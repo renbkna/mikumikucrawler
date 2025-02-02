@@ -1,10 +1,10 @@
-# Miku Web Crawler Beam
+# Miku Miku Crawler
 
 A **real-time** web crawler powered by **Puppeteer, Cheerio, and Socket.io**, featuring a dynamic frontend with **real-time stats, animations, and a Miku-powered theme**. This project crawls a website, extracts links, and displays **live crawling progress** with interactive visuals.
 
 Inspired by [MikuMikuBeam](https://github.com/sammwyy/MikuMikuBeam) by [Sammwy](https://github.com/sammwyy), with styles and animations adapted from its **index.css**.
 
-![Miku Crawler Preview](https://cdn.discordapp.com/attachments/718157319233339488/1335211524293132488/miku.jpeg?ex=679f5822&is=679e06a2&hm=b03f760e5a4767f096a6d87c49f8ad215e4fdab382130d94b120f776c340a4ce&)
+![Miku Crawler Preview](https://cdn.discordapp.com/attachments/718157319233339488/1335472231656194078/image.png?ex=67a04aef&is=679ef96f&hm=1a88e997386d787c052733876123ab8f9ffee24db8fe2041bb46976238c79f15&)
 
 ## 🌟 Features
 
@@ -118,4 +118,4 @@ This project is **MIT licensed**. See `LICENSE` for details.
 
 ---
 
-🌸 **Miku Crawler Beam - Because Web Crawling Should Be Kawaii Too!** 🌸
+🌸 **Miku Miku Crawler - Because Web Crawling Should Be Kawaii Too!** 🌸

@@ -144,7 +144,7 @@ function App() {
 
     setStats({ pagesScanned: 0, linksFound: 0, totalData: 0 });
     setCrawledPages([]);
-    addLog("🕷️ Preparing web crawler beam...");
+    addLog("🕷️ Preparing miku beam...");
 
     if (audioRef.current) {
       audioRef.current.currentTime = isQuick ? 9.5 : 0;
@@ -204,7 +204,7 @@ function App() {
         {/* Title and Miku */}
         <div className="text-center">
           <h1 className="mb-2 text-4xl font-bold text-emerald-500">
-            Web Crawler Beam
+            Miku Miku Beam
           </h1>
           <p className={isLightTheme ? "text-gray-600" : "text-white"}>
             Because web crawling is cuter when Miku does it! 🕷️✨
@@ -249,7 +249,7 @@ function App() {
                   } flex items-center justify-center gap-2 shadow-sm`}
                 >
                   <Wand2 className="w-5 h-5" />
-                  {isAttacking ? "Stop Beam" : "Start Crawler Beam"}
+                  {isAttacking ? "Stop Beam" : "Start Miku Beam"}
                 </button>
                 <button
                   onClick={() => (isAttacking ? stopAttack() : startAttack(true))}
@@ -431,12 +431,9 @@ function App() {
         {openedConfig && <ConfigurationView />}
 
         <div className="flex flex-col items-center">
-          <span className="text-sm text-center text-gray-500">
-            🕷️ Web Crawler Beam v1.0. Made by renbkna
-          </span>
-          <span className="text-sm text-center text-gray-500">
-            Made by renbkna
-          </span>
+        <span className="text-sm text-center text-gray-500">
+  🕷️ v1.0 made by <a href="https://github.com/renbkna" className="text-blue-500 hover:underline">renbkna</a> 🕷️
+</span>
           <span>
             <input
               className="shadow-sm volume_bar focus:border-emerald-500"
