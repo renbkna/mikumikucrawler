@@ -1,47 +1,226 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
   <head>
     <!-- Basic Meta Tags -->
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    
+    <!-- Security and Referrer -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.vercel.app; connect-src 'self' wss://*.railway.app ws://*.railway.app https://*.railway.app http://localhost:* ws://localhost:*;">
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    
     <!-- Title and Description -->
-    <title>Miku Miku Crawler | Real-Time Web Crawling</title>
-    <meta name="description" content="Miku Miku Crawler is a real-time web crawler. Experience dynamic crawling with live stats and interactive visuals." />
-
+    <title>Miku Miku Crawler | Real-Time Web Crawling with Visualization</title>
+    <meta name="description" content="Miku Miku Crawler is a modern web crawler with real-time visualization. Watch pages being crawled with live statistics, interactive data displays, and Miku-themed animations." />
+    
     <!-- Keywords -->
-    <meta name="keywords" content="Miku Miku Crawler, Web Crawler, Puppeteer, Cheerio, Socket.io, Real-Time, React, Vite" />
-
+    <meta name="keywords" content="Miku Miku Crawler, Web Crawler, Puppeteer, Cheerio, Socket.io, Real-Time, React, Vite, Web Scraping, Data Visualization, Website Analysis" />
+    
+    <!-- SEO Tags -->
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://mikumikucrawler.vercel.app/" />
+    <meta name="author" content="renbkna" />
+    
+    <!-- Color Scheme and Appearance -->
+    <meta name="theme-color" content="#10B981" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    
     <!-- Favicon & Icons -->
     <link rel="icon" type="image/svg+xml" href="/miku.ico" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.json" />
-
+    <link rel="mask-icon" href="/safari-pinned-tab.svg" color="#10B981" />
+    
     <!-- Open Graph (Social Sharing) -->
-    <meta property="og:title" content="Miku Miku Crawler" />
-    <meta property="og:description" content="Experience real-time web crawling with Miku Crawler" />
+    <meta property="og:title" content="Miku Miku Crawler | Real-Time Web Crawling" />
+    <meta property="og:description" content="Experience real-time web crawling with interactive visuals. Watch as Miku traverses the web, gathering data with style!" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://mikumikucrawler.vercel.app/" />
-    <meta property="og:image" content="https://mikumikucrawler.vercel.app/miku.gif" />
-
+    <meta property="og:image" content="https://mikumikucrawler.vercel.app/miku.ico" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:site_name" content="Miku Miku Crawler" />
+    <meta property="og:locale" content="en_US" />
+    
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Miku Miku Crawler" />
-    <meta name="twitter:description" content="Real-time web crawling with interactive visuals and live stats." />
-    <meta name="twitter:image" content="https://mikumikucrawler.vercel.app/miku.gif" />
-
-    <!-- Preconnect & DNS Prefetch (if using external fonts or APIs) -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <meta name="twitter:description" content="Real-time web crawling with interactive visuals and live stats. Watch the web unfold before your eyes!" />
+    <meta name="twitter:image" content="https://mikumikucrawler.vercel.app/miku.ico" />
+    <meta name="twitter:creator" content="@renbkna" />
+    
+    <!-- Preconnect & DNS Prefetch -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link rel="dns-prefetch" href="//fonts.googleapis.com" />
-
-    <!-- Optional: Custom CSS for initial styles (can also be bundled) -->
-    <link rel="stylesheet" href="/src/index.css" />
+    <link rel="dns-prefetch" href="//fonts.gstatic.com" />
+    
+    <!-- Preload Critical Assets -->
+    <link rel="preload" href="/miku.gif" as="image" />
+    <link rel="preload" href="/audio.mp3" as="audio" />
+    <link rel="preload" href="/src/main.tsx" as="script" />
+    
+    <!-- Font Loading with Display Swap -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet" />
+    
+    <!-- Structured Data for SEO -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Miku Miku Crawler",
+        "description": "A real-time web crawler with interactive visualizations",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Any",
+        "author": {
+          "@type": "Person",
+          "name": "renbkna",
+          "url": "https://github.com/renbkna"
+        },
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        }
+      }
+    </script>
+    
+    <!-- Inline Critical CSS -->
+    <style>
+      :root {
+        --miku-primary: #10B981;
+        --miku-secondary: #06B6D4;
+        --miku-accent: #EC4899;
+      }
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: black;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+      #root {
+        width: 100%;
+        height: 100%;
+      }
+      .loading-screen {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(to bottom right, #10B981, #06B6D4);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        z-index: 9999;
+      }
+      .loading-screen img {
+        width: 100px;
+        height: 100px;
+        margin-bottom: 20px;
+      }
+      .loading-bar {
+        width: 200px;
+        height: 4px;
+        background-color: rgba(255, 255, 255, 0.3);
+        border-radius: 2px;
+        overflow: hidden;
+        position: relative;
+      }
+      .loading-progress {
+        position: absolute;
+        top: 0;
+        left: 0;
+        height: 100%;
+        width: 0%;
+        background-color: white;
+        animation: progress 2s ease-in-out infinite;
+      }
+      @keyframes progress {
+        0% { width: 0%; }
+        50% { width: 100%; }
+        100% { width: 0%; }
+      }
+      
+      /* Skip to content link for accessibility */
+      .skip-to-content {
+        position: absolute;
+        top: -40px;
+        left: 0;
+        background: var(--miku-primary);
+        color: white;
+        padding: 8px 16px;
+        z-index: 100;
+        transition: top 0.2s;
+        text-decoration: none;
+        border-radius: 0 0 4px 0;
+      }
+      .skip-to-content:focus {
+        top: 0;
+      }
+      
+      /* Dark mode adjustments */
+      @media (prefers-color-scheme: dark) {
+        body {
+          background-color: #111;
+          color: #f9f9f9;
+        }
+      }
+    </style>
+    
+    <!-- Main CSS (non-blocking) -->
+    <link rel="stylesheet" href="/src/index.css" media="print" onload="this.media='all'" />
   </head>
   <body>
+    <!-- Skip to content link for accessibility -->
+    <a href="#root" class="skip-to-content">Skip to content</a>
+    
+    <!-- Loading Screen (shown until app loads) -->
+    <div class="loading-screen" id="loading-screen">
+      <img src="/miku.gif" alt="Loading Miku" />
+      <h1>Miku Miku Crawler</h1>
+      <p>Preparing crawler beam...</p>
+      <div class="loading-bar">
+        <div class="loading-progress"></div>
+      </div>
+    </div>
+    
+    <!-- Main application container -->
     <div id="root"></div>
-    <!-- Main script loaded as module by Vite -->
-    <script type="module" src="/src/main.tsx"></script>
+    
+    <!-- Inline script to handle loading screen -->
+    <script>
+      document.addEventListener('DOMContentLoaded', function() {
+        // Simulate loading progress
+        setTimeout(function() {
+          const loadingScreen = document.getElementById('loading-screen');
+          if (loadingScreen) {
+            loadingScreen.style.opacity = '0';
+            loadingScreen.style.transition = 'opacity 0.5s ease-in-out';
+            setTimeout(function() {
+              loadingScreen.style.display = 'none';
+            }, 500);
+          }
+        }, 1500);
+      });
+    </script>
+    
+    <!-- Main script loaded as module by Vite (with error handling) -->
+    <script type="module" src="/src/main.tsx" onerror="document.body.innerHTML = '<div style=\'font-family: sans-serif; padding: 20px; text-align: center;\'><h1>App failed to load</h1><p>Please check your connection and try refreshing the page.</p></div>'"></script>
+    
+    <!-- Fallback for browsers that don't support modules -->
+    <script nomodule>
+      document.body.innerHTML = '<div style="font-family: sans-serif; padding: 20px; text-align: center;"><h1>Browser not supported</h1><p>Please use a modern browser like Chrome, Firefox, Safari, or Edge to view this application.</p></div>';
+    </script>
   </body>
 </html>

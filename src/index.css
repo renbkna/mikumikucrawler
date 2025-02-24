@@ -2,16 +2,52 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --miku-primary: rgb(16, 185, 129);
+  --miku-secondary: rgb(6, 182, 212);
+  --miku-accent: rgb(236, 72, 153);
+  --animation-speed: 0.31s;
+}
+
+/* Basic styling */
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   width: 100vw;
   height: 100vh;
   overflow-x: hidden;
   background-color: black;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
+/* Accessibility improvements */
+*:focus {
+  outline: 2px solid var(--miku-primary);
+  outline-offset: 2px;
+}
+
+/* Screen reader only class */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* More efficient background animation using transform and opacity */
 .background-pulse {
-  animation: background-pulse 0.31s infinite;
-  transition: background-color 0.2s ease-in-out;
+  animation: background-pulse var(--animation-speed) infinite;
+  will-change: background-color;
 }
 
 @keyframes background-pulse {
@@ -22,67 +58,87 @@ body {
     background-color: rgb(48, 15, 31);
   }
   100% {
-    transform: rgb(3 7 18 / var(--tw-bg-opacity, 1));
+    background-color: rgb(3 7 18 / var(--tw-bg-opacity, 1));
   }
 }
 
-/* Infinite intense shaking */
+/* Optimized shake animation with reduced intensity and hardware acceleration */
 .shake {
   animation: shake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) infinite;
   transform: translate3d(0, 0, 0);
   backface-visibility: hidden;
   perspective: 1000px;
+  will-change: transform;
 }
 
+/* Reduced intensity shake for better performance */
 @keyframes shake {
   0% {
-    transform: translate(2px, 2px) rotate(0deg);
+    transform: translate(1px, 1px) rotate(0deg);
   }
   10% {
-    transform: translate(-2px, -4px) rotate(-1deg);
+    transform: translate(-1px, -2px) rotate(-0.5deg);
   }
   20% {
-    transform: translate(-6px, 0px) rotate(1deg);
+    transform: translate(-3px, 0px) rotate(0.5deg);
   }
   30% {
-    transform: translate(6px, 4px) rotate(0deg);
+    transform: translate(3px, 2px) rotate(0deg);
   }
   40% {
-    transform: translate(2px, -2px) rotate(1deg);
+    transform: translate(1px, -1px) rotate(0.5deg);
   }
   50% {
-    transform: translate(-2px, 4px) rotate(-1deg);
+    transform: translate(-1px, 2px) rotate(-0.5deg);
   }
   60% {
-    transform: translate(-6px, 2px) rotate(0deg);
+    transform: translate(-3px, 1px) rotate(0deg);
   }
   70% {
-    transform: translate(6px, 2px) rotate(-1deg);
+    transform: translate(3px, 1px) rotate(-0.5deg);
   }
   80% {
-    transform: translate(-2px, -2px) rotate(1deg);
+    transform: translate(-1px, -1px) rotate(0.5deg);
   }
   90% {
-    transform: translate(2px, 4px) rotate(0deg);
+    transform: translate(1px, 2px) rotate(0deg);
   }
   100% {
-    transform: translate(2px, -4px) rotate(-1deg);
+    transform: translate(1px, -2px) rotate(-0.5deg);
   }
 }
 
-/* styling is done for the volume bar to match the rest of the miku theme. code was generated from: https://danielstern.ca/range.css/?ref=css-tricks#/ and background was replaced with linear-gradient */
+/* Disable shake on devices with prefers-reduced-motion */
+@media (prefers-reduced-motion) {
+  .shake {
+    animation: none;
+  }
+
+  .background-pulse {
+    animation: none;
+  }
+
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* Enhanced styling for the volume bar to match the Miku theme */
 input[type="range"].volume_bar {
   width: 100%;
   margin: 5px 0;
   background-color: transparent;
   -webkit-appearance: none;
+  cursor: pointer;
 }
+
 input[type="range"].volume_bar:focus {
   outline: none;
 }
+
 input[type="range"].volume_bar::-webkit-slider-runnable-track {
   background: linear-gradient(
-    to bottom right,
+    to right,
     rgba(236, 72, 153, 1),
     rgba(59, 130, 246, 1)
   );
@@ -92,6 +148,7 @@ input[type="range"].volume_bar::-webkit-slider-runnable-track {
   height: 5px;
   cursor: pointer;
 }
+
 input[type="range"].volume_bar::-webkit-slider-thumb {
   margin-top: -5px;
   width: 20px;
@@ -101,17 +158,24 @@ input[type="range"].volume_bar::-webkit-slider-thumb {
   border-radius: 50px;
   cursor: pointer;
   -webkit-appearance: none;
+  transition: transform 0.2s ease;
 }
+
+input[type="range"].volume_bar::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+}
+
 input[type="range"].volume_bar:focus::-webkit-slider-runnable-track {
   background: linear-gradient(
-    to bottom right,
+    to right,
     rgba(236, 72, 153, 1),
     rgba(59, 130, 246, 1)
   );
 }
+
 input[type="range"].volume_bar::-moz-range-track {
   background: linear-gradient(
-    to bottom right,
+    to right,
     rgba(236, 72, 153, 1),
     rgba(59, 130, 246, 1)
   );
@@ -121,6 +185,7 @@ input[type="range"].volume_bar::-moz-range-track {
   height: 5px;
   cursor: pointer;
 }
+
 input[type="range"].volume_bar::-moz-range-thumb {
   width: 20px;
   height: 15px;
@@ -128,7 +193,13 @@ input[type="range"].volume_bar::-moz-range-thumb {
   border: 1px solid #0891b2;
   border-radius: 50px;
   cursor: pointer;
+  transition: transform 0.2s ease;
 }
+
+input[type="range"].volume_bar::-moz-range-thumb:hover {
+  transform: scale(1.1);
+}
+
 input[type="range"].volume_bar::-ms-track {
   background: transparent;
   border-color: transparent;
@@ -138,24 +209,27 @@ input[type="range"].volume_bar::-ms-track {
   height: 5px;
   cursor: pointer;
 }
+
 input[type="range"].volume_bar::-ms-fill-lower {
   background: linear-gradient(
-    to bottom right,
+    to right,
     rgba(236, 72, 153, 1),
     rgba(59, 130, 246, 1)
   );
   border: 0;
   border-radius: 50px;
 }
+
 input[type="range"].volume_bar::-ms-fill-upper {
   background: linear-gradient(
-    to bottom right,
+    to right,
     rgba(236, 72, 153, 1),
     rgba(59, 130, 246, 1)
   );
   border: 0;
   border-radius: 50px;
 }
+
 input[type="range"].volume_bar::-ms-thumb {
   width: 20px;
   height: 15px;
@@ -164,28 +238,159 @@ input[type="range"].volume_bar::-ms-thumb {
   border-radius: 50px;
   cursor: pointer;
   margin-top: 0px;
+  transition: transform 0.2s ease;
 }
+
+input[type="range"].volume_bar::-ms-thumb:hover {
+  transform: scale(1.1);
+}
+
 input[type="range"].volume_bar:focus::-ms-fill-lower {
   background: linear-gradient(
-    to bottom right,
+    to right,
     rgba(236, 72, 153, 1),
     rgba(59, 130, 246, 1)
   );
 }
+
 input[type="range"].volume_bar:focus::-ms-fill-upper {
   background: linear-gradient(
-    to bottom right,
+    to right,
     rgba(236, 72, 153, 1),
     rgba(59, 130, 246, 1)
   );
 }
+
+/* For IE browsers - limited support */
 @supports (-ms-ime-align: auto) {
   input[type="range"].volume_bar {
     margin: 0;
   }
 }
 
+/* Text utilities */
 .break-text {
   word-break: break-all;
   overflow-wrap: break-word;
+}
+
+/* Responsive styles for mobile devices */
+@media (max-width: 640px) {
+  .grid-cols-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .grid-cols-3 {
+    grid-template-columns: repeat(1, minmax(0, 1fr));
+  }
+
+  h1 {
+    font-size: 1.875rem !important;
+  }
+
+  .shake {
+    animation: shake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) 3;
+    animation-iteration-count: 3; /* Limit shake on mobile */
+  }
+}
+
+/* Transitions and animations */
+.transition-all {
+  transition-property: all;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 300ms;
+}
+
+/* Tooltip styles */
+.tooltip {
+  position: relative;
+}
+
+.tooltip:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.5rem;
+  background-color: rgba(0, 0, 0, 0.8);
+  color: white;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  z-index: 10;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    to bottom,
+    rgba(236, 72, 153, 0.7),
+    rgba(59, 130, 246, 0.7)
+  );
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(
+    to bottom,
+    rgba(236, 72, 153, 0.9),
+    rgba(59, 130, 246, 0.9)
+  );
+}
+
+/* Toast notification animations */
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideOut {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
+.toast-enter {
+  animation: slideIn 0.3s forwards;
+}
+
+.toast-exit {
+  animation: slideOut 0.3s forwards;
+}
+
+/* Print styles */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  body {
+    background-color: white !important;
+  }
+
+  .container {
+    max-width: 100% !important;
+  }
 }
