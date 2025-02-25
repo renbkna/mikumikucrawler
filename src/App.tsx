@@ -635,7 +635,7 @@ function App() {
       console.error("Socket initialization error:", error);
       addToast('error', `Failed to connect to backend: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-  }, [addToast]);
+  }, [addToast, advancedOptions.maxPages, filterText, isFilterActive]);
 
   // Audio management for the attack animation/sound
   useEffect(() => {
@@ -849,7 +849,7 @@ function App() {
             Miku Miku Beam
           </h1>
           <p className={isLightTheme ? "text-gray-600" : "text-white"}>
-          Because web crawling is cuter when Miku does it! 🕷️✨
+          Because web crawling is cuter when Miku does it! 🌺
           </p>
         </div>
 
