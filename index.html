@@ -6,17 +6,15 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     
-<!-- Security and Referrer -->
-<meta http-equiv="Content-Security-Policy" content="
-  default-src 'self'; 
-  script-src 'self' 'unsafe-inline'; 
-  style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; 
-  font-src 'self' https://fonts.gstatic.com; 
-  img-src 'self' data: https://*.vercel.app; 
-  connect-src 'self' wss://*.railway.app:* ws://*.railway.app:* https://*.railway.app:* http://localhost:* ws://localhost:*; 
-  upgrade-insecure-requests;">
-<meta name="referrer" content="strict-origin-when-cross-origin" />
-
+    <meta http-equiv="Content-Security-Policy" content="
+    default-src 'self'; 
+    script-src 'self' 'unsafe-inline'; 
+    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; 
+    font-src 'self' https://fonts.gstatic.com; 
+    img-src 'self' data: https://*.vercel.app; 
+    connect-src 'self' https://*.onrender.com wss://*.onrender.com http://localhost:* ws://localhost:*; 
+    upgrade-insecure-requests;">
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
     
     <!-- Title and Description -->
     <title>Miku Miku Crawler | Real-Time Web Crawling with Visualization</title>
@@ -70,7 +68,7 @@
     <link rel="dns-prefetch" href="//fonts.gstatic.com" />
     
     <!-- Preload Critical Assets -->
-    <link rel="preload" href="/miku.gif" as="image" />
+    <link rel="preload" href="/miku1.gif" as="image" />
     <link rel="preload" href="/audio.mp3" as="audio" />
     <link rel="preload" href="/src/main.tsx" as="script" />
     
@@ -195,7 +193,7 @@
     
     <!-- Loading Screen (shown until app loads) -->
     <div class="loading-screen" id="loading-screen">
-      <img src="/miku.gif" alt="Loading Miku" />
+      <img src="/miku1.gif" alt="Loading Miku" />
       <h1>Miku Miku Crawler</h1>
       <p>Preparing the beam...</p>
       <div class="loading-bar">
