@@ -769,24 +769,25 @@ function App() {
 
     if (!isQuick) setAnimState(1);
 
+    // Update target in options before sending
+    const optionsToSend = {
+      ...advancedOptions,
+      target: target
+    };
+    
+    // Send crawl request to backend immediately
+    socket.emit("startAttack", optionsToSend);
+    addLog(`🌐 Starting crawl on ${target}`);
+    addLog("📡 Scanning for links and data...");
+
+    // But still keep the visual animation timing for the frontend
     const timeout = setTimeout(() => {
       setAnimState(3);
-      
-      // Update target in options before sending
-      const optionsToSend = {
-        ...advancedOptions,
-        target: target
-      };
-      
-      socket.emit("startAttack", optionsToSend);
-      
       addToast('info', `Started crawling ${target}`);
     }, isQuick ? 700 : 10250);
     setCurrentTask(timeout);
 
     setIsAttacking(true);
-    addLog(`🌐 Starting crawl on ${target}`);
-    addLog("📡 Scanning for links and data...");
   };
 
   const stopAttack = () => {

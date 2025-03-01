@@ -3,6 +3,10 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "author": {
+    "name": "renbkna",
+    "url": "https://github.com/renbkna"
+  },
   "scripts": {
     "dev": "concurrently --ks SIGKILL -n \"Client,Server\" \"npm run dev:client\" \"npm run dev:server\"",
     "dev:server": "tsx server/server.js",

@@ -48,9 +48,9 @@
     <meta property="og:description" content="Experience real-time web crawling with interactive visuals. Watch as Miku traverses the web, gathering data with style!" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://mikumikucrawler.vercel.app/" />
-    <meta property="og:image" content="https://mikumikucrawler.vercel.app/miku.ico" />
-    <meta property="og:image:width" content="1200" />
-    <meta property="og:image:height" content="630" />
+    <meta property="og:image" content="https://mikumikucrawler.vercel.app/miku1.gif" />
+    <meta property="og:image:width" content="400" />
+    <meta property="og:image:height" content="157" />
     <meta property="og:site_name" content="Miku Miku Crawler" />
     <meta property="og:locale" content="en_US" />
     
@@ -58,7 +58,7 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Miku Miku Crawler" />
     <meta name="twitter:description" content="Real-time web crawling with interactive visuals and live stats. Watch the web unfold before your eyes!" />
-    <meta name="twitter:image" content="https://mikumikucrawler.vercel.app/miku.ico" />
+    <meta name="twitter:image" content="https://mikumikucrawler.vercel.app/miku1.gif" />
     <meta name="twitter:creator" content="@renbkna" />
     
     <!-- Preconnect & DNS Prefetch -->
@@ -123,36 +123,90 @@
         left: 0;
         right: 0;
         bottom: 0;
-        background: linear-gradient(to bottom right, #10B981, #06B6D4);
+        background: linear-gradient(135deg, #10B981, #06B6D4);
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
         color: white;
         z-index: 9999;
+        overflow: hidden;
       }
+
+      .loading-screen::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(135deg, rgba(236, 72, 153, 0.2), rgba(6, 182, 212, 0.2));
+        z-index: -1;
+        animation: pulse 4s ease-in-out infinite;
+      }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 0.2; }
+        50% { opacity: 0.7; }
+      }
+
+      .loading-screen .miku-container {
+        width: 400px;
+        height: 157px;
+        position: relative;
+        margin-bottom: 30px;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+
       .loading-screen img {
-        width: 100px;
-        height: 100px;
-        margin-bottom: 20px;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
       }
+
+      .loading-screen h1 {
+        font-size: 2.5rem;
+        font-weight: 700;
+        margin: 0 0 10px;
+        text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        background: linear-gradient(to right, #ffffff, #f0f0f0);
+        background-clip: text;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        letter-spacing: 0.5px;
+      }
+
+      .loading-screen p {
+        margin: 0 0 20px;
+        font-size: 1.1rem;
+        opacity: 0.9;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+      }
+
       .loading-bar {
-        width: 200px;
-        height: 4px;
-        background-color: rgba(255, 255, 255, 0.3);
-        border-radius: 2px;
+        width: 250px;
+        height: 6px;
+        background-color: rgba(255, 255, 255, 0.2);
+        border-radius: 3px;
         overflow: hidden;
         position: relative;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
       }
+      
       .loading-progress {
         position: absolute;
         top: 0;
         left: 0;
         height: 100%;
         width: 0%;
-        background-color: white;
+        background: linear-gradient(to right, #EC4899, #3B82F6);
         animation: progress 2s ease-in-out infinite;
+        border-radius: 3px;
       }
+      
       @keyframes progress {
         0% { width: 0%; }
         50% { width: 100%; }
@@ -183,6 +237,22 @@
           color: #f9f9f9;
         }
       }
+
+      /* Glow effect */
+      .glow {
+        animation: glow 1.5s ease-in-out infinite alternate;
+      }
+
+      @keyframes glow {
+        from {
+          box-shadow: 0 0 10px rgba(255, 255, 255, 0.2), 
+                      0 0 20px rgba(236, 72, 153, 0.2);
+        }
+        to {
+          box-shadow: 0 0 20px rgba(255, 255, 255, 0.5), 
+                      0 0 30px rgba(236, 72, 153, 0.5);
+        }
+      }
     </style>
     
     <!-- Main CSS (non-blocking) -->
@@ -194,7 +264,9 @@
     
     <!-- Loading Screen (shown until app loads) -->
     <div class="loading-screen" id="loading-screen">
-      <img src="/miku1.gif" alt="Loading Miku" />
+      <div class="miku-container glow">
+        <img src="/miku1.gif" alt="Loading Miku" />
+      </div>
       <h1>Miku Miku Crawler</h1>
       <p>Preparing the beam...</p>
       <div class="loading-bar">
