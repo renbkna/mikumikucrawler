@@ -16,11 +16,12 @@ import robotsParser from 'robots-parser' // Added for robots.txt handling
 import {mkdir, existsSync} from 'fs'
 import {promisify} from 'util'
 import path from 'path'
+import os from 'os' // Added this import
 import sanitizeHtml from 'sanitize-html' // For content sanitization
 
-process.env.PUPPETEER_CACHE_DIR =
-  process.env.PUPPETEER_CACHE_DIR ||
-  path.join(os.homedir(), '.cache', 'puppeteer')
+// Configure Puppeteer - Fix for rendering environments like Render.com
+const isProd = process.env.NODE_ENV === 'production';
+const PUPPETEER_CACHE_DIR = process.env.PUPPETEER_CACHE_DIR || path.join(os.homedir(), '.cache', 'puppeteer');
 
 // Promisify mkdir
 const mkdirAsync = promisify(mkdir)
@@ -296,8 +297,9 @@ class AdvancedCrawlSession {
     try {
       // If dynamic content is enabled, launch Puppeteer
       if (this.options.dynamic) {
-        const browser = await puppeteer.launch({
-          headless: true,
+        // Improved Puppeteer launch configuration for Render.com and other environments
+        const puppeteerConfig = {
+          headless: 'new',
           args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -306,9 +308,59 @@ class AdvancedCrawlSession {
             '--disable-gpu',
             '--window-size=1280,720'
           ]
-        })
-        this.browser = browser
-        logger.info('Puppeteer launched for dynamic content handling.')
+        };
+
+        // When running in production (like Render.com), use the pre-installed Chrome binary
+        if (isProd) {
+          if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+            // If a specific path is provided (like in some CI/CD environments)
+            puppeteerConfig.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+          } else {
+            // On Render.com, Chrome is installed during the build process via postinstall script
+            // We need to find and specify its location
+            logger.info('Running in production environment, checking for Chrome installation');
+            
+            // Add executablePath if we're on Linux (Render.com uses Linux)
+            if (process.platform === 'linux') {
+              // Check common Linux Chrome locations for Render.com
+              const possiblePaths = [
+                '/tmp/puppeteer/chrome/linux-133.0.6943.126/chrome-linux64/chrome', // From postinstall
+                '/opt/render/project/chrome-linux/chrome',
+                '/usr/bin/google-chrome',
+                '/usr/bin/chromium-browser',
+                '/usr/bin/chromium'
+              ];
+              
+              // Use the first path that exists
+              for (const chromePath of possiblePaths) {
+                if (existsSync(chromePath)) {
+                  logger.info(`Found Chrome at: ${chromePath}`);
+                  puppeteerConfig.executablePath = chromePath;
+                  break;
+                }
+              }
+              
+              if (!puppeteerConfig.executablePath) {
+                logger.warn('No Chrome executable found in common paths, relying on Puppeteer to find it');
+              }
+            }
+          }
+        }
+
+        try {
+          logger.info(`Launching browser with config: ${JSON.stringify(puppeteerConfig)}`);
+          const browser = await puppeteer.launch(puppeteerConfig);
+          this.browser = browser;
+          logger.info('Puppeteer launched successfully for dynamic content handling.');
+        } catch (err) {
+          logger.error(`Failed to launch Puppeteer: ${err.message}`);
+          // Fall back to static crawling
+          this.options.dynamic = false;
+          this.socket.emit('stats', {
+            ...this.stats,
+            log: `⚠️ Falling back to static crawling: ${err.message}`
+          });
+        }
       }
 
       // Check robots.txt first
