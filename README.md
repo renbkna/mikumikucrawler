@@ -12,7 +12,7 @@ Crawl websites, extract data, and watch the **magic happen in real-time** with c
 
 Inspired by [MikuMikuBeam](https://github.com/sammwyy/MikuMikuBeam) by [Sammwy](https://github.com/sammwyy), but supercharged with advanced features and dazzling new effects!
 
-![Miku Crawler Preview](./public/mikumikucrawler.jpeg)
+![Miku Crawler Preview](./public/mikumikucrawler.png)
 
 ## ✨ Features Galore
 
