@@ -8,24 +8,34 @@ export function ProgressBar({ progress, isLightTheme }: ProgressBarProps) {
     <div className="mb-8">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <span className={`text-lg font-bold ${isLightTheme ? "text-gray-700" : "text-gray-200"}`}>
+          <span
+            className={`text-lg font-bold ${
+              isLightTheme ? 'text-gray-700' : 'text-gray-200'
+            }`}
+          >
             🎵 Crawl Progress
           </span>
           {progress > 0 && progress < 100 && (
             <div className="flex items-center gap-1">
               <div className="w-2 h-2 bg-pink-400 rounded-full animate-pulse"></div>
-              <span className="text-sm text-gray-500 font-medium">In progress...</span>
+              <span className="text-sm text-gray-500 font-medium">
+                In progress...
+              </span>
             </div>
           )}
         </div>
         <div className="flex items-center gap-2">
-          <span className={`text-lg font-black ${
-            progress === 100
-              ? "text-emerald-500"
-              : progress > 0
-                ? "text-pink-500"
-                : isLightTheme ? "text-gray-600" : "text-gray-300"
-          }`}>
+          <span
+            className={`text-lg font-black ${
+              progress === 100
+                ? 'text-emerald-500'
+                : progress > 0
+                ? 'text-pink-500'
+                : isLightTheme
+                ? 'text-gray-600'
+                : 'text-gray-300'
+            }`}
+          >
             {progress.toFixed(0)}%
           </span>
           {progress === 100 && <span className="text-emerald-500">✨</span>}
@@ -33,11 +43,13 @@ export function ProgressBar({ progress, isLightTheme }: ProgressBarProps) {
       </div>
 
       {/* Enhanced progress bar container */}
-      <div className={`relative h-6 rounded-full overflow-hidden backdrop-blur-sm border-2 ${
-        isLightTheme
-          ? "bg-gray-100/80 border-gray-200/50"
-          : "bg-gray-800/80 border-gray-700/50"
-      } shadow-inner`}>
+      <div
+        className={`relative h-6 rounded-full overflow-hidden backdrop-blur-sm border-2 ${
+          isLightTheme
+            ? 'bg-gray-100/80 border-gray-200/50'
+            : 'bg-gray-800/80 border-gray-700/50'
+        } shadow-inner`}
+      >
         {/* Background gradient */}
         <div className="absolute inset-0 bg-gradient-to-r from-gray-200/50 to-gray-300/50 dark:from-gray-700/50 dark:to-gray-600/50"></div>
 
@@ -57,23 +69,14 @@ export function ProgressBar({ progress, isLightTheme }: ProgressBarProps) {
           )}
         </div>
 
-        {/* Completion celebration effect */}
-        {progress === 100 && (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="flex space-x-1">
-              <span className="text-white text-sm animate-bounce delay-0">🎉</span>
-              <span className="text-white text-sm animate-bounce delay-100">✨</span>
-              <span className="text-white text-sm animate-bounce delay-200">🎊</span>
-            </div>
-          </div>
-        )}
-
         {/* Progress segments for visual appeal */}
         <div className="absolute inset-0 flex">
           {[...Array(10)].map((_, i) => (
             <div
               key={i}
-              className={`flex-1 border-r border-white/20 ${i === 9 ? 'border-r-0' : ''}`}
+              className={`flex-1 border-r border-white/20 ${
+                i === 9 ? 'border-r-0' : ''
+              }`}
             ></div>
           ))}
         </div>
@@ -82,13 +85,19 @@ export function ProgressBar({ progress, isLightTheme }: ProgressBarProps) {
       {/* Progress status text */}
       <div className="mt-2 text-center">
         {progress === 0 && (
-          <span className="text-sm text-gray-500 font-medium">Ready to start crawling! 🚀</span>
+          <span className="text-sm text-gray-500 font-medium">
+            Ready to start crawling! 🚀
+          </span>
         )}
         {progress > 0 && progress < 100 && (
-          <span className="text-sm text-pink-500 font-medium">Miku is working hard! 💪</span>
+          <span className="text-sm text-pink-500 font-medium">
+            Miku is working hard! 💪
+          </span>
         )}
         {progress === 100 && (
-          <span className="text-sm text-emerald-500 font-bold">Crawl completed successfully! 🎉</span>
+          <span className="text-sm text-emerald-500 font-bold">
+            Crawl completed successfully! 🎉
+          </span>
         )}
       </div>
     </div>

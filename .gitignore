@@ -51,3 +51,9 @@ temp/
 # OS-specific files
 .DS_Store
 Thumbs.db
+
+# Puppeteer cache
+.cache/puppeteer/
+
+# Chrome binary
+chrome-linux64/
