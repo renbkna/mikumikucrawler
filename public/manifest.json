@@ -1,0 +1,43 @@
+{
+  "name": "Miku Miku Crawler",
+  "short_name": "MikuCrawler",
+  "description": "Real-time web crawler with interactive visualizations",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#10b981",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "lang": "en",
+  "categories": ["developer", "utilities"],
+  "icons": [
+    {
+      "src": "/miku.ico",
+      "sizes": "any",
+      "type": "image/x-icon",
+      "purpose": "any maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/mikumikucrawler.jpeg",
+      "sizes": "1280x720",
+      "type": "image/jpeg",
+      "form_factor": "wide"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Start Crawling",
+      "short_name": "Crawl",
+      "description": "Start a new web crawling session",
+      "url": "/?action=crawl",
+      "icons": [
+        {
+          "src": "/miku.ico",
+          "sizes": "any"
+        }
+      ]
+    }
+  ]
+}

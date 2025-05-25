@@ -32,7 +32,7 @@ export function StatsGrid({ stats, queueStats, isAttacking, isLightTheme }: Stat
             <div className={`text-2xl font-black ${
               isLightTheme ? "text-gray-800" : "text-white"
             }`}>
-              {stats.pagesScanned.toLocaleString()}
+              {(stats.pagesScanned || 0).toLocaleString()}
             </div>
           </div>
 
@@ -40,7 +40,7 @@ export function StatsGrid({ stats, queueStats, isAttacking, isLightTheme }: Stat
             <div className="flex items-center gap-2 text-xs">
               <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></div>
               <span className="text-gray-500 font-medium">
-                {queueStats.pagesPerSecond.toFixed(1)}/sec • Q:{queueStats.queueLength}
+                {(queueStats?.pagesPerSecond || 0).toFixed(1)}/sec • Q:{queueStats?.queueLength || 0}
               </span>
             </div>
           )}
@@ -68,7 +68,7 @@ export function StatsGrid({ stats, queueStats, isAttacking, isLightTheme }: Stat
             <div className={`text-2xl font-black ${
               isLightTheme ? "text-gray-800" : "text-white"
             }`}>
-              {stats.linksFound.toLocaleString()}
+              {(stats.linksFound || 0).toLocaleString()}
             </div>
           </div>
 
@@ -108,7 +108,7 @@ export function StatsGrid({ stats, queueStats, isAttacking, isLightTheme }: Stat
             <div className={`text-2xl font-black ${
               isLightTheme ? "text-gray-800" : "text-white"
             }`}>
-              {stats.totalData.toLocaleString()}
+              {(stats.totalData || 0).toLocaleString()}
             </div>
           </div>
 

@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, useCallback } from "react";
-import { io, Socket } from "socket.io-client";
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { io, Socket } from 'socket.io-client';
 import {
   Header,
   CrawlerForm,
@@ -11,16 +11,16 @@ import {
   ConfigurationView,
   ToastNotification,
   StatsVisualizer,
-  ExportDialog
-} from "./components";
+  ExportDialog,
+} from './components';
 import {
   Stats,
   QueueStats,
   StatsPayload,
   CrawledPage,
   CrawlOptions,
-  Toast
-} from "./types";
+  Toast,
+} from './types';
 
 function App() {
   const [isAttacking, setIsAttacking] = useState(false);
@@ -29,10 +29,10 @@ function App() {
   const [progress, setProgress] = useState<number>(0);
 
   // For crawler config
-  const [target, setTarget] = useState<string>("");
+  const [target, setTarget] = useState<string>('');
   const [advancedOptions, setAdvancedOptions] = useState<CrawlOptions>({
-    target: "",
-    crawlMethod: "links",
+    target: '',
+    crawlMethod: 'links',
     crawlDepth: 2,
     crawlDelay: 1000,
     maxPages: 50,
@@ -41,7 +41,7 @@ function App() {
     dynamic: true,
     respectRobots: true,
     contentOnly: false,
-    saveMedia: false
+    saveMedia: false,
   });
 
   // UI state
@@ -51,7 +51,7 @@ function App() {
   const [selectedPage, setSelectedPage] = useState<CrawledPage | null>(null);
   const [openedConfig, setOpenedConfig] = useState(false);
   const [openExportDialog, setOpenExportDialog] = useState(false);
-  const [filterText, setFilterText] = useState("");
+  const [filterText, setFilterText] = useState('');
   const [isFilterActive, setIsFilterActive] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [currentTask, setCurrentTask] = useState<NodeJS.Timeout | null>(null);
@@ -70,150 +70,187 @@ function App() {
     mediaFiles: 0,
     successCount: 0,
     failureCount: 0,
-    skippedCount: 0
+    skippedCount: 0,
   });
 
   // Toast notification system
-  const addToast = useCallback((type: 'success' | 'error' | 'info' | 'warning', message: string, timeout = 3000) => {
-    const id = Date.now();
-    setToasts(prevToasts => [...prevToasts, { id, type, message, timeout }]);
-  }, []);
+  const addToast = useCallback(
+    (
+      type: 'success' | 'error' | 'info' | 'warning',
+      message: string,
+      timeout = 3000
+    ) => {
+      const id = Date.now();
+      setToasts((prevToasts) => [
+        ...prevToasts,
+        { id, type, message, timeout },
+      ]);
+    },
+    []
+  );
 
   const dismissToast = useCallback((id: number) => {
-    setToasts(prevToasts => prevToasts.filter(toast => toast.id !== id));
+    setToasts((prevToasts) => prevToasts.filter((toast) => toast.id !== id));
   }, []);
 
   // Connect to backend using the environment variable (VITE_BACKEND_URL)
   useEffect(() => {
-    const socketEndpoint = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
+    const socketEndpoint =
+      import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
     console.log(`Connecting to backend at ${socketEndpoint}`);
 
-    try {
-      const newSocket = io(socketEndpoint, {
-        transports: ["websocket"],
-        reconnectionAttempts: 5,
-        reconnectionDelay: 1000,
-        timeout: 10000
-      });
-
-      newSocket.on("connect", () => {
-        console.log("Connected to backend");
-        addToast('success', 'Connected to crawler backend');
-        setSocket(newSocket);
-      });
-
-      newSocket.on("connect_error", (err) => {
-        console.error("Connection error:", err);
-        addToast('error', `Connection error: ${err.message}`);
-      });
-
-      newSocket.on("stats", (data: StatsPayload) => {
-        // Merge new stats
-        setStats((old) => ({
-          pagesScanned: data.pagesScanned ?? old.pagesScanned,
-          linksFound: data.linksFound ?? old.linksFound,
-          totalData: data.totalData ?? old.totalData,
-          mediaFiles: data.mediaFiles ?? old.mediaFiles,
-          successCount: data.successCount ?? old.successCount,
-          failureCount: data.failureCount ?? old.failureCount,
-          skippedCount: data.skippedCount ?? old.skippedCount,
-          elapsedTime: data.elapsedTime ?? old.elapsedTime,
-          pagesPerSecond: data.pagesPerSecond ?? old.pagesPerSecond,
-          successRate: data.successRate ?? old.successRate
-        }));
-
-        if (data.log) {
-          addLog(data.log);
-        }
-
-        // Update progress
-        setProgress((prev) => {
-          // Create a smoother progress that accelerates as we go through the crawl
-          const newProgress = Math.min(
-            (data.pagesScanned || 0) / (advancedOptions.maxPages * 0.8) * 100,
-            99
-          );
-          return Math.max(prev, newProgress); // Never go backwards
+    // Add a small delay to ensure server is ready
+    const connectTimer = setTimeout(() => {
+      try {
+        const newSocket = io(socketEndpoint, {
+          transports: ['websocket', 'polling'], // Allow fallback to polling
+          reconnectionAttempts: 10,
+          reconnectionDelay: 1000,
+          reconnectionDelayMax: 5000,
+          timeout: 20000,
+          forceNew: true,
         });
-      });
 
-      newSocket.on("queueStats", (data: QueueStats) => {
-        setQueueStats(data);
-      });
+        newSocket.on('connect', () => {
+          console.log('Connected to backend');
+          addToast('success', 'Connected to crawler backend');
+          setSocket(newSocket);
+        });
 
-      newSocket.on("pageContent", (data: CrawledPage) => {
-        setCrawledPages((prev) => {
-          const newPages = [data, ...prev];
-          // Update filtered pages if filter is active
-          if (isFilterActive) {
-            setFilteredPages(filterPages(newPages, filterText));
+        newSocket.on('connect_error', (err) => {
+          console.error('Connection error:', err);
+          addToast('error', `Connection error: ${err.message}`);
+        });
+
+        newSocket.on('stats', (data: StatsPayload) => {
+          // Merge new stats
+          setStats((old) => ({
+            pagesScanned: data.pagesScanned ?? old.pagesScanned,
+            linksFound: data.linksFound ?? old.linksFound,
+            totalData: data.totalData ?? old.totalData,
+            mediaFiles: data.mediaFiles ?? old.mediaFiles,
+            successCount: data.successCount ?? old.successCount,
+            failureCount: data.failureCount ?? old.failureCount,
+            skippedCount: data.skippedCount ?? old.skippedCount,
+            elapsedTime: data.elapsedTime ?? old.elapsedTime,
+            pagesPerSecond: data.pagesPerSecond ?? old.pagesPerSecond,
+            successRate: data.successRate ?? old.successRate,
+          }));
+
+          if (data.log) {
+            addLog(data.log);
           }
-          return newPages;
+
+          // Update progress
+          setProgress((prev) => {
+            // Create a smoother progress that accelerates as we go through the crawl
+            const newProgress = Math.min(
+              ((data.pagesScanned || 0) / (advancedOptions.maxPages * 0.8)) *
+                100,
+              99
+            );
+            return Math.max(prev, newProgress); // Never go backwards
+          });
         });
-      });
 
-      newSocket.on("exportResult", (data: { data: string, format: string }) => {
-        // Create a blob and download link
-        const blob = new Blob([data.data], {
-          type: data.format === 'json'
-            ? 'application/json'
-            : 'text/csv'
+        newSocket.on('queueStats', (data: QueueStats) => {
+          setQueueStats(data);
         });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `miku-crawler-export.${data.format}`;
-        document.body.appendChild(a);
-        a.click();
 
-        // Clean up
-        setTimeout(() => {
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-        }, 100);
+        newSocket.on('pageContent', (data: CrawledPage) => {
+          setCrawledPages((prev) => {
+            const newPages = [data, ...prev];
+            // Update filtered pages if filter is active
+            if (isFilterActive) {
+              setFilteredPages(filterPages(newPages, filterText));
+            }
+            return newPages;
+          });
+        });
 
-        addToast('success', `Data exported successfully as ${data.format.toUpperCase()}`);
-      });
+        newSocket.on(
+          'exportResult',
+          (data: { data: string; format: string }) => {
+            // Create a blob and download link
+            const blob = new Blob([data.data], {
+              type: data.format === 'json' ? 'application/json' : 'text/csv',
+            });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `miku-crawler-export.${data.format}`;
+            document.body.appendChild(a);
+            a.click();
 
-      newSocket.on("error", (error: { message: string }) => {
-        addToast('error', error.message);
-      });
+            // Clean up
+            setTimeout(() => {
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+            }, 100);
 
-      newSocket.on("attackEnd", (finalStats: Stats) => {
-        setIsAttacking(false);
-        addLog("🛑 Crawl ended.");
-        setStats(finalStats);
-        setProgress(100); // Complete the progress bar
-
-        if (audioRef.current) {
-          audioRef.current.pause();
-          audioRef.current.currentTime = 0;
-        }
-
-        // Show completion toast
-        addToast(
-          'success',
-          `Crawl completed! Scanned ${finalStats.pagesScanned} pages in ${
-            finalStats.elapsedTime
-              ? `${finalStats.elapsedTime.hours}h ${finalStats.elapsedTime.minutes}m ${finalStats.elapsedTime.seconds}s`
-              : 'some time'
-          }`,
-          5000
+            addToast(
+              'success',
+              `Data exported successfully as ${data.format.toUpperCase()}`
+            );
+          }
         );
-      });
 
-      newSocket.on("disconnect", () => {
-        console.log("Disconnected from backend");
-        addToast('warning', 'Disconnected from crawler backend');
-      });
+        newSocket.on('error', (error: { message: string }) => {
+          addToast('error', error.message);
+        });
 
-      return () => {
-        newSocket.close();
-      };
-    } catch (error) {
-      console.error("Socket initialization error:", error);
-      addToast('error', `Failed to connect to backend: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
+        newSocket.on('attackEnd', (finalStats: Stats) => {
+          setIsAttacking(false);
+          setAnimState(0); // Reset to original theme
+          addLog('🛑 Crawl ended.');
+          setStats(finalStats);
+          setProgress(100); // Complete the progress bar
+
+          if (audioRef.current) {
+            audioRef.current.pause();
+            audioRef.current.currentTime = 0;
+          }
+
+          // Clear any pending timeouts
+          if (currentTask) {
+            clearTimeout(currentTask);
+            setCurrentTask(null);
+          }
+
+          // Show completion toast
+          addToast(
+            'success',
+            `Crawl completed! Scanned ${finalStats.pagesScanned} pages in ${
+              finalStats.elapsedTime
+                ? `${finalStats.elapsedTime.hours}h ${finalStats.elapsedTime.minutes}m ${finalStats.elapsedTime.seconds}s`
+                : 'some time'
+            }`,
+            5000
+          );
+        });
+
+        newSocket.on('disconnect', () => {
+          console.log('Disconnected from backend');
+          addToast('warning', 'Disconnected from crawler backend');
+        });
+
+        return () => {
+          newSocket.close();
+        };
+      } catch (error) {
+        console.error('Socket initialization error:', error);
+        addToast(
+          'error',
+          `Failed to connect to backend: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`
+        );
+      }
+    }, 500); // 500ms delay
+
+    return () => {
+      clearTimeout(connectTimer);
+    };
   }, [addToast, advancedOptions.maxPages, filterText, isFilterActive]);
 
   // Audio management for the attack animation/sound
@@ -223,15 +260,19 @@ function App() {
 
     const handler = () => {
       if (audio.paused) return;
-      if (animState !== 2 && audio.currentTime > 5.24 && audio.currentTime < 9.4) {
+      if (
+        animState !== 2 &&
+        audio.currentTime > 5.24 &&
+        audio.currentTime < 9.4
+      ) {
         setAnimState(2);
       }
       if (audio.currentTime > 17.53) {
         audio.currentTime = 15.86;
       }
     };
-    audio.addEventListener("timeupdate", handler);
-    return () => audio.removeEventListener("timeupdate", handler);
+    audio.addEventListener('timeupdate', handler);
+    return () => audio.removeEventListener('timeupdate', handler);
   }, [animState]);
 
   // Clean up timeouts when attack state changes
@@ -265,21 +306,26 @@ function App() {
     setTarget(newTarget);
 
     // Also update the target in advanced options
-    setAdvancedOptions(prev => ({
+    setAdvancedOptions((prev) => ({
       ...prev,
-      target: newTarget
+      target: newTarget,
     }));
   };
 
   // Filtering functions for crawled pages
-  const filterPages = (pages: CrawledPage[], filterString: string): CrawledPage[] => {
+  const filterPages = (
+    pages: CrawledPage[],
+    filterString: string
+  ): CrawledPage[] => {
     if (!filterString.trim()) return pages;
 
     const lowerFilter = filterString.toLowerCase();
-    return pages.filter(page =>
-      page.url.toLowerCase().includes(lowerFilter) ||
-      (page.title && page.title.toLowerCase().includes(lowerFilter)) ||
-      (page.description && page.description.toLowerCase().includes(lowerFilter))
+    return pages.filter(
+      (page) =>
+        page.url.toLowerCase().includes(lowerFilter) ||
+        (page.title && page.title.toLowerCase().includes(lowerFilter)) ||
+        (page.description &&
+          page.description.toLowerCase().includes(lowerFilter))
     );
   };
 
@@ -296,7 +342,7 @@ function App() {
       if (!/^https?:\/\//i.test(url)) {
         url = 'http://' + url;
         setTarget(url);
-        setAdvancedOptions(prev => ({ ...prev, target: url }));
+        setAdvancedOptions((prev) => ({ ...prev, target: url }));
       }
 
       new URL(url); // Will throw if invalid
@@ -318,7 +364,10 @@ function App() {
     }
 
     if (!socket) {
-      addToast('error', 'Socket not connected! Please wait or refresh the page.');
+      addToast(
+        'error',
+        'Socket not connected! Please wait or refresh the page.'
+      );
       return;
     }
 
@@ -330,13 +379,13 @@ function App() {
       mediaFiles: 0,
       successCount: 0,
       failureCount: 0,
-      skippedCount: 0
+      skippedCount: 0,
     });
     setCrawledPages([]);
     setFilteredPages([]);
     setSelectedPage(null);
     setProgress(0);
-    addLog("🕷️ Preparing miku beam...");
+    addLog('🕷️ Preparing miku beam...');
 
     if (audioRef.current) {
       audioRef.current.currentTime = isQuick ? 9.5 : 0;
@@ -349,19 +398,22 @@ function App() {
     // Update target in options before sending
     const optionsToSend = {
       ...advancedOptions,
-      target: target
+      target: target,
     };
 
     // Send crawl request to backend immediately
-    socket.emit("startAttack", optionsToSend);
+    socket.emit('startAttack', optionsToSend);
     addLog(`🌐 Starting crawl on ${target}`);
-    addLog("📡 Scanning for links and data...");
+    addLog('📡 Scanning for links and data...');
 
     // But still keep the visual animation timing for the frontend
-    const timeout = setTimeout(() => {
-      setAnimState(3);
-      addToast('info', `Started crawling ${target}`);
-    }, isQuick ? 700 : 10250);
+    const timeout = setTimeout(
+      () => {
+        setAnimState(3);
+        addToast('info', `Started crawling ${target}`);
+      },
+      isQuick ? 700 : 10250
+    );
     setCurrentTask(timeout);
 
     setIsAttacking(true);
@@ -369,10 +421,29 @@ function App() {
 
   const stopAttack = () => {
     if (socket) {
-      socket.emit("stopAttack");
-      addLog("🛑 Stopped crawler beam.");
+      socket.emit('stopAttack');
+      addLog('🛑 Stopped crawler beam.');
       addToast('info', 'Crawler stopped');
     }
+
+    // Reset all visual and audio effects
+    setIsAttacking(false);
+    setAnimState(0); // Reset to original theme
+
+    // Stop and reset audio
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
+
+    // Clear any pending timeouts
+    if (currentTask) {
+      clearTimeout(currentTask);
+      setCurrentTask(null);
+    }
+
+    // Reset progress
+    setProgress(0);
   };
 
   // Volume control
@@ -385,7 +456,7 @@ function App() {
   // Export function
   const handleExport = (format: string) => {
     if (socket && crawledPages.length > 0) {
-      socket.emit("exportData", format);
+      socket.emit('exportData', format);
       addToast('info', 'Preparing export...');
     } else {
       addToast('warning', 'No data to export!');
@@ -400,15 +471,15 @@ function App() {
   // Theme-based styling
   const isLightTheme = animState === 0 || animState === 3;
   const backgroundClass = isLightTheme
-    ? "from-emerald-100 to-cyan-100"
+    ? 'from-emerald-100 to-cyan-100'
     : animState === 2
-    ? "background-pulse"
-    : "bg-gray-950";
+    ? 'background-pulse'
+    : 'bg-gray-950';
 
   return (
     <div
       className={`relative w-screen h-screen bg-gradient-to-br ${backgroundClass} pt-4 px-4 pb-16 overflow-y-auto ${
-        isAttacking && (animState === 0 || animState === 3) ? "shake" : ""
+        isAttacking && (animState === 0 || animState === 3) ? 'shake' : ''
       }`}
     >
       <audio ref={audioRef} src="/audio.mp3" />
@@ -416,10 +487,18 @@ function App() {
       {/* Floating background decorations */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
         {/* Floating musical notes */}
-        <div className="absolute top-20 left-10 text-pink-400/20 text-4xl animate-bounce delay-0">♪</div>
-        <div className="absolute top-40 right-20 text-cyan-400/20 text-3xl animate-bounce delay-500">♫</div>
-        <div className="absolute bottom-40 left-20 text-emerald-400/20 text-5xl animate-bounce delay-1000">♪</div>
-        <div className="absolute bottom-20 right-10 text-pink-400/20 text-2xl animate-bounce delay-1500">♫</div>
+        <div className="absolute top-20 left-10 text-pink-400/20 text-4xl animate-bounce delay-0">
+          ♪
+        </div>
+        <div className="absolute top-40 right-20 text-cyan-400/20 text-3xl animate-bounce delay-500">
+          ♫
+        </div>
+        <div className="absolute bottom-40 left-20 text-emerald-400/20 text-5xl animate-bounce delay-1000">
+          ♪
+        </div>
+        <div className="absolute bottom-20 right-10 text-pink-400/20 text-2xl animate-bounce delay-1500">
+          ♫
+        </div>
 
         {/* Floating sparkles */}
         <div className="absolute top-32 left-1/4 w-2 h-2 bg-pink-400/30 rounded-full sparkle"></div>
@@ -435,8 +514,12 @@ function App() {
 
       {/* Toast Notifications */}
       <div className="fixed top-4 right-4 z-50 space-y-2">
-        {toasts.map(toast => (
-          <ToastNotification key={toast.id} toast={toast} onDismiss={dismissToast} />
+        {toasts.map((toast) => (
+          <ToastNotification
+            key={toast.id}
+            toast={toast}
+            onDismiss={dismissToast}
+          />
         ))}
       </div>
 
@@ -447,8 +530,8 @@ function App() {
         <div
           className={`relative p-8 overflow-hidden rounded-2xl shadow-2xl backdrop-blur-sm border ${
             isLightTheme
-              ? "bg-white/90 border-emerald-200/50 shadow-emerald-500/20"
-              : "bg-gray-950/90 border-gray-700/50 shadow-pink-500/20"
+              ? 'bg-white/90 border-emerald-200/50 shadow-emerald-500/20'
+              : 'bg-gray-950/90 border-gray-700/50 shadow-pink-500/20'
           }`}
         >
           {/* Enhanced decorative background */}
@@ -461,17 +544,17 @@ function App() {
           {/* Enhanced Miku GIF container */}
           <div className="relative z-10 mb-8">
             {/* Miku GIF with original working structure */}
-          <div
-            className="flex justify-center w-full h-48 mb-6"
-            style={{
-              backgroundImage: "url('/miku.gif')",
-              backgroundRepeat: "no-repeat",
-              backgroundPosition: "center",
-              backgroundSize: "cover",
-              opacity: animState === 0 || animState === 3 ? 1 : 0,
-              transition: "opacity 0.2s ease-in-out",
-            }}
-          ></div>
+            <div
+              className="flex justify-center w-full h-48 mb-6"
+              style={{
+                backgroundImage: "url('/miku.gif')",
+                backgroundRepeat: 'no-repeat',
+                backgroundPosition: 'center',
+                backgroundSize: 'cover',
+                opacity: animState === 0 || animState === 3 ? 1 : 0,
+                transition: 'opacity 0.2s ease-in-out',
+              }}
+            ></div>
           </div>
 
           {/* Crawler Config */}
@@ -507,9 +590,7 @@ function App() {
           />
 
           {/* Extended Stats */}
-          {showDetails && (
-            <StatsVisualizer stats={stats} />
-          )}
+          {showDetails && <StatsVisualizer stats={stats} />}
 
           {/* Logs Section */}
           <LogsSection
@@ -539,8 +620,8 @@ function App() {
                   absolute inset-0 bg-gradient-to-r
                   ${
                     animState === 2
-                      ? "from-pink-500/10 via-red-500/20 to-blue-500/10"
-                      : "from-pink-500/10 to-blue-500/10"
+                      ? 'from-pink-500/10 via-red-500/20 to-blue-500/10'
+                      : 'from-pink-500/10 to-blue-500/10'
                   }
                   animate-pulse
                 `}
@@ -551,78 +632,90 @@ function App() {
             </div>
           )}
         </div>
-        </div>
+      </div>
 
-        {/* Configuration Dialog */}
-        <ConfigurationView
-          isOpen={openedConfig}
-          onClose={() => setOpenedConfig(false)}
-          options={advancedOptions}
-          onOptionsChange={setAdvancedOptions}
-          onSave={() => {
-            addToast('success', 'Configuration saved');
-          }}
-        />
+      {/* Configuration Dialog */}
+      <ConfigurationView
+        isOpen={openedConfig}
+        onClose={() => setOpenedConfig(false)}
+        options={advancedOptions}
+        onOptionsChange={setAdvancedOptions}
+        onSave={() => {
+          addToast('success', 'Configuration saved');
+        }}
+      />
 
-        {/* Export Dialog */}
-        <ExportDialog
-          isOpen={openExportDialog}
-          onClose={() => setOpenExportDialog(false)}
-          onExport={handleExport}
-        />
+      {/* Export Dialog */}
+      <ExportDialog
+        isOpen={openExportDialog}
+        onClose={() => setOpenExportDialog(false)}
+        onExport={handleExport}
+      />
 
       <div className="flex flex-col items-center space-y-4 mt-8">
         {/* Enhanced footer with beautiful styling */}
-        <div className={`relative p-6 rounded-2xl backdrop-blur-sm border ${
-          isLightTheme
-            ? "bg-white/80 border-emerald-200/50 shadow-lg shadow-emerald-500/10"
-            : "bg-gray-900/80 border-gray-700/50 shadow-lg shadow-pink-500/10"
-        }`}>
+        <div
+          className={`relative p-6 rounded-2xl backdrop-blur-sm border ${
+            isLightTheme
+              ? 'bg-white/80 border-emerald-200/50 shadow-lg shadow-emerald-500/10'
+              : 'bg-gray-900/80 border-gray-700/50 shadow-lg shadow-pink-500/10'
+          }`}
+        >
           {/* Decorative background */}
           <div className="absolute inset-0 bg-gradient-to-r from-pink-400/5 via-emerald-400/5 to-cyan-400/5 rounded-2xl"></div>
 
           <div className="relative z-10 text-center space-y-4">
             {/* Main footer text */}
             <div className="flex items-center justify-center gap-2 text-lg font-bold">
-              <span className="text-pink-400 animate-bounce">🕷️</span>
-              <span className={`bg-gradient-to-r from-emerald-500 to-cyan-500 bg-clip-text text-transparent ${
-                isLightTheme ? "" : "filter brightness-125"
-              }`}>
-                v2.0 made with ❤️ by{" "}
+              <span className="text-pink-400">🕷️</span>
+              <span
+                className={`bg-gradient-to-r from-emerald-500 to-cyan-500 bg-clip-text text-transparent ${
+                  isLightTheme ? '' : 'filter brightness-125'
+                }`}
+              >
+                v2.0 made with ❤️ by{' '}
                 <a
                   href="https://github.com/renbkna"
                   className="text-pink-500 hover:text-pink-400 transition-colors duration-300 underline decoration-pink-400/50 hover:decoration-pink-400"
                 >
-              renbkna
+                  renbkna
                 </a>
-          </span>
-              <span className="text-cyan-400 animate-bounce delay-300">🕷️</span>
+              </span>
+              <span className="text-cyan-400">🕷️</span>
             </div>
 
             {/* Volume control section */}
             <div className="space-y-2">
               <div className="flex items-center justify-center gap-2">
-                <span className="text-sm font-semibold text-gray-500">🎵 Audio Volume</span>
-                <span className={`text-sm font-bold ${
-                  audioVol > 50 ? "text-emerald-500" : audioVol > 0 ? "text-yellow-500" : "text-gray-400"
-                }`}>
+                <span className="text-sm font-semibold text-gray-500">
+                  🎵 Audio Volume
+                </span>
+                <span
+                  className={`text-sm font-bold ${
+                    audioVol > 50
+                      ? 'text-emerald-500'
+                      : audioVol > 0
+                      ? 'text-yellow-500'
+                      : 'text-gray-400'
+                  }`}
+                >
                   {audioVol}%
                 </span>
               </div>
 
               {/* Enhanced volume slider */}
               <div className="relative w-48 mx-auto">
-            <input
+                <input
                   className="w-full volume_bar focus:border-emerald-500 transition-all duration-300 hover:scale-105"
-              type="range"
-              min="0"
-              max="100"
-              step="5"
-              draggable="false"
-              value={audioVol}
-              onChange={(e) => setAudioVol(parseInt(e.target.value))}
-              aria-label="Volume control"
-            />
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="5"
+                  draggable="false"
+                  value={audioVol}
+                  onChange={(e) => setAudioVol(parseInt(e.target.value))}
+                  aria-label="Volume control"
+                />
 
                 {/* Volume level indicators */}
                 <div className="flex justify-between mt-1 text-xs text-gray-400">
@@ -636,9 +729,11 @@ function App() {
             {/* Decorative elements */}
             <div className="flex items-center justify-center space-x-4 text-sm opacity-60">
               <span className="text-pink-400">✨</span>
-              <span className={isLightTheme ? "text-gray-600" : "text-gray-400"}>
+              <span
+                className={isLightTheme ? 'text-gray-600' : 'text-gray-400'}
+              >
                 Powered by Miku's magic
-          </span>
+              </span>
               <span className="text-cyan-400">✨</span>
             </div>
           </div>
