@@ -9,6 +9,7 @@ import {
   extractMetadata,
   getChromePaths,
 } from '../utils/helpers.js';
+import { ContentProcessor } from '../processors/ContentProcessor.js';
 
 // Advanced Crawl Session Class - improved
 export class AdvancedCrawlSession {
@@ -16,6 +17,7 @@ export class AdvancedCrawlSession {
     this.socket = socket;
     this.dbPromise = dbPromise;
     this.logger = logger;
+    this.contentProcessor = new ContentProcessor(logger);
 
     // Validate and sanitize input options
     this.options = {
@@ -387,6 +389,37 @@ export class AdvancedCrawlSession {
       const url = new URL(item.url);
       const domain = url.hostname;
 
+      // Process content with ContentProcessor for enhanced data extraction
+      let processedContent;
+      try {
+        processedContent = await this.contentProcessor.processContent(
+          content,
+          item.url,
+          contentType
+        );
+      } catch (error) {
+        this.logger.error(
+          `ContentProcessor failed for ${item.url}: ${error.message}`
+        );
+        // Provide fallback data
+        processedContent = {
+          extractedData: { mainContent: '' },
+          analysis: {
+            wordCount: 0,
+            readingTime: 0,
+            language: 'unknown',
+            keywords: [],
+            sentiment: 'neutral',
+            readabilityScore: 0,
+            quality: { score: 0, factors: {}, issues: ['Processing failed'] },
+          },
+          metadata: {},
+          media: [],
+          links: [],
+          errors: [{ type: 'processor_error', message: error.message }],
+        };
+      }
+
       // Insert into database
       const db = await this.dbPromise;
       const sanitizedContent = contentType.includes('text/html')
@@ -399,10 +432,30 @@ export class AdvancedCrawlSession {
           })
         : content;
 
+      // Prepare enhanced data for database with safe fallbacks
+      const enhancedData = {
+        mainContent: processedContent.extractedData?.mainContent || '',
+        wordCount: processedContent.analysis?.wordCount || 0,
+        readingTime: processedContent.analysis?.readingTime || 0,
+        language: processedContent.analysis?.language || 'unknown',
+        keywords: JSON.stringify(processedContent.analysis?.keywords || []),
+        qualityScore: processedContent.analysis?.quality?.score || 0,
+        structuredData: JSON.stringify(processedContent.extractedData || {}),
+        mediaCount: processedContent.media?.length || 0,
+        internalLinksCount:
+          processedContent.links?.filter((link) => link.isInternal)?.length ||
+          0,
+        externalLinksCount:
+          processedContent.links?.filter((link) => !link.isInternal)?.length ||
+          0,
+      };
+
       const result = await db.run(
         `INSERT OR REPLACE INTO pages
-        (url, domain, content_type, status_code, data_length, title, description, content, is_dynamic, last_modified)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (url, domain, content_type, status_code, data_length, title, description, content, is_dynamic, last_modified,
+         main_content, word_count, reading_time, language, keywords, quality_score, structured_data,
+         media_count, internal_links_count, external_links_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         item.url,
         domain,
         contentType,
@@ -412,7 +465,17 @@ export class AdvancedCrawlSession {
         description,
         this.options.contentOnly ? null : sanitizedContent, // Save content only if needed
         isDynamic ? 1 : 0,
-        lastModified
+        lastModified,
+        enhancedData.mainContent,
+        enhancedData.wordCount,
+        enhancedData.readingTime,
+        enhancedData.language,
+        enhancedData.keywords,
+        enhancedData.qualityScore,
+        enhancedData.structuredData,
+        enhancedData.mediaCount,
+        enhancedData.internalLinksCount,
+        enhancedData.externalLinksCount
       );
 
       // Parse content and extract links if HTML
@@ -455,16 +518,45 @@ export class AdvancedCrawlSession {
         this.stats.mediaFiles++;
       }
 
-      // Emit stats update to client
+      // Emit stats update to client with enhanced insights
+      const enhancedLog = [
+        `🕷️ Crawled: ${item.url} (${statusCode})`,
+        `[${Math.floor(contentLength / 1024)}KB]`,
+        processedContent.analysis?.wordCount
+          ? `${processedContent.analysis.wordCount} words`
+          : '',
+        processedContent.analysis?.language &&
+        processedContent.analysis.language !== 'unknown'
+          ? `Lang: ${processedContent.analysis.language}`
+          : '',
+        processedContent.analysis?.quality?.score
+          ? `Quality: ${processedContent.analysis.quality.score}/100`
+          : '',
+        processedContent.links?.length
+          ? `${processedContent.links.length} links`
+          : '',
+        processedContent.media?.length
+          ? `${processedContent.media.length} media`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' | ');
+
       this.socket.emit('stats', {
         ...this.stats,
-        log: `🕷️ Crawled: ${item.url} (${statusCode}) [${Math.floor(
-          contentLength / 1024
-        )}KB] ${links.length ? `Found ${links.length} links` : ''}`,
+        log: enhancedLog,
+        // Add processing insights to stats
+        lastProcessed: {
+          url: item.url,
+          wordCount: processedContent.analysis?.wordCount || 0,
+          qualityScore: processedContent.analysis?.quality?.score || 0,
+          language: processedContent.analysis?.language || 'unknown',
+          mediaCount: processedContent.media?.length || 0,
+          linksCount: processedContent.links?.length || 0,
+        },
       });
 
-      // Emit page content to client
-      // Send sanitized content to avoid XSS when displaying in browser
+      // Emit page content to client with enhanced processed data
       const pageForClient = {
         url: item.url,
         content: sanitizedContent,
@@ -472,6 +564,16 @@ export class AdvancedCrawlSession {
         description,
         contentType,
         domain,
+        // Enhanced data from ContentProcessor
+        processedData: {
+          extractedData: processedContent.extractedData || {},
+          metadata: processedContent.metadata || {},
+          analysis: processedContent.analysis || {},
+          media: processedContent.media || [],
+          qualityScore: processedContent.analysis?.quality?.score || 0,
+          keywords: processedContent.analysis?.keywords || [],
+          language: processedContent.analysis?.language || 'unknown',
+        },
       };
 
       this.socket.emit('pageContent', pageForClient);
