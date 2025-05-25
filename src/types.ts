@@ -34,6 +34,52 @@ export interface CrawledPage {
   description?: string;
   contentType?: string;
   domain?: string;
+  processedData?: {
+    extractedData: {
+      mainContent?: string;
+      jsonLd?: any[];
+      microdata?: any;
+      openGraph?: any;
+      twitterCards?: any;
+      schema?: any;
+    };
+    metadata: {
+      title?: string;
+      description?: string;
+      author?: string;
+      publishDate?: string;
+      modifiedDate?: string;
+      canonical?: string;
+      robots?: string;
+      viewport?: string;
+      charset?: string;
+      generator?: string;
+    };
+    analysis: {
+      wordCount: number;
+      readingTime: number;
+      language: string;
+      keywords: Array<{ word: string; count: number }>;
+      sentiment: string;
+      readabilityScore: number;
+      quality?: {
+        score: number;
+        factors: any;
+        issues: string[];
+      };
+    };
+    media: Array<{
+      type: string;
+      url: string;
+      alt?: string;
+      title?: string;
+      width?: string;
+      height?: string;
+      poster?: string;
+    }>;
+    qualityScore: number;
+    language: string;
+  };
 }
 
 // Crawl configuration options

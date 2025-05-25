@@ -50,9 +50,9 @@ export function CrawlerForm({
               placeholder="Enter target URL (e.g., https://example.com)"
               className={`w-full px-4 py-3 rounded-xl border-2 transition-all duration-300 focus:scale-[1.02] ${
                 isLightTheme
-                  ? 'bg-white/80 border-emerald-200 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100 text-gray-800'
-                  : 'bg-gray-800/80 border-gray-600 focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/20 text-white'
-              } backdrop-blur-sm shadow-lg placeholder-gray-400`}
+                  ? 'bg-white/80 border-emerald-200 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100 text-gray-800 placeholder-gray-500'
+                  : 'bg-gray-800/80 border-gray-600 focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/20 text-white placeholder-gray-300'
+              } backdrop-blur-sm shadow-lg`}
               disabled={isAttacking}
             />
             {/* Decorative border gradient */}
@@ -146,7 +146,7 @@ export function CrawlerForm({
               className={`w-full px-3 py-2 rounded-lg border transition-all duration-300 focus:scale-[1.02] ${
                 isLightTheme
                   ? 'bg-white/90 border-emerald-200 focus:border-emerald-400 text-gray-800'
-                  : 'bg-gray-700/90 border-gray-600 focus:border-cyan-400 text-white'
+                  : 'bg-gray-600/90 border-gray-500 focus:border-cyan-400 text-white'
               } backdrop-blur-sm shadow-md`}
               disabled={isAttacking}
             >
@@ -178,7 +178,7 @@ export function CrawlerForm({
               className={`w-full px-3 py-2 rounded-lg border transition-all duration-300 focus:scale-[1.02] ${
                 isLightTheme
                   ? 'bg-white/90 border-emerald-200 focus:border-emerald-400 text-gray-800'
-                  : 'bg-gray-700/90 border-gray-600 focus:border-cyan-400 text-white'
+                  : 'bg-gray-600/90 border-gray-500 focus:border-cyan-400 text-white'
               } backdrop-blur-sm shadow-md`}
               disabled={isAttacking}
               min="1"
@@ -207,7 +207,7 @@ export function CrawlerForm({
               className={`w-full px-3 py-2 rounded-lg border transition-all duration-300 focus:scale-[1.02] ${
                 isLightTheme
                   ? 'bg-white/90 border-emerald-200 focus:border-emerald-400 text-gray-800'
-                  : 'bg-gray-700/90 border-gray-600 focus:border-cyan-400 text-white'
+                  : 'bg-gray-600/90 border-gray-500 focus:border-cyan-400 text-white'
               } backdrop-blur-sm shadow-md`}
               disabled={isAttacking}
               min="1"
@@ -236,7 +236,7 @@ export function CrawlerForm({
               className={`w-full px-3 py-2 rounded-lg border transition-all duration-300 focus:scale-[1.02] ${
                 isLightTheme
                   ? 'bg-white/90 border-emerald-200 focus:border-emerald-400 text-gray-800'
-                  : 'bg-gray-700/90 border-gray-600 focus:border-cyan-400 text-white'
+                  : 'bg-gray-600/90 border-gray-500 focus:border-cyan-400 text-white'
               } backdrop-blur-sm shadow-md`}
               disabled={isAttacking}
               min="500"

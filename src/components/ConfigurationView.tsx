@@ -1,5 +1,5 @@
-import { X, Coffee, Database } from "lucide-react";
-import { CrawlOptions } from "../types";
+import { X, Coffee, Database } from 'lucide-react';
+import { CrawlOptions } from '../types';
 
 interface ConfigurationViewProps {
   isOpen: boolean;
@@ -14,7 +14,7 @@ export function ConfigurationView({
   onClose,
   options,
   onOptionsChange,
-  onSave
+  onSave,
 }: ConfigurationViewProps) {
   if (!isOpen) return null;
 
@@ -22,7 +22,9 @@ export function ConfigurationView({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="w-full max-w-xl p-6 bg-white rounded-lg shadow-lg max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-2xl font-bold text-emerald-600">Advanced Configuration</h2>
+          <h2 className="text-2xl font-bold text-emerald-600">
+            Advanced Configuration
+          </h2>
           <button
             onClick={onClose}
             className="p-1 rounded-full hover:bg-gray-200"
@@ -47,15 +49,19 @@ export function ConfigurationView({
                 <input
                   type="number"
                   value={options.maxConcurrentRequests}
-                  onChange={(e) => onOptionsChange({
-                    ...options,
-                    maxConcurrentRequests: Number(e.target.value)
-                  })}
-                  className="w-full px-3 py-2 border border-emerald-200 rounded-lg"
+                  onChange={(e) =>
+                    onOptionsChange({
+                      ...options,
+                      maxConcurrentRequests: Number(e.target.value),
+                    })
+                  }
+                  className="w-full px-3 py-2 border border-emerald-200 rounded-lg bg-white text-gray-800 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-200"
                   min="1"
                   max="20"
                 />
-                <p className="mt-1 text-xs text-gray-500">Higher values crawl faster but may overload servers</p>
+                <p className="mt-1 text-xs text-gray-500">
+                  Higher values crawl faster but may overload servers
+                </p>
               </div>
 
               <div>
@@ -65,15 +71,19 @@ export function ConfigurationView({
                 <input
                   type="number"
                   value={options.retryLimit}
-                  onChange={(e) => onOptionsChange({
-                    ...options,
-                    retryLimit: Number(e.target.value)
-                  })}
-                  className="w-full px-3 py-2 border border-emerald-200 rounded-lg"
+                  onChange={(e) =>
+                    onOptionsChange({
+                      ...options,
+                      retryLimit: Number(e.target.value),
+                    })
+                  }
+                  className="w-full px-3 py-2 border border-emerald-200 rounded-lg bg-white text-gray-800 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-200"
                   min="0"
                   max="10"
                 />
-                <p className="mt-1 text-xs text-gray-500">How many times to retry failed requests</p>
+                <p className="mt-1 text-xs text-gray-500">
+                  How many times to retry failed requests
+                </p>
               </div>
             </div>
           </div>
@@ -91,13 +101,18 @@ export function ConfigurationView({
                   type="checkbox"
                   id="dynamic"
                   checked={options.dynamic}
-                  onChange={(e) => onOptionsChange({
-                    ...options,
-                    dynamic: e.target.checked
-                  })}
+                  onChange={(e) =>
+                    onOptionsChange({
+                      ...options,
+                      dynamic: e.target.checked,
+                    })
+                  }
                   className="w-4 h-4 text-emerald-600 border-gray-300 rounded"
                 />
-                <label htmlFor="dynamic" className="ml-2 text-sm font-medium text-gray-700">
+                <label
+                  htmlFor="dynamic"
+                  className="ml-2 text-sm font-medium text-gray-700"
+                >
                   Use Dynamic Content (JavaScript Rendering)
                 </label>
                 <div className="ml-2 text-xs text-gray-500">
@@ -110,13 +125,18 @@ export function ConfigurationView({
                   type="checkbox"
                   id="respectRobots"
                   checked={options.respectRobots}
-                  onChange={(e) => onOptionsChange({
-                    ...options,
-                    respectRobots: e.target.checked
-                  })}
+                  onChange={(e) =>
+                    onOptionsChange({
+                      ...options,
+                      respectRobots: e.target.checked,
+                    })
+                  }
                   className="w-4 h-4 text-emerald-600 border-gray-300 rounded"
                 />
-                <label htmlFor="respectRobots" className="ml-2 text-sm font-medium text-gray-700">
+                <label
+                  htmlFor="respectRobots"
+                  className="ml-2 text-sm font-medium text-gray-700"
+                >
                   Respect robots.txt
                 </label>
                 <div className="ml-2 text-xs text-gray-500">
@@ -129,13 +149,18 @@ export function ConfigurationView({
                   type="checkbox"
                   id="contentOnly"
                   checked={options.contentOnly}
-                  onChange={(e) => onOptionsChange({
-                    ...options,
-                    contentOnly: e.target.checked
-                  })}
+                  onChange={(e) =>
+                    onOptionsChange({
+                      ...options,
+                      contentOnly: e.target.checked,
+                    })
+                  }
                   className="w-4 h-4 text-emerald-600 border-gray-300 rounded"
                 />
-                <label htmlFor="contentOnly" className="ml-2 text-sm font-medium text-gray-700">
+                <label
+                  htmlFor="contentOnly"
+                  className="ml-2 text-sm font-medium text-gray-700"
+                >
                   Metadata Only
                 </label>
                 <div className="ml-2 text-xs text-gray-500">
@@ -148,13 +173,18 @@ export function ConfigurationView({
                   type="checkbox"
                   id="saveMedia"
                   checked={options.saveMedia}
-                  onChange={(e) => onOptionsChange({
-                    ...options,
-                    saveMedia: e.target.checked
-                  })}
+                  onChange={(e) =>
+                    onOptionsChange({
+                      ...options,
+                      saveMedia: e.target.checked,
+                    })
+                  }
                   className="w-4 h-4 text-emerald-600 border-gray-300 rounded"
                 />
-                <label htmlFor="saveMedia" className="ml-2 text-sm font-medium text-gray-700">
+                <label
+                  htmlFor="saveMedia"
+                  className="ml-2 text-sm font-medium text-gray-700"
+                >
                   Process Media Files
                 </label>
                 <div className="ml-2 text-xs text-gray-500">
