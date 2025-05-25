@@ -461,17 +461,17 @@ function App() {
           {/* Enhanced Miku GIF container */}
           <div className="relative z-10 mb-8">
             {/* Miku GIF with original working structure */}
-            <div
-              className="flex justify-center w-full h-48 mb-6"
-              style={{
-                backgroundImage: "url('/miku.gif')",
-                backgroundRepeat: "no-repeat",
-                backgroundPosition: "center",
-                backgroundSize: "cover",
-                opacity: animState === 0 || animState === 3 ? 1 : 0,
-                transition: "opacity 0.2s ease-in-out",
-              }}
-            ></div>
+          <div
+            className="flex justify-center w-full h-48 mb-6"
+            style={{
+              backgroundImage: "url('/miku.gif')",
+              backgroundRepeat: "no-repeat",
+              backgroundPosition: "center",
+              backgroundSize: "cover",
+              opacity: animState === 0 || animState === 3 ? 1 : 0,
+              transition: "opacity 0.2s ease-in-out",
+            }}
+          ></div>
           </div>
 
           {/* Crawler Config */}
@@ -551,25 +551,25 @@ function App() {
             </div>
           )}
         </div>
-      </div>
+        </div>
 
-      {/* Configuration Dialog */}
-      <ConfigurationView
-        isOpen={openedConfig}
-        onClose={() => setOpenedConfig(false)}
-        options={advancedOptions}
-        onOptionsChange={setAdvancedOptions}
-        onSave={() => {
-          addToast('success', 'Configuration saved');
-        }}
-      />
+        {/* Configuration Dialog */}
+        <ConfigurationView
+          isOpen={openedConfig}
+          onClose={() => setOpenedConfig(false)}
+          options={advancedOptions}
+          onOptionsChange={setAdvancedOptions}
+          onSave={() => {
+            addToast('success', 'Configuration saved');
+          }}
+        />
 
-      {/* Export Dialog */}
-      <ExportDialog
-        isOpen={openExportDialog}
-        onClose={() => setOpenExportDialog(false)}
-        onExport={handleExport}
-      />
+        {/* Export Dialog */}
+        <ExportDialog
+          isOpen={openExportDialog}
+          onClose={() => setOpenExportDialog(false)}
+          onExport={handleExport}
+        />
 
       <div className="flex flex-col items-center space-y-4 mt-8">
         {/* Enhanced footer with beautiful styling */}
@@ -593,9 +593,9 @@ function App() {
                   href="https://github.com/renbkna"
                   className="text-pink-500 hover:text-pink-400 transition-colors duration-300 underline decoration-pink-400/50 hover:decoration-pink-400"
                 >
-                  renbkna
+              renbkna
                 </a>
-              </span>
+          </span>
               <span className="text-cyan-400 animate-bounce delay-300">🕷️</span>
             </div>
 
@@ -612,17 +612,17 @@ function App() {
 
               {/* Enhanced volume slider */}
               <div className="relative w-48 mx-auto">
-                <input
+            <input
                   className="w-full volume_bar focus:border-emerald-500 transition-all duration-300 hover:scale-105"
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="5"
-                  draggable="false"
-                  value={audioVol}
-                  onChange={(e) => setAudioVol(parseInt(e.target.value))}
-                  aria-label="Volume control"
-                />
+              type="range"
+              min="0"
+              max="100"
+              step="5"
+              draggable="false"
+              value={audioVol}
+              onChange={(e) => setAudioVol(parseInt(e.target.value))}
+              aria-label="Volume control"
+            />
 
                 {/* Volume level indicators */}
                 <div className="flex justify-between mt-1 text-xs text-gray-400">
@@ -638,7 +638,7 @@ function App() {
               <span className="text-pink-400">✨</span>
               <span className={isLightTheme ? "text-gray-600" : "text-gray-400"}>
                 Powered by Miku's magic
-              </span>
+          </span>
               <span className="text-cyan-400">✨</span>
             </div>
           </div>
