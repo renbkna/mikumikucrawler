@@ -40,7 +40,18 @@ export const setupDatabase = async () => {
       title TEXT,
       description TEXT,
       content TEXT,
-      is_dynamic BOOLEAN DEFAULT 0
+      is_dynamic BOOLEAN DEFAULT 0,
+      -- Enhanced content processing fields
+      main_content TEXT,
+      word_count INTEGER,
+      reading_time INTEGER,
+      language TEXT,
+      keywords TEXT, -- JSON array
+      quality_score INTEGER,
+      structured_data TEXT, -- JSON
+      media_count INTEGER,
+      internal_links_count INTEGER,
+      external_links_count INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS links (
@@ -66,5 +77,41 @@ export const setupDatabase = async () => {
     CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_url);
   `);
 
+  // Migration: Add new columns for content processing if they don't exist
+  await migrateDatabase(db);
+
   return db;
+};
+
+// Database migration function
+const migrateDatabase = async (db) => {
+  try {
+    // Check if the new columns exist
+    const tableInfo = await db.all('PRAGMA table_info(pages)');
+    const columnNames = tableInfo.map((col) => col.name);
+
+    const newColumns = [
+      'main_content TEXT',
+      'word_count INTEGER',
+      'reading_time INTEGER',
+      'language TEXT',
+      'keywords TEXT',
+      'quality_score INTEGER',
+      'structured_data TEXT',
+      'media_count INTEGER',
+      'internal_links_count INTEGER',
+      'external_links_count INTEGER',
+    ];
+
+    // Add missing columns
+    for (const column of newColumns) {
+      const columnName = column.split(' ')[0];
+      if (!columnNames.includes(columnName)) {
+        await db.exec(`ALTER TABLE pages ADD COLUMN ${column}`);
+        console.log(`Added column: ${columnName}`);
+      }
+    }
+  } catch (error) {
+    console.error('Migration error:', error.message);
+  }
 };
