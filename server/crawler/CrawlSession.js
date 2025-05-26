@@ -10,6 +10,7 @@ import {
   getChromePaths,
 } from '../utils/helpers.js';
 import { ContentProcessor } from '../processors/ContentProcessor.js';
+import { MemoryMonitor } from '../utils/memoryMonitor.js';
 
 // Advanced Crawl Session Class - improved
 export class AdvancedCrawlSession {
@@ -58,6 +59,7 @@ export class AdvancedCrawlSession {
     this.isActive = true;
     this.activeCount = 0;
     this.browser = null;
+    this.browserPageCount = 0; // Track pages opened for browser recycling
 
     // Extract target domain
     try {
@@ -74,65 +76,128 @@ export class AdvancedCrawlSession {
 
   async start() {
     try {
+      // Check memory status before attempting Puppeteer
+      const memoryStatus = MemoryMonitor.logMemoryStatus(this.logger);
+
       // If dynamic content is enabled, launch Puppeteer
       if (this.options.dynamic) {
-        try {
-          const chromePaths = getChromePaths();
-
-          let executablePath = null;
-
-          for (const chromePath of chromePaths) {
-            if (existsSync(chromePath)) {
-              executablePath = chromePath;
-              this.logger.info(`Found Chrome executable at: ${chromePath}`);
-              break;
-            }
-          }
-
-          // Launch options with improved configuration for Docker/Production
-          const launchOptions = {
-            headless: 'new',
-            args: [
-              '--no-sandbox',
-              '--disable-setuid-sandbox',
-              '--disable-dev-shm-usage',
-              '--disable-gpu',
-              '--disable-software-rasterizer',
-              '--disable-background-timer-throttling',
-              '--disable-backgrounding-occluded-windows',
-              '--disable-renderer-backgrounding',
-              '--disable-features=TranslateUI',
-              '--disable-ipc-flooding-protection',
-              '--window-size=1280,720',
-              '--disable-extensions',
-              '--disable-features=site-per-process',
-              '--no-first-run',
-              '--no-zygote',
-              '--single-process', // Important for some cloud environments
-              '--disable-background-networking',
-            ],
-          };
-
-          // Add the executable path if we found it
-          if (executablePath) {
-            launchOptions.executablePath = executablePath;
-          }
-
-          this.logger.info(
-            `Launching Puppeteer with config: ${JSON.stringify(launchOptions)}`
+        // Don't even try Puppeteer if memory is already low or on very constrained systems
+        if (
+          memoryStatus.isLowMemory ||
+          (process.env.RENDER && memoryStatus.heapUsed > 50)
+        ) {
+          this.logger.warn(
+            'Skipping Puppeteer due to low memory or constrained environment - falling back to static crawling'
           );
-          this.browser = await puppeteer.launch(launchOptions);
-          this.logger.info(
-            'Puppeteer launched successfully for dynamic content handling.'
-          );
-        } catch (err) {
-          this.logger.error(`Failed to launch Puppeteer: ${err.message}`);
-          // Fall back to static crawling
           this.options.dynamic = false;
           this.socket.emit('stats', {
             ...this.stats,
-            log: `⚠️ Falling back to static crawling: ${err.message}`,
+            log: `⚠️ Falling back to static crawling: ${
+              memoryStatus.recommendation || 'Constrained environment'
+            }`,
           });
+        } else {
+          try {
+            const chromePaths = getChromePaths();
+
+            let executablePath = null;
+
+            for (const chromePath of chromePaths) {
+              if (existsSync(chromePath)) {
+                executablePath = chromePath;
+                this.logger.info(`Found Chrome executable at: ${chromePath}`);
+                break;
+              }
+            }
+
+            // Launch options with improved configuration for Docker/Production
+            const launchOptions = {
+              headless: 'new',
+              args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--disable-software-rasterizer',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding',
+                '--disable-features=TranslateUI,VizDisplayCompositor',
+                '--disable-ipc-flooding-protection',
+                '--disable-background-networking',
+                '--disable-default-apps',
+                '--disable-extensions',
+                '--disable-sync',
+                '--disable-translate',
+                '--hide-scrollbars',
+                '--metrics-recording-only',
+                '--mute-audio',
+                '--no-first-run',
+                '--safebrowsing-disable-auto-update',
+                '--ignore-certificate-errors',
+                '--ignore-ssl-errors',
+                '--ignore-certificate-errors-spki-list',
+                '--ignore-certificate-errors-ssl-errors',
+                '--disable-features=site-per-process',
+                '--disable-web-security',
+                '--disable-blink-features=AutomationControlled',
+                '--window-size=800,600', // Smaller window to save memory
+                '--memory-pressure-off',
+                '--aggressive-cache-discard',
+                '--disable-background-mode',
+                '--disable-plugins',
+                '--disable-java',
+                '--disable-popup-blocking',
+                '--disable-features=VizDisplayCompositor',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding',
+                '--disable-background-timer-throttling',
+                '--disable-features=TranslateUI',
+                '--disable-ipc-flooding-protection',
+                '--no-zygote', // Better stability in containers
+                '--disable-dev-shm-usage',
+                '--disable-extensions-http-throttling',
+              ],
+              // Remove single-process as it can cause issues with some sites
+              timeout: 45000, // Increased timeout
+              protocolTimeout: 45000, // Increased protocol timeout
+              slowMo: 100, // Add slight delay between actions for stability
+            };
+
+            // Add the executable path if we found it
+            if (executablePath) {
+              launchOptions.executablePath = executablePath;
+            }
+
+            this.logger.info(
+              `Launching Puppeteer with config: ${JSON.stringify(
+                launchOptions
+              )}`
+            );
+            this.browser = await puppeteer.launch(launchOptions);
+            this.logger.info(
+              'Puppeteer launched successfully for dynamic content handling.'
+            );
+          } catch (err) {
+            this.logger.error(`Failed to launch Puppeteer: ${err.message}`);
+            // Fall back to static crawling
+            this.options.dynamic = false;
+
+            let fallbackReason = err.message;
+            if (
+              err.message.includes('spawn') ||
+              err.message.includes('ENOMEM') ||
+              err.message.includes('memory')
+            ) {
+              fallbackReason =
+                'Insufficient memory (need at least 1GB RAM for dynamic crawling)';
+            }
+
+            this.socket.emit('stats', {
+              ...this.stats,
+              log: `⚠️ Falling back to static crawling: ${fallbackReason}`,
+            });
+          }
         }
       }
 
@@ -290,12 +355,93 @@ export class AdvancedCrawlSession {
 
       // Check if we should use dynamic content fetching (Puppeteer)
       if (this.options.dynamic && this.browser) {
+        // Recycle browser more aggressively on low-memory systems (prevents memory leaks)
+        const recycleThreshold = process.env.RENDER ? 10 : 20; // More aggressive on Render
+        if (this.browserPageCount > recycleThreshold) {
+          this.logger.info('Recycling browser to prevent memory leaks');
+          try {
+            await this.browser.close();
+          } catch (e) {
+            this.logger.warn(`Error closing old browser: ${e.message}`);
+          }
+
+          // Relaunch browser with same config
+          const chromePaths = getChromePaths();
+          let executablePath = null;
+          for (const chromePath of chromePaths) {
+            if (existsSync(chromePath)) {
+              executablePath = chromePath;
+              break;
+            }
+          }
+
+          const launchOptions = {
+            headless: 'new',
+            args: [
+              '--no-sandbox',
+              '--disable-setuid-sandbox',
+              '--disable-dev-shm-usage',
+              '--disable-gpu',
+              '--disable-software-rasterizer',
+              '--disable-background-timer-throttling',
+              '--disable-backgrounding-occluded-windows',
+              '--disable-renderer-backgrounding',
+              '--disable-features=TranslateUI,VizDisplayCompositor',
+              '--disable-ipc-flooding-protection',
+              '--disable-background-networking',
+              '--disable-default-apps',
+              '--disable-extensions',
+              '--disable-sync',
+              '--disable-translate',
+              '--hide-scrollbars',
+              '--metrics-recording-only',
+              '--mute-audio',
+              '--no-first-run',
+              '--safebrowsing-disable-auto-update',
+              '--ignore-certificate-errors',
+              '--ignore-ssl-errors',
+              '--ignore-certificate-errors-spki-list',
+              '--ignore-certificate-errors-ssl-errors',
+              '--disable-features=site-per-process',
+              '--disable-web-security',
+              '--disable-blink-features=AutomationControlled',
+              '--window-size=800,600',
+              '--memory-pressure-off',
+              '--aggressive-cache-discard',
+              '--disable-background-mode',
+              '--disable-plugins',
+              '--disable-java',
+              '--disable-popup-blocking',
+              '--disable-features=VizDisplayCompositor',
+              '--disable-backgrounding-occluded-windows',
+              '--disable-renderer-backgrounding',
+              '--disable-background-timer-throttling',
+              '--disable-features=TranslateUI',
+              '--disable-ipc-flooding-protection',
+              '--no-zygote',
+              '--disable-dev-shm-usage',
+              '--disable-extensions-http-throttling',
+            ],
+            timeout: 45000,
+            protocolTimeout: 45000,
+            slowMo: 100,
+          };
+
+          if (executablePath) {
+            launchOptions.executablePath = executablePath;
+          }
+
+          this.browser = await puppeteer.launch(launchOptions);
+          this.browserPageCount = 0;
+        }
+
         isDynamic = true;
         const page = await this.browser.newPage();
+        this.browserPageCount++;
 
-        // Set user agent to identify our crawler
+        // Set a more realistic user agent to avoid bot detection
         await page.setUserAgent(
-          'MikuCrawler/1.0 (+https://mikucrawler.example.com)'
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         );
 
         // Set viewport to a reasonable size
@@ -306,11 +452,32 @@ export class AdvancedCrawlSession {
           await dialog.dismiss();
         });
 
+        // Add extra headers to appear more like a real browser
+        await page.setExtraHTTPHeaders({
+          Accept:
+            'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
+          'Accept-Encoding': 'gzip, deflate',
+          DNT: '1',
+          Connection: 'keep-alive',
+          'Upgrade-Insecure-Requests': '1',
+        });
+
         try {
-          // Navigation with timeout
+          // For YouTube and other complex sites, use networkidle0 and longer timeout
+          const waitUntil =
+            item.url.includes('youtube.com') || item.url.includes('google.com')
+              ? 'networkidle0'
+              : 'domcontentloaded';
+
+          const navigationTimeout = item.url.includes('youtube.com')
+            ? 30000
+            : 20000;
+
+          // Navigation with timeout and error handling
           const response = await page.goto(item.url, {
-            waitUntil: 'networkidle2',
-            timeout: 20000,
+            waitUntil: waitUntil,
+            timeout: navigationTimeout,
           });
 
           // Extract HTTP status and headers
@@ -330,6 +497,21 @@ export class AdvancedCrawlSession {
               domain: new URL(item.url).hostname,
             });
           } catch {}
+
+          // Special handling for YouTube - wait for video metadata to load
+          if (item.url.includes('youtube.com/watch')) {
+            try {
+              await page.waitForSelector('h1.ytd-video-primary-info-renderer', {
+                timeout: 10000,
+              });
+              // Give YouTube a bit more time to load dynamic content
+              await new Promise((resolve) => setTimeout(resolve, 2000));
+            } catch (waitErr) {
+              this.logger.warn(
+                `YouTube selector wait failed: ${waitErr.message}`
+              );
+            }
+          }
 
           // Get page content
           content = await page.content();
@@ -355,16 +537,49 @@ export class AdvancedCrawlSession {
           await page.close();
         } catch (err) {
           this.logger.error(`Puppeteer error for ${item.url}: ${err.message}`);
-          await page.close();
-          throw err;
+          try {
+            await page.close();
+          } catch (closeErr) {
+            this.logger.error(`Error closing page: ${closeErr.message}`);
+          }
+
+          // Handle specific error types with fallbacks
+          if (
+            err.message.includes('Protocol error') ||
+            err.message.includes('Connection closed') ||
+            err.message.includes('Navigating frame was detached') ||
+            err.message.includes('Target closed') ||
+            err.message.includes('Session closed')
+          ) {
+            this.logger.warn(
+              `Browser session error detected, falling back to static crawling for ${item.url}`
+            );
+            // Don't throw the error, instead fall through to axios method
+            content = ''; // Ensure content is reset
+          } else if (err.message.includes('TimeoutError')) {
+            this.logger.warn(
+              `Navigation timeout for ${item.url}, falling back to static crawling`
+            );
+            content = ''; // Reset content and fall through to axios
+          } else {
+            throw err;
+          }
         }
-      } else {
-        // Use axios for static content
+      }
+
+      // If we don't have content yet (either no dynamic crawling or it failed), use axios
+      if (!content) {
+        this.logger.info(`Using static crawling for ${item.url}`);
         const response = await axios.get(item.url, {
-          timeout: 10000,
+          timeout: 15000,
           maxContentLength: 5 * 1024 * 1024, // 5MB limit
           headers: {
-            'User-Agent': 'MikuCrawler/1.0 (+https://mikucrawler.example.com)',
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            Accept:
+              'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
           },
         });
 
