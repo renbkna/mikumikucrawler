@@ -23,7 +23,9 @@ function CrawledPageDisplay({
       }`}
     >
       <div className="flex items-center justify-between mb-2">
-        <div className="font-bold break-text">{page.title || page.url}</div>
+        <div className="font-bold text-green-600 break-text">
+          {page.title || page.url}
+        </div>
         <div className="flex space-x-2">
           <button
             onClick={() => setIsExpanded(!isExpanded)}
