@@ -79,20 +79,23 @@ export const getChromePaths = () => {
   const basePaths = [];
 
   if (isProd) {
-    // Production paths (cloud hosting)
+    // Production paths (cloud hosting and Docker)
     basePaths.push(
-      // Render.com, Railway, Heroku
-      '/tmp/puppeteer/chrome/linux-133.0.6943.126/chrome-linux64/chrome',
-      '/tmp/.cache/puppeteer/chrome/linux-133.0.6943.126/chrome-linux64/chrome',
-      '/app/.cache/puppeteer/chrome/linux-133.0.6943.126/chrome-linux64/chrome',
-      // Docker containers
+      // Custom environment variable (highest priority)
+      process.env.PUPPETEER_EXECUTABLE_PATH,
+      process.env.CHROME_BIN,
+      // Docker containers (Google Chrome Stable)
       '/usr/bin/google-chrome-stable',
       '/usr/bin/google-chrome',
       '/usr/bin/chromium-browser',
       '/usr/bin/chromium',
-      // Custom environment variable
-      process.env.PUPPETEER_EXECUTABLE_PATH,
-      process.env.CHROME_BIN
+      // Render.com, Railway, Heroku
+      '/tmp/puppeteer/chrome/linux-133.0.6943.126/chrome-linux64/chrome',
+      '/tmp/.cache/puppeteer/chrome/linux-133.0.6943.126/chrome-linux64/chrome',
+      '/app/.cache/puppeteer/chrome/linux-133.0.6943.126/chrome-linux64/chrome',
+      // Additional Docker paths
+      '/opt/google/chrome/chrome',
+      '/opt/google/chrome/google-chrome'
     );
   } else {
     // Development paths
