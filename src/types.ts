@@ -37,11 +37,11 @@ export interface CrawledPage {
   processedData?: {
     extractedData: {
       mainContent?: string;
-      jsonLd?: any[];
-      microdata?: any;
-      openGraph?: any;
-      twitterCards?: any;
-      schema?: any;
+      jsonLd?: Record<string, unknown>[];
+      microdata?: Record<string, unknown>;
+      openGraph?: Record<string, string>;
+      twitterCards?: Record<string, string>;
+      schema?: Record<string, unknown>;
     };
     metadata: {
       title?: string;
@@ -64,7 +64,7 @@ export interface CrawledPage {
       readabilityScore: number;
       quality?: {
         score: number;
-        factors: any;
+        factors: Record<string, number | boolean>;
         issues: string[];
       };
     };
