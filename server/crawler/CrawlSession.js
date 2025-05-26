@@ -89,7 +89,7 @@ export class AdvancedCrawlSession {
             }
           }
 
-          // Launch options with improved configuration
+          // Launch options with improved configuration for Docker/Production
           const launchOptions = {
             headless: 'new',
             args: [
@@ -97,9 +97,19 @@ export class AdvancedCrawlSession {
               '--disable-setuid-sandbox',
               '--disable-dev-shm-usage',
               '--disable-gpu',
+              '--disable-software-rasterizer',
+              '--disable-background-timer-throttling',
+              '--disable-backgrounding-occluded-windows',
+              '--disable-renderer-backgrounding',
+              '--disable-features=TranslateUI',
+              '--disable-ipc-flooding-protection',
               '--window-size=1280,720',
               '--disable-extensions',
               '--disable-features=site-per-process',
+              '--no-first-run',
+              '--no-zygote',
+              '--single-process', // Important for some cloud environments
+              '--disable-background-networking',
             ],
           };
 
