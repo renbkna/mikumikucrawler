@@ -291,6 +291,22 @@ function App() {
       return newLogs;
     });
 
+    // Check for JavaScript crawling fallback messages and show helpful toast
+    // Use a flag to prevent duplicate toasts during the same session
+    if (
+      (msg.includes('Falling back to static crawling') ||
+        msg.includes('falling back to static crawling')) &&
+      !toasts.some((toast) =>
+        toast.message.includes('Try disabling JavaScript crawling')
+      )
+    ) {
+      addToast(
+        'warning',
+        '💡 Tip: Try disabling JavaScript crawling in settings for better performance',
+        5000 // Show for 5 seconds
+      );
+    }
+
     // Scroll to the bottom of the log container
     if (logContainerRef.current) {
       setTimeout(() => {

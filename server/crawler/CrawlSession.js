@@ -464,15 +464,52 @@ export class AdvancedCrawlSession {
         });
 
         try {
-          // For YouTube and other complex sites, use networkidle0 and longer timeout
-          const waitUntil =
-            item.url.includes('youtube.com') || item.url.includes('google.com')
-              ? 'networkidle0'
-              : 'domcontentloaded';
+          // Complex JS websites that require special handling
+          const complexJsSites = [
+            'youtube.com',
+            'google.com',
+            'facebook.com',
+            'meta.com',
+            'twitter.com',
+            'x.com',
+            'instagram.com',
+            'linkedin.com',
+            'discord.com',
+            'reddit.com',
+            'pinterest.com',
+            'tiktok.com',
+            'netflix.com',
+            'amazon.com',
+            'airbnb.com',
+            'uber.com',
+            'spotify.com',
+            'github.com',
+            'stackoverflow.com',
+            'medium.com',
+            'twitch.tv',
+            'salesforce.com',
+            'slack.com',
+            'notion.so',
+            'figma.com',
+            'canva.com',
+            'trello.com',
+            'asana.com',
+            'dropbox.com',
+            'zoom.us',
+          ];
 
-          const navigationTimeout = item.url.includes('youtube.com')
-            ? 30000
-            : 20000;
+          // Check if current URL contains any complex JS site
+          const isComplexJsSite = complexJsSites.some((site) =>
+            item.url.includes(site)
+          );
+
+          // Use networkidle0 for complex JS sites, domcontentloaded for others
+          const waitUntil = isComplexJsSite
+            ? 'networkidle0'
+            : 'domcontentloaded';
+
+          // 1 minute timeout for complex sites, 30 seconds for others
+          const navigationTimeout = isComplexJsSite ? 60000 : 30000;
 
           // Navigation with timeout and error handling
           const response = await page.goto(item.url, {
@@ -489,26 +526,100 @@ export class AdvancedCrawlSession {
           );
           lastModified = response.headers()['last-modified'];
 
-          // Set cookies to skip pop-ups (optional)
+          // Set cookies to skip pop-ups and improve site experience
           try {
-            await page.setCookie({
-              name: 'cookie_consent',
-              value: 'true',
-              domain: new URL(item.url).hostname,
-            });
-          } catch {}
+            const urlDomain = new URL(item.url).hostname;
 
-          // Special handling for YouTube - wait for video metadata to load
-          if (item.url.includes('youtube.com/watch')) {
-            try {
-              await page.waitForSelector('h1.ytd-video-primary-info-renderer', {
-                timeout: 10000,
+            // Common cookie consent and preference cookies
+            const cookiesToSet = [
+              { name: 'cookie_consent', value: 'true' },
+              { name: 'cookies_accepted', value: 'true' },
+              { name: 'gdpr_consent', value: 'true' },
+              { name: 'privacy_accepted', value: 'true' },
+              { name: 'cookieConsent', value: 'true' },
+              { name: 'CookieConsent', value: 'true' },
+              {
+                name: 'OptanonAlertBoxClosed',
+                value: new Date().toISOString(),
+              },
+              { name: 'viewed_cookie_policy', value: 'yes' },
+            ];
+
+            // Site-specific cookies for better experience
+            if (item.url.includes('youtube.com')) {
+              cookiesToSet.push(
+                { name: 'CONSENT', value: 'YES+' },
+                { name: 'PREF', value: 'tz=UTC' }
+              );
+            } else if (item.url.includes('reddit.com')) {
+              cookiesToSet.push(
+                { name: 'over18', value: '1' },
+                { name: 'reddit_session', value: 'crawler_session' }
+              );
+            } else if (item.url.includes('medium.com')) {
+              cookiesToSet.push({ name: 'nonce', value: 'crawler_nonce' });
+            }
+
+            for (const cookie of cookiesToSet) {
+              await page.setCookie({
+                name: cookie.name,
+                value: cookie.value,
+                domain: urlDomain,
               });
-              // Give YouTube a bit more time to load dynamic content
-              await new Promise((resolve) => setTimeout(resolve, 2000));
+            }
+          } catch (cookieErr) {
+            this.logger.debug(`Cookie setting failed: ${cookieErr.message}`);
+          }
+
+          // Special handling for complex JS sites - wait for content to load
+          if (isComplexJsSite) {
+            try {
+              // Site-specific selectors for better content detection
+              let selectorToWait = null;
+              let additionalWaitTime = 2000;
+
+              if (item.url.includes('youtube.com/watch')) {
+                selectorToWait = 'h1.ytd-video-primary-info-renderer';
+              } else if (
+                item.url.includes('twitter.com') ||
+                item.url.includes('x.com')
+              ) {
+                selectorToWait = '[data-testid="tweet"]';
+              } else if (item.url.includes('linkedin.com')) {
+                selectorToWait = '.feed-container-theme';
+              } else if (item.url.includes('instagram.com')) {
+                selectorToWait = '[role="main"]';
+              } else if (item.url.includes('reddit.com')) {
+                selectorToWait = '[data-testid="post-container"]';
+              } else if (
+                item.url.includes('facebook.com') ||
+                item.url.includes('meta.com')
+              ) {
+                selectorToWait = '[role="main"]';
+              } else if (item.url.includes('github.com')) {
+                selectorToWait = '.js-repo-root, .repository-content';
+              } else if (item.url.includes('medium.com')) {
+                selectorToWait = 'article';
+              } else if (item.url.includes('stackoverflow.com')) {
+                selectorToWait = '.question, .answer';
+              }
+
+              if (selectorToWait) {
+                await page.waitForSelector(selectorToWait, {
+                  timeout: 15000,
+                });
+                this.logger.debug(
+                  `Waited for selector: ${selectorToWait} on ${item.url}`
+                );
+              }
+
+              // Give complex sites additional time to load dynamic content
+              await new Promise((resolve) =>
+                setTimeout(resolve, additionalWaitTime)
+              );
             } catch (waitErr) {
               this.logger.warn(
-                `YouTube selector wait failed: ${waitErr.message}`
+                `Complex site selector wait failed for ${item.url}: ${waitErr.message}`
               );
             }
           }
