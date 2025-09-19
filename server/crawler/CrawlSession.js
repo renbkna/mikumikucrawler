@@ -60,6 +60,7 @@ export class AdvancedCrawlSession {
     this.activeCount = 0;
     this.browser = null;
     this.browserPageCount = 0; // Track pages opened for browser recycling
+    this.retryTimers = new Set();
 
     // Extract target domain
     try {
@@ -211,7 +212,7 @@ export class AdvancedCrawlSession {
           );
 
           // Check if we're allowed to crawl the target
-          if (!robots.isAllowed(this.options.target, 'MikuCrawler')) {
+          if (robots && !robots.isAllowed(this.options.target, 'MikuCrawler')) {
             this.socket.emit('stats', {
               ...this.stats,
               log: `⚠️ This site doesn't allow crawling according to robots.txt. Respecting their wishes.`,
@@ -232,7 +233,7 @@ export class AdvancedCrawlSession {
           }
 
           // Get crawl delay from robots.txt
-          const crawlDelay = robots.getCrawlDelay('MikuCrawler');
+          const crawlDelay = robots?.getCrawlDelay?.('MikuCrawler');
           if (crawlDelay) {
             const delayMs = Math.max(
               crawlDelay * 1000,
@@ -953,7 +954,7 @@ export class AdvancedCrawlSession {
                   this.logger
                 );
 
-                if (!robots.isAllowed(link.url, 'MikuCrawler')) {
+                if (robots && !robots.isAllowed(link.url, 'MikuCrawler')) {
                   this.logger.debug(
                     `Skipping ${link.url} - disallowed by robots.txt`
                   );
@@ -962,7 +963,7 @@ export class AdvancedCrawlSession {
                 }
 
                 // Get crawl delay for this domain
-                const crawlDelay = robots.getCrawlDelay('MikuCrawler');
+                const crawlDelay = robots?.getCrawlDelay?.('MikuCrawler');
                 if (crawlDelay) {
                   const delayMs = Math.max(
                     crawlDelay * 1000,
@@ -1020,9 +1021,14 @@ export class AdvancedCrawlSession {
           `Retrying ${item.url} in ${backoffDelay}ms (attempt ${item.retries}/${this.options.retryLimit})`
         );
 
-        setTimeout(() => {
+        const retryTimer = setTimeout(() => {
+          this.retryTimers.delete(retryTimer);
+          if (!this.isActive) {
+            return;
+          }
           this.enqueue(item);
         }, backoffDelay);
+        this.retryTimers.add(retryTimer);
       } else {
         this.visited.add(item.url); // Mark as visited to avoid further attempts
       }
@@ -1115,6 +1121,11 @@ export class AdvancedCrawlSession {
 
     this.isActive = false;
 
+    for (const timer of this.retryTimers) {
+      clearTimeout(timer);
+    }
+    this.retryTimers.clear();
+
     // Calculate elapsed time
     const elapsedSeconds = Math.floor((Date.now() - this.startTime) / 1000);
     const elapsedTime = {
@@ -1152,3 +1163,4 @@ export class AdvancedCrawlSession {
     this.socket.emit('attackEnd', finalStats);
   }
 }
+
