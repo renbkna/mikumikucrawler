@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo, useReducer } from 'react';
 import { io, Socket } from 'socket.io-client';
 import {
   Header,
@@ -21,6 +21,25 @@ import {
   CrawlOptions,
   Toast,
 } from './types';
+
+const MAX_PAGE_BUFFER = 200;
+
+type PageAction =
+  | { type: 'add'; page: CrawledPage }
+  | { type: 'reset' };
+
+function pagesReducer(state: CrawledPage[], action: PageAction): CrawledPage[] {
+  switch (action.type) {
+    case 'add': {
+      const next = [action.page, ...state];
+      return next.length > MAX_PAGE_BUFFER ? next.slice(0, MAX_PAGE_BUFFER) : next;
+    }
+    case 'reset':
+      return [];
+    default:
+      return state;
+  }
+}
 
 function App() {
   const [isAttacking, setIsAttacking] = useState(false);
@@ -46,13 +65,11 @@ function App() {
 
   // UI state
   const [audioVol, setAudioVol] = useState<number>(100);
-  const [crawledPages, setCrawledPages] = useState<CrawledPage[]>([]);
-  const [filteredPages, setFilteredPages] = useState<CrawledPage[]>([]);
+  const [crawledPages, dispatchPages] = useReducer(pagesReducer, [] as CrawledPage[]);
   const [selectedPage, setSelectedPage] = useState<CrawledPage | null>(null);
   const [openedConfig, setOpenedConfig] = useState(false);
   const [openExportDialog, setOpenExportDialog] = useState(false);
   const [filterText, setFilterText] = useState('');
-  const [isFilterActive, setIsFilterActive] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [socket, setSocket] = useState<Socket | null>(null);
   const [queueStats, setQueueStats] = useState<QueueStats | null>(null);
@@ -62,8 +79,6 @@ function App() {
   const logContainerRef = useRef<HTMLDivElement>(null);
   const currentTaskRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const socketRef = useRef<Socket | null>(null);
-  const filterTextRef = useRef('');
-  const isFilterActiveRef = useRef(false);
   const maxPagesRef = useRef(advancedOptions.maxPages);
   const fallbackToastShownRef = useRef(false);
 
@@ -102,14 +117,37 @@ function App() {
     maxPagesRef.current = advancedOptions.maxPages;
   }, [advancedOptions.maxPages]);
 
-  useEffect(() => {
-    filterTextRef.current = filterText;
-  }, [filterText]);
+  // Log management
+  const addLog = useCallback(
+    (msg: string) => {
+      setLogs((prev) => {
+        const newLogs = [msg, ...prev].slice(0, 30); // Keep more logs (30 instead of 12)
+        return newLogs;
+      });
 
-  useEffect(() => {
-    isFilterActiveRef.current = isFilterActive;
-  }, [isFilterActive]);
+      const lowered = msg.toLowerCase();
+      if (
+        lowered.includes('falling back to static crawling') &&
+        !fallbackToastShownRef.current
+      ) {
+        addToast(
+          'warning',
+          'Tip: Try disabling JavaScript crawling in settings for better performance',
+          5000
+        );
+        fallbackToastShownRef.current = true;
+      }
 
+      if (logContainerRef.current) {
+        setTimeout(() => {
+          if (logContainerRef.current) {
+            logContainerRef.current.scrollTop = 0;
+          }
+        }, 10);
+      }
+    },
+    [addToast]
+  );
 
   // Connect to backend using the environment variable (VITE_BACKEND_URL)
   useEffect(() => {
@@ -182,13 +220,7 @@ function App() {
         };
 
         const handlePageContent = (data: CrawledPage) => {
-          setCrawledPages((prev) => {
-            const newPages = [data, ...prev];
-            if (isFilterActiveRef.current) {
-              setFilteredPages(filterPages(newPages, filterTextRef.current));
-            }
-            return newPages;
-          });
+          dispatchPages({ type: 'add', page: data });
         };
 
         const handleExportResult = (data: { data: string; format: string }) => {
@@ -336,38 +368,6 @@ function App() {
     }
   }, [isAttacking]);
 
-  // Log management
-  const addLog = useCallback(
-    (msg: string) => {
-      setLogs((prev) => {
-        const newLogs = [msg, ...prev].slice(0, 30); // Keep more logs (30 instead of 12)
-        return newLogs;
-      });
-
-      const lowered = msg.toLowerCase();
-      if (
-        lowered.includes('falling back to static crawling') &&
-        !fallbackToastShownRef.current
-      ) {
-        addToast(
-          'warning',
-          'Tip: Try disabling JavaScript crawling in settings for better performance',
-          5000
-        );
-        fallbackToastShownRef.current = true;
-      }
-
-      if (logContainerRef.current) {
-        setTimeout(() => {
-          if (logContainerRef.current) {
-            logContainerRef.current.scrollTop = 0;
-          }
-        }, 10);
-      }
-    },
-    [addToast]
-  );
-
   // Handle target input changes
   const handleTargetChange = (newTarget: string) => {
     setTarget(newTarget);
@@ -396,10 +396,16 @@ function App() {
     );
   };
 
+  const filteredPages = useMemo(
+    () => filterPages(crawledPages, filterText),
+    [crawledPages, filterText]
+  );
+  const isFilterActive = filterText.trim().length > 0;
+  const displayedPages = isFilterActive ? filteredPages : crawledPages;
+  const clearFilter = useCallback(() => setFilterText(''), []);
+
   const handleFilterChange = (filter: string) => {
     setFilterText(filter);
-    setFilteredPages(filterPages(crawledPages, filter));
-    setIsFilterActive(!!filter.trim());
   };
 
   // Attack control functions
@@ -449,8 +455,8 @@ function App() {
       failureCount: 0,
       skippedCount: 0,
     });
-    setCrawledPages([]);
-    setFilteredPages([]);
+    dispatchPages({ type: 'reset' });
+    setFilterText('');
     setSelectedPage(null);
     setProgress(0);
     addLog('Preparing Miku beam...');
@@ -673,14 +679,15 @@ function App() {
           {/* Crawled Pages Section */}
           <CrawledPagesSection
             crawledPages={crawledPages}
-            filteredPages={filteredPages}
+            displayedPages={displayedPages}
             filterText={filterText}
-            setFilterText={handleFilterChange}
+            onFilterChange={handleFilterChange}
+            onClearFilter={clearFilter}
             isFilterActive={isFilterActive}
-            setIsFilterActive={setIsFilterActive}
             selectedPage={selectedPage}
             setSelectedPage={setSelectedPage}
             viewPageDetails={viewPageDetails}
+            pageLimit={MAX_PAGE_BUFFER}
           />
 
           {/* Animation Overlay */}

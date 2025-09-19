@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ChangeEvent } from 'react';
 import { Filter, X } from 'lucide-react';
 import { CrawledPage } from '../types';
 
@@ -205,31 +205,31 @@ function CrawledPageDisplay({
 
 interface CrawledPagesSectionProps {
   crawledPages: CrawledPage[];
-  filteredPages: CrawledPage[];
+  displayedPages: CrawledPage[];
   filterText: string;
-  setFilterText: (text: string) => void;
+  onFilterChange: (text: string) => void;
+  onClearFilter: () => void;
   isFilterActive: boolean;
-  setIsFilterActive: (active: boolean) => void;
   selectedPage: CrawledPage | null;
   setSelectedPage: (page: CrawledPage | null) => void;
   viewPageDetails: (page: CrawledPage) => void;
+  pageLimit?: number;
 }
 
 export function CrawledPagesSection({
   crawledPages,
-  filteredPages,
+  displayedPages,
   filterText,
-  setFilterText,
+  onFilterChange,
+  onClearFilter,
   isFilterActive,
-  setIsFilterActive,
   selectedPage,
   setSelectedPage,
   viewPageDetails,
+  pageLimit,
 }: CrawledPagesSectionProps) {
-  const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const filter = e.target.value;
-    setFilterText(filter);
-    setIsFilterActive(!!filter.trim());
+  const handleFilterChange = (e: ChangeEvent<HTMLInputElement>) => {
+    onFilterChange(e.target.value);
   };
 
   return (
@@ -248,8 +248,7 @@ export function CrawledPagesSection({
           {filterText && (
             <button
               onClick={() => {
-                setFilterText('');
-                setIsFilterActive(false);
+                onClearFilter();
               }}
               className="p-1 text-gray-400 hover:text-gray-600"
             >
@@ -259,11 +258,17 @@ export function CrawledPagesSection({
         </div>
         <div className="ml-2 text-sm text-gray-500">
           {isFilterActive
-            ? `${filteredPages.length}/${crawledPages.length}`
+            ? `${displayedPages.length}/${crawledPages.length}`
             : crawledPages.length}{' '}
           pages
         </div>
       </div>
+
+      {pageLimit && crawledPages.length >= pageLimit && (
+        <div className="mt-1 text-xs text-gray-500">
+          Showing latest {pageLimit} pages
+        </div>
+      )}
 
       {/* Crawled Pages Section */}
       <div className="p-4 font-mono text-sm bg-gray-900 rounded-lg mt-2 max-h-96 overflow-y-auto break-text">
@@ -277,8 +282,8 @@ export function CrawledPagesSection({
             {'> '} No pages crawled yet...
           </div>
         ) : isFilterActive ? (
-          filteredPages.length ? (
-            filteredPages.map((page, i) => (
+          displayedPages.length ? (
+            displayedPages.map((page, i) => (
               <div
                 key={i}
                 className="cursor-pointer"

@@ -47,6 +47,7 @@ temp/
 *.njsproj
 *.sln
 *.sw?
+AGENTS.md
 
 # OS-specific files
 .DS_Store
