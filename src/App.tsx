@@ -213,8 +213,9 @@ function App() {
           );
         };
 
-        const handleErrorEvent = (error: { message: string }) => {
-          addToast('error', error.message);
+        const handleErrorEvent = (error: { message?: string } | Error) => {
+          const message = error instanceof Error ? error.message : error?.message;
+          addToast('error', message || 'An unknown crawler error occurred');
         };
 
         const handleAttackEnd = (finalStats: Stats) => {
@@ -257,6 +258,7 @@ function App() {
         newSocket.on('queueStats', handleQueueStats);
         newSocket.on('pageContent', handlePageContent);
         newSocket.on('exportResult', handleExportResult);
+        newSocket.on('crawlError', handleErrorEvent);
         newSocket.on('error', handleErrorEvent);
         newSocket.on('attackEnd', handleAttackEnd);
         newSocket.on('disconnect', handleDisconnect);
@@ -270,6 +272,7 @@ function App() {
           newSocket.off('queueStats', handleQueueStats);
           newSocket.off('pageContent', handlePageContent);
           newSocket.off('exportResult', handleExportResult);
+          newSocket.off('crawlError', handleErrorEvent);
           newSocket.off('error', handleErrorEvent);
           newSocket.off('attackEnd', handleAttackEnd);
           newSocket.off('disconnect', handleDisconnect);
