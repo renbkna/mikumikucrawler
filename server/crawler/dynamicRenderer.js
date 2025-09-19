@@ -41,40 +41,17 @@ const DEFAULT_LAUNCH_ARGS = [
   '--disable-setuid-sandbox',
   '--disable-dev-shm-usage',
   '--disable-gpu',
-  '--disable-software-rasterizer',
-  '--disable-background-timer-throttling',
-  '--disable-backgrounding-occluded-windows',
-  '--disable-renderer-backgrounding',
-  '--disable-features=TranslateUI,VizDisplayCompositor',
-  '--disable-ipc-flooding-protection',
   '--disable-background-networking',
+  '--disable-sync',
   '--disable-default-apps',
   '--disable-extensions',
-  '--disable-sync',
   '--disable-translate',
-  '--hide-scrollbars',
-  '--metrics-recording-only',
   '--mute-audio',
   '--no-first-run',
-  '--safebrowsing-disable-auto-update',
-  '--ignore-certificate-errors',
-  '--ignore-ssl-errors',
-  '--ignore-certificate-errors-spki-list',
-  '--ignore-certificate-errors-ssl-errors',
-  '--disable-features=site-per-process',
-  '--disable-web-security',
-  '--disable-blink-features=AutomationControlled',
-  '--window-size=800,600',
-  '--memory-pressure-off',
-  '--aggressive-cache-discard',
+  '--metrics-recording-only',
   '--disable-background-mode',
-  '--disable-plugins',
-  '--disable-java',
   '--disable-popup-blocking',
-  '--disable-features=VizDisplayCompositor',
-  '--disable-ipc-flooding-protection',
-  '--no-zygote',
-  '--disable-extensions-http-throttling',
+  '--window-size=1280,720',
 ];
 
 export class DynamicRenderer {
@@ -348,16 +325,7 @@ export class DynamicRenderer {
   async setCookiesForPage(page, url) {
     try {
       const urlDomain = new URL(url).hostname;
-      const cookiesToSet = [
-        { name: 'cookie_consent', value: 'true' },
-        { name: 'cookies_accepted', value: 'true' },
-        { name: 'gdpr_consent', value: 'true' },
-        { name: 'privacy_accepted', value: 'true' },
-        { name: 'cookieConsent', value: 'true' },
-        { name: 'CookieConsent', value: 'true' },
-        { name: 'OptanonAlertBoxClosed', value: new Date().toISOString() },
-        { name: 'viewed_cookie_policy', value: 'yes' },
-      ];
+      const cookiesToSet = [];
 
       if (url.includes('youtube.com')) {
         cookiesToSet.push(
@@ -365,12 +333,7 @@ export class DynamicRenderer {
           { name: 'PREF', value: 'tz=UTC' }
         );
       } else if (url.includes('reddit.com')) {
-        cookiesToSet.push(
-          { name: 'over18', value: '1' },
-          { name: 'reddit_session', value: 'crawler_session' }
-        );
-      } else if (url.includes('medium.com')) {
-        cookiesToSet.push({ name: 'nonce', value: 'crawler_nonce' });
+        cookiesToSet.push({ name: 'over18', value: '1' });
       }
 
       for (const cookie of cookiesToSet) {
