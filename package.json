@@ -16,7 +16,8 @@
     "preview": "vite preview",
     "start": "node server/server.js",
     "postinstall": "npx puppeteer browsers install chrome && node -e \"const fs=require('fs'),path=require('path');const dir=path.join('.cache','puppeteer');if(!fs.existsSync(dir))fs.mkdirSync(dir,{recursive:true});\"",
-    "postinstall:prod": "mkdir -p .cache/puppeteer"
+    "postinstall:prod": "mkdir -p .cache/puppeteer",
+    "test": "node --test"
   },
   "dependencies": {
     "axios": "^1.9.0",
