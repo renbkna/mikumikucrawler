@@ -28,14 +28,19 @@ async function assertPublicHostname(hostname) {
     throw new Error('Target host is not allowed');
   }
 
-  const lower = hostname.toLowerCase();
+  const normalizedHost =
+    hostname.startsWith('[') && hostname.endsWith(']')
+      ? hostname.slice(1, -1)
+      : hostname;
+
+  const lower = normalizedHost.toLowerCase();
   if (lower === 'localhost') {
     throw new Error('Target host is not allowed');
   }
 
-  const ipType = net.isIP(hostname);
+  const ipType = net.isIP(normalizedHost);
   if (ipType) {
-    if (isInvalidIpAddress(hostname)) {
+    if (isInvalidIpAddress(normalizedHost)) {
       throw new Error('Target host is not allowed');
     }
     return;
@@ -43,7 +48,7 @@ async function assertPublicHostname(hostname) {
 
   let records;
   try {
-    records = await dns.promises.lookup(hostname, { all: true, verbatim: false });
+    records = await dns.promises.lookup(normalizedHost, { all: true, verbatim: false });
   } catch {
     throw new Error('Unable to resolve target hostname');
   }
