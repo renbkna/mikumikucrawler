@@ -49,18 +49,20 @@ export function setupApiRoutes(dbPromise, activeCrawls, logger) {
 
       // Quality distribution
       const qualityStats = await db.all(`
-        SELECT
-          CASE
-            WHEN quality_score >= 80 THEN 'High (80-100)'
-            WHEN quality_score >= 60 THEN 'Medium (60-79)'
-            WHEN quality_score >= 40 THEN 'Low (40-59)'
-            ELSE 'Poor (0-39)'
-          END as quality_range,
-          COUNT(*) as count
-        FROM pages
-        WHERE quality_score IS NOT NULL
+        SELECT quality_range, COUNT(*) as count
+        FROM (
+          SELECT
+            CASE
+              WHEN quality_score >= 80 THEN 'High (80-100)'
+              WHEN quality_score >= 60 THEN 'Medium (60-79)'
+              WHEN quality_score >= 40 THEN 'Low (40-59)'
+              ELSE 'Poor (0-39)'
+            END AS quality_range
+          FROM pages
+          WHERE quality_score IS NOT NULL
+        )
         GROUP BY quality_range
-        ORDER BY quality_score DESC
+        ORDER BY count DESC
       `);
 
       res.json({

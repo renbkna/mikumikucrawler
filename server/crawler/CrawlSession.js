@@ -27,7 +27,10 @@ export class AdvancedCrawlSession {
       dynamic: options.dynamic !== false,
       respectRobots: options.respectRobots !== false,
       filterDuplicates: options.filterDuplicates !== false,
-      saveMedia: ["media", "full"].includes(options.crawlMethod),
+      saveMedia:
+        typeof options.saveMedia === 'boolean'
+          ? options.saveMedia
+          : ["media", "full"].includes(options.crawlMethod),
       contentOnly: options.contentOnly || false,
     };
 
