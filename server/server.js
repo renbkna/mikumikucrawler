@@ -74,12 +74,20 @@ server.listen(PORT, () => {
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, shutting down gracefully');
 
-  // Close all active crawl sessions
   for (const [_, session] of activeCrawls) {
     await session.stop();
   }
 
-  // Close server
+  try {
+    const db = await dbPromise;
+    await db.close();
+    logger.info('Database connection closed');
+  } catch (error) {
+    logger.warn('Failed to close database cleanly: ' + (error?.message || error));
+  }
+
+  logger.close();
+
   server.close(() => {
     logger.info('Server closed');
     process.exit(0);
@@ -87,3 +95,4 @@ process.on('SIGTERM', async () => {
 });
 
 export default app;
+
