@@ -20,8 +20,6 @@ const AXIOS_OPTIONS = {
   },
 };
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
 export function createPagePipeline({
   options,
   state,
@@ -333,14 +331,6 @@ export function createPagePipeline({
     }
   };
 
-  const waitForDomainDelay = async (domain) => {
-    const delay = state.getDomainDelay(domain);
-    if (!delay) {
-      return;
-    }
-    await sleep(delay);
-  };
-
   return async function processItem(item) {
     if (!state.canProcessMore()) {
       return;
@@ -441,6 +431,7 @@ export function createPagePipeline({
     }
 
     if (
+      options.saveMedia &&
       (options.crawlMethod === "media" || options.crawlMethod === "full") &&
       contentType.match(MEDIA_CONTENT_REGEX)
     ) {
@@ -470,8 +461,5 @@ export function createPagePipeline({
 
     await enqueueLinksWithPolicies(links, item, domain);
 
-    if (state.isActive) {
-      await waitForDomainDelay(domain);
-    }
   };
 }

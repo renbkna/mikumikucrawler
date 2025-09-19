@@ -115,6 +115,10 @@ export async function sanitizeOptions(rawOptions = {}) {
     dynamic: rawOptions.dynamic !== false,
     respectRobots: rawOptions.respectRobots !== false,
     contentOnly: Boolean(rawOptions.contentOnly),
+    saveMedia:
+      rawOptions.saveMedia === true ||
+      crawlMethod === 'media' ||
+      crawlMethod === 'full',
   };
 }
 
