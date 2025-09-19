@@ -10,7 +10,7 @@ const isProd = process.env.NODE_ENV === 'production';
 const robotsCache = new Map();
 
 // Helper function to get robots.txt rules
-export async function getRobotsRules(domain, dbPromise, logger) {
+export async function getRobotsRules(domain, dbPromise, logger, { allowOnFailure = true } = {}) {
   if (robotsCache.has(domain)) {
     return robotsCache.get(domain);
   }
@@ -52,7 +52,12 @@ export async function getRobotsRules(domain, dbPromise, logger) {
 
     if (!robotsTxt) {
       logger.warn(`Failed to download robots.txt for ${domain}: ${lastError?.message || 'unknown error'}`);
-      throw lastError || new Error('robots.txt unavailable');
+      if (!allowOnFailure) {
+        return null;
+      }
+      const fallback = robotsParser(`http://${domain}/robots.txt`, '');
+      robotsCache.set(domain, fallback);
+      return fallback;
     }
 
     const robotsUrl = `${successfulProtocol || 'http'}://${domain}/robots.txt`;
@@ -68,10 +73,12 @@ export async function getRobotsRules(domain, dbPromise, logger) {
     return robots;
   } catch (err) {
     logger.warn(`Failed to get robots.txt for ${domain}: ${err.message}`);
-    // Create an empty robots parser as fallback
-    const robots = robotsParser(`http://${domain}/robots.txt`, '');
-    robotsCache.set(domain, robots);
-    return robots;
+    if (!allowOnFailure) {
+      return null;
+    }
+    const fallback = robotsParser(`http://${domain}/robots.txt`, '');
+    robotsCache.set(domain, fallback);
+    return fallback;
   }
 }
 
