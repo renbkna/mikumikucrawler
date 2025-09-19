@@ -54,13 +54,18 @@ function App() {
   const [filterText, setFilterText] = useState('');
   const [isFilterActive, setIsFilterActive] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [currentTask, setCurrentTask] = useState<NodeJS.Timeout | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
   const [queueStats, setQueueStats] = useState<QueueStats | null>(null);
   const [showDetails, setShowDetails] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
+  const currentTaskRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const socketRef = useRef<Socket | null>(null);
+  const filterTextRef = useRef('');
+  const isFilterActiveRef = useRef(false);
+  const maxPagesRef = useRef(advancedOptions.maxPages);
+  const fallbackToastShownRef = useRef(false);
 
   // Stats tracking
   const [stats, setStats] = useState<Stats>({
@@ -93,14 +98,33 @@ function App() {
     setToasts((prevToasts) => prevToasts.filter((toast) => toast.id !== id));
   }, []);
 
+  useEffect(() => {
+    maxPagesRef.current = advancedOptions.maxPages;
+  }, [advancedOptions.maxPages]);
+
+  useEffect(() => {
+    filterTextRef.current = filterText;
+  }, [filterText]);
+
+  useEffect(() => {
+    isFilterActiveRef.current = isFilterActive;
+  }, [isFilterActive]);
+
+
   // Connect to backend using the environment variable (VITE_BACKEND_URL)
   useEffect(() => {
     const socketEndpoint =
       import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
     console.log(`Connecting to backend at ${socketEndpoint}`);
 
-    // Add a small delay to ensure server is ready
+    let isCancelled = false;
+    let cleanupSocket: (() => void) | null = null;
+
     const connectTimer = setTimeout(() => {
+      if (isCancelled) {
+        return;
+      }
+
       try {
         const newSocket = io(socketEndpoint, {
           transports: ['websocket', 'polling'], // Allow fallback to polling
@@ -111,19 +135,18 @@ function App() {
           forceNew: true,
         });
 
-        newSocket.on('connect', () => {
+        const handleConnect = () => {
           console.log('Connected to backend');
           addToast('success', 'Connected to crawler backend');
           setSocket(newSocket);
-        });
+        };
 
-        newSocket.on('connect_error', (err) => {
+        const handleConnectError = (err: Error) => {
           console.error('Connection error:', err);
           addToast('error', `Connection error: ${err.message}`);
-        });
+        };
 
-        newSocket.on('stats', (data: StatsPayload) => {
-          // Merge new stats
+        const handleStats = (data: StatsPayload) => {
           setStats((old) => ({
             pagesScanned: data.pagesScanned ?? old.pagesScanned,
             linksFound: data.linksFound ?? old.linksFound,
@@ -141,83 +164,76 @@ function App() {
             addLog(data.log);
           }
 
-          // Update progress
           setProgress((prev) => {
-            // Create a smoother progress that accelerates as we go through the crawl
+            const adjustedTarget = Math.max(maxPagesRef.current * 0.8, 1);
             const newProgress = Math.min(
-              ((data.pagesScanned || 0) / (advancedOptions.maxPages * 0.8)) *
-                100,
+              ((data.pagesScanned || 0) / adjustedTarget) * 100,
               99
             );
-            return Math.max(prev, newProgress); // Never go backwards
+            return Math.max(prev, newProgress);
           });
-        });
+        };
 
-        newSocket.on('queueStats', (data: QueueStats) => {
-          setQueueStats(data);
-        });
+        const handleQueueStats = (data: QueueStats) => {
+          const sanitizedRate = Number.isFinite(data.pagesPerSecond)
+            ? data.pagesPerSecond
+            : 0;
+          setQueueStats({ ...data, pagesPerSecond: sanitizedRate });
+        };
 
-        newSocket.on('pageContent', (data: CrawledPage) => {
+        const handlePageContent = (data: CrawledPage) => {
           setCrawledPages((prev) => {
             const newPages = [data, ...prev];
-            // Update filtered pages if filter is active
-            if (isFilterActive) {
-              setFilteredPages(filterPages(newPages, filterText));
+            if (isFilterActiveRef.current) {
+              setFilteredPages(filterPages(newPages, filterTextRef.current));
             }
             return newPages;
           });
-        });
+        };
 
-        newSocket.on(
-          'exportResult',
-          (data: { data: string; format: string }) => {
-            // Create a blob and download link
-            const blob = new Blob([data.data], {
-              type: data.format === 'json' ? 'application/json' : 'text/csv',
-            });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `miku-crawler-export.${data.format}`;
-            document.body.appendChild(a);
-            a.click();
+        const handleExportResult = (data: { data: string; format: string }) => {
+          const blob = new Blob([data.data], {
+            type: data.format === 'json' ? 'application/json' : 'text/csv',
+          });
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          anchor.download = `miku-crawler-export.${data.format}`;
+          document.body.appendChild(anchor);
+          anchor.click();
 
-            // Clean up
-            setTimeout(() => {
-              document.body.removeChild(a);
-              URL.revokeObjectURL(url);
-            }, 100);
+          setTimeout(() => {
+            document.body.removeChild(anchor);
+            URL.revokeObjectURL(url);
+          }, 100);
 
-            addToast(
-              'success',
-              `Data exported successfully as ${data.format.toUpperCase()}`
-            );
-          }
-        );
+          addToast(
+            'success',
+            `Data exported successfully as ${data.format.toUpperCase()}`
+          );
+        };
 
-        newSocket.on('error', (error: { message: string }) => {
+        const handleErrorEvent = (error: { message: string }) => {
           addToast('error', error.message);
-        });
+        };
 
-        newSocket.on('attackEnd', (finalStats: Stats) => {
+        const handleAttackEnd = (finalStats: Stats) => {
           setIsAttacking(false);
-          setAnimState(0); // Reset to original theme
-          addLog('🛑 Crawl ended.');
+          setAnimState(0);
+          addLog('Crawl ended.');
           setStats(finalStats);
-          setProgress(100); // Complete the progress bar
+          setProgress(100);
 
           if (audioRef.current) {
             audioRef.current.pause();
             audioRef.current.currentTime = 0;
           }
 
-          // Clear any pending timeouts
-          if (currentTask) {
-            clearTimeout(currentTask);
-            setCurrentTask(null);
+          if (currentTaskRef.current) {
+            clearTimeout(currentTaskRef.current);
+            currentTaskRef.current = null;
           }
 
-          // Show completion toast
           addToast(
             'success',
             `Crawl completed! Scanned ${finalStats.pagesScanned} pages in ${
@@ -227,15 +243,41 @@ function App() {
             }`,
             5000
           );
-        });
+        };
 
-        newSocket.on('disconnect', () => {
+        const handleDisconnect = () => {
           console.log('Disconnected from backend');
           addToast('warning', 'Disconnected from crawler backend');
-        });
+          setSocket(null);
+        };
 
-        return () => {
+        newSocket.on('connect', handleConnect);
+        newSocket.on('connect_error', handleConnectError);
+        newSocket.on('stats', handleStats);
+        newSocket.on('queueStats', handleQueueStats);
+        newSocket.on('pageContent', handlePageContent);
+        newSocket.on('exportResult', handleExportResult);
+        newSocket.on('error', handleErrorEvent);
+        newSocket.on('attackEnd', handleAttackEnd);
+        newSocket.on('disconnect', handleDisconnect);
+
+        socketRef.current = newSocket;
+
+        cleanupSocket = () => {
+          newSocket.off('connect', handleConnect);
+          newSocket.off('connect_error', handleConnectError);
+          newSocket.off('stats', handleStats);
+          newSocket.off('queueStats', handleQueueStats);
+          newSocket.off('pageContent', handlePageContent);
+          newSocket.off('exportResult', handleExportResult);
+          newSocket.off('error', handleErrorEvent);
+          newSocket.off('attackEnd', handleAttackEnd);
+          newSocket.off('disconnect', handleDisconnect);
           newSocket.close();
+          if (socketRef.current === newSocket) {
+            socketRef.current = null;
+          }
+          setSocket((prev) => (prev === newSocket ? null : prev));
         };
       } catch (error) {
         console.error('Socket initialization error:', error);
@@ -246,13 +288,21 @@ function App() {
           }`
         );
       }
-    }, 500); // 500ms delay
+    }, 500);
 
     return () => {
+      isCancelled = true;
       clearTimeout(connectTimer);
+      if (cleanupSocket) {
+        cleanupSocket();
+        cleanupSocket = null;
+      } else if (socketRef.current) {
+        socketRef.current.close();
+        socketRef.current = null;
+      }
+      setSocket(null);
     };
-  }, [addToast, advancedOptions.maxPages, filterText, isFilterActive]);
-
+  }, [addLog, addToast]);
   // Audio management for the attack animation/sound
   useEffect(() => {
     const audio = audioRef.current;
@@ -277,45 +327,43 @@ function App() {
 
   // Clean up timeouts when attack state changes
   useEffect(() => {
-    if (!isAttacking) {
-      if (currentTask) {
-        clearTimeout(currentTask);
-      }
+    if (!isAttacking && currentTaskRef.current) {
+      clearTimeout(currentTaskRef.current);
+      currentTaskRef.current = null;
     }
-  }, [isAttacking, currentTask]);
+  }, [isAttacking]);
 
   // Log management
-  const addLog = (msg: string) => {
-    setLogs((prev) => {
-      const newLogs = [msg, ...prev].slice(0, 30); // Keep more logs (30 instead of 12)
-      return newLogs;
-    });
+  const addLog = useCallback(
+    (msg: string) => {
+      setLogs((prev) => {
+        const newLogs = [msg, ...prev].slice(0, 30); // Keep more logs (30 instead of 12)
+        return newLogs;
+      });
 
-    // Check for JavaScript crawling fallback messages and show helpful toast
-    // Use a flag to prevent duplicate toasts during the same session
-    if (
-      (msg.includes('Falling back to static crawling') ||
-        msg.includes('falling back to static crawling')) &&
-      !toasts.some((toast) =>
-        toast.message.includes('Try disabling JavaScript crawling')
-      )
-    ) {
-      addToast(
-        'warning',
-        '💡 Tip: Try disabling JavaScript crawling in settings for better performance',
-        5000 // Show for 5 seconds
-      );
-    }
+      const lowered = msg.toLowerCase();
+      if (
+        lowered.includes('falling back to static crawling') &&
+        !fallbackToastShownRef.current
+      ) {
+        addToast(
+          'warning',
+          'Tip: Try disabling JavaScript crawling in settings for better performance',
+          5000
+        );
+        fallbackToastShownRef.current = true;
+      }
 
-    // Scroll to the bottom of the log container
-    if (logContainerRef.current) {
-      setTimeout(() => {
-        if (logContainerRef.current) {
-          logContainerRef.current.scrollTop = 0;
-        }
-      }, 10);
-    }
-  };
+      if (logContainerRef.current) {
+        setTimeout(() => {
+          if (logContainerRef.current) {
+            logContainerRef.current.scrollTop = 0;
+          }
+        }, 10);
+      }
+    },
+    [addToast]
+  );
 
   // Handle target input changes
   const handleTargetChange = (newTarget: string) => {
@@ -370,6 +418,7 @@ function App() {
   };
 
   const startAttack = (isQuick = false) => {
+    fallbackToastShownRef.current = false;
     if (!target.trim()) {
       addToast('error', 'Please enter a target URL!');
       return;
@@ -401,7 +450,7 @@ function App() {
     setFilteredPages([]);
     setSelectedPage(null);
     setProgress(0);
-    addLog('🕷️ Preparing miku beam...');
+    addLog('Preparing Miku beam...');
 
     if (audioRef.current) {
       audioRef.current.currentTime = isQuick ? 9.5 : 0;
@@ -420,7 +469,7 @@ function App() {
     // Send crawl request to backend immediately
     socket.emit('startAttack', optionsToSend);
     addLog(`🌐 Starting crawl on ${target}`);
-    addLog('📡 Scanning for links and data...');
+    addLog('Scanning for links and data...');
 
     // But still keep the visual animation timing for the frontend
     const timeout = setTimeout(
@@ -430,7 +479,10 @@ function App() {
       },
       isQuick ? 700 : 10250
     );
-    setCurrentTask(timeout);
+    if (currentTaskRef.current) {
+      clearTimeout(currentTaskRef.current);
+    }
+    currentTaskRef.current = timeout;
 
     setIsAttacking(true);
   };
@@ -438,7 +490,7 @@ function App() {
   const stopAttack = () => {
     if (socket) {
       socket.emit('stopAttack');
-      addLog('🛑 Stopped crawler beam.');
+      addLog('Stopped crawler beam.');
       addToast('info', 'Crawler stopped');
     }
 
@@ -453,9 +505,9 @@ function App() {
     }
 
     // Clear any pending timeouts
-    if (currentTask) {
-      clearTimeout(currentTask);
-      setCurrentTask(null);
+    if (currentTaskRef.current) {
+      clearTimeout(currentTaskRef.current);
+      currentTaskRef.current = null;
     }
 
     // Reset progress

@@ -31,13 +31,32 @@ export async function getRobotsRules(domain, dbPromise, logger) {
       return robots;
     }
 
-    const response = await axios.get(`http://${domain}/robots.txt`, {
-      timeout: 5000,
-      maxRedirects: 3,
-    });
+    const protocols = ['https', 'http'];
+    let robotsTxt = null;
+    let successfulProtocol = null;
+    let lastError = null;
 
-    const robotsTxt = response.data;
-    const robots = robotsParser(`http://${domain}/robots.txt`, robotsTxt);
+    for (const protocol of protocols) {
+      try {
+        const response = await axios.get(`${protocol}://${domain}/robots.txt`, {
+          timeout: 5000,
+          maxRedirects: 3,
+        });
+        robotsTxt = response.data;
+        successfulProtocol = protocol;
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (!robotsTxt) {
+      logger.warn(`Failed to download robots.txt for ${domain}: ${lastError?.message || 'unknown error'}`);
+      throw lastError || new Error('robots.txt unavailable');
+    }
+
+    const robotsUrl = `${successfulProtocol || 'http'}://${domain}/robots.txt`;
+    const robots = robotsParser(robotsUrl, robotsTxt);
 
     await db.run(
       'INSERT OR REPLACE INTO domain_settings (domain, robots_txt) VALUES (?, ?)',

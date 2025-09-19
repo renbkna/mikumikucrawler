@@ -272,65 +272,82 @@ export class AdvancedCrawlSession {
   }
 
   async processQueue() {
-    // Keep track of domains being processed to implement per-domain rate limiting
     const domainProcessing = new Map();
 
     while ((this.queue.length > 0 || this.activeCount > 0) && this.isActive) {
-      // Process as many items as possible up to maxConcurrentRequests
+      let deferredDelay = null;
+
       while (
         this.activeCount < this.options.maxConcurrentRequests &&
-        this.queue.length > 0
+        this.queue.length > 0 &&
+        this.isActive
       ) {
         const item = this.queue.shift();
+        if (!item) {
+          break;
+        }
 
         try {
-          // Get domain of URL
           const url = new URL(item.url);
           const domain = url.hostname;
 
-          // Check if we're already processing this domain and need to respect crawl delay
-          const lastProcessed = domainProcessing.get(domain) || 0;
+          const nextAllowed = domainProcessing.get(domain) || 0;
           const now = Date.now();
           const domainDelay =
             this.domainDelays.get(domain) || this.options.crawlDelay;
 
-          if (now - lastProcessed < domainDelay) {
-            // Put back in queue and continue with next item
+          if (now < nextAllowed) {
+            const waitTime = nextAllowed - now;
+            deferredDelay =
+              deferredDelay === null
+                ? waitTime
+                : Math.min(deferredDelay, waitTime);
             this.queue.push(item);
+            if (this.queue.length === 1) {
+              break;
+            }
             continue;
           }
 
-          // Mark this domain as being processed
-          domainProcessing.set(domain, now);
+          domainProcessing.set(domain, now + domainDelay);
 
-          // Process the item
-          this.activeCount++;
+          this.activeCount += 1;
           this.fetchPage(item).finally(() => {
-            this.activeCount--;
+            this.activeCount = Math.max(0, this.activeCount - 1);
           });
         } catch (err) {
           this.logger.error(`Error in queue processing: ${err.message}`);
-          this.activeCount--;
+          this.stats.failureCount++;
         }
       }
 
-      // Emit live stats periodically
       if (this.activeCount > 0 || this.queue.length > 0) {
+        const elapsedMs = Date.now() - this.startTime;
+        const elapsedSeconds = Math.max(Math.floor(elapsedMs / 1000), 0);
+        const pagesPerSecond =
+          elapsedSeconds > 0
+            ? this.stats.pagesScanned / elapsedSeconds
+            : 0;
+
         this.socket.volatile.emit('queueStats', {
           activeRequests: this.activeCount,
           queueLength: this.queue.length,
-          elapsedTime: Math.floor((Date.now() - this.startTime) / 1000),
-          pagesPerSecond:
-            this.stats.pagesScanned / ((Date.now() - this.startTime) / 1000),
+          elapsedTime: elapsedSeconds,
+          pagesPerSecond: Number.isFinite(pagesPerSecond)
+            ? Number(pagesPerSecond.toFixed(2))
+            : 0,
         });
       }
 
-      // Small pause to prevent CPU hogging
-      await new Promise((r) => setTimeout(r, 100));
+      const sleepDuration =
+        deferredDelay !== null
+          ? Math.max(Math.min(deferredDelay, this.options.crawlDelay), 50)
+          : 100;
+
+      await new Promise((resolve) => setTimeout(resolve, sleepDuration));
     }
 
     if (this.isActive) {
-      // All done, clean up
       this.stop();
     }
   }
