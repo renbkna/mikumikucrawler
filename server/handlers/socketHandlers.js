@@ -1,4 +1,90 @@
+import net from 'net';
 import { AdvancedCrawlSession } from '../crawler/CrawlSession.js';
+
+
+const ALLOWED_CRAWL_METHODS = new Set(['links', 'content', 'media', 'full']);
+const PRIVATE_V4_PATTERNS = [
+  /^10\./,
+  /^127\./,
+  /^169\.254\./,
+  /^172\.(1[6-9]|2[0-9]|3[0-1])\./,
+  /^192\.168\./,
+];
+const PRIVATE_V6_PREFIXES = ['::1', 'fd', 'fc'];
+
+function isPrivateHostname(hostname) {
+  const lower = hostname.toLowerCase();
+  if (lower === 'localhost') {
+    return true;
+  }
+
+  const ipType = net.isIP(hostname);
+  if (ipType === 4) {
+    return PRIVATE_V4_PATTERNS.some((pattern) => pattern.test(hostname));
+  }
+  if (ipType === 6) {
+    return PRIVATE_V6_PREFIXES.some((prefix) => lower.startsWith(prefix));
+  }
+
+  return false;
+}
+
+function clampNumber(value, { min, max, fallback }) {
+  const parsed = Number(value);
+  if (Number.isNaN(parsed)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, Math.floor(parsed)));
+}
+
+function sanitizeOptions(rawOptions = {}) {
+  const targetInput = typeof rawOptions.target === 'string' ? rawOptions.target.trim() : '';
+  if (!targetInput) {
+    throw new Error('Target URL is required');
+  }
+
+  let normalizedTarget = targetInput;
+  if (!/^https?:\/\//i.test(normalizedTarget)) {
+    normalizedTarget = `http://${normalizedTarget}`;
+  }
+
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(normalizedTarget);
+  } catch {
+    throw new Error('Target must be a valid URL');
+  }
+
+  if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+    throw new Error('Only HTTP and HTTPS targets are supported');
+  }
+
+  if (isPrivateHostname(parsedUrl.hostname)) {
+    throw new Error('Target host is not allowed');
+  }
+
+  const crawlDepth = clampNumber(rawOptions.crawlDepth, { min: 1, max: 5, fallback: 2 });
+  const maxPages = clampNumber(rawOptions.maxPages, { min: 1, max: 200, fallback: 50 });
+  const crawlDelay = clampNumber(rawOptions.crawlDelay, { min: 200, max: 10000, fallback: 1000 });
+  const maxConcurrentRequests = clampNumber(rawOptions.maxConcurrentRequests, { min: 1, max: 10, fallback: 5 });
+  const retryLimit = clampNumber(rawOptions.retryLimit, { min: 0, max: 5, fallback: 3 });
+
+  const method = typeof rawOptions.crawlMethod === 'string' ? rawOptions.crawlMethod.toLowerCase() : 'links';
+  const crawlMethod = ALLOWED_CRAWL_METHODS.has(method) ? method : 'links';
+
+  return {
+    target: parsedUrl.toString(),
+    crawlDepth,
+    maxPages,
+    crawlDelay,
+    crawlMethod,
+    maxConcurrentRequests,
+    retryLimit,
+    dynamic: rawOptions.dynamic !== false,
+    respectRobots: rawOptions.respectRobots !== false,
+    contentOnly: Boolean(rawOptions.contentOnly),
+  };
+}
 
 export function setupSocketHandlers(io, dbPromise, logger) {
   const activeCrawls = new Map();
@@ -12,27 +98,21 @@ export function setupSocketHandlers(io, dbPromise, logger) {
         crawlSession.stop();
       }
 
-      logger.info(
-        `Starting new crawl session for ${socket.id} with target: ${options.target}`
-      );
 
-      // Validate all options coming from client
-      const validated = {
-        target: options.target,
-        crawlDepth: options.crawlDepth,
-        maxPages: options.maxPages,
-        crawlDelay: options.crawlDelay,
-        crawlMethod: options.crawlMethod,
-        maxConcurrentRequests: options.maxConcurrentRequests,
-        retryLimit: options.retryLimit,
-        dynamic: options.dynamic !== false,
-        respectRobots: options.respectRobots !== false,
-        contentOnly: options.contentOnly || false,
-      };
+      let validatedOptions;
+      try {
+        validatedOptions = sanitizeOptions(options);
+      } catch (validationError) {
+        logger.warn('Invalid crawl options from ' + socket.id + ': ' + validationError.message);
+        socket.emit('error', { message: validationError.message });
+        return;
+      }
+
+      logger.info('Starting new crawl session for ' + socket.id + ' with target: ' + validatedOptions.target);
 
       crawlSession = new AdvancedCrawlSession(
         socket,
-        validated,
+        validatedOptions,
         dbPromise,
         logger
       );
@@ -83,12 +163,23 @@ export function setupSocketHandlers(io, dbPromise, logger) {
         if (format === 'json') {
           result = JSON.stringify(pages, null, 2);
         } else if (format === 'csv') {
-          // Simple CSV conversion
-          const headers = Object.keys(pages[0] || {}).join(',');
-          const rows = pages
-            .map((page) => Object.values(page).join(','))
-            .join('\n');
-          result = headers + '\n' + rows;
+          const headers = Object.keys(pages[0] || {});
+          const escapeCell = (value) => {
+            if (value === null || value === undefined) return '""';
+            let stringValue = String(value);
+            if (/^[=+\-@]/.test(stringValue)) {
+              stringValue = '\'' + stringValue;
+            }
+            stringValue = stringValue.replace(/"/g, '""');
+            return '"' + stringValue + '"';
+          };
+
+          const rows = pages.map((page) =>
+            headers.map((header) => escapeCell(page[header])).join(',')
+          );
+
+          const headerLine = headers.join(',');
+          result = [headerLine, ...rows].join('\n');
         } else {
           throw new Error('Unsupported export format');
         }
