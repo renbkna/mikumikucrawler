@@ -22,6 +22,9 @@ export const setupDatabase = async () => {
     driver: sqlite3.Database,
   });
 
+  // Enforce relational constraints before any migrations manipulate data
+  await db.exec('PRAGMA foreign_keys = ON;');
+
   // Enable WAL mode for better concurrency
   await db.exec('PRAGMA journal_mode = WAL;');
   await db.exec('PRAGMA synchronous = NORMAL;');
@@ -79,6 +82,9 @@ export const setupDatabase = async () => {
 
   // Migration: Add new columns for content processing if they don't exist
   await migrateDatabase(db);
+
+  // Remove any dangling links left behind before foreign keys were enforced
+  await db.run('DELETE FROM links WHERE source_id NOT IN (SELECT id FROM pages)');
 
   return db;
 };

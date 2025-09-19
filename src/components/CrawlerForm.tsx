@@ -1,4 +1,5 @@
 import { Wand2, Zap, Settings } from 'lucide-react';
+import type { ChangeEvent } from 'react';
 import { CrawlOptions } from '../types';
 
 interface CrawlerFormProps {
@@ -24,7 +25,7 @@ export function CrawlerForm({
   setOpenedConfig,
   isLightTheme,
 }: CrawlerFormProps) {
-  const handleTargetChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleTargetChange = (e: ChangeEvent<HTMLInputElement>) => {
     const newTarget = e.target.value;
     setTarget(newTarget);
   };
