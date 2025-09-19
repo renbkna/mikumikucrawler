@@ -203,12 +203,33 @@ export function createPagePipeline({
         processedContent.links?.filter((link) => !link.isInternal)?.length || 0,
     };
 
-    return db.run(
-      `INSERT OR REPLACE INTO pages
+    await db.run(
+      `INSERT INTO pages
         (url, domain, content_type, status_code, data_length, title, description, content, is_dynamic, last_modified,
          main_content, word_count, reading_time, language, keywords, quality_score, structured_data,
          media_count, internal_links_count, external_links_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(url) DO UPDATE SET
+          domain = excluded.domain,
+          content_type = excluded.content_type,
+          status_code = excluded.status_code,
+          data_length = excluded.data_length,
+          title = excluded.title,
+          description = excluded.description,
+          content = excluded.content,
+          is_dynamic = excluded.is_dynamic,
+          last_modified = excluded.last_modified,
+          main_content = excluded.main_content,
+          word_count = excluded.word_count,
+          reading_time = excluded.reading_time,
+          language = excluded.language,
+          keywords = excluded.keywords,
+          quality_score = excluded.quality_score,
+          structured_data = excluded.structured_data,
+          media_count = excluded.media_count,
+          internal_links_count = excluded.internal_links_count,
+          external_links_count = excluded.external_links_count,
+          crawled_at = CURRENT_TIMESTAMP`,
       item.url,
       domain,
       contentType,
@@ -230,10 +251,13 @@ export function createPagePipeline({
       enhancedData.internalLinksCount,
       enhancedData.externalLinksCount
     );
+
+    const pageRow = await db.get(`SELECT id FROM pages WHERE url = ?`, item.url);
+    return pageRow?.id ?? null;
   };
 
-  const handleLinkPersistence = async (db, sourceId, links) => {
-    if (!links.length || !sourceId) {
+  const handleLinkPersistence = async (db, pageId, links) => {
+    if (!links.length || !pageId) {
       return;
     }
 
@@ -241,7 +265,7 @@ export function createPagePipeline({
       db
         .run(
           "INSERT OR IGNORE INTO links (source_id, target_url, text) VALUES (?, ?, ?)",
-          sourceId,
+          pageId,
           link.url,
           link.text || ""
         )
@@ -392,7 +416,7 @@ export function createPagePipeline({
         })
       : content;
 
-    const result = await storePageRecord({
+    const pageId = await storePageRecord({
       db,
       item,
       domain,
@@ -413,7 +437,7 @@ export function createPagePipeline({
       const parser = $ || cheerio.load(content);
       links = extractLinks(parser, item.url, options);
       state.addLinks(links.length);
-      await handleLinkPersistence(db, result.lastID, links);
+      await handleLinkPersistence(db, pageId, links);
     }
 
     if (
