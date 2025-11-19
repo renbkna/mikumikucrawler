@@ -1,24 +1,26 @@
-import { useEffect, useRef, useState, useCallback, useMemo, useReducer } from 'react';
+import { Heart, Music } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import {
-  Header,
-  CrawlerForm,
-  StatsGrid,
-  ProgressBar,
   ActionButtons,
-  LogsSection,
-  CrawledPagesSection,
   ConfigurationView,
-  ToastNotification,
-  StatsVisualizer,
+  CrawledPagesSection,
+  CrawlerForm,
   ExportDialog,
+  LogsSection,
+  ProgressBar,
+  StatsGrid,
+  StatsVisualizer,
+  ToastNotification,
 } from './components';
+import { MikuBanner } from './components/MikuBanner';
+import { TheatreOverlay } from './components/TheatreOverlay';
 import {
-  Stats,
-  QueueStats,
-  StatsPayload,
   CrawledPage,
   CrawlOptions,
+  QueueStats,
+  Stats,
+  StatsPayload,
   Toast,
 } from './types';
 
@@ -43,11 +45,11 @@ function pagesReducer(state: CrawledPage[], action: PageAction): CrawledPage[] {
 
 function App() {
   const [isAttacking, setIsAttacking] = useState(false);
-  const [animState, setAnimState] = useState<number>(0);
+  const [theatreStatus, setTheatreStatus] = useState<'idle' | 'blackout' | 'counting' | 'beam' | 'live'>('idle');
+
   const [logs, setLogs] = useState<string[]>([]);
   const [progress, setProgress] = useState<number>(0);
 
-  // For crawler config
   const [target, setTarget] = useState<string>('');
   const [advancedOptions, setAdvancedOptions] = useState<CrawlOptions>({
     target: '',
@@ -63,7 +65,6 @@ function App() {
     saveMedia: false,
   });
 
-  // UI state
   const [audioVol, setAudioVol] = useState<number>(100);
   const [crawledPages, dispatchPages] = useReducer(pagesReducer, [] as CrawledPage[]);
   const [selectedPage, setSelectedPage] = useState<CrawledPage | null>(null);
@@ -75,14 +76,11 @@ function App() {
   const [queueStats, setQueueStats] = useState<QueueStats | null>(null);
   const [showDetails, setShowDetails] = useState(false);
 
-  const audioRef = useRef<HTMLAudioElement>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
-  const currentTaskRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const maxPagesRef = useRef(advancedOptions.maxPages);
   const fallbackToastShownRef = useRef(false);
 
-  // Stats tracking
   const [stats, setStats] = useState<Stats>({
     pagesScanned: 0,
     linksFound: 0,
@@ -93,7 +91,6 @@ function App() {
     skippedCount: 0,
   });
 
-  // Toast notification system
   const addToast = useCallback(
     (
       type: 'success' | 'error' | 'info' | 'warning',
@@ -117,11 +114,10 @@ function App() {
     maxPagesRef.current = advancedOptions.maxPages;
   }, [advancedOptions.maxPages]);
 
-  // Log management
   const addLog = useCallback(
     (msg: string) => {
       setLogs((prev) => {
-        const newLogs = [msg, ...prev].slice(0, 30); // Keep more logs (30 instead of 12)
+        const newLogs = [msg, ...prev].slice(0, 30);
         return newLogs;
       });
 
@@ -149,7 +145,6 @@ function App() {
     [addToast]
   );
 
-  // Connect to backend using the environment variable (VITE_BACKEND_URL)
   useEffect(() => {
     const socketEndpoint =
       import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
@@ -159,13 +154,11 @@ function App() {
     let cleanupSocket: (() => void) | null = null;
 
     const connectTimer = setTimeout(() => {
-      if (isCancelled) {
-        return;
-      }
+      if (isCancelled) return;
 
       try {
         const newSocket = io(socketEndpoint, {
-          transports: ['websocket', 'polling'], // Allow fallback to polling
+          transports: ['websocket', 'polling'],
           reconnectionAttempts: 10,
           reconnectionDelay: 1000,
           reconnectionDelayMax: 5000,
@@ -252,28 +245,13 @@ function App() {
 
         const handleAttackEnd = (finalStats: Stats) => {
           setIsAttacking(false);
-          setAnimState(0);
           addLog('Crawl ended.');
           setStats(finalStats);
           setProgress(100);
 
-          if (audioRef.current) {
-            audioRef.current.pause();
-            audioRef.current.currentTime = 0;
-          }
-
-          if (currentTaskRef.current) {
-            clearTimeout(currentTaskRef.current);
-            currentTaskRef.current = null;
-          }
-
           addToast(
             'success',
-            `Crawl completed! Scanned ${finalStats.pagesScanned} pages in ${
-              finalStats.elapsedTime
-                ? `${finalStats.elapsedTime.hours}h ${finalStats.elapsedTime.minutes}m ${finalStats.elapsedTime.seconds}s`
-                : 'some time'
-            }`,
+            `Crawl completed! Scanned ${finalStats.pagesScanned} pages`,
             5000
           );
         };
@@ -338,48 +316,15 @@ function App() {
       setSocket(null);
     };
   }, [addLog, addToast]);
-  // Audio management for the attack animation/sound
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
 
-    const handler = () => {
-      if (audio.paused) return;
-      if (
-        animState !== 2 &&
-        audio.currentTime > 5.24 &&
-        audio.currentTime < 9.4
-      ) {
-        setAnimState(2);
-      }
-      if (audio.currentTime > 17.53) {
-        audio.currentTime = 15.86;
-      }
-    };
-    audio.addEventListener('timeupdate', handler);
-    return () => audio.removeEventListener('timeupdate', handler);
-  }, [animState]);
-
-  // Clean up timeouts when attack state changes
-  useEffect(() => {
-    if (!isAttacking && currentTaskRef.current) {
-      clearTimeout(currentTaskRef.current);
-      currentTaskRef.current = null;
-    }
-  }, [isAttacking]);
-
-  // Handle target input changes
   const handleTargetChange = (newTarget: string) => {
     setTarget(newTarget);
-
-    // Also update the target in advanced options
     setAdvancedOptions((prev) => ({
       ...prev,
       target: newTarget,
     }));
   };
 
-  // Filtering functions for crawled pages
   const filterPages = (
     pages: CrawledPage[],
     filterString: string
@@ -408,17 +353,14 @@ function App() {
     setFilterText(filter);
   };
 
-  // Attack control functions
   const validateTarget = (url: string): boolean => {
     try {
-      // Add http:// prefix if missing
       if (!/^https?:\/\//i.test(url)) {
         url = 'http://' + url;
         setTarget(url);
         setAdvancedOptions((prev) => ({ ...prev, target: url }));
       }
-
-      new URL(url); // Will throw if invalid
+      new URL(url);
       return true;
     } catch {
       addToast('error', 'Please enter a valid URL');
@@ -445,7 +387,6 @@ function App() {
       return;
     }
 
-    // Reset stats and logs for a new crawl session
     setStats({
       pagesScanned: 0,
       linksFound: 0,
@@ -459,41 +400,22 @@ function App() {
     setFilterText('');
     setSelectedPage(null);
     setProgress(0);
-    addLog('Preparing Miku beam...');
+    addLog('Initiating Miku Beam Sequence...');
 
-    if (audioRef.current) {
-      audioRef.current.currentTime = isQuick ? 9.5 : 0;
-      audioRef.current.volume = audioVol / 100;
-      audioRef.current.play().catch(console.error);
+    setIsAttacking(true);
+
+    if (isQuick) {
+        setTheatreStatus('live');
+        addToast('info', '⚡ Lightning Strike! Skipping animation...');
+    } else {
+        setTheatreStatus('blackout');
     }
 
-    if (!isQuick) setAnimState(1);
-
-    // Update target in options before sending
     const optionsToSend = {
       ...advancedOptions,
       target: target,
     };
-
-    // Send crawl request to backend immediately
     socket.emit('startAttack', optionsToSend);
-    addLog(`🌐 Starting crawl on ${target}`);
-    addLog('Scanning for links and data...');
-
-    // But still keep the visual animation timing for the frontend
-    const timeout = setTimeout(
-      () => {
-        setAnimState(3);
-        addToast('info', `Started crawling ${target}`);
-      },
-      isQuick ? 700 : 10250
-    );
-    if (currentTaskRef.current) {
-      clearTimeout(currentTaskRef.current);
-    }
-    currentTaskRef.current = timeout;
-
-    setIsAttacking(true);
   };
 
   const stopAttack = () => {
@@ -502,35 +424,11 @@ function App() {
       addLog('Stopped crawler beam.');
       addToast('info', 'Crawler stopped');
     }
-
-    // Reset all visual and audio effects
     setIsAttacking(false);
-    setAnimState(0); // Reset to original theme
-
-    // Stop and reset audio
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-    }
-
-    // Clear any pending timeouts
-    if (currentTaskRef.current) {
-      clearTimeout(currentTaskRef.current);
-      currentTaskRef.current = null;
-    }
-
-    // Reset progress
+    setTheatreStatus('idle');
     setProgress(0);
   };
 
-  // Volume control
-  useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = audioVol / 100;
-    }
-  }, [audioVol]);
-
-  // Export function
   const handleExport = (format: string) => {
     if (socket && crawledPages.length > 0) {
       socket.emit('exportData', format);
@@ -540,175 +438,183 @@ function App() {
     }
   };
 
-  // View details of a specific page
   const viewPageDetails = (page: CrawledPage) => {
     setSelectedPage(page);
   };
 
-  // Theme-based styling
-  const isLightTheme = animState === 0 || animState === 3;
-  const backgroundClass = isLightTheme
-    ? 'from-emerald-100 to-cyan-100'
-    : animState === 2
-    ? 'background-pulse'
-    : 'bg-gray-950';
+  const handleBeamStart = useCallback(() => {
+    setTheatreStatus('beam');
+  }, []);
+
+  const handleTheatreComplete = useCallback(() => {
+    setTheatreStatus('live');
+  }, []);
+
+  const isUIHidden = theatreStatus === 'blackout' || theatreStatus === 'counting';
+  const isModalOpen = openedConfig || openExportDialog;
 
   return (
-    <div
-      className={`relative w-screen h-screen bg-gradient-to-br ${backgroundClass} pt-4 px-4 pb-16 overflow-y-auto ${
-        isAttacking && (animState === 0 || animState === 3) ? 'shake' : ''
-      }`}
-    >
-      <audio ref={audioRef} src="/audio.mp3" />
+    <div className="relative w-screen h-screen overflow-hidden bg-miku-bg text-miku-text font-sans transition-colors duration-500">
 
-      {/* Floating background decorations */}
-      <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
-        {/* Floating musical notes */}
-        <div className="absolute top-20 left-10 text-pink-400/20 text-4xl animate-bounce delay-0">
-          ♪
-        </div>
-        <div className="absolute top-40 right-20 text-cyan-400/20 text-3xl animate-bounce delay-500">
-          ♫
-        </div>
-        <div className="absolute bottom-40 left-20 text-emerald-400/20 text-5xl animate-bounce delay-1000">
-          ♪
-        </div>
-        <div className="absolute bottom-20 right-10 text-pink-400/20 text-2xl animate-bounce delay-1500">
-          ♫
+      {/* THEATRE OVERLAY */}
+      <TheatreOverlay
+        status={theatreStatus}
+        onBeamStart={handleBeamStart}
+        onComplete={handleTheatreComplete}
+      />
+
+      {/* MAIN UI LAYER */}
+      <div
+        className={`relative w-full h-full pt-4 px-4 pb-16 transition-all duration-1000 ${
+          isUIHidden ? 'opacity-0 scale-95 blur-xl pointer-events-none' : 'opacity-100 scale-100 blur-0'
+        } ${isModalOpen ? 'overflow-hidden' : 'overflow-y-auto'}`}
+      >
+        {/* Floating Decorations */}
+        <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
+             <div className="absolute top-10 left-10 w-32 h-32 bg-miku-teal/10 rounded-full blur-3xl animate-float" />
+             <div className="absolute bottom-20 right-20 w-40 h-40 bg-miku-pink/10 rounded-full blur-3xl animate-float" style={{ animationDelay: '1s' }} />
         </div>
 
-        {/* Floating sparkles */}
-        <div className="absolute top-32 left-1/4 w-2 h-2 bg-pink-400/30 rounded-full sparkle"></div>
-        <div className="absolute top-60 right-1/3 w-3 h-3 bg-cyan-400/30 rounded-full sparkle delay-700"></div>
-        <div className="absolute bottom-60 left-1/3 w-2 h-2 bg-emerald-400/30 rounded-full sparkle delay-1400"></div>
-        <div className="absolute bottom-32 right-1/4 w-4 h-4 bg-pink-400/30 rounded-full sparkle delay-2100"></div>
+        {/* Toast Notifications */}
+        <div className="fixed top-4 right-4 z-50 space-y-2">
+            {toasts.map((toast) => (
+            <ToastNotification
+                key={toast.id}
+                toast={toast}
+                onDismiss={dismissToast}
+            />
+            ))}
+        </div>
 
-        {/* Gradient orbs */}
-        <div className="absolute top-1/4 left-1/6 w-32 h-32 bg-gradient-to-br from-pink-400/10 to-transparent rounded-full blur-2xl miku-float"></div>
-        <div className="absolute top-1/3 right-1/6 w-24 h-24 bg-gradient-to-br from-cyan-400/10 to-transparent rounded-full blur-xl miku-float delay-1000"></div>
-        <div className="absolute bottom-1/4 left-1/5 w-28 h-28 bg-gradient-to-br from-emerald-400/10 to-transparent rounded-full blur-2xl miku-float delay-2000"></div>
-      </div>
-
-      {/* Toast Notifications */}
-      <div className="fixed top-4 right-4 z-50 space-y-2">
-        {toasts.map((toast) => (
-          <ToastNotification
-            key={toast.id}
-            toast={toast}
-            onDismiss={dismissToast}
-          />
-        ))}
-      </div>
-
-      <div className="relative z-10 max-w-3xl mx-auto space-y-6">
-        {/* Title and Miku */}
-        <Header isLightTheme={isLightTheme} />
-
-        <div
-          className={`relative p-8 overflow-hidden rounded-2xl shadow-2xl backdrop-blur-sm border ${
-            isLightTheme
-              ? 'bg-white/90 border-emerald-200/50 shadow-emerald-500/20'
-              : 'bg-gray-950/90 border-gray-700/50 shadow-pink-500/20'
-          }`}
-        >
-          {/* Enhanced decorative background */}
-          <div className="absolute inset-0 pointer-events-none overflow-hidden">
-            <div className="absolute -top-10 -left-10 w-40 h-40 bg-gradient-to-br from-pink-400/10 to-transparent rounded-full blur-2xl"></div>
-            <div className="absolute -bottom-10 -right-10 w-40 h-40 bg-gradient-to-tl from-cyan-400/10 to-transparent rounded-full blur-2xl"></div>
-            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-gradient-radial from-emerald-400/5 to-transparent rounded-full blur-3xl"></div>
-          </div>
-
-          {/* Enhanced Miku GIF container */}
-          <div className="relative z-10 mb-8">
-            {/* Miku GIF with original working structure */}
-            <div
-              className="flex justify-center w-full h-48 mb-6"
-              style={{
-                backgroundImage: "url('/miku.gif')",
-                backgroundRepeat: 'no-repeat',
-                backgroundPosition: 'center',
-                backgroundSize: 'cover',
-                opacity: animState === 0 || animState === 3 ? 1 : 0,
-                transition: 'opacity 0.2s ease-in-out',
-              }}
-            ></div>
-          </div>
-
-          {/* Crawler Config */}
-          <CrawlerForm
-            target={target}
-            setTarget={handleTargetChange}
-            advancedOptions={advancedOptions}
-            setAdvancedOptions={setAdvancedOptions}
-            isAttacking={isAttacking}
-            startAttack={startAttack}
-            stopAttack={stopAttack}
-            setOpenedConfig={setOpenedConfig}
-            isLightTheme={isLightTheme}
-          />
-
-          {/* Stats Widgets */}
-          <StatsGrid
-            stats={stats}
-            queueStats={queueStats}
-            isAttacking={isAttacking}
-            isLightTheme={isLightTheme}
-          />
-
-          {/* Progress Bar */}
-          <ProgressBar progress={progress} isLightTheme={isLightTheme} />
-
-          {/* Action Buttons */}
-          <ActionButtons
-            crawledPages={crawledPages}
-            setOpenExportDialog={setOpenExportDialog}
-            showDetails={showDetails}
-            setShowDetails={setShowDetails}
-          />
-
-          {/* Extended Stats */}
-          {showDetails && <StatsVisualizer stats={stats} />}
-
-          {/* Logs Section */}
-          <LogsSection
-            logs={logs}
-            setLogs={setLogs}
-            logContainerRef={logContainerRef}
-          />
-
-          {/* Crawled Pages Section */}
-          <CrawledPagesSection
-            crawledPages={crawledPages}
-            displayedPages={displayedPages}
-            filterText={filterText}
-            onFilterChange={handleFilterChange}
-            onClearFilter={clearFilter}
-            isFilterActive={isFilterActive}
-            selectedPage={selectedPage}
-            setSelectedPage={setSelectedPage}
-            viewPageDetails={viewPageDetails}
-            pageLimit={MAX_PAGE_BUFFER}
-          />
-
-          {/* Animation Overlay */}
-          {isAttacking && (
-            <div className="absolute inset-0 pointer-events-none">
-              <div
-                className={`
-                  absolute inset-0 bg-gradient-to-r
-                  ${
-                    animState === 2
-                      ? 'from-pink-500/10 via-red-500/20 to-blue-500/10'
-                      : 'from-pink-500/10 to-blue-500/10'
-                  }
-                  animate-pulse
-                `}
-              />
-              <div className="absolute top-0 -translate-x-1/2 left-1/2">
-                <div className="w-2 h-2 bg-pink-500 rounded-full animate-bounce" />
-              </div>
+        <div className="relative z-10 max-w-7xl mx-auto space-y-8">
+            {/* Header - Cute Style */}
+            <div className="flex items-center justify-center py-8">
+                <div className="glass-panel px-8 py-4 flex items-center gap-4 animate-bounce-slow">
+                    <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center shadow-lg border-2 border-miku-teal/20">
+                        <Music className="w-6 h-6 text-miku-teal fill-miku-teal/20" />
+                    </div>
+                    <div className="text-center">
+                        <h1 className="text-3xl font-black tracking-tight text-miku-teal drop-shadow-sm">
+                            Miku Miku Crawler
+                        </h1>
+                        <p className="text-xs font-bold text-miku-pink tracking-widest">Because web crawling is cuter when Miku does it! 🌸</p>
+                    </div>
+                    <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center shadow-lg border-2 border-miku-pink/20">
+                        <Heart className="w-6 h-6 text-miku-pink fill-miku-pink/20" />
+                    </div>
+                </div>
             </div>
-          )}
+
+            {/* Main Control Panel */}
+            <div className="glass-panel p-8 relative overflow-hidden group hover:shadow-xl transition-all duration-500">
+                {/* Miku Banner - Integrated here */}
+                <MikuBanner active={theatreStatus === 'beam' || isAttacking} />
+
+                <CrawlerForm
+                    target={target}
+                    setTarget={handleTargetChange}
+                    advancedOptions={advancedOptions}
+                    setAdvancedOptions={setAdvancedOptions}
+                    isAttacking={isAttacking}
+                    startAttack={startAttack}
+                    stopAttack={stopAttack}
+                    setOpenedConfig={setOpenedConfig}
+                    isLightTheme={true}
+                />
+            </div>
+
+            {/* Stats & Progress */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2 glass-panel p-6">
+                    <StatsGrid
+                        stats={stats}
+                        queueStats={queueStats}
+                        isAttacking={isAttacking}
+                        isLightTheme={true}
+                    />
+                </div>
+                <div className="glass-panel p-6 flex flex-col justify-center">
+                    <ProgressBar progress={progress} isLightTheme={true} />
+                </div>
+            </div>
+
+            {/* Action Buttons */}
+            <ActionButtons
+                crawledPages={crawledPages}
+                setOpenExportDialog={setOpenExportDialog}
+                showDetails={showDetails}
+                setShowDetails={setShowDetails}
+            />
+
+            {/* Extended Stats */}
+            {showDetails && <StatsVisualizer stats={stats} />}
+
+            {/* Logs & Results */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="glass-panel p-6 h-[600px] flex flex-col">
+                    <div className="flex items-center justify-between mb-4 border-b border-miku-teal/20 pb-2">
+                        <h3 className="text-lg font-bold text-miku-teal flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-miku-teal animate-pulse" />
+                            System Logs
+                        </h3>
+                    </div>
+                    <LogsSection
+                        logs={logs}
+                        setLogs={setLogs}
+                        logContainerRef={logContainerRef as React.RefObject<HTMLDivElement>}
+                    />
+                </div>
+                <div className="glass-panel p-6 h-[600px] flex flex-col">
+                    <div className="flex items-center justify-between mb-4 border-b border-miku-pink/20 pb-2">
+                        <h3 className="text-lg font-bold text-miku-pink flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-miku-pink animate-pulse" />
+                            Captured Data
+                        </h3>
+                        <span className="text-xs font-bold text-miku-text/50 bg-white px-2 py-1 rounded-full">
+                            {crawledPages.length} items
+                        </span>
+                    </div>
+                    <CrawledPagesSection
+                        crawledPages={crawledPages}
+                        displayedPages={displayedPages}
+                        filterText={filterText}
+                        onFilterChange={handleFilterChange}
+                        onClearFilter={clearFilter}
+                        isFilterActive={isFilterActive}
+                        selectedPage={selectedPage}
+                        setSelectedPage={setSelectedPage}
+                        viewPageDetails={viewPageDetails}
+                        pageLimit={MAX_PAGE_BUFFER}
+                    />
+                </div>
+            </div>
+        </div>
+
+        {/* Footer */}
+        <div className="mt-12 pb-8 text-center">
+            <div className="inline-block glass-panel px-8 py-4 rounded-full">
+                <div className="flex items-center gap-4">
+                    <span className="text-miku-pink animate-bounce">♥</span>
+                    <span className="text-sm text-miku-text font-bold">
+                        Miku Miku Crawler <span className="text-miku-teal">v2.0</span>
+                    </span>
+                    <span className="text-miku-teal animate-bounce delay-100">♥</span>
+
+                    <div className="w-px h-4 bg-miku-text/20 mx-2" />
+
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs text-miku-teal font-bold">VOL</span>
+                        <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            value={audioVol}
+                            onChange={(e) => setAudioVol(parseInt(e.target.value))}
+                            className="w-24 h-1 bg-miku-bg rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-miku-teal [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-md"
+                        />
+                    </div>
+                </div>
+            </div>
         </div>
       </div>
 
@@ -719,7 +625,7 @@ function App() {
         options={advancedOptions}
         onOptionsChange={setAdvancedOptions}
         onSave={() => {
-          addToast('success', 'Configuration saved');
+          addToast('success', 'Configuration saved! ✨');
         }}
       />
 
@@ -729,94 +635,6 @@ function App() {
         onClose={() => setOpenExportDialog(false)}
         onExport={handleExport}
       />
-
-      <div className="flex flex-col items-center space-y-4 mt-8">
-        {/* Enhanced footer with beautiful styling */}
-        <div
-          className={`relative p-6 rounded-2xl backdrop-blur-sm border ${
-            isLightTheme
-              ? 'bg-white/80 border-emerald-200/50 shadow-lg shadow-emerald-500/10'
-              : 'bg-gray-900/80 border-gray-700/50 shadow-lg shadow-pink-500/10'
-          }`}
-        >
-          {/* Decorative background */}
-          <div className="absolute inset-0 bg-gradient-to-r from-pink-400/5 via-emerald-400/5 to-cyan-400/5 rounded-2xl"></div>
-
-          <div className="relative z-10 text-center space-y-4">
-            {/* Main footer text */}
-            <div className="flex items-center justify-center gap-2 text-lg font-bold">
-              <span className="text-pink-400">🕷️</span>
-              <span
-                className={`bg-gradient-to-r from-emerald-500 to-cyan-500 bg-clip-text text-transparent ${
-                  isLightTheme ? '' : 'filter brightness-125'
-                }`}
-              >
-                v2.0 made with ❤️ by{' '}
-                <a
-                  href="https://github.com/renbkna"
-                  className="text-pink-500 hover:text-pink-400 transition-colors duration-300 underline decoration-pink-400/50 hover:decoration-pink-400"
-                >
-                  renbkna
-                </a>
-              </span>
-              <span className="text-cyan-400">🕷️</span>
-            </div>
-
-            {/* Volume control section */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-center gap-2">
-                <span className="text-sm font-semibold text-gray-500">
-                  🎵 Audio Volume
-                </span>
-                <span
-                  className={`text-sm font-bold ${
-                    audioVol > 50
-                      ? 'text-emerald-500'
-                      : audioVol > 0
-                      ? 'text-yellow-500'
-                      : 'text-gray-400'
-                  }`}
-                >
-                  {audioVol}%
-                </span>
-              </div>
-
-              {/* Enhanced volume slider */}
-              <div className="relative w-48 mx-auto">
-                <input
-                  className="w-full volume_bar focus:border-emerald-500 transition-all duration-300 hover:scale-105"
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="5"
-                  draggable="false"
-                  value={audioVol}
-                  onChange={(e) => setAudioVol(parseInt(e.target.value))}
-                  aria-label="Volume control"
-                />
-
-                {/* Volume level indicators */}
-                <div className="flex justify-between mt-1 text-xs text-gray-400">
-                  <span>🔇</span>
-                  <span>🔉</span>
-                  <span>🔊</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Decorative elements */}
-            <div className="flex items-center justify-center space-x-4 text-sm opacity-60">
-              <span className="text-pink-400">✨</span>
-              <span
-                className={isLightTheme ? 'text-gray-600' : 'text-gray-400'}
-              >
-                Powered by Miku's magic
-              </span>
-              <span className="text-cyan-400">✨</span>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

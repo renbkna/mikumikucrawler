@@ -1,3 +1,5 @@
+import { Music } from 'lucide-react';
+
 interface ProgressBarProps {
   progress: number;
   isLightTheme: boolean;
@@ -5,98 +7,58 @@ interface ProgressBarProps {
 
 export function ProgressBar({ progress, isLightTheme }: ProgressBarProps) {
   return (
-    <div className="mb-8">
-      <div className="flex items-center justify-between mb-3">
+    <div className="mb-8 relative">
+      <div className="flex items-center justify-between mb-3 px-2">
         <div className="flex items-center gap-2">
-          <span
-            className={`text-lg font-bold ${
-              isLightTheme ? 'text-gray-700' : 'text-gray-200'
-            }`}
-          >
-            🎵 Crawl Progress
+          <span className="text-lg font-bold text-slate-600 flex items-center gap-2">
+            <Music className={`w-5 h-5 ${progress > 0 && progress < 100 ? 'animate-bounce' : ''} text-miku-primary`} />
+            Crawl Progress
           </span>
-          {progress > 0 && progress < 100 && (
-            <div className="flex items-center gap-1">
-              <div className="w-2 h-2 bg-pink-400 rounded-full animate-pulse"></div>
-              <span className="text-sm text-gray-500 font-medium">
-                In progress...
-              </span>
-            </div>
-          )}
         </div>
         <div className="flex items-center gap-2">
-          <span
-            className={`text-lg font-black ${
-              progress === 100
-                ? 'text-emerald-500'
-                : progress > 0
-                ? 'text-pink-500'
-                : isLightTheme
-                ? 'text-gray-600'
-                : 'text-gray-300'
-            }`}
-          >
+          <span className="text-2xl font-black text-miku-primary">
             {progress.toFixed(0)}%
           </span>
-          {progress === 100 && <span className="text-emerald-500">✨</span>}
         </div>
       </div>
 
-      {/* Enhanced progress bar container */}
-      <div
-        className={`relative h-6 rounded-full overflow-hidden backdrop-blur-sm border-2 ${
-          isLightTheme
-            ? 'bg-gray-100/80 border-gray-200/50'
-            : 'bg-gray-800/80 border-gray-700/50'
-        } shadow-inner`}
-      >
-        {/* Background gradient */}
-        <div className="absolute inset-0 bg-gradient-to-r from-gray-200/50 to-gray-300/50 dark:from-gray-700/50 dark:to-gray-600/50"></div>
+      {/* Progress Bar Container */}
+      <div className="relative h-8 rounded-full bg-slate-200/50 overflow-hidden shadow-inner border border-white/50">
+        {/* Animated Background Pattern */}
+        <div className="absolute inset-0 opacity-30"
+             style={{
+               backgroundImage: 'radial-gradient(#39C5BB 1px, transparent 1px)',
+               backgroundSize: '10px 10px'
+             }}>
+        </div>
 
-        {/* Progress fill with beautiful gradient */}
+        {/* Progress Fill */}
         <div
-          className="relative h-full transition-all duration-700 ease-out bg-gradient-to-r from-pink-500 via-emerald-500 to-cyan-500 shadow-lg"
+          className="relative h-full transition-all duration-700 ease-out bg-gradient-to-r from-miku-primary via-miku-secondary to-miku-primary bg-[length:200%_100%] animate-gradient-shift shadow-lg rounded-full"
           style={{ width: `${progress}%` }}
         >
-          {/* Animated shine effect */}
-          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-pulse"></div>
+          {/* Shine Effect */}
+          <div className="absolute inset-0 bg-gradient-to-b from-white/30 to-transparent"></div>
 
-          {/* Sparkle effect for active progress */}
+          {/* Leading Sparkle */}
           {progress > 0 && progress < 100 && (
-            <div className="absolute right-0 top-1/2 transform -translate-y-1/2 translate-x-1">
-              <div className="w-3 h-3 bg-white rounded-full shadow-lg animate-ping"></div>
+            <div className="absolute right-2 top-1/2 -translate-y-1/2">
+              <div className="w-2 h-2 bg-white rounded-full animate-ping"></div>
             </div>
           )}
         </div>
-
-        {/* Progress segments for visual appeal */}
-        <div className="absolute inset-0 flex">
-          {[...Array(10)].map((_, i) => (
-            <div
-              key={i}
-              className={`flex-1 border-r border-white/20 ${
-                i === 9 ? 'border-r-0' : ''
-              }`}
-            ></div>
-          ))}
-        </div>
       </div>
 
-      {/* Progress status text */}
-      <div className="mt-2 text-center">
-        {progress === 0 && (
-          <span className="text-sm text-gray-500 font-medium">
-            Ready to start crawling! 🚀
-          </span>
-        )}
+      {/* Status Message */}
+      <div className="mt-3 text-center h-6">
         {progress > 0 && progress < 100 && (
-          <span className="text-sm text-pink-500 font-medium">
-            Miku is working hard! 💪
+          <span className="text-sm font-bold text-miku-secondary animate-pulse">
+            Miku is working hard! Ganbare! ♪
           </span>
         )}
         {progress === 100 && (
-          <span className="text-sm text-emerald-500 font-bold">
-            Crawl completed successfully! 🎉
+          <span className="text-sm font-bold text-miku-primary animate-bounce">
+            All done! Sugoi! ✨
           </span>
         )}
       </div>

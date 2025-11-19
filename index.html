@@ -23,134 +23,57 @@
     <meta name="referrer" content="strict-origin-when-cross-origin" />
 
     <!-- Title and Description -->
-    <title>Miku Miku Crawler | Real-Time Web Crawling with Visualization</title>
+    <title>Miku Miku Crawler | Cute & Fast Web Crawling</title>
     <meta
       name="description"
-      content="Miku Miku Crawler is a modern web crawler with real-time visualization. Watch pages being crawled with live statistics, interactive data displays, and Miku-themed animations."
+      content="Miku Miku Crawler is a cute, modern web crawler. Watch pages being crawled with live statistics and Miku-themed animations!"
     />
 
     <!-- Keywords -->
     <meta
       name="keywords"
-      content="Miku Miku Crawler, Web Crawler, Puppeteer, Cheerio, Socket.io, Real-Time, React, Vite, Web Scraping, Data Visualization, Website Analysis"
+      content="Miku Miku Crawler, Web Crawler, React, Vite, Web Scraping, Hatsune Miku, Cute"
     />
 
     <!-- SEO Tags -->
     <meta name="robots" content="index, follow" />
-    <link rel="canonical" href="https://mikumikucrawler.vercel.app/" />
     <meta name="author" content="renbkna" />
 
     <!-- Color Scheme and Appearance -->
-    <meta name="theme-color" content="#10B981" />
-    <meta name="color-scheme" content="light dark" />
-    <meta
-      name="apple-mobile-web-app-status-bar-style"
-      content="black-translucent"
-    />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#39c5bb" />
+    <meta name="color-scheme" content="light" />
 
     <!-- Favicon & Icons -->
     <link rel="icon" type="image/svg+xml" href="/miku.ico" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
-    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
-    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.json" />
-    <link rel="mask-icon" href="/safari-pinned-tab.svg" color="#10B981" />
-
-    <!-- Open Graph (Social Sharing) -->
-    <meta
-      property="og:title"
-      content="Miku Miku Crawler | Real-Time Web Crawling"
-    />
-    <meta
-      property="og:description"
-      content="Experience real-time web crawling with interactive visuals. Watch as Miku traverses the web, gathering data with style!"
-    />
-    <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://mikumikucrawler.vercel.app/" />
-    <meta
-      property="og:image"
-      content="https://mikumikucrawler.vercel.app/miku1.gif"
-    />
-    <meta property="og:image:width" content="400" />
-    <meta property="og:image:height" content="157" />
-    <meta property="og:site_name" content="Miku Miku Crawler" />
-    <meta property="og:locale" content="en_US" />
-
-    <!-- Twitter Card -->
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Miku Miku Crawler" />
-    <meta
-      name="twitter:description"
-      content="Real-time web crawling with interactive visuals and live stats. Watch the web unfold before your eyes!"
-    />
-    <meta
-      name="twitter:image"
-      content="https://mikumikucrawler.vercel.app/miku1.gif"
-    />
-    <meta name="twitter:creator" content="@renbkna" />
 
     <!-- Preconnect & DNS Prefetch -->
     <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link rel="dns-prefetch" href="//fonts.googleapis.com" />
-    <link rel="dns-prefetch" href="//fonts.gstatic.com" />
 
     <!-- Preload Critical Assets -->
     <link rel="preload" href="/miku.gif" as="image" />
     <link rel="preload" href="/miku1.gif" as="image" />
     <link rel="preload" href="/audio.mp3" as="audio" />
-    <link rel="modulepreload" href="/src/main.tsx" crossorigin />
 
-    <!-- Font Loading with Display Swap -->
+    <!-- Font Loading -->
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Varela+Round&family=M+PLUS+Rounded+1c:wght@400;500;700;800&display=swap"
       rel="stylesheet"
     />
-
-    <!-- Structured Data for SEO -->
-    <script type="application/ld+json">
-      {
-        "@context": "https://schema.org",
-        "@type": "WebApplication",
-        "name": "Miku Miku Crawler",
-        "description": "A real-time web crawler with interactive visualizations",
-        "applicationCategory": "DeveloperApplication",
-        "operatingSystem": "Any",
-        "author": {
-          "@type": "Person",
-          "name": "renbkna",
-          "url": "https://github.com/renbkna"
-        },
-        "offers": {
-          "@type": "Offer",
-          "price": "0",
-          "priceCurrency": "USD"
-        }
-      }
-    </script>
 
     <!-- Inline Critical CSS -->
     <style>
       :root {
-        --miku-primary: #10b981;
-        --miku-secondary: #06b6d4;
-        --miku-accent: #ec4899;
+        --miku-teal: #39c5bb;
+        --miku-pink: #ffb7c5;
+        --miku-bg: #f0f8ff;
       }
       body {
         margin: 0;
         padding: 0;
-        background: linear-gradient(
-          135deg,
-          #d1fae5 0%,
-          #a7f3d0 50%,
-          #6ee7b7 100%
-        );
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
-          Roboto, sans-serif;
-        -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
+        background-color: var(--miku-bg);
+        font-family: 'Varela Round', sans-serif;
         overflow: hidden;
       }
       #root {
@@ -163,351 +86,86 @@
         left: 0;
         right: 0;
         bottom: 0;
-        background: linear-gradient(
-          135deg,
-          #d1fae5 0%,
-          #a7f3d0 25%,
-          #6ee7b7 50%,
-          #34d399 75%,
-          #10b981 100%
-        );
-        background-size: 400% 400%;
-        animation: gradientShift 8s ease infinite;
+        background: #f0f8ff;
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        color: #065f46;
         z-index: 9999;
-        overflow: hidden;
+        background-image: radial-gradient(#39c5bb 1px, transparent 1px), radial-gradient(#ffb7c5 1px, transparent 1px);
+        background-size: 40px 40px;
+        background-position: 0 0, 20px 20px;
       }
 
-      /* Animated background gradient */
-      @keyframes gradientShift {
-        0% {
-          background-position: 0% 50%;
-        }
-        50% {
-          background-position: 100% 50%;
-        }
-        100% {
-          background-position: 0% 50%;
-        }
+      .miku-loader {
+        width: 100px;
+        height: 100px;
+        position: relative;
+        margin-bottom: 20px;
+        animation: bounce 2s infinite ease-in-out;
+        display: flex;
+        align-items: center;
+        justify-content: center;
       }
 
-      /* Floating particles background */
-      .loading-screen::before {
+      .miku-loader img {
+        width: 60px;
+        height: 60px;
+        object-fit: contain;
+        animation: spin 3s infinite linear;
+        background: transparent;
+      }
+
+      .miku-loader::after {
         content: '';
         position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background-image: radial-gradient(
-            circle at 20% 80%,
-            rgba(16, 185, 129, 0.2) 0%,
-            transparent 50%
-          ),
-          radial-gradient(
-            circle at 80% 20%,
-            rgba(6, 182, 212, 0.2) 0%,
-            transparent 50%
-          ),
-          radial-gradient(
-            circle at 40% 40%,
-            rgba(236, 72, 153, 0.2) 0%,
-            transparent 50%
-          );
-        animation: floatParticles 12s ease-in-out infinite;
-        z-index: -1;
-      }
-
-      @keyframes floatParticles {
-        0%,
-        100% {
-          transform: translateY(0px) rotate(0deg);
-          opacity: 0.3;
-        }
-        50% {
-          transform: translateY(-20px) rotate(180deg);
-          opacity: 0.7;
-        }
-      }
-
-      /* Glassmorphism container for Miku */
-      .loading-screen .miku-container {
-        width: 400px;
-        height: 157px;
-        position: relative;
-        margin-bottom: 40px;
-        background: rgba(255, 255, 255, 0.3);
-        backdrop-filter: blur(20px);
-        border: 1px solid rgba(255, 255, 255, 0.4);
-        border-radius: 20px;
-        overflow: hidden;
-        box-shadow: 0 20px 40px rgba(16, 185, 129, 0.2),
-          0 0 0 1px rgba(255, 255, 255, 0.2),
-          inset 0 1px 0 rgba(255, 255, 255, 0.3);
-        animation: mikuFloat 4s ease-in-out infinite;
-      }
-
-      @keyframes mikuFloat {
-        0%,
-        100% {
-          transform: translateY(0px) scale(1);
-          box-shadow: 0 20px 40px rgba(16, 185, 129, 0.2),
-            0 0 0 1px rgba(255, 255, 255, 0.2),
-            inset 0 1px 0 rgba(255, 255, 255, 0.3);
-        }
-        50% {
-          transform: translateY(-10px) scale(1.02);
-          box-shadow: 0 30px 60px rgba(16, 185, 129, 0.3),
-            0 0 0 1px rgba(255, 255, 255, 0.3),
-            inset 0 1px 0 rgba(255, 255, 255, 0.4),
-            0 0 30px rgba(236, 72, 153, 0.4);
-        }
-      }
-
-      .loading-screen img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-        display: block;
-        border-radius: 20px;
-      }
-
-      /* Enhanced title styling */
-      .loading-screen h1 {
-        font-size: 3rem;
-        font-weight: 900;
-        margin: 0 0 20px;
-        background: linear-gradient(135deg, #065f46, #047857, #059669, #0d9488);
-        background-size: 300% 300%;
-        background-clip: text;
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        letter-spacing: 2px;
-        text-shadow: 0 0 30px rgba(16, 185, 129, 0.5);
-        animation: titleGlow 3s ease-in-out infinite;
-        position: relative;
-      }
-
-      @keyframes titleGlow {
-        0%,
-        100% {
-          background-position: 0% 50%;
-          filter: drop-shadow(0 0 10px rgba(16, 185, 129, 0.4));
-        }
-        50% {
-          background-position: 100% 50%;
-          filter: drop-shadow(0 0 20px rgba(6, 182, 212, 0.6));
-        }
-      }
-
-      /* Subtitle with glassmorphism */
-      .loading-screen p {
-        margin: 0 0 30px;
-        font-size: 1.2rem;
-        font-weight: 500;
-        color: #065f46;
-        text-shadow: 0 2px 10px rgba(255, 255, 255, 0.5);
-        background: rgba(255, 255, 255, 0.4);
-        backdrop-filter: blur(10px);
-        padding: 12px 24px;
-        border-radius: 50px;
-        border: 1px solid rgba(255, 255, 255, 0.5);
-        animation: subtitlePulse 2s ease-in-out infinite;
-      }
-
-      @keyframes subtitlePulse {
-        0%,
-        100% {
-          transform: scale(1);
-          box-shadow: 0 4px 20px rgba(16, 185, 129, 0.3);
-        }
-        50% {
-          transform: scale(1.05);
-          box-shadow: 0 8px 30px rgba(16, 185, 129, 0.5);
-        }
-      }
-
-      /* Enhanced loading bar */
-      .loading-bar {
-        width: 300px;
-        height: 8px;
-        background: rgba(255, 255, 255, 0.4);
-        backdrop-filter: blur(10px);
-        border-radius: 50px;
-        overflow: hidden;
-        position: relative;
-        border: 1px solid rgba(255, 255, 255, 0.5);
-        box-shadow: 0 4px 20px rgba(16, 185, 129, 0.2),
-          inset 0 1px 0 rgba(255, 255, 255, 0.3);
-      }
-
-      .loading-progress {
-        position: absolute;
-        top: 0;
-        left: 0;
-        height: 100%;
-        width: 0%;
-        background: linear-gradient(90deg, #ec4899, #06b6d4, #10b981, #3b82f6);
-        background-size: 200% 100%;
-        animation: progress 2.5s ease-in-out infinite,
-          progressGlow 2.5s ease-in-out infinite;
-        border-radius: 50px;
-        box-shadow: 0 0 20px rgba(236, 72, 153, 0.5);
-      }
-
-      @keyframes progress {
-        0% {
-          width: 0%;
-          background-position: 0% 50%;
-        }
-        50% {
-          width: 100%;
-          background-position: 100% 50%;
-        }
-        100% {
-          width: 0%;
-          background-position: 200% 50%;
-        }
-      }
-
-      @keyframes progressGlow {
-        0%,
-        100% {
-          box-shadow: 0 0 20px rgba(236, 72, 153, 0.5);
-        }
-        25% {
-          box-shadow: 0 0 25px rgba(6, 182, 212, 0.7);
-        }
-        50% {
-          box-shadow: 0 0 30px rgba(16, 185, 129, 0.8);
-        }
-        75% {
-          box-shadow: 0 0 25px rgba(59, 130, 246, 0.7);
-        }
-      }
-
-      /* Sparkle effects */
-      .sparkle {
-        position: absolute;
-        width: 4px;
-        height: 4px;
-        background: #065f46;
+        inset: 0;
+        border: 4px solid #39c5bb;
+        border-top-color: #ffb7c5;
         border-radius: 50%;
-        animation: sparkle 3s linear infinite;
-        box-shadow: 0 0 10px rgba(16, 185, 129, 0.6);
+        animation: spin 1.5s infinite linear;
       }
 
-      .sparkle:nth-child(1) {
-        top: 20%;
-        left: 10%;
-        animation-delay: 0s;
-      }
-      .sparkle:nth-child(2) {
-        top: 80%;
-        left: 20%;
-        animation-delay: 1s;
-      }
-      .sparkle:nth-child(3) {
-        top: 40%;
-        right: 15%;
-        animation-delay: 2s;
-      }
-      .sparkle:nth-child(4) {
-        bottom: 30%;
-        right: 25%;
-        animation-delay: 0.5s;
-      }
-      .sparkle:nth-child(5) {
-        top: 60%;
-        left: 80%;
-        animation-delay: 1.5s;
+      h1 {
+        color: #39c5bb;
+        font-size: 24px;
+        margin-bottom: 8px;
+        text-shadow: 2px 2px 0px #fff;
       }
 
-      @keyframes sparkle {
-        0%,
-        100% {
-          opacity: 0;
-          transform: scale(0) rotate(0deg);
-        }
-        50% {
-          opacity: 1;
-          transform: scale(1) rotate(180deg);
-        }
+      p {
+        color: #ffb7c5;
+        font-weight: bold;
+        font-size: 14px;
+        letter-spacing: 1px;
       }
 
-      /* Skip to content link for accessibility */
-      .skip-to-content {
-        position: absolute;
-        top: -40px;
-        left: 0;
-        background: var(--miku-primary);
-        color: white;
-        padding: 8px 16px;
-        z-index: 100;
-        transition: top 0.2s;
-        text-decoration: none;
-        border-radius: 0 0 4px 0;
-      }
-      .skip-to-content:focus {
-        top: 0;
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
       }
 
-      /* Dark mode adjustments - keep light theme for consistency */
-      @media (prefers-color-scheme: dark) {
-        body {
-          background: linear-gradient(
-            135deg,
-            #d1fae5 0%,
-            #a7f3d0 50%,
-            #6ee7b7 100%
-          );
-          color: #065f46;
-        }
+      @keyframes bounce {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-10px); }
       }
     </style>
-
-    <!-- Main CSS (non-blocking) -->
-    <link
-      rel="stylesheet"
-      href="/src/index.css"
-      media="print"
-      onload="this.media='all'"
-    />
   </head>
   <body>
-    <!-- Skip to content link for accessibility -->
-    <a href="#root" class="skip-to-content">Skip to content</a>
-
-    <!-- Loading Screen (shown until app loads) -->
     <div class="loading-screen" id="loading-screen">
-      <!-- Sparkle effects -->
-      <div class="sparkle"></div>
-      <div class="sparkle"></div>
-      <div class="sparkle"></div>
-      <div class="sparkle"></div>
-      <div class="sparkle"></div>
-
-      <div class="miku-container">
-        <img src="/miku1.gif" alt="Loading Miku" />
+      <div class="miku-loader">
+        <img src="/miku.ico" alt="Miku" />
       </div>
       <h1>Miku Miku Crawler</h1>
-      <p>Preparing the beam...</p>
-      <div class="loading-bar">
-        <div class="loading-progress"></div>
-      </div>
+      <p>LOADING...</p>
     </div>
 
-    <!-- Main application container -->
     <div id="root"></div>
 
-    <!-- Inline script to handle loading screen -->
     <script>
       document.addEventListener('DOMContentLoaded', function () {
-        // Simulate loading progress
+        // The app will handle removing this when ready,
+        // but as a fallback we fade it out after a timeout if React takes too long
         setTimeout(function () {
           const loadingScreen = document.getElementById('loading-screen');
           if (loadingScreen) {
@@ -517,21 +175,10 @@
               loadingScreen.style.display = 'none';
             }, 500);
           }
-        }, 1500);
+        }, 3000); // Wait a bit longer for React to hydrate
       });
     </script>
 
-    <!-- Main script loaded as module by Vite (with error handling) -->
-    <script
-      type="module"
-      src="/src/main.tsx"
-      onerror="document.body.innerHTML = '<div style=\'font-family: sans-serif; padding: 20px; text-align: center;\'><h1>App failed to load</h1><p>Please check your connection and try refreshing the page.</p></div>'"
-    ></script>
-
-    <!-- Fallback for browsers that don't support modules -->
-    <script nomodule>
-      document.body.innerHTML =
-        '<div style="font-family: sans-serif; padding: 20px; text-align: center;"><h1>Browser not supported</h1><p>Please use a modern browser like Chrome, Firefox, Safari, or Edge to view this application.</p></div>';
-    </script>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

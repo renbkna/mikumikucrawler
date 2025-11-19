@@ -1,5 +1,5 @@
-import { Bug, Link2, ExternalLink } from "lucide-react";
-import { Stats, QueueStats } from "../types";
+import { Activity, Bug, CheckCircle, Database, Link2, XCircle } from "lucide-react";
+import { QueueStats, Stats } from "../types";
 
 interface StatsGridProps {
   stats: Stats;
@@ -8,118 +8,82 @@ interface StatsGridProps {
   isLightTheme: boolean;
 }
 
-export function StatsGrid({ stats, queueStats, isAttacking, isLightTheme }: StatsGridProps) {
+export function StatsGrid({ stats, queueStats, isAttacking }: StatsGridProps) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-      {/* Pages Scanned */}
-      <div className={`relative p-4 rounded-xl backdrop-blur-sm border transition-all duration-300 hover:scale-105 ${
-        isLightTheme
-          ? "bg-gradient-to-r from-emerald-50/90 to-cyan-50/90 border-emerald-200/50 shadow-md shadow-emerald-500/10"
-          : "bg-gradient-to-r from-emerald-900/30 to-cyan-900/30 border-emerald-700/50 shadow-md shadow-emerald-500/20"
-      }`}>
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+      {/* Pages Scanned Card */}
+      <div className="cute-card p-6 relative overflow-hidden group">
+        <div className="absolute -right-6 -top-6 w-24 h-24 bg-miku-teal/10 rounded-full group-hover:scale-150 transition-transform duration-500" />
+
         <div className="relative z-10">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              <div className="p-1.5 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-600 shadow-md">
-                <Bug className="w-4 h-4 text-white" />
-              </div>
-              <span className={`font-bold text-sm ${
-                isLightTheme ? "text-emerald-700" : "text-emerald-400"
-              }`}>
-                Pages Scanned
-              </span>
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-3 rounded-2xl bg-miku-teal/10 text-miku-teal shadow-sm">
+              <Bug className="w-6 h-6" />
             </div>
-            <div className={`text-2xl font-black ${
-              isLightTheme ? "text-gray-800" : "text-white"
-            }`}>
-              {(stats.pagesScanned || 0).toLocaleString()}
-            </div>
+            <h3 className="font-bold text-slate-500 text-sm uppercase tracking-wider">Pages Scanned</h3>
+          </div>
+
+          <div className="text-5xl font-black text-slate-700 mb-3 tracking-tight">
+            {(stats.pagesScanned || 0).toLocaleString()}
           </div>
 
           {queueStats && isAttacking && (
-            <div className="flex items-center gap-2 text-xs">
-              <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></div>
-              <span className="text-gray-500 font-medium">
-                {(queueStats?.pagesPerSecond || 0).toFixed(1)}/sec • Q:{queueStats?.queueLength || 0}
-              </span>
+            <div className="flex items-center gap-2 text-xs font-bold text-miku-teal bg-miku-teal/5 rounded-full px-3 py-1.5 w-fit border border-miku-teal/20">
+              <Activity className="w-3 h-3 animate-pulse" />
+              <span>{(queueStats?.pagesPerSecond || 0).toFixed(1)} / sec</span>
             </div>
           )}
         </div>
       </div>
 
-      {/* Links Found */}
-      <div className={`relative p-4 rounded-xl backdrop-blur-sm border transition-all duration-300 hover:scale-105 ${
-        isLightTheme
-          ? "bg-gradient-to-r from-cyan-50/90 to-blue-50/90 border-cyan-200/50 shadow-md shadow-cyan-500/10"
-          : "bg-gradient-to-r from-cyan-900/30 to-blue-900/30 border-cyan-700/50 shadow-md shadow-cyan-500/20"
-      }`}>
+      {/* Links Found Card */}
+      <div className="cute-card p-6 relative overflow-hidden group">
+        <div className="absolute -right-6 -top-6 w-24 h-24 bg-miku-pink/10 rounded-full group-hover:scale-150 transition-transform duration-500" />
+
         <div className="relative z-10">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              <div className="p-1.5 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-600 shadow-md">
-                <Link2 className="w-4 h-4 text-white" />
-              </div>
-              <span className={`font-bold text-sm ${
-                isLightTheme ? "text-cyan-700" : "text-cyan-400"
-              }`}>
-                Links Found
-              </span>
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-3 rounded-2xl bg-miku-pink/10 text-miku-pink shadow-sm">
+              <Link2 className="w-6 h-6" />
             </div>
-            <div className={`text-2xl font-black ${
-              isLightTheme ? "text-gray-800" : "text-white"
-            }`}>
-              {(stats.linksFound || 0).toLocaleString()}
-            </div>
+            <h3 className="font-bold text-slate-500 text-sm uppercase tracking-wider">Links Found</h3>
           </div>
 
-          {stats.successCount !== undefined && stats.failureCount !== undefined && (
-            <div className="flex items-center gap-3 text-xs">
-              <div className="flex items-center gap-1">
-                <div className="w-1.5 h-1.5 bg-green-400 rounded-full"></div>
-                <span className="text-gray-500 font-medium">{stats.successCount}</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <div className="w-1.5 h-1.5 bg-red-400 rounded-full"></div>
-                <span className="text-gray-500 font-medium">{stats.failureCount}</span>
-              </div>
+          <div className="text-5xl font-black text-slate-700 mb-3 tracking-tight">
+            {(stats.linksFound || 0).toLocaleString()}
+          </div>
+
+          <div className="flex gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 border border-emerald-100 px-2.5 py-1 rounded-full">
+              <CheckCircle className="w-3 h-3" />
+              {stats.successCount}
             </div>
-          )}
+            <div className="flex items-center gap-1.5 text-xs font-bold text-rose-500 bg-rose-50 border border-rose-100 px-2.5 py-1 rounded-full">
+              <XCircle className="w-3 h-3" />
+              {stats.failureCount}
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Data (KB) */}
-      <div className={`relative p-4 rounded-xl backdrop-blur-sm border transition-all duration-300 hover:scale-105 ${
-        isLightTheme
-          ? "bg-gradient-to-r from-pink-50/90 to-purple-50/90 border-pink-200/50 shadow-md shadow-pink-500/10"
-          : "bg-gradient-to-r from-pink-900/30 to-purple-900/30 border-pink-700/50 shadow-md shadow-pink-500/20"
-      }`}>
+      {/* Data Card */}
+      <div className="cute-card p-6 relative overflow-hidden group">
+        <div className="absolute -right-6 -top-6 w-24 h-24 bg-purple-100 rounded-full group-hover:scale-150 transition-transform duration-500" />
+
         <div className="relative z-10">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              <div className="p-1.5 rounded-lg bg-gradient-to-br from-pink-500 to-purple-600 shadow-md">
-                <ExternalLink className="w-4 h-4 text-white" />
-              </div>
-              <span className={`font-bold text-sm ${
-                isLightTheme ? "text-pink-700" : "text-pink-400"
-              }`}>
-                Data (KB)
-              </span>
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-3 rounded-2xl bg-purple-50 text-purple-500 shadow-sm">
+              <Database className="w-6 h-6" />
             </div>
-            <div className={`text-2xl font-black ${
-              isLightTheme ? "text-gray-800" : "text-white"
-            }`}>
-              {(stats.totalData || 0).toLocaleString()}
-            </div>
+            <h3 className="font-bold text-slate-500 text-sm uppercase tracking-wider">Data Collected</h3>
           </div>
 
-          {stats.mediaFiles !== undefined && (
-            <div className="flex items-center gap-2 text-xs">
-              <div className="w-1.5 h-1.5 bg-pink-400 rounded-full"></div>
-              <span className="text-gray-500 font-medium">
-                {stats.mediaFiles} media
-              </span>
-            </div>
-          )}
+          <div className="text-5xl font-black text-slate-700 mb-3 tracking-tight">
+            {(stats.totalData || 0).toLocaleString()} <span className="text-xl text-slate-300 font-bold">KB</span>
+          </div>
+
+          <div className="text-xs font-bold text-purple-500 bg-purple-50 border border-purple-100 rounded-full px-3 py-1.5 w-fit">
+            {stats.mediaFiles} media files
+          </div>
         </div>
       </div>
     </div>

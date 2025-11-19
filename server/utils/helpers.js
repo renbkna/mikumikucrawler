@@ -1,7 +1,6 @@
 import axios from 'axios';
-import robotsParser from 'robots-parser';
 import path from 'path';
-import { existsSync } from 'fs';
+import robotsParser from 'robots-parser';
 
 // Configure Puppeteer - Fix for rendering environments like Render.com
 const isProd = process.env.NODE_ENV === 'production';
@@ -17,10 +16,9 @@ export async function getRobotsRules(domain, dbPromise, logger, { allowOnFailure
 
   try {
     const db = await dbPromise;
-    const domainSettings = await db.get(
-      'SELECT robots_txt FROM domain_settings WHERE domain = ?',
-      domain
-    );
+    const domainSettings = db.prepare(
+      'SELECT robots_txt FROM domain_settings WHERE domain = ?'
+    ).get(domain);
 
     if (domainSettings && domainSettings.robots_txt) {
       const robots = robotsParser(
@@ -63,11 +61,9 @@ export async function getRobotsRules(domain, dbPromise, logger, { allowOnFailure
     const robotsUrl = `${successfulProtocol || 'http'}://${domain}/robots.txt`;
     const robots = robotsParser(robotsUrl, robotsTxt);
 
-    await db.run(
-      'INSERT OR REPLACE INTO domain_settings (domain, robots_txt) VALUES (?, ?)',
-      domain,
-      robotsTxt
-    );
+    db.prepare(
+      'INSERT OR REPLACE INTO domain_settings (domain, robots_txt) VALUES (?, ?)'
+    ).run(domain, robotsTxt);
 
     robotsCache.set(domain, robots);
     return robots;
