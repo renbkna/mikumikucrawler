@@ -2,8 +2,8 @@ import axios from "axios";
 import * as cheerio from "cheerio";
 import sanitizeHtml from "sanitize-html";
 import { URL } from "url";
-import { extractMetadata, getRobotsRules } from "../../utils/helpers.js";
 import { ContentProcessor } from "../../processors/ContentProcessor.js";
+import { extractMetadata, getRobotsRules } from "../../utils/helpers.js";
 import { extractLinks } from "./linkExtractor.js";
 
 const MEDIA_CONTENT_REGEX = /image|video|audio|application\/(pdf|zip)/i;
@@ -171,7 +171,7 @@ export function createPagePipeline({
     };
   };
 
-  const storePageRecord = async ({
+  const storePageRecord = ({
     db,
     item,
     domain,
@@ -201,7 +201,7 @@ export function createPagePipeline({
         processedContent.links?.filter((link) => !link.isInternal)?.length || 0,
     };
 
-    await db.run(
+    db.prepare(
       `INSERT INTO pages
         (url, domain, content_type, status_code, data_length, title, description, content, is_dynamic, last_modified,
          main_content, word_count, reading_time, language, keywords, quality_score, structured_data,
@@ -227,7 +227,8 @@ export function createPagePipeline({
           media_count = excluded.media_count,
           internal_links_count = excluded.internal_links_count,
           external_links_count = excluded.external_links_count,
-          crawled_at = CURRENT_TIMESTAMP`,
+          crawled_at = CURRENT_TIMESTAMP`
+    ).run(
       item.url,
       domain,
       contentType,
@@ -250,29 +251,30 @@ export function createPagePipeline({
       enhancedData.externalLinksCount
     );
 
-    const pageRow = await db.get(`SELECT id FROM pages WHERE url = ?`, item.url);
+    const pageRow = db.prepare(`SELECT id FROM pages WHERE url = ?`).get(item.url);
     return pageRow?.id ?? null;
   };
 
-  const handleLinkPersistence = async (db, pageId, links) => {
+  const handleLinkPersistence = (db, pageId, links) => {
     if (!links.length || !pageId) {
       return;
     }
 
-    const operations = links.map((link) =>
-      db
-        .run(
-          "INSERT OR IGNORE INTO links (source_id, target_url, text) VALUES (?, ?, ?)",
-          pageId,
-          link.url,
-          link.text || ""
-        )
-        .catch((err) => {
-          logger.warn(`Failed to insert link: ${err.message}`);
-        })
+    const insertStmt = db.prepare(
+      "INSERT OR IGNORE INTO links (source_id, target_url, text) VALUES (?, ?, ?)"
     );
 
-    await Promise.allSettled(operations);
+    const transaction = db.transaction((links) => {
+      for (const link of links) {
+        try {
+          insertStmt.run(pageId, link.url, link.text || "");
+        } catch (err) {
+          logger.warn(`Failed to insert link: ${err.message}`);
+        }
+      }
+    });
+
+    transaction(links);
   };
 
   const enqueueLinksWithPolicies = async (links, item, domain) => {
@@ -427,8 +429,9 @@ export function createPagePipeline({
       const parser = $ || cheerio.load(content);
       links = extractLinks(parser, item.url, options);
       state.addLinks(links.length);
-      await handleLinkPersistence(db, pageId, links);
+      handleLinkPersistence(db, pageId, links);
     }
+
 
     if (
       options.saveMedia &&

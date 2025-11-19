@@ -1,8 +1,8 @@
 import { URL } from "url";
 import { getRobotsRules } from "../utils/helpers.js";
 import { DynamicRenderer } from "./dynamicRenderer.js";
-import { CrawlState } from "./modules/crawlState.js";
 import { CrawlQueue } from "./modules/crawlQueue.js";
+import { CrawlState } from "./modules/crawlState.js";
 import { createPagePipeline } from "./modules/pagePipeline.js";
 
 export class AdvancedCrawlSession {
@@ -102,10 +102,9 @@ export class AdvancedCrawlSession {
             );
 
             const db = await this.dbPromise;
-            await db.run(
-              "INSERT OR REPLACE INTO domain_settings (domain, allowed) VALUES (?, 0)",
-              this.targetDomain
-            );
+            db.prepare(
+              "INSERT OR REPLACE INTO domain_settings (domain, allowed) VALUES (?, 0)"
+            ).run(this.targetDomain);
 
             await this.stop();
             return;

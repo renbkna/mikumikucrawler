@@ -15,17 +15,19 @@ export function setupApiRoutes(dbPromise, activeCrawls, logger) {
   router.get('/stats', async (req, res) => {
     try {
       const db = await dbPromise;
-      const basicStats = await db.get(`
+
+      // better-sqlite3 is synchronous, so we prepare and get/all
+      const basicStats = db.prepare(`
         SELECT
           COUNT(*) as totalPages,
           SUM(data_length) as totalDataSize,
           COUNT(DISTINCT domain) as uniqueDomains,
           MAX(crawled_at) as lastCrawled
         FROM pages
-      `);
+      `).get();
 
       // Enhanced statistics with content processing data
-      const enhancedStats = await db.get(`
+      const enhancedStats = db.prepare(`
         SELECT
           AVG(word_count) as avgWordCount,
           AVG(quality_score) as avgQualityScore,
@@ -35,20 +37,20 @@ export function setupApiRoutes(dbPromise, activeCrawls, logger) {
           SUM(external_links_count) as totalExternalLinks
         FROM pages
         WHERE word_count IS NOT NULL
-      `);
+      `).get();
 
       // Language distribution
-      const languageStats = await db.all(`
+      const languageStats = db.prepare(`
         SELECT language, COUNT(*) as count
         FROM pages
         WHERE language IS NOT NULL AND language != 'unknown'
         GROUP BY language
         ORDER BY count DESC
         LIMIT 10
-      `);
+      `).all();
 
       // Quality distribution
-      const qualityStats = await db.all(`
+      const qualityStats = db.prepare(`
         SELECT quality_range, COUNT(*) as count
         FROM (
           SELECT
@@ -63,7 +65,7 @@ export function setupApiRoutes(dbPromise, activeCrawls, logger) {
         )
         GROUP BY quality_range
         ORDER BY count DESC
-      `);
+      `).all();
 
       res.json({
         status: 'ok',

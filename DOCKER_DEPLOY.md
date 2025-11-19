@@ -15,7 +15,8 @@ The following files have been created/updated for Docker deployment:
 1. `Dockerfile` - Main Docker configuration
 2. `.dockerignore` - Excludes unnecessary files from build
 3. `server/utils/helpers.js` - Updated Chrome path detection for Docker
-4. `server/crawler/CrawlSession.js` - Enhanced Puppeteer launch options for Docker
+4. `server/crawler/CrawlSession.js` - Orchestrates the modular crawler pieces so Docker instances stay in sync
+5. `server/crawler/modules/` - Houses `crawlQueue`, `crawlState`, `pagePipeline`, and `linkExtractor` for granular control
 
 ## Local Testing
 
