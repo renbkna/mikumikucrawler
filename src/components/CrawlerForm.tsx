@@ -1,4 +1,4 @@
-import { Wand2, Zap, Settings } from 'lucide-react';
+import { FileText, Globe, Settings, Wand2, Zap } from 'lucide-react';
 import type { ChangeEvent } from 'react';
 import { CrawlOptions } from '../types';
 
@@ -26,83 +26,64 @@ export function CrawlerForm({
   isLightTheme,
 }: CrawlerFormProps) {
   const handleTargetChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const newTarget = e.target.value;
-    setTarget(newTarget);
+    setTarget(e.target.value);
   };
 
   return (
     <div className="relative mb-8 space-y-6">
-      {/* Main input section with enhanced styling */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* URL Input with beautiful styling */}
-        <div className="relative group">
-          <label
-            className={`block mb-2 text-sm font-semibold ${
-              isLightTheme ? 'text-gray-700' : 'text-gray-200'
-            }`}
-          >
-            🎯 Target URL
-          </label>
-          <div className="relative">
-            <input
-              type="text"
-              value={target}
-              onChange={handleTargetChange}
-              placeholder="Enter target URL (e.g., https://example.com)"
-              className={`w-full px-4 py-3 rounded-xl border-2 transition-all duration-300 focus:scale-[1.02] ${
-                isLightTheme
-                  ? 'bg-white/80 border-emerald-200 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100 text-gray-800 placeholder-gray-500'
-                  : 'bg-gray-800/80 border-gray-600 focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/20 text-white placeholder-gray-300'
-              } backdrop-blur-sm shadow-lg`}
-              disabled={isAttacking}
-            />
-            {/* Decorative border gradient */}
-            <div className="absolute inset-0 rounded-xl bg-gradient-to-r from-pink-400/20 via-emerald-400/20 to-cyan-400/20 -z-10 blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-          </div>
-        </div>
+      {/* Main Input Area */}
+      <div className="glass-panel rounded-[32px] p-8 relative overflow-hidden group">
+        {/* Background decoration */}
+        <div className="absolute -right-10 -top-10 w-40 h-40 bg-miku-teal/10 rounded-full blur-3xl group-hover:bg-miku-teal/20 transition-colors duration-500"></div>
+        <div className="absolute -left-10 -bottom-10 w-40 h-40 bg-miku-pink/10 rounded-full blur-3xl group-hover:bg-miku-pink/20 transition-colors duration-500"></div>
 
-        {/* Action buttons with enhanced styling */}
-        <div className="flex flex-col justify-end">
-          <label
-            className={`block mb-2 text-sm font-semibold ${
-              isLightTheme ? 'text-gray-700' : 'text-gray-200'
-            }`}
-          >
-            🚀 Actions
-          </label>
-          <div className="flex items-center gap-3">
-            {/* Main beam button */}
+        <div className="relative z-10 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-6 items-end">
+          <div className="space-y-3">
+            <label className="text-sm font-bold text-slate-500 ml-4 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-miku-pink animate-pulse"></span>
+              TARGET URL
+            </label>
+            <div className="relative group/input">
+                <div className="absolute inset-0 bg-gradient-to-r from-miku-teal to-miku-pink rounded-2xl blur opacity-20 group-hover/input:opacity-40 transition-opacity duration-300"></div>
+                <input
+                type="text"
+                value={target}
+                onChange={handleTargetChange}
+                placeholder="https://example.com"
+                className="relative w-full px-6 py-4 rounded-2xl bg-white border-2 border-transparent focus:border-miku-teal focus:ring-4 focus:ring-miku-teal/10 transition-all duration-300 outline-none text-slate-700 placeholder-slate-300 font-bold text-lg shadow-sm"
+                disabled={isAttacking}
+                />
+            </div>
+          </div>
+
+          <div className="flex gap-3">
+            {/* Lightning Strike Button */}
+            {!isAttacking && (
+              <button
+                onClick={() => startAttack(true)}
+                className="p-4 rounded-2xl bg-yellow-400 text-white hover:bg-yellow-500 hover:scale-105 transition-all duration-300 shadow-lg shadow-yellow-400/30 flex items-center justify-center group/zap"
+                title="Lightning Strike (Skip Animation)"
+              >
+                <Zap className="w-5 h-5 group-hover/zap:fill-white transition-colors" />
+              </button>
+            )}
+
             <button
               onClick={() => (isAttacking ? stopAttack() : startAttack())}
-              className={`flex-1 px-4 py-3 rounded-xl font-bold text-white transition-all duration-300 transform hover:scale-105 active:scale-95 shadow-lg ${
+              className={`px-6 py-4 rounded-2xl font-black text-white shadow-xl transition-all duration-300 hover:scale-105 active:scale-95 flex items-center gap-3 text-base ${
                 isAttacking
-                  ? 'bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 shadow-red-500/30'
-                  : 'bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-600 hover:to-cyan-600 shadow-emerald-500/30'
-              } flex items-center justify-center gap-2`}
+                  ? 'bg-gradient-to-r from-miku-pink to-red-400 hover:shadow-miku-pink/40'
+                  : 'bg-gradient-to-r from-miku-teal to-[#2cb5ab] hover:shadow-miku-teal/40'
+              }`}
             >
-              <Wand2 className="w-5 h-5" />
-              {isAttacking ? 'Stop Beam' : 'Start Miku Beam'}
+              <Wand2 className={`w-5 h-5 ${isAttacking ? 'animate-spin' : 'animate-bounce'}`} />
+              {isAttacking ? 'STOP!' : 'MIKU BEAM!'}
             </button>
 
-            {/* Electric beam button (no effects) */}
             <button
-              onClick={() => (isAttacking ? stopAttack() : startAttack(true))}
-              className={`px-4 py-3 rounded-xl font-bold text-white transition-all duration-300 transform hover:scale-105 active:scale-95 shadow-lg ${
-                isAttacking
-                  ? 'bg-gradient-to-r from-gray-500 to-gray-600 hover:from-gray-600 hover:to-gray-700'
-                  : 'bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 shadow-cyan-500/30'
-              } flex items-center justify-center gap-2`}
-              title="Electric Beam (No Effects)"
-            >
-              <Zap className="w-5 h-5" />
-            </button>
-
-            {/* Settings button */}
-            <button
-              className="px-4 py-3 rounded-xl font-bold text-white transition-all duration-300 transform hover:scale-105 active:scale-95 bg-gradient-to-r from-slate-700 to-slate-800 hover:from-slate-800 hover:to-slate-900 shadow-lg shadow-slate-500/30 flex items-center justify-center gap-2"
               onClick={() => setOpenedConfig(true)}
-              disabled={isAttacking}
-              title="Advanced Settings"
+              className="p-4 rounded-2xl bg-white text-slate-400 hover:text-miku-teal border-2 border-slate-100 hover:border-miku-teal/30 transition-all duration-300 shadow-sm hover:shadow-md hover:rotate-90"
+              title="Settings"
             >
               <Settings className="w-5 h-5" />
             </button>
@@ -110,141 +91,19 @@ export function CrawlerForm({
         </div>
       </div>
 
-      {/* Configuration options with enhanced styling */}
-      <div
-        className={`p-6 rounded-xl backdrop-blur-sm border ${
-          isLightTheme
-            ? 'bg-emerald-50/80 border-emerald-200/50'
-            : 'bg-gray-800/50 border-gray-600/50'
-        }`}
-      >
-        <h3
-          className={`mb-4 text-lg font-bold flex items-center gap-2 ${
-            isLightTheme ? 'text-emerald-700' : 'text-emerald-400'
-          }`}
-        >
-          ⚙️ Quick Configuration
-        </h3>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {/* Crawl Method */}
-          <div className="group">
-            <label
-              className={`block mb-2 text-sm font-semibold ${
-                isLightTheme ? 'text-gray-700' : 'text-gray-200'
-              }`}
-            >
-              🎯 Method
-            </label>
-            <select
-              value={advancedOptions.crawlMethod}
-              onChange={(e) =>
-                setAdvancedOptions({
-                  ...advancedOptions,
-                  crawlMethod: e.target.value,
-                })
-              }
-              className={`w-full px-3 py-2 rounded-lg border transition-all duration-300 focus:scale-[1.02] ${
-                isLightTheme
-                  ? 'bg-white/90 border-emerald-200 focus:border-emerald-400 text-gray-800'
-                  : 'bg-gray-600/90 border-gray-500 focus:border-cyan-400 text-white'
-              } backdrop-blur-sm shadow-md`}
-              disabled={isAttacking}
-            >
-              <option value="links">🔗 Links Only</option>
-              <option value="content">📄 Content + Links</option>
-              <option value="media">🖼️ Media Files</option>
-              <option value="full">🌐 Full Crawl</option>
-            </select>
-          </div>
-
-          {/* Max Depth */}
-          <div className="group">
-            <label
-              className={`block mb-2 text-sm font-semibold ${
-                isLightTheme ? 'text-gray-700' : 'text-gray-200'
-              }`}
-            >
-              📊 Depth
-            </label>
-            <input
-              type="number"
-              value={advancedOptions.crawlDepth}
-              onChange={(e) =>
-                setAdvancedOptions({
-                  ...advancedOptions,
-                  crawlDepth: Number(e.target.value),
-                })
-              }
-              className={`w-full px-3 py-2 rounded-lg border transition-all duration-300 focus:scale-[1.02] ${
-                isLightTheme
-                  ? 'bg-white/90 border-emerald-200 focus:border-emerald-400 text-gray-800'
-                  : 'bg-gray-600/90 border-gray-500 focus:border-cyan-400 text-white'
-              } backdrop-blur-sm shadow-md`}
-              disabled={isAttacking}
-              min="1"
-              max="5"
-            />
-          </div>
-
-          {/* Max Pages */}
-          <div className="group">
-            <label
-              className={`block mb-2 text-sm font-semibold ${
-                isLightTheme ? 'text-gray-700' : 'text-gray-200'
-              }`}
-            >
-              📈 Pages
-            </label>
-            <input
-              type="number"
-              value={advancedOptions.maxPages}
-              onChange={(e) =>
-                setAdvancedOptions({
-                  ...advancedOptions,
-                  maxPages: Number(e.target.value),
-                })
-              }
-              className={`w-full px-3 py-2 rounded-lg border transition-all duration-300 focus:scale-[1.02] ${
-                isLightTheme
-                  ? 'bg-white/90 border-emerald-200 focus:border-emerald-400 text-gray-800'
-                  : 'bg-gray-600/90 border-gray-500 focus:border-cyan-400 text-white'
-              } backdrop-blur-sm shadow-md`}
-              disabled={isAttacking}
-              min="1"
-              max="200"
-            />
-          </div>
-
-          {/* Delay */}
-          <div className="group">
-            <label
-              className={`block mb-2 text-sm font-semibold ${
-                isLightTheme ? 'text-gray-700' : 'text-gray-200'
-              }`}
-            >
-              ⏱️ Delay (ms)
-            </label>
-            <input
-              type="number"
-              value={advancedOptions.crawlDelay}
-              onChange={(e) =>
-                setAdvancedOptions({
-                  ...advancedOptions,
-                  crawlDelay: Number(e.target.value),
-                })
-              }
-              className={`w-full px-3 py-2 rounded-lg border transition-all duration-300 focus:scale-[1.02] ${
-                isLightTheme
-                  ? 'bg-white/90 border-emerald-200 focus:border-emerald-400 text-gray-800'
-                  : 'bg-gray-600/90 border-gray-500 focus:border-cyan-400 text-white'
-              } backdrop-blur-sm shadow-md`}
-              disabled={isAttacking}
-              min="500"
-              max="5000"
-              step="100"
-            />
-          </div>
+      {/* Quick Settings Pills */}
+      <div className="flex flex-wrap gap-4 justify-center">
+        <div className="px-5 py-2.5 rounded-full bg-white/60 border-2 border-white text-sm font-bold text-slate-500 flex items-center gap-2 shadow-sm hover:scale-105 transition-transform">
+          <Globe className="w-4 h-4 text-miku-teal" />
+          Depth: <span className="text-miku-teal">{advancedOptions.crawlDepth}</span>
+        </div>
+        <div className="px-5 py-2.5 rounded-full bg-white/60 border-2 border-white text-sm font-bold text-slate-500 flex items-center gap-2 shadow-sm hover:scale-105 transition-transform">
+          <FileText className="w-4 h-4 text-miku-pink" />
+          Pages: <span className="text-miku-pink">{advancedOptions.maxPages}</span>
+        </div>
+        <div className="px-5 py-2.5 rounded-full bg-white/60 border-2 border-white text-sm font-bold text-slate-500 flex items-center gap-2 shadow-sm hover:scale-105 transition-transform">
+          <Zap className="w-4 h-4 text-yellow-400" />
+          Delay: <span className="text-yellow-500">{advancedOptions.crawlDelay}ms</span>
         </div>
       </div>
     </div>

@@ -1,6 +1,6 @@
-import net from 'net';
 import dns from 'dns';
 import ipaddr from 'ipaddr.js';
+import net from 'net';
 import { AdvancedCrawlSession } from '../crawler/CrawlSession.js';
 
 
@@ -170,13 +170,12 @@ export function setupSocketHandlers(io, dbPromise, logger) {
         if (!url) return;
 
         const db = await dbPromise;
-        const page = await db.get(`SELECT * FROM pages WHERE url = ?`, url);
+        const page = db.prepare(`SELECT * FROM pages WHERE url = ?`).get(url);
 
         if (page) {
-          const links = await db.all(
-            `SELECT * FROM links WHERE source_id = ?`,
-            page.id
-          );
+          const links = db.prepare(
+            `SELECT * FROM links WHERE source_id = ?`
+          ).all(page.id);
 
           socket.emit('pageDetails', { ...page, links });
         } else {
@@ -191,9 +190,8 @@ export function setupSocketHandlers(io, dbPromise, logger) {
     socket.on('exportData', async (format) => {
       try {
         const db = await dbPromise;
-        const pages =
-          await db.all(`SELECT id, url, domain, crawled_at, status_code,
-                                   data_length, title, description FROM pages`);
+        const pages = db.prepare(`SELECT id, url, domain, crawled_at, status_code,
+                                   data_length, title, description FROM pages`).all();
 
         let result;
         if (format === 'json') {
