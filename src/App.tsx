@@ -1,5 +1,5 @@
 import { Heart, Music } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActionButtons,
 	ConfigurationView,
@@ -190,15 +190,28 @@ function App() {
 		[addLog, addToast, setStats, setProgress],
 	);
 
-	const { socket, connectionState, emit } = useSocket({
-		onStatsUpdate: handleStatsUpdate,
-		onQueueStats: handleQueueStats,
-		onPageContent: handlePageContent,
-		onExportResult: handleExportResult,
-		onError: handleError,
-		onAttackEnd: handleAttackEnd,
-		addToast,
-	});
+	const socketHandlers = useMemo(
+		() => ({
+			onStatsUpdate: handleStatsUpdate,
+			onQueueStats: handleQueueStats,
+			onPageContent: handlePageContent,
+			onExportResult: handleExportResult,
+			onError: handleError,
+			onAttackEnd: handleAttackEnd,
+			addToast,
+		}),
+		[
+			handleStatsUpdate,
+			handleQueueStats,
+			handlePageContent,
+			handleExportResult,
+			handleError,
+			handleAttackEnd,
+			addToast,
+		],
+	);
+
+	const { socket, connectionState, emit } = useSocket(socketHandlers);
 
 	const normalizeAndValidateUrl = useCallback(
 		(url: string): { url: string } | { error: string } => {

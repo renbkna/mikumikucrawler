@@ -44,7 +44,7 @@ export const StatsGrid = memo(function StatsGrid({
 					{queueStats && isAttacking && (
 						<div className="flex items-center gap-2 text-xs font-bold text-miku-teal bg-miku-teal/10 rounded-full px-3 py-1.5 w-fit border border-miku-teal/20">
 							<Activity className="w-3 h-3 animate-pulse" />
-							<span>{(queueStats?.pagesPerSecond || 0).toFixed(1)} / sec</span>
+							<span>{(queueStats.pagesPerSecond || 0).toFixed(1)} / sec</span>
 							<SparkleIcon className="text-miku-teal" size={10} />
 						</div>
 					)}
@@ -72,11 +72,11 @@ export const StatsGrid = memo(function StatsGrid({
 					<div className="flex gap-2">
 						<div className="flex items-center gap-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 border border-emerald-100 px-2.5 py-1 rounded-full">
 							<CheckCircle className="w-3 h-3" />
-							{stats.successCount}
+							{stats.successCount ?? 0}
 						</div>
 						<div className="flex items-center gap-1.5 text-xs font-bold text-rose-500 bg-rose-50 border border-rose-100 px-2.5 py-1 rounded-full">
 							<XCircle className="w-3 h-3" />
-							{stats.failureCount}
+							{stats.failureCount ?? 0}
 						</div>
 					</div>
 				</div>

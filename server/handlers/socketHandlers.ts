@@ -211,10 +211,10 @@ export function setupSocketHandlers(
 			crawlSession.start();
 		});
 
-		socket.on("stopAttack", () => {
+		socket.on("stopAttack", async () => {
 			logger.info(`Stopping crawl session for ${socket.id}`);
 			if (crawlSession) {
-				crawlSession.stop();
+				await crawlSession.stop();
 				activeCrawls.delete(socket.id);
 				crawlSession = null;
 			}
