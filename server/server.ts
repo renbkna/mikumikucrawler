@@ -1,12 +1,12 @@
-import http from "node:http";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import compression from "compression";
 import cors from "cors";
 import dotenv from "dotenv";
 import express, { type Request, type Response } from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
+import http from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Server } from "socket.io";
 
 dotenv.config();
@@ -83,7 +83,7 @@ app.get("{*splat}", (_req: Request, res: Response) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-	logger.info(`Advanced Miku Crawler Beam backend running on port ${PORT}`);
+	logger.info(`Miku Crawler backend running on port ${PORT}`);
 });
 
 async function gracefulShutdown(signal: string): Promise<void> {

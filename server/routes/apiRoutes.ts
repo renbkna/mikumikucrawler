@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3";
 import express, { type Request, type Response, type Router } from "express";
 import type { Logger } from "winston";
-import type { AdvancedCrawlSession } from "../crawler/CrawlSession.js";
+import type { CrawlSession } from "../crawler/CrawlSession.js";
 
 interface BasicStats {
 	totalPages: number;
@@ -31,7 +31,7 @@ interface QualityStat {
 
 export function setupApiRoutes(
 	dbPromise: Promise<Database.Database>,
-	activeCrawls: Map<string, AdvancedCrawlSession>,
+	activeCrawls: Map<string, CrawlSession>,
 	logger: Logger,
 ): Router {
 	const router = express.Router();

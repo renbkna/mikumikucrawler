@@ -37,8 +37,8 @@ function App() {
 	const {
 		target,
 		setTarget,
-		advancedOptions,
-		setAdvancedOptions,
+		crawlOptions,
+		setCrawlOptions,
 		handleTargetChange,
 		stats,
 		setStats,
@@ -59,12 +59,12 @@ function App() {
 	} = useCrawlState();
 
 	const logContainerRef = useRef<HTMLDivElement>(null);
-	const maxPagesRef = useRef(advancedOptions.maxPages);
+	const maxPagesRef = useRef(crawlOptions.maxPages);
 	const fallbackToastShownRef = useRef(false);
 
 	useEffect(() => {
-		maxPagesRef.current = advancedOptions.maxPages;
-	}, [advancedOptions.maxPages]);
+		maxPagesRef.current = crawlOptions.maxPages;
+	}, [crawlOptions.maxPages]);
 
 	const addLog = useCallback(
 		(msg: string) => {
@@ -248,7 +248,7 @@ function App() {
 			// Update target if it was normalized
 			if (normalizedTarget !== target) {
 				setTarget(normalizedTarget);
-				setAdvancedOptions((prev) => ({ ...prev, target: normalizedTarget }));
+				setCrawlOptions((prev) => ({ ...prev, target: normalizedTarget }));
 			}
 
 			if (!socket) {
@@ -274,7 +274,7 @@ function App() {
 				setTheatreStatus("blackout");
 			}
 
-			emit("startAttack", { ...advancedOptions, target: normalizedTarget });
+			emit("startAttack", { ...crawlOptions, target: normalizedTarget });
 		},
 		[
 			target,
@@ -283,13 +283,13 @@ function App() {
 			addLog,
 			addToast,
 			emit,
-			advancedOptions,
+			crawlOptions,
 			resetStats,
 			resetPages,
 			setFilterText,
 			setProgress,
 			setTarget,
-			setAdvancedOptions,
+			setCrawlOptions,
 		],
 	);
 
@@ -404,7 +404,7 @@ function App() {
 						<CrawlerForm
 							target={target}
 							setTarget={handleTargetChange}
-							advancedOptions={advancedOptions}
+							crawlOptions={crawlOptions}
 							isAttacking={isAttacking}
 							startAttack={startAttack}
 							stopAttack={stopAttack}
@@ -544,8 +544,8 @@ function App() {
 			<ConfigurationView
 				isOpen={openedConfig}
 				onClose={() => setOpenedConfig(false)}
-				options={advancedOptions}
-				onOptionsChange={setAdvancedOptions}
+				options={crawlOptions}
+				onOptionsChange={setCrawlOptions}
 				onSave={() => {
 					addToast("success", "Configuration saved! ✨");
 				}}
