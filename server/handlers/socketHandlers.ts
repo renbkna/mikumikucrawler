@@ -1,10 +1,10 @@
-import dns from "node:dns";
-import net from "node:net";
 import type Database from "better-sqlite3";
 import ipaddr from "ipaddr.js";
+import dns from "node:dns";
+import net from "node:net";
 import type { Socket, Server as SocketIOServer } from "socket.io";
 import type { Logger } from "winston";
-import { AdvancedCrawlSession } from "../crawler/CrawlSession.js";
+import { CrawlSession } from "../crawler/CrawlSession.js";
 import type {
 	ClampOptions,
 	RawCrawlOptions,
@@ -172,12 +172,12 @@ export function setupSocketHandlers(
 	io: SocketIOServer,
 	dbPromise: Promise<Database.Database>,
 	logger: Logger,
-): Map<string, AdvancedCrawlSession> {
-	const activeCrawls = new Map<string, AdvancedCrawlSession>();
+): Map<string, CrawlSession> {
+	const activeCrawls = new Map<string, CrawlSession>();
 
 	io.on("connection", (socket: Socket) => {
 		logger.info(`Client connected: ${socket.id}`);
-		let crawlSession: AdvancedCrawlSession | null = null;
+		let crawlSession: CrawlSession | null = null;
 
 		socket.on("startAttack", async (options: RawCrawlOptions) => {
 			if (crawlSession) {
@@ -201,7 +201,7 @@ export function setupSocketHandlers(
 				`Starting new crawl session for ${socket.id} with target: ${validatedOptions.target}`,
 			);
 
-			crawlSession = new AdvancedCrawlSession(
+			crawlSession = new CrawlSession(
 				socket,
 				validatedOptions,
 				dbPromise,

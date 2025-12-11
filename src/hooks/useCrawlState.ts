@@ -36,8 +36,8 @@ export interface UseCrawlStateReturn {
 	// Crawl options
 	target: string;
 	setTarget: (target: string) => void;
-	advancedOptions: CrawlOptions;
-	setAdvancedOptions: React.Dispatch<React.SetStateAction<CrawlOptions>>;
+	crawlOptions: CrawlOptions;
+	setCrawlOptions: React.Dispatch<React.SetStateAction<CrawlOptions>>;
 	handleTargetChange: (newTarget: string) => void;
 
 	// Stats
@@ -72,7 +72,7 @@ export interface UseCrawlStateReturn {
 export function useCrawlState(): UseCrawlStateReturn {
 	// Target and options
 	const [target, setTarget] = useState("");
-	const [advancedOptions, setAdvancedOptions] = useState<CrawlOptions>({
+	const [crawlOptions, setCrawlOptions] = useState<CrawlOptions>({
 		target: "",
 		crawlMethod: CRAWLER_DEFAULTS.CRAWL_METHOD,
 		crawlDepth: CRAWLER_DEFAULTS.CRAWL_DEPTH,
@@ -105,7 +105,7 @@ export function useCrawlState(): UseCrawlStateReturn {
 	// Handlers
 	const handleTargetChange = useCallback((newTarget: string) => {
 		setTarget(newTarget);
-		setAdvancedOptions((prev) => ({ ...prev, target: newTarget }));
+		setCrawlOptions((prev) => ({ ...prev, target: newTarget }));
 	}, []);
 
 	const addPage = useCallback((page: CrawledPage) => {
@@ -142,8 +142,8 @@ export function useCrawlState(): UseCrawlStateReturn {
 	return {
 		target,
 		setTarget,
-		advancedOptions,
-		setAdvancedOptions,
+		crawlOptions,
+		setCrawlOptions,
 		handleTargetChange,
 		stats,
 		setStats,

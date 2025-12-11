@@ -17,7 +17,7 @@ import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 interface CrawlerFormProps {
 	target: string;
 	setTarget: (target: string) => void;
-	advancedOptions: CrawlOptions;
+	crawlOptions: CrawlOptions;
 	isAttacking: boolean;
 	startAttack: (isQuick?: boolean) => void;
 	stopAttack: () => void;
@@ -28,7 +28,7 @@ interface CrawlerFormProps {
 export const CrawlerForm = memo(function CrawlerForm({
 	target,
 	setTarget,
-	advancedOptions,
+	crawlOptions,
 	isAttacking,
 	startAttack,
 	stopAttack,
@@ -196,21 +196,21 @@ export const CrawlerForm = memo(function CrawlerForm({
 					<Globe className="w-4 h-4 text-miku-teal" />
 					Depth:{" "}
 					<span className="text-teal-700 font-bold">
-						{advancedOptions.crawlDepth}
+						{crawlOptions.crawlDepth}
 					</span>
 				</div>
 				<div className="cute-badge">
 					<FileText className="w-4 h-4 text-miku-pink" />
 					Pages:{" "}
 					<span className="text-pink-700 font-bold">
-						{advancedOptions.maxPages}
+						{crawlOptions.maxPages}
 					</span>
 				</div>
 				<div className="cute-badge">
 					<Zap className="w-4 h-4 text-amber-400" />
 					Delay:{" "}
 					<span className="text-amber-700 font-bold">
-						{advancedOptions.crawlDelay}ms
+						{crawlOptions.crawlDelay}ms
 					</span>
 				</div>
 			</div>

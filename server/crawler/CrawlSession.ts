@@ -1,5 +1,5 @@
-import { URL } from "node:url";
 import type Database from "better-sqlite3";
+import { URL } from "node:url";
 import type { Socket } from "socket.io";
 import type { Logger } from "winston";
 import type { QueueItem, SanitizedCrawlOptions } from "../types.js";
@@ -9,7 +9,7 @@ import { CrawlQueue } from "./modules/crawlQueue.js";
 import { CrawlState } from "./modules/crawlState.js";
 import { createPagePipeline } from "./modules/pagePipeline.js";
 
-export class AdvancedCrawlSession {
+export class CrawlSession {
 	private readonly socket: Socket;
 	private readonly dbPromise: Promise<Database.Database>;
 	private readonly logger: Logger;
