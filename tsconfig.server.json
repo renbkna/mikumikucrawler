@@ -1,0 +1,18 @@
+{
+	"compilerOptions": {
+		"target": "ESNext",
+		"module": "Node16",
+		"moduleResolution": "Node16",
+		"lib": ["ESNext"],
+		"outDir": "./dist",
+		"strict": true,
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"forceConsistentCasingInFileNames": true,
+		"noEmit": true,
+		"allowJs": true,
+		"checkJs": false,
+		"types": ["node"]
+	},
+	"include": ["server/**/*"]
+}

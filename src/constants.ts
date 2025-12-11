@@ -1,0 +1,61 @@
+// Crawler defaults
+export const CRAWLER_DEFAULTS = {
+	CRAWL_METHOD: "links" as const,
+	CRAWL_DEPTH: 2,
+	CRAWL_DELAY: 1000,
+	MAX_PAGES: 50,
+	MAX_CONCURRENT_REQUESTS: 5,
+	RETRY_LIMIT: 3,
+	DYNAMIC: true,
+	RESPECT_ROBOTS: true,
+	CONTENT_ONLY: false,
+	SAVE_MEDIA: false,
+} as const;
+
+// UI limits
+export const UI_LIMITS = {
+	MAX_PAGE_BUFFER: 200,
+	INITIAL_VISIBLE_COUNT: 20,
+	LOAD_MORE_COUNT: 20,
+	MAX_LOGS: 30,
+} as const;
+
+// Socket configuration (used by useSocket.ts)
+export const SOCKET_CONFIG = {
+	TRANSPORTS: ["websocket", "polling"] as const,
+	RECONNECTION_ATTEMPTS: 10,
+	RECONNECTION_DELAY: 1000,
+	RECONNECTION_DELAY_MAX: 5000,
+	TIMEOUT: 20000,
+	CONNECT_DELAY: 500,
+	FORCE_NEW: true,
+} as const;
+
+// Toast defaults
+export const TOAST_DEFAULTS = {
+	DEFAULT_TIMEOUT: 3000,
+	LONG_TIMEOUT: 5000,
+	EXIT_ANIMATION_MS: 300,
+} as const;
+
+// Progress calculation
+export const PROGRESS_CONFIG = {
+	TARGET_MULTIPLIER: 0.8,
+	MAX_PROGRESS_BEFORE_COMPLETE: 99,
+} as const;
+
+// Retry configuration
+export const RETRY_CONFIG = {
+	BASE_DELAY_MS: 1000,
+	MAX_DELAY_MS: 30000,
+	BACKOFF_MULTIPLIER: 2,
+} as const;
+
+export const SEQUENCE_TIMINGS = {
+	COUNT_1: 5400, // "1" appears
+	COUNT_2: 6650, // "2" appears
+	COUNT_3: 7800, // "3" appears
+	READY: 8900, // "READY?" appears
+	BEAM_START: 10200, // Miku appears (Beam starts) - Sync this with the drop!
+	COMPLETE: 10200, // Sequence ends, UI returns
+};

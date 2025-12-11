@@ -1,134 +1,418 @@
 @import "tailwindcss";
 
-:root {
-  --miku-teal: #39c5bb;
-  --miku-pink: #ffb7c5; /* Pastel Pink */
-  --miku-bg: #e0f2f1; /* Cool Mint */
-  --miku-card: #ffffff;
-  --miku-text: #4a5568; /* Slate 700 */
-  --miku-accent: #e0509d; /* Deeper pink for accents */
+html {
+	font-size: 80%;
+}
 
-  --font-sans: 'Varela Round', 'M PLUS Rounded 1c', system-ui, sans-serif;
+:root {
+	/* Miku's Signature Colors - Accessibility Adjusted */
+	/* Original: #39c5bb (fails on white) -> Darkened for AA compliance */
+	--miku-teal: #2a918a;
+	--miku-teal-soft: #7dd8d2;
+	--miku-teal-pale: #c5f0ed;
+	--miku-teal-dark: #1d6661;
+
+	/* Original: #ffb7c5 (fails on white) -> Darkened for AA compliance */
+	--miku-pink: #d65d7a;
+	--miku-pink-soft: #ffd4de;
+	--miku-pink-pale: #fff0f3;
+	--miku-pink-dark: #b03c58;
+
+	--miku-accent: #e0509d;
+
+	/* Kawaii Backgrounds */
+	--kawaii-bg: linear-gradient(135deg, #fff5f7 0%, #f0fffe 50%, #fff5f7 100%);
+	--kawaii-card: rgba(255, 255, 255, 0.9);
+
+	/* Text */
+	--miku-text: #4a5568;
+	--miku-text-soft: #718096;
+	--miku-text-light: #a0aec0;
+
+	/* Cute Shadows */
+	--shadow-cute:
+		0 4px 20px rgba(57, 197, 187, 0.15), 0 2px 8px rgba(255, 183, 197, 0.1);
+	--shadow-hover:
+		0 8px 30px rgba(57, 197, 187, 0.2), 0 4px 12px rgba(255, 183, 197, 0.15);
+
+	--font-sans: "Varela Round", "M PLUS Rounded 1c", system-ui, sans-serif;
 }
 
 @theme {
-  --color-miku-teal: var(--miku-teal);
-  --color-miku-pink: var(--miku-pink);
-  --color-miku-bg: var(--miku-bg);
-  --color-miku-card: var(--miku-card);
-  --color-miku-text: var(--miku-text);
-  --color-miku-accent: var(--miku-accent);
+	--color-miku-teal: var(--miku-teal);
+	--color-miku-pink: var(--miku-pink);
+	--color-miku-accent: var(--miku-accent);
+	--color-miku-text: var(--miku-text);
+	--color-miku-primary: var(--miku-teal);
+	--color-miku-secondary: var(--miku-pink);
 
-  /* Aliases for compatibility */
-  --color-miku-primary: var(--miku-teal);
-  --color-miku-secondary: var(--miku-pink);
+	/* Kawaii Animations */
+	--animate-float: float 3s ease-in-out infinite;
+	--animate-bounce-slow: bounce-slow 2s ease-in-out infinite;
+	--animate-wiggle: wiggle 0.5s ease-in-out;
+	--animate-sparkle: sparkle 1.5s ease-in-out infinite;
+	--animate-pop: pop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+	--animate-heart-beat: heart-beat 1s ease-in-out infinite;
 
-  --animate-bounce-slow: bounce-slow 3s infinite;
-  --animate-float: float 3s ease-in-out infinite;
-  --animate-pop: pop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-  --animate-shake: shake 0.5s cubic-bezier(.36,.07,.19,.97) both;
-  --animate-beam-flash: beam-flash 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+	@keyframes float {
+		0%,
+		100% {
+			transform: translateY(0px);
+		}
+		50% {
+			transform: translateY(-8px);
+		}
+	}
 
-  @keyframes float {
-    0%, 100% { transform: translateY(0px); }
-    50% { transform: translateY(-10px); }
-  }
+	@keyframes bounce-slow {
+		0%,
+		100% {
+			transform: translateY(-3px);
+		}
+		50% {
+			transform: translateY(3px);
+		}
+	}
 
-  @keyframes bounce-slow {
-    0%, 100% { transform: translateY(-5%); animation-timing-function: cubic-bezier(0.8, 0, 1, 1); }
-    50% { transform: translateY(0); animation-timing-function: cubic-bezier(0, 0, 0.2, 1); }
-  }
+	@keyframes wiggle {
+		0%,
+		100% {
+			transform: rotate(0deg);
+		}
+		25% {
+			transform: rotate(-3deg);
+		}
+		75% {
+			transform: rotate(3deg);
+		}
+	}
 
-  @keyframes pop {
-    0% { opacity: 0; transform: scale(0.5); }
-    100% { opacity: 1; transform: scale(1); }
-  }
+	@keyframes sparkle {
+		0%,
+		100% {
+			opacity: 0.4;
+			transform: scale(1);
+		}
+		50% {
+			opacity: 1;
+			transform: scale(1.2);
+		}
+	}
 
-  @keyframes shake {
-    10%, 90% { transform: translate3d(-1px, 0, 0); }
-    20%, 80% { transform: translate3d(2px, 0, 0); }
-    30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
-    40%, 60% { transform: translate3d(4px, 0, 0); }
-  }
+	@keyframes pop {
+		0% {
+			opacity: 0;
+			transform: scale(0.8);
+		}
+		100% {
+			opacity: 1;
+			transform: scale(1);
+		}
+	}
 
-  @keyframes beam-flash {
-    0% { opacity: 0; transform: scale(0.9); filter: brightness(1); }
-    50% { opacity: 1; transform: scale(1.1); filter: brightness(2); }
-    100% { opacity: 0; transform: scale(1.5); filter: brightness(0); }
-  }
+	@keyframes heart-beat {
+		0%,
+		100% {
+			transform: scale(1);
+		}
+		50% {
+			transform: scale(1.1);
+		}
+	}
+
+	@keyframes gradient-shift {
+		0% {
+			background-position: 0% 50%;
+		}
+		50% {
+			background-position: 100% 50%;
+		}
+		100% {
+			background-position: 0% 50%;
+		}
+	}
 }
+
+/* ================================================
+   ACCESSIBILITY - Reduced Motion
+   ================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	::before,
+	::after {
+		animation-duration: 0.01ms;
+		animation-iteration-count: 1;
+		transition-duration: 0.01ms;
+		scroll-behavior: auto;
+	}
+}
+
+/* ================================================
+   BASE - Soft Kawaii Background
+   ================================================ */
 
 body {
-  background-color: var(--miku-bg);
-  color: var(--miku-text);
-  font-family: var(--font-sans);
-  overflow-x: hidden;
-  background-image: radial-gradient(var(--miku-teal) 1px, transparent 1px), radial-gradient(var(--miku-pink) 1px, transparent 1px);
-  background-size: 40px 40px;
-  background-position: 0 0, 20px 20px;
+	background: var(--kawaii-bg);
+	color: var(--miku-text);
+	font-family: var(--font-sans);
+	min-height: 100vh;
+	position: relative;
+	overflow-x: hidden;
 }
 
-/* Cute Utilities */
+button {
+	cursor: pointer;
+}
+
+/* Cute floating decorations */
+body::before,
+body::after {
+	content: "";
+	position: fixed;
+	border-radius: 50%;
+	pointer-events: none;
+	z-index: 0;
+}
+
+body::before {
+	width: 300px;
+	height: 300px;
+	background: radial-gradient(
+		circle,
+		var(--miku-teal-pale) 0%,
+		transparent 70%
+	);
+	top: -100px;
+	right: -100px;
+	animation: float 8s ease-in-out infinite;
+}
+
+body::after {
+	width: 250px;
+	height: 250px;
+	background: radial-gradient(
+		circle,
+		var(--miku-pink-pale) 0%,
+		transparent 70%
+	);
+	bottom: -50px;
+	left: -50px;
+	animation: float 10s ease-in-out infinite reverse;
+}
+
+/* ================================================
+   KAWAII CARD SYSTEM
+   ================================================ */
+
 .glass-panel {
-  background: rgba(255, 255, 255, 0.8);
-  backdrop-filter: blur(12px);
-  border: 2px solid rgba(255, 255, 255, 0.9);
-  box-shadow: 0 8px 32px rgba(57, 197, 187, 0.1);
-  border-radius: 24px;
+	background: var(--kawaii-card);
+	backdrop-filter: blur(10px);
+	border: 2px solid rgba(255, 255, 255, 0.8);
+	border-radius: 24px;
+	box-shadow: var(--shadow-cute);
+	transition: all 0.3s ease;
+	position: relative;
+	overflow: hidden;
+}
+
+.glass-panel:hover {
+	box-shadow: var(--shadow-hover);
+	transform: translateY(-2px);
 }
 
 .cute-card {
-  background: white;
-  border-radius: 24px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
-  border: 1px solid rgba(255, 183, 197, 0.3);
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+	background: white;
+	border-radius: 20px;
+	border: 2px solid var(--miku-pink-pale);
+	box-shadow: var(--shadow-cute);
+	transition: all 0.3s ease;
+	position: relative;
+}
+
+.cute-card::before {
+	content: "";
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	height: 4px;
+	background: linear-gradient(
+		90deg,
+		var(--miku-teal),
+		var(--miku-pink),
+		var(--miku-teal)
+	);
+	border-radius: 20px 20px 0 0;
 }
 
 .cute-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 15px -3px rgba(57, 197, 187, 0.1), 0 4px 6px -2px rgba(57, 197, 187, 0.05);
+	transform: translateY(-4px);
+	box-shadow: var(--shadow-hover);
+	border-color: var(--miku-pink-soft);
 }
 
+/* ================================================
+   KAWAII BUTTONS
+   ================================================ */
+
 .cute-button {
-  background: linear-gradient(135deg, var(--miku-teal), #2cb5ab);
-  color: white;
-  border-radius: 9999px;
-  font-weight: bold;
-  transition: all 0.2s;
-  box-shadow: 0 4px 14px 0 rgba(57, 197, 187, 0.39);
+	background: linear-gradient(135deg, var(--miku-teal), var(--miku-teal-soft));
+	color: white;
+	border-radius: 50px;
+	font-weight: bold;
+	padding: 12px 24px;
+	border: none;
+	box-shadow: 0 4px 15px rgba(57, 197, 187, 0.3);
+	transition: all 0.3s ease;
+	position: relative;
+	overflow: hidden;
+	cursor: pointer;
+}
+
+.cute-button::after {
+	content: "✧";
+	position: absolute;
+	right: 12px;
+	opacity: 0;
+	transform: scale(0);
+	transition: all 0.3s ease;
 }
 
 .cute-button:hover {
-  transform: scale(1.05);
-  box-shadow: 0 6px 20px rgba(57, 197, 187, 0.23);
+	transform: translateY(-2px) scale(1.02);
+	box-shadow: 0 6px 20px rgba(57, 197, 187, 0.4);
 }
 
+.cute-button:hover::after {
+	opacity: 1;
+	transform: scale(1);
+}
+
+.cute-button:active {
+	transform: translateY(0) scale(0.98);
+}
+
+/* ================================================
+   KAWAII INPUT
+   ================================================ */
+
 .cute-input {
-  border: 2px solid #ffe4e6;
-  border-radius: 16px;
-  padding: 0.5rem 1rem;
-  transition: all 0.2s;
+	background: white;
+	border: 2px solid var(--miku-pink-pale);
+	border-radius: 16px;
+	padding: 12px 20px;
+	color: var(--miku-text);
+	transition: all 0.3s ease;
+	font-weight: 500;
+}
+
+.cute-input::placeholder {
+	color: var(--miku-text-soft);
+	opacity: 0.8;
 }
 
 .cute-input:focus {
-  outline: none;
-  border-color: var(--miku-teal);
-  box-shadow: 0 0 0 3px rgba(57, 197, 187, 0.1);
+	outline: none;
+	border-color: var(--miku-teal);
+	/* Uses teal-dark for focus ring to ensure visibility */
+	box-shadow:
+		0 0 0 3px rgba(42, 145, 138, 0.2),
+		0 4px 12px rgba(57, 197, 187, 0.15);
 }
 
-/* Scrollbar */
+/* ================================================
+   CUTE DECORATIONS
+   ================================================ */
+
+.sparkle {
+	animation: sparkle 1.5s ease-in-out infinite;
+}
+
+.sparkle:nth-child(2n) {
+	animation-delay: 0.3s;
+}
+.sparkle:nth-child(3n) {
+	animation-delay: 0.6s;
+}
+
+.gradient-text {
+	background: linear-gradient(135deg, var(--miku-teal), var(--miku-pink));
+	-webkit-background-clip: text;
+	-webkit-text-fill-color: transparent;
+	background-clip: text;
+}
+
+/* Cute pill badges */
+.cute-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 6px 14px;
+	border-radius: 50px;
+	font-size: 12px;
+	font-weight: bold;
+	background: white;
+	border: 2px solid var(--miku-pink-pale);
+	color: var(--miku-text);
+	transition: all 0.2s ease;
+}
+
+.cute-badge:hover {
+	transform: scale(1.05);
+	border-color: var(--miku-teal);
+}
+
+/* ================================================
+   SCROLLBAR - Kawaii Style
+   ================================================ */
+
 ::-webkit-scrollbar {
-  width: 10px;
+	width: 10px;
 }
+
 ::-webkit-scrollbar-track {
-  background: transparent;
+	background: var(--miku-pink-pale);
+	border-radius: 10px;
 }
+
 ::-webkit-scrollbar-thumb {
-  background: var(--miku-pink);
-  border-radius: 10px;
-  border: 2px solid var(--miku-bg);
+	background: linear-gradient(180deg, var(--miku-teal-soft), var(--miku-pink));
+	border-radius: 10px;
+	border: 2px solid var(--miku-pink-pale);
 }
+
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--miku-accent);
+	background: linear-gradient(180deg, var(--miku-teal), var(--miku-accent));
+}
+
+/* ================================================
+   ENERGY BAR - Cute Version
+   ================================================ */
+
+.energy-bar {
+	background: linear-gradient(
+		90deg,
+		var(--miku-teal),
+		var(--miku-pink),
+		var(--miku-teal)
+	);
+	background-size: 200% 100%;
+	animation: gradient-shift 2s ease infinite;
+	border-radius: 50px;
+}
+
+/* ================================================
+   UTILITY CLASSES
+   ================================================ */
+
+.text-shadow-cute {
+	text-shadow: 0 2px 4px rgba(57, 197, 187, 0.2);
+}
+
+.border-gradient {
+	border: 2px solid transparent;
+	background:
+		linear-gradient(white, white) padding-box,
+		linear-gradient(135deg, var(--miku-teal), var(--miku-pink)) border-box;
 }
