@@ -67,11 +67,13 @@ export const LogsSection = memo(function LogsSection({
 							data={logs}
 							itemContent={(index, log) => {
 								const stableIndex = logs.length - index;
-								const contentHash = log.slice(0, 20).replaceAll(/\s/g, "_");
-								const key = `log-${stableIndex}-${contentHash}`;
-
+								// Index is stable for prepend-only lists
 								return (
-									<LogItem key={key} log={log} stableIndex={stableIndex} />
+									<LogItem
+										key={`log-${index}`}
+										log={log}
+										stableIndex={stableIndex}
+									/>
 								);
 							}}
 						/>
