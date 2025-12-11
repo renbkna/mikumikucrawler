@@ -59,6 +59,19 @@ curl http://localhost:3000/health
 
 5. **Deploy**: Click "Create Web Service"
 
+### Data Persistence (CRITICAL)
+
+By default, Docker containers are ephemeral, meaning all data is lost when the container restarts. To save your crawled data:
+
+1.  In your Render Service settings, go to the **Disks** tab.
+2.  Click **Add Disk**.
+3.  **Name**: `crawler-data` (or similar).
+4.  **Mount Path**: `/app/data` (This MUST match the internal data path).
+5.  **Size**: Start with `1 GB` (or more if you plan to crawl extensively).
+
+**Why is this needed?**
+Without this, your SQLite database (`crawler.db`) inside the container will be wiped every time you deploy or the app restarts.
+
 ### Method 2: Docker Registry
 
 1. **Build and tag your image**:
