@@ -1,59 +1,70 @@
 import { PieChart } from "lucide-react";
-import { Stats } from "../types";
+import type { Stats } from "../types";
 
 interface StatsVisualizerProps {
-  stats: Stats;
+	stats: Stats;
 }
 
-export function StatsVisualizer({ stats }: StatsVisualizerProps) {
-  return (
-    <div className="p-4 mt-4 bg-white/10 rounded-lg">
-      <h3 className="flex items-center mb-3 font-semibold text-emerald-400">
-        <PieChart className="w-4 h-4 mr-2" />
-        Crawl Statistics
-      </h3>
+export function StatsVisualizer({ stats }: Readonly<StatsVisualizerProps>) {
+	return (
+		<div className="glass-panel p-6 mt-4">
+			<h3 className="flex items-center mb-4 font-bold text-miku-teal">
+				<PieChart className="w-5 h-5 mr-2" />♪ Crawl Statistics ♪
+			</h3>
 
-      {/* Progress bars */}
-      <div className="space-y-2">
-        {/* Page success rate */}
-        {stats.successRate && (
-          <div>
-            <div className="flex justify-between mb-1 text-xs text-gray-300">
-              <span>Success Rate</span>
-              <span>{stats.successRate}</span>
-            </div>
-            <div className="h-2 bg-gray-700 rounded">
-              <div
-                className="h-full bg-green-500 rounded"
-                style={{ width: stats.successRate }}
-              ></div>
-            </div>
-          </div>
-        )}
+			{/* Progress bars */}
+			<div className="space-y-4">
+				{/* Page success rate */}
+				{stats.successRate && (
+					<div>
+						<div className="flex justify-between mb-2 text-sm text-miku-text font-medium">
+							<span>Success Rate ✧</span>
+							<span className="text-emerald-500 font-bold">
+								{stats.successRate}
+							</span>
+						</div>
+						<div className="h-3 bg-miku-pink/10 rounded-full overflow-hidden border-2 border-miku-pink/20">
+							<div
+								className="h-full bg-gradient-to-r from-emerald-400 to-emerald-300 rounded-full transition-all duration-500"
+								style={{ width: stats.successRate }}
+							></div>
+						</div>
+					</div>
+				)}
 
-        {/* Pages/second performance */}
-        {stats.pagesPerSecond && (
-          <div>
-            <div className="flex justify-between mb-1 text-xs text-gray-300">
-              <span>Speed</span>
-              <span>{stats.pagesPerSecond} pages/sec</span>
-            </div>
-            <div className="h-2 bg-gray-700 rounded">
-              <div
-                className="h-full bg-blue-500 rounded"
-                style={{ width: `${Math.min(Number(stats.pagesPerSecond) * 20, 100)}%` }}
-              ></div>
-            </div>
-          </div>
-        )}
-      </div>
+				{/* Pages/second performance */}
+				{stats.pagesPerSecond && (
+					<div>
+						<div className="flex justify-between mb-2 text-sm text-miku-text font-medium">
+							<span>Speed ♥</span>
+							<span className="text-miku-teal font-bold">
+								{stats.pagesPerSecond} pages/sec
+							</span>
+						</div>
+						<div className="h-3 bg-miku-teal/10 rounded-full overflow-hidden border-2 border-miku-teal/20">
+							<div
+								className="h-full bg-gradient-to-r from-miku-teal to-teal-300 rounded-full transition-all duration-500"
+								style={{
+									width: `${Math.min(Number(stats.pagesPerSecond) * 20, 100)}%`,
+								}}
+							></div>
+						</div>
+					</div>
+				)}
+			</div>
 
-      {/* Elapsed time */}
-      {stats.elapsedTime && (
-        <div className="mt-3 text-sm text-center text-emerald-300">
-          Time elapsed: {stats.elapsedTime.hours}h {stats.elapsedTime.minutes}m {stats.elapsedTime.seconds}s
-        </div>
-      )}
-    </div>
-  );
+			{/* Elapsed time */}
+			{stats.elapsedTime && (
+				<div className="mt-6 text-center">
+					<div className="inline-block cute-badge">
+						⏱ Time elapsed:{" "}
+						<span className="text-miku-teal font-bold">
+							{stats.elapsedTime.hours}h {stats.elapsedTime.minutes}m{" "}
+							{stats.elapsedTime.seconds}s
+						</span>
+					</div>
+				</div>
+			)}
+		</div>
+	);
 }
