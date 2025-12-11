@@ -136,10 +136,8 @@ export function useCrawlState(): UseCrawlStateReturn {
 	}, [crawledPages, filterText]);
 
 	const isFilterActive = filterText.trim().length > 0;
-	const displayedPages = useMemo(
-		() => (isFilterActive ? filteredPages : crawledPages),
-		[isFilterActive, filteredPages, crawledPages],
-	);
+	// Both filteredPages and crawledPages are already memoized, no need for additional memo
+	const displayedPages = isFilterActive ? filteredPages : crawledPages;
 
 	return {
 		target,

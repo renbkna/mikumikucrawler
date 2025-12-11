@@ -115,7 +115,6 @@ export class DynamicRenderer {
 
 	disableDynamic(reason?: string): void {
 		this.enabled = false;
-		this.options.dynamic = false;
 		if (reason) {
 			this.logger.warn(reason);
 		}
@@ -198,7 +197,6 @@ export class DynamicRenderer {
 		this.browser = await puppeteer.launch(launchOptions);
 		this.pageCount = 0;
 		this.enabled = true;
-		this.options.dynamic = true;
 	}
 
 	async recycleIfNeeded(): Promise<void> {

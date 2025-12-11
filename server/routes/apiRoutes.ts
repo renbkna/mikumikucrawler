@@ -129,11 +129,19 @@ export function setupApiRoutes(
 	router.get("/pages/:id/content", async (req: Request, res: Response) => {
 		try {
 			const { id } = req.params;
+
+			// Validate that id is a positive integer
+			const pageId = Number.parseInt(id, 10);
+			if (Number.isNaN(pageId) || pageId <= 0) {
+				res.status(400).json({ error: "Invalid page ID" });
+				return;
+			}
+
 			const db = await dbPromise;
 
 			const page = db
 				.prepare("SELECT content FROM pages WHERE id = ?")
-				.get(id) as { content: string } | undefined;
+				.get(pageId) as { content: string } | undefined;
 
 			if (!page) {
 				res.status(404).json({ error: "Page not found" });

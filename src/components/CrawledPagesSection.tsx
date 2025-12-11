@@ -7,7 +7,14 @@ import {
 	Filter,
 	X,
 } from "lucide-react";
-import { type ChangeEvent, memo, useState } from "react";
+import {
+	type ChangeEvent,
+	memo,
+	useCallback,
+	useEffect,
+	useMemo,
+	useState,
+} from "react";
 import { Virtuoso } from "react-virtuoso";
 import type { CrawledPage } from "../types";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
@@ -239,9 +246,36 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 	onClearFilter,
 	pageLimit,
 }: CrawledPagesSectionProps) {
-	const handleFilterChange = (e: ChangeEvent<HTMLInputElement>) => {
-		onFilterChange(e.target.value);
-	};
+	// Local state for immediate UI feedback, debounced propagation
+	const [localFilter, setLocalFilter] = useState(filterText);
+
+	// Sync external filterText changes to local state
+	useEffect(() => {
+		setLocalFilter(filterText);
+	}, [filterText]);
+
+	// Debounce filter propagation (200ms)
+	useEffect(() => {
+		const timer = setTimeout(() => {
+			if (localFilter !== filterText) {
+				onFilterChange(localFilter);
+			}
+		}, 200);
+		return () => clearTimeout(timer);
+	}, [localFilter, filterText, onFilterChange]);
+
+	const handleFilterChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+		setLocalFilter(e.target.value);
+	}, []);
+
+	// Stable Footer component for Virtuoso
+	const footerComponents = useMemo(
+		() =>
+			pageLimit && crawledPages.length >= pageLimit
+				? { Footer: () => <PageLimitFooter pageLimit={pageLimit} /> }
+				: undefined,
+		[pageLimit, crawledPages.length],
+	);
 
 	return (
 		<div className="space-y-4 h-full flex flex-col">
@@ -252,12 +286,12 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 				</div>
 				<input
 					type="text"
-					value={filterText}
+					value={localFilter}
 					onChange={handleFilterChange}
 					placeholder="Filter pages..."
 					className="flex-1 bg-transparent border-none outline-none text-miku-text placeholder-miku-text/30 font-bold"
 				/>
-				{filterText && (
+				{localFilter && (
 					<button
 						type="button"
 						onClick={onClearFilter}
@@ -287,25 +321,12 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 						);
 					}
 					if (displayedPages.length > 0) {
-						// Stable Footer component - extracted to avoid inline definition
-						const FooterComponent =
-							pageLimit && crawledPages.length >= pageLimit
-								? () => <PageLimitFooter pageLimit={pageLimit} />
-								: undefined;
-
 						return (
 							<Virtuoso
 								style={{ height: "100%" }}
 								data={displayedPages}
-								itemContent={(index, page) => (
-									<CrawledPageCard
-										key={page.id || `${page.url}-${index}`}
-										page={page}
-									/>
-								)}
-								components={{
-									Footer: FooterComponent,
-								}}
+								itemContent={(_index, page) => <CrawledPageCard page={page} />}
+								components={footerComponents}
 							/>
 						);
 					}
