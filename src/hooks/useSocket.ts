@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { io, type Socket } from "socket.io-client";
 import { SOCKET_CONFIG } from "../constants";
 import type {
 	CrawledPage,
@@ -8,11 +7,10 @@ import type {
 	StatsPayload,
 	Toast,
 } from "../types";
+import type { ClientToServerEvents } from "../types/socket";
 
-// Connection states - exported for use in other components
 export type ConnectionState = "connecting" | "connected" | "disconnected";
 
-// Socket event handlers type
 interface SocketEventHandlers {
 	onStatsUpdate: (stats: Stats, log?: string) => void;
 	onQueueStats: (queueStats: QueueStats) => void;
@@ -24,229 +22,221 @@ interface SocketEventHandlers {
 }
 
 interface UseSocketReturn {
-	socket: Socket | null;
+	socket: WebSocket | null;
 	connectionState: ConnectionState;
-	emit: <T>(event: string, data?: T) => void;
+	emit: <K extends keyof ClientToServerEvents>(
+		event: K,
+		data?: Parameters<ClientToServerEvents[K]>[0],
+	) => void;
 }
 
-// Transform centralized config to socket.io format
-const socketIoConfig = {
-	transports: [...SOCKET_CONFIG.TRANSPORTS],
-	reconnectionAttempts: SOCKET_CONFIG.RECONNECTION_ATTEMPTS,
-	reconnectionDelay: SOCKET_CONFIG.RECONNECTION_DELAY,
-	reconnectionDelayMax: SOCKET_CONFIG.RECONNECTION_DELAY_MAX,
-	timeout: SOCKET_CONFIG.TIMEOUT,
-	forceNew: SOCKET_CONFIG.FORCE_NEW,
-};
+type WSMessage =
+	| { type: "stats"; data: StatsPayload }
+	| { type: "queueStats"; data: QueueStats }
+	| { type: "pageContent"; data: CrawledPage }
+	| { type: "exportStart"; data: { format: string } }
+	| { type: "exportChunk"; data: { data: string } }
+	| { type: "exportComplete"; data: unknown }
+	| { type: "crawlError" | "error"; data: { message: string } }
+	| { type: "attackEnd"; data: Stats }
+	| { type: "pageDetails"; data: CrawledPage | null };
 
+/** Manages WebSocket connection and event orchestration for the crawler. */
 export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
-	const [socket, setSocket] = useState<Socket | null>(null);
+	const [socket, setSocket] = useState<WebSocket | null>(null);
 	const [connectionState, setConnectionState] =
 		useState<ConnectionState>("connecting");
-	const socketRef = useRef<Socket | null>(null);
+	const socketRef = useRef<WebSocket | null>(null);
 	const handlersRef = useRef(handlers);
+	const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+		null,
+	);
+	const reconnectAttemptsRef = useRef(0);
+	const isMountedRef = useRef(true);
 
-	// Keep handlers ref updated
 	useEffect(() => {
 		handlersRef.current = handlers;
 	}, [handlers]);
 
 	useEffect(() => {
-		const socketEndpoint =
-			import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
-		console.log(`Connecting to backend at ${socketEndpoint}`);
-
-		let isCancelled = false;
-		let cleanupSocket: (() => void) | null = null;
-
-		const connectTimer = setTimeout(() => {
-			if (isCancelled) return;
-
-			try {
-				const newSocket = io(socketEndpoint, socketIoConfig);
-
-				const handleConnect = () => {
-					console.log("Connected to backend");
-					handlersRef.current.addToast(
-						"success",
-						"Connected to crawler backend",
-					);
-					setSocket(newSocket);
-					setConnectionState("connected");
-				};
-
-				const handleConnectError = (err: Error) => {
-					console.error("Connection error:", err);
-					handlersRef.current.addToast(
-						"error",
-						`Connection error: ${err.message}`,
-					);
-					setConnectionState("disconnected");
-				};
-
-				const handleStats = (data: StatsPayload) => {
-					const stats: Stats = {
-						pagesScanned: data.pagesScanned ?? 0,
-						linksFound: data.linksFound ?? 0,
-						totalData: data.totalData ?? 0,
-						mediaFiles: data.mediaFiles ?? 0,
-						successCount: data.successCount ?? 0,
-						failureCount: data.failureCount ?? 0,
-						skippedCount: data.skippedCount ?? 0,
-						elapsedTime: data.elapsedTime,
-						pagesPerSecond: data.pagesPerSecond,
-						successRate: data.successRate,
-					};
-					handlersRef.current.onStatsUpdate(stats, data.log);
-				};
-
-				const handleQueueStats = (data: QueueStats) => {
-					const sanitizedRate = Number.isFinite(data.pagesPerSecond)
-						? data.pagesPerSecond
-						: 0;
-					handlersRef.current.onQueueStats({
-						...data,
-						pagesPerSecond: sanitizedRate,
-					});
-				};
-
-				const handlePageContent = (data: CrawledPage) => {
-					handlersRef.current.onPageContent(data);
-				};
-
-				// Streaming Export Handlers
-				const exportBufferRef = { current: [] as string[] };
-				const exportFormatRef = { current: "json" };
-
-				const handleExportStart = (data: { format: string }) => {
-					console.log("Export started, format:", data.format);
-					exportBufferRef.current = [];
-					exportFormatRef.current = data.format;
-					handlersRef.current.addToast(
-						"info",
-						"Downloading export data...",
-						2000,
-					);
-				};
-
-				const handleExportChunk = (data: { data: string }) => {
-					exportBufferRef.current.push(data.data);
-				};
-
-				const handleExportComplete = () => {
-					console.log("Export complete, assembling file...");
-					const fullData = exportBufferRef.current.join("");
-					handlersRef.current.onExportResult({
-						data: fullData,
-						format: exportFormatRef.current,
-					});
-					exportBufferRef.current = []; // Clear memory
-				};
-
-				const handleErrorEvent = (error: { message?: string } | Error) => {
-					const message =
-						error instanceof Error ? error.message : error?.message;
-					handlersRef.current.onError(
-						message || "An unknown crawler error occurred",
-					);
-				};
-
-				const handleAttackEnd = (finalStats: Stats) => {
-					handlersRef.current.onAttackEnd(finalStats);
-				};
-
-				const handleDisconnect = () => {
-					console.log("Disconnected from backend");
-					handlersRef.current.addToast(
-						"warning",
-						"Disconnected from crawler backend",
-					);
-					setSocket(null);
-					setConnectionState("disconnected");
-				};
-
-				const handleReconnect = () => {
-					console.log("Reconnected to backend");
-					handlersRef.current.addToast(
-						"success",
-						"Reconnected to crawler backend",
-					);
-					setConnectionState("connected");
-				};
-
-				newSocket.on("connect", handleConnect);
-				newSocket.on("connect_error", handleConnectError);
-				newSocket.on("stats", handleStats);
-				newSocket.on("queueStats", handleQueueStats);
-				newSocket.on("pageContent", handlePageContent);
-
-				// New Streaming Events
-				newSocket.on("exportStart", handleExportStart);
-				newSocket.on("exportChunk", handleExportChunk);
-				newSocket.on("exportComplete", handleExportComplete);
-
-				newSocket.on("crawlError", handleErrorEvent);
-				newSocket.on("error", handleErrorEvent);
-				newSocket.on("attackEnd", handleAttackEnd);
-				newSocket.on("disconnect", handleDisconnect);
-				newSocket.io.on("reconnect", handleReconnect);
-
-				socketRef.current = newSocket;
-
-				cleanupSocket = () => {
-					newSocket.off("connect", handleConnect);
-					newSocket.off("connect_error", handleConnectError);
-					newSocket.off("stats", handleStats);
-					newSocket.off("queueStats", handleQueueStats);
-					newSocket.off("pageContent", handlePageContent);
-
-					newSocket.off("exportStart", handleExportStart);
-					newSocket.off("exportChunk", handleExportChunk);
-					newSocket.off("exportComplete", handleExportComplete);
-
-					newSocket.off("crawlError", handleErrorEvent);
-					newSocket.off("error", handleErrorEvent);
-					newSocket.off("attackEnd", handleAttackEnd);
-					newSocket.off("disconnect", handleDisconnect);
-					newSocket.io.off("reconnect", handleReconnect);
-					newSocket.close();
-					if (socketRef.current === newSocket) {
-						socketRef.current = null;
-					}
-					setSocket((prev) => (prev === newSocket ? null : prev));
-				};
-			} catch (error) {
-				console.error("Socket initialization error:", error);
-				handlersRef.current.addToast(
-					"error",
-					`Failed to connect to backend: ${
-						error instanceof Error ? error.message : "Unknown error"
-					}`,
-				);
-			}
-		}, 500);
-
+		isMountedRef.current = true;
 		return () => {
-			isCancelled = true;
-			clearTimeout(connectTimer);
-			if (cleanupSocket) {
-				cleanupSocket();
-				cleanupSocket = null;
-			} else if (socketRef.current) {
-				socketRef.current.close();
-				socketRef.current = null;
-			}
-			setSocket(null);
+			isMountedRef.current = false;
 		};
 	}, []);
 
+	/** Establishes connection to the backend and sets up event listeners. */
+	const connect = useCallback(() => {
+		if (
+			socketRef.current?.readyState === WebSocket.OPEN ||
+			socketRef.current?.readyState === WebSocket.CONNECTING
+		)
+			return;
+
+		const envUrl = import.meta.env.VITE_WS_URL;
+		let socketEndpoint = "ws://localhost:3000/ws";
+
+		if (envUrl) {
+			if (envUrl.startsWith("http")) {
+				socketEndpoint = envUrl.replace(/^http/, "ws");
+			} else if (envUrl.startsWith("ws")) {
+				socketEndpoint = envUrl;
+			}
+			if (!socketEndpoint.endsWith("/ws")) {
+				socketEndpoint = `${socketEndpoint.replace(/\/$/, "")}/ws`;
+			}
+		}
+
+		try {
+			const ws = new WebSocket(socketEndpoint);
+			const exportBuffer: string[] = [];
+			let exportFormat = "json";
+
+			ws.onopen = () => {
+				if (!isMountedRef.current) return;
+				handlersRef.current.addToast("success", "Connected to crawler backend");
+				setSocket(ws);
+				setConnectionState("connected");
+				reconnectAttemptsRef.current = 0;
+			};
+
+			ws.onclose = () => {
+				if (!isMountedRef.current) return;
+				setSocket(null);
+				setConnectionState("disconnected");
+				socketRef.current = null;
+
+				const delay = Math.min(
+					SOCKET_CONFIG.RECONNECTION_DELAY * 2 ** reconnectAttemptsRef.current,
+					SOCKET_CONFIG.RECONNECTION_DELAY_MAX,
+				);
+
+				handlersRef.current.addToast(
+					"warning",
+					`Disconnected. Reconnecting in ${delay / 1000}s...`,
+				);
+
+				reconnectTimeoutRef.current = setTimeout(() => {
+					reconnectAttemptsRef.current++;
+					connect();
+				}, delay);
+			};
+
+			ws.onerror = (event) => {
+				console.error("WebSocket error:", event);
+			};
+
+			ws.onmessage = (event) => {
+				try {
+					const msg: WSMessage = JSON.parse(event.data);
+					const { type, data } = msg;
+
+					switch (type) {
+						case "stats": {
+							const stats: Stats = {
+								pagesScanned: data.pagesScanned ?? 0,
+								linksFound: data.linksFound ?? 0,
+								totalData: data.totalData ?? 0,
+								mediaFiles: data.mediaFiles ?? 0,
+								successCount: data.successCount ?? 0,
+								failureCount: data.failureCount ?? 0,
+								skippedCount: data.skippedCount ?? 0,
+								elapsedTime: data.elapsedTime,
+								pagesPerSecond: data.pagesPerSecond,
+								successRate: data.successRate,
+							};
+							handlersRef.current.onStatsUpdate(stats, data.log);
+							break;
+						}
+						case "queueStats": {
+							const sanitizedRate = Number.isFinite(data.pagesPerSecond)
+								? data.pagesPerSecond
+								: 0;
+							handlersRef.current.onQueueStats({
+								...data,
+								pagesPerSecond: sanitizedRate,
+							});
+							break;
+						}
+						case "pageContent":
+							handlersRef.current.onPageContent(data);
+							break;
+						case "exportStart":
+							exportBuffer.length = 0;
+							exportFormat = data.format;
+							handlersRef.current.addToast(
+								"info",
+								"Downloading export data...",
+								2000,
+							);
+							break;
+						case "exportChunk":
+							exportBuffer.push(data.data);
+							break;
+						case "exportComplete": {
+							const fullData = exportBuffer.join("");
+							handlersRef.current.onExportResult({
+								data: fullData,
+								format: exportFormat,
+							});
+							exportBuffer.length = 0;
+							break;
+						}
+						case "crawlError":
+						case "error": {
+							const message = data?.message || "Unknown error";
+							handlersRef.current.onError(message);
+							break;
+						}
+						case "attackEnd":
+							handlersRef.current.onAttackEnd(data);
+							break;
+						case "pageDetails":
+							break;
+						default:
+							break;
+					}
+				} catch (err) {
+					console.error("Failed to parse WS message", err);
+				}
+			};
+
+			socketRef.current = ws;
+		} catch (error) {
+			console.error("Socket initialization error:", error);
+			const delay = SOCKET_CONFIG.RECONNECTION_DELAY;
+			reconnectTimeoutRef.current = setTimeout(() => {
+				connect();
+			}, delay);
+		}
+	}, []);
+
+	useEffect(() => {
+		const timer = setTimeout(() => {
+			connect();
+		}, 10);
+
+		return () => {
+			clearTimeout(timer);
+			if (reconnectTimeoutRef.current)
+				clearTimeout(reconnectTimeoutRef.current);
+			if (socketRef.current) {
+				socketRef.current.close();
+				socketRef.current = null;
+			}
+		};
+	}, [connect]);
+
 	const emit = useCallback(
-		<T>(event: string, data?: T) => {
-			if (socket) {
-				socket.emit(event, data);
+		<K extends keyof ClientToServerEvents>(
+			event: K,
+			data?: Parameters<ClientToServerEvents[K]>[0],
+		) => {
+			if (socketRef.current?.readyState === WebSocket.OPEN) {
+				socketRef.current.send(JSON.stringify({ type: event, data }));
 			}
 		},
-		[socket],
+		[],
 	);
 
 	return { socket, connectionState, emit };

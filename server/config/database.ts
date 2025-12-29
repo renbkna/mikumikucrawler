@@ -1,11 +1,9 @@
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import path from "node:path";
-import Database from "better-sqlite3";
 
-// Use environment variable for DB path, or default to local data directory
 const DB_PATH = process.env.DB_PATH || "./data/crawler.db";
 
-// Ensure directories exist
 const ensureDirectoryExists = (filePath: string) => {
 	const dir = path.dirname(filePath);
 	if (!fs.existsSync(dir)) {
@@ -13,19 +11,16 @@ const ensureDirectoryExists = (filePath: string) => {
 	}
 };
 
-let dbInstance: Database.Database | null = null;
+let dbInstance: Database | null = null;
 
-// SETUP: Persistent Storage (better-sqlite3)
-export const setupDatabase = async (): Promise<Database.Database> => {
+export const setupDatabase = (): Database => {
 	ensureDirectoryExists(DB_PATH);
 
 	if (!dbInstance) {
 		dbInstance = new Database(DB_PATH);
-		// Enable WAL mode for better concurrency and performance
-		dbInstance.pragma("journal_mode = WAL");
+		dbInstance.exec("PRAGMA journal_mode = WAL;");
 	}
 
-	// Create tables
 	dbInstance.exec(`
     CREATE TABLE IF NOT EXISTS pages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,11 +70,12 @@ export const setupDatabase = async (): Promise<Database.Database> => {
     CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_url);
   `);
 
-	// Migration logic
+	/** Checks for schema updates and applies migrations. */
 	try {
-		const tableInfo = dbInstance.pragma("table_info(pages)") as {
+		const tableInfo = dbInstance.query("PRAGMA table_info(pages)").all() as {
 			name: string;
 		}[];
+
 		const hasMainContent = tableInfo.some((col) => col.name === "main_content");
 
 		if (!hasMainContent) {
@@ -99,7 +95,7 @@ export const setupDatabase = async (): Promise<Database.Database> => {
 				try {
 					dbInstance.exec(`ALTER TABLE pages ADD COLUMN ${col}`);
 				} catch {
-					// Ignore if already exists (safety net)
+					// Migration might have already been applied
 				}
 			}
 		}

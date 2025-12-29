@@ -8,6 +8,7 @@ interface ExportDialogProps {
 	onExport: (format: string) => void;
 }
 
+/** Modal dialog for selecting the desired output format (JSON/CSV) for captured data. */
 export function ExportDialog({
 	isOpen,
 	onClose,
@@ -21,13 +22,10 @@ export function ExportDialog({
 	if (!isOpen) return null;
 
 	const handleBackdropClick = (e: React.MouseEvent) => {
-		if (e.target === e.currentTarget) {
-			onClose();
-		}
+		if (e.target === e.currentTarget) onClose();
 	};
 
 	return (
-		// eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- <dialog> is interactive; click is for backdrop-close
 		<dialog
 			open={isOpen}
 			className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm m-0 p-0 w-full h-full max-w-none max-h-none border-none bg-transparent"

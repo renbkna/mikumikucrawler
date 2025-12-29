@@ -6,7 +6,6 @@ interface KawaiiIconProps {
 	style?: React.CSSProperties;
 }
 
-// Musical note ♪
 export const NoteIcon = ({
 	className = "",
 	size = 12,
@@ -15,7 +14,6 @@ export const NoteIcon = ({
 	<Music2 className={`inline-block ${className}`} size={size} style={style} />
 );
 
-// Heart ♥
 export const HeartIcon = ({
 	className = "",
 	size = 12,
@@ -29,7 +27,6 @@ export const HeartIcon = ({
 	/>
 );
 
-// Sparkle ✧
 export const SparkleIcon = ({
 	className = "",
 	size = 12,
@@ -38,7 +35,6 @@ export const SparkleIcon = ({
 	<Sparkles className={`inline-block ${className}`} size={size} style={style} />
 );
 
-// Star ★
 export const StarIcon = ({
 	className = "",
 	size = 12,
@@ -52,7 +48,6 @@ export const StarIcon = ({
 	/>
 );
 
-// Cherry blossom 🌸 - custom SVG
 export const SakuraIcon = ({ className = "", size = 14 }: KawaiiIconProps) => (
 	<svg
 		viewBox="0 0 24 24"
@@ -72,7 +67,6 @@ export const SakuraIcon = ({ className = "", size = 14 }: KawaiiIconProps) => (
 	</svg>
 );
 
-// Decorative dot
 export const DotIcon = ({ className = "", size = 8 }: KawaiiIconProps) => (
 	<span
 		className={`inline-block rounded-full bg-current ${className}`}

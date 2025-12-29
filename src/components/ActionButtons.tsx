@@ -9,6 +9,7 @@ interface ActionButtonsProps {
 	setShowDetails: (show: boolean) => void;
 }
 
+/** Group of buttons for global actions like data export and toggling extended statistics. */
 export function ActionButtons({
 	crawledPages,
 	setOpenExportDialog,
@@ -17,7 +18,6 @@ export function ActionButtons({
 }: ActionButtonsProps) {
 	return (
 		<div className="flex flex-wrap gap-4 mb-4">
-			{/* Export Data Button */}
 			<button
 				type="button"
 				className={`flex items-center justify-center px-5 py-2.5 rounded-full font-bold text-sm text-white transition-all duration-300 transform hover:scale-105 active:scale-95 ${
@@ -38,7 +38,6 @@ export function ActionButtons({
 				)}
 			</button>
 
-			{/* Show/Hide Stats Button */}
 			<button
 				type="button"
 				className="flex items-center justify-center px-5 py-2.5 rounded-full font-bold text-sm text-white transition-all duration-300 transform hover:scale-105 active:scale-95 bg-gradient-to-r from-miku-teal to-teal-400 shadow-lg shadow-miku-teal/20"

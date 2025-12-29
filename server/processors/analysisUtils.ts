@@ -275,13 +275,13 @@ const STOP_WORDS: Record<string, Set<string>> = {
 
 const DEFAULT_STOP_WORDS = STOP_WORDS.en;
 
+/** Analyzes text to determine word count, language, sentiment, and readability. */
 export function analyzeContent(text: string): AnalysisResult {
 	const cleanText = (text || "").toString().trim();
 	const words = cleanText.split(/\s+/).filter((w) => w.length > 0);
 	const wordCount = words.length;
 	const readingTime = Math.ceil(wordCount / 200);
 
-	// Language detection
 	let language = "en";
 	try {
 		const detected = lngDetector.detect(cleanText, 1);
@@ -292,7 +292,6 @@ export function analyzeContent(text: string): AnalysisResult {
 		language = "en";
 	}
 
-	// Keyword extraction (simple frequency-based)
 	const stopWords = STOP_WORDS[language] || DEFAULT_STOP_WORDS;
 	const wordFreq: Record<string, number> = {};
 	words.forEach((word) => {
@@ -307,7 +306,6 @@ export function analyzeContent(text: string): AnalysisResult {
 		.slice(0, 10)
 		.map(([word, count]) => ({ word, count }));
 
-	// Sentiment analysis
 	let sentimentLabel = "neutral";
 	try {
 		const result = sentiment.analyze(cleanText);
@@ -317,7 +315,6 @@ export function analyzeContent(text: string): AnalysisResult {
 		sentimentLabel = "neutral";
 	}
 
-	// Simple readability score (Flesch-like approximation)
 	const sentences = cleanText
 		.split(/[.!?]+/)
 		.filter((s) => s.trim().length > 0);
@@ -351,6 +348,9 @@ export function analyzeContent(text: string): AnalysisResult {
 	};
 }
 
+/**
+ * Detects the syllable count in a word using heuristic vowel pattern matching.
+ */
 function countSyllables(word: string): number {
 	word = word.toLowerCase().replaceAll(/[^a-z]/g, "");
 	if (word.length <= 3) return 1;
@@ -362,6 +362,13 @@ function countSyllables(word: string): number {
 	return matches ? matches.length : 1;
 }
 
+/**
+ * Assesses page quality based on metadata presence, content length, and accessibility markers.
+ *
+ * @param cheerioInstance - Loaded HTML document
+ * @param mainContent - Primary extracted text body
+ * @returns Object containing quality score (0-100), factors checked, and identified issues.
+ */
 export function assessContentQuality(
 	cheerioInstance: CheerioAPI,
 	mainContent: string,
@@ -443,6 +450,7 @@ interface JSONProcessResult {
 	structure?: string;
 }
 
+/** Parses and analyzes JSON content structure. */
 export function processJSON(content: string): JSONProcessResult {
 	try {
 		const data = JSON.parse(content);

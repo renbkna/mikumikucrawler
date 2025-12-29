@@ -3,12 +3,17 @@ import type { CheerioAPI } from "cheerio";
 import type { SanitizedCrawlOptions } from "../../types.js";
 import { normalizeUrl } from "../../utils/helpers.js";
 
+/** Pre-compiled regex for file extensions to skip (hoisted to avoid recompilation per-link) */
+const SKIP_EXTENSIONS =
+	/\.(css|js|json|xml|txt|md|csv|svg|ico|git|gitignore)$/i;
+
 interface ExtractedLink {
 	url: string;
 	text: string;
 	isInternal: boolean;
 }
 
+/** Extracts both content links and media sources from a Cheerio document. */
 export function extractLinks(
 	$: CheerioAPI,
 	baseUrl: string,
@@ -20,40 +25,21 @@ export function extractLinks(
 
 	$("a").each((_: number, el) => {
 		const href = $(el as unknown as string).attr("href");
-		if (!href) {
-			return;
-		}
+		if (!href) return;
 
 		try {
 			const url = new URL(href, baseUrl);
-
-			// Use centralized normalization
 			const normalized = normalizeUrl(url.href);
-			if ("error" in normalized || !normalized.url) {
-				return;
-			}
+			if ("error" in normalized || !normalized.url) return;
 			const normalizedUrl = normalized.url;
 
-			if (seen.has(normalizedUrl)) {
-				return;
-			}
+			if (seen.has(normalizedUrl)) return;
 			seen.add(normalizedUrl);
 
-			if (url.protocol !== "http:" && url.protocol !== "https:") {
-				return;
-			}
+			if (url.protocol !== "http:" && url.protocol !== "https:") return;
+			if (options.crawlMethod !== "full" && url.hostname !== baseHost) return;
 
-			if (options.crawlMethod !== "full" && url.hostname !== baseHost) {
-				return;
-			}
-
-			if (
-				new RegExp(
-					/\.(css|js|json|xml|txt|md|csv|svg|ico|git|gitignore)$/i,
-				).exec(url.pathname)
-			) {
-				return;
-			}
+			if (SKIP_EXTENSIONS.test(url.pathname)) return;
 
 			result.push({
 				url: normalizedUrl,
@@ -63,35 +49,25 @@ export function extractLinks(
 				isInternal: url.hostname === baseHost,
 			});
 		} catch {
-			// Ignore invalid URLs
+			// Silent fail for malformed URLs
 		}
 	});
 
 	if (options.crawlMethod === "media" || options.crawlMethod === "full") {
 		$("img, video, audio, source").each((_: number, el) => {
 			const src = $(el as unknown as string).attr("src");
-			if (!src) {
-				return;
-			}
+			if (!src) return;
 
 			try {
 				const url = new URL(src, baseUrl);
-
-				// Use centralized normalization (same as for links)
 				const normalized = normalizeUrl(url.href);
-				if ("error" in normalized || !normalized.url) {
-					return;
-				}
+				if ("error" in normalized || !normalized.url) return;
 				const normalizedUrl = normalized.url;
 
-				if (seen.has(normalizedUrl)) {
-					return;
-				}
+				if (seen.has(normalizedUrl)) return;
 				seen.add(normalizedUrl);
 
-				if (url.protocol !== "http:" && url.protocol !== "https:") {
-					return;
-				}
+				if (url.protocol !== "http:" && url.protocol !== "https:") return;
 
 				result.push({
 					url: normalizedUrl,
@@ -99,7 +75,7 @@ export function extractLinks(
 					isInternal: url.hostname === baseHost,
 				});
 			} catch {
-				// Ignore invalid URLs
+				// Silent fail for malformed URLs
 			}
 		});
 	}

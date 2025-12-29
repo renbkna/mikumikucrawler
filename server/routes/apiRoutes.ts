@@ -1,7 +1,13 @@
-import type Database from "better-sqlite3";
-import express, { type Request, type Response, type Router } from "express";
-import type { Logger } from "winston";
+import { Elysia, t } from "elysia";
 import type { CrawlSession } from "../crawler/CrawlSession.js";
+import type { DatabaseLike, LoggerLike } from "../types.js";
+
+interface RouteContext {
+	db: DatabaseLike;
+	logger: LoggerLike;
+	activeCrawls: Map<string, CrawlSession>;
+	error: (code: number, response: unknown) => unknown;
+}
 
 interface BasicStats {
 	totalPages: number;
@@ -29,84 +35,72 @@ interface QualityStat {
 	count: number;
 }
 
-export function setupApiRoutes(
-	dbPromise: Promise<Database.Database>,
-	activeCrawls: Map<string, CrawlSession>,
-	logger: Logger,
-): Router {
-	const router = express.Router();
-
-	// Note: /health endpoint is defined at root level in server.ts
-
-	router.get("/stats", async (_req: Request, res: Response) => {
+/** REST API routes for retrieving system-wide statistics and specific page content. */
+export const apiRoutes = new Elysia({ prefix: "/api" })
+	.get("/stats", (context) => {
+		const { db, activeCrawls, error, logger } =
+			context as unknown as RouteContext;
 		try {
-			const db = await dbPromise;
-
-			// better-sqlite3 is synchronous, so we prepare and get/all
 			const basicStats = db
-				.prepare(`
-        SELECT
-          COUNT(*) as totalPages,
-          SUM(data_length) as totalDataSize,
-          COUNT(DISTINCT domain) as uniqueDomains,
-          MAX(crawled_at) as lastCrawled
-        FROM pages
-      `)
+				.query(`
+					SELECT
+						COUNT(*) as totalPages,
+						SUM(data_length) as totalDataSize,
+						COUNT(DISTINCT domain) as uniqueDomains,
+						MAX(crawled_at) as lastCrawled
+					FROM pages
+				`)
 				.get() as BasicStats;
 
-			// Enhanced statistics with content processing data
 			const enhancedStats = db
-				.prepare(`
-        SELECT
-          AVG(word_count) as avgWordCount,
-          AVG(quality_score) as avgQualityScore,
-          AVG(reading_time) as avgReadingTime,
-          SUM(media_count) as totalMedia,
-          SUM(internal_links_count) as totalInternalLinks,
-          SUM(external_links_count) as totalExternalLinks
-        FROM pages
-        WHERE word_count IS NOT NULL
-      `)
+				.query(`
+					SELECT
+						AVG(word_count) as avgWordCount,
+						AVG(quality_score) as avgQualityScore,
+						AVG(reading_time) as avgReadingTime,
+						SUM(media_count) as totalMedia,
+						SUM(internal_links_count) as totalInternalLinks,
+						SUM(external_links_count) as totalExternalLinks
+					FROM pages
+					WHERE word_count IS NOT NULL
+				`)
 				.get() as EnhancedStats;
 
-			// Language distribution
 			const languageStats = db
-				.prepare(`
-        SELECT language, COUNT(*) as count
-        FROM pages
-        WHERE language IS NOT NULL AND language != 'unknown'
-        GROUP BY language
-        ORDER BY count DESC
-        LIMIT 10
-      `)
+				.query(`
+					SELECT language, COUNT(*) as count
+					FROM pages
+					WHERE language IS NOT NULL AND language != 'unknown'
+					GROUP BY language
+					ORDER BY count DESC
+					LIMIT 10
+				`)
 				.all() as LanguageStat[];
 
-			// Quality distribution
 			const qualityStats = db
-				.prepare(`
-        SELECT quality_range, COUNT(*) as count
-        FROM (
-          SELECT
-            CASE
-              WHEN quality_score >= 80 THEN 'High (80-100)'
-              WHEN quality_score >= 60 THEN 'Medium (60-79)'
-              WHEN quality_score >= 40 THEN 'Low (40-59)'
-              ELSE 'Poor (0-39)'
-            END AS quality_range
-          FROM pages
-          WHERE quality_score IS NOT NULL
-        )
-        GROUP BY quality_range
-        ORDER BY count DESC
-      `)
+				.query(`
+					SELECT quality_range, COUNT(*) as count
+					FROM (
+						SELECT
+							CASE
+								WHEN quality_score >= 80 THEN 'High (80-100)'
+								WHEN quality_score >= 60 THEN 'Medium (60-79)'
+								WHEN quality_score >= 40 THEN 'Low (40-59)'
+								ELSE 'Poor (0-39)'
+							END AS quality_range
+						FROM pages
+						WHERE quality_score IS NOT NULL
+					)
+					GROUP BY quality_range
+					ORDER BY count DESC
+				`)
 				.all() as QualityStat[];
 
-			res.json({
+			return {
 				status: "ok",
 				stats: {
 					...basicStats,
 					activeCrawls: activeCrawls.size,
-					// Enhanced content statistics
 					content: {
 						avgWordCount: Math.round(enhancedStats.avgWordCount || 0),
 						avgQualityScore: Math.round(enhancedStats.avgQualityScore || 0),
@@ -118,48 +112,44 @@ export function setupApiRoutes(
 					languages: languageStats,
 					qualityDistribution: qualityStats,
 				},
-			});
+			};
 		} catch (err) {
 			const message = err instanceof Error ? err.message : "Unknown error";
 			logger.error(`Error getting stats: ${message}`);
-			res.status(500).json({ error: "Failed to get statistics" });
+			return error(500, { error: "Failed to get statistics" });
 		}
-	});
+	})
+	.get(
+		"/pages/:id/content",
+		(context) => {
+			const {
+				params: { id },
+				db,
+				error,
+				logger,
+			} = context as unknown as RouteContext & { params: { id: number } };
+			try {
+				const page = db
+					.query("SELECT content FROM pages WHERE id = ?")
+					.get(id) as { content: string } | undefined;
 
-	router.get("/pages/:id/content", async (req: Request, res: Response) => {
-		try {
-			const { id } = req.params;
+				if (!page) {
+					return error(404, { error: "Page not found" });
+				}
 
-			// Validate that id is a positive integer
-			const pageId = Number.parseInt(id, 10);
-			if (Number.isNaN(pageId) || pageId <= 0) {
-				res.status(400).json({ error: "Invalid page ID" });
-				return;
+				return {
+					status: "ok",
+					content: page.content,
+				};
+			} catch (err) {
+				const message = err instanceof Error ? err.message : "Unknown error";
+				logger.error(`Error fetching page content for id ${id}: ${message}`);
+				return error(500, { error: "Failed to fetch content" });
 			}
-
-			const db = await dbPromise;
-
-			const page = db
-				.prepare("SELECT content FROM pages WHERE id = ?")
-				.get(pageId) as { content: string } | undefined;
-
-			if (!page) {
-				res.status(404).json({ error: "Page not found" });
-				return;
-			}
-
-			res.json({
-				status: "ok",
-				content: page.content,
-			});
-		} catch (err) {
-			const message = err instanceof Error ? err.message : "Unknown error";
-			logger.error(
-				`Error fetching page content for id ${req.params.id}: ${message}`,
-			);
-			res.status(500).json({ error: "Failed to fetch content" });
-		}
-	});
-
-	return router;
-}
+		},
+		{
+			params: t.Object({
+				id: t.Numeric(),
+			}),
+		},
+	);

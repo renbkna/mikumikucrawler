@@ -13,22 +13,28 @@ interface MemoryStatus extends MemoryUsage {
 	totalEstimated: string;
 }
 
+/**
+ * Retrieves the current process memory usage in Megabytes.
+ */
 export function getMemoryUsage(): MemoryUsage {
 	const usage = process.memoryUsage();
 	return {
-		rss: Math.round(usage.rss / 1024 / 1024), // MB
-		heapUsed: Math.round(usage.heapUsed / 1024 / 1024), // MB
-		heapTotal: Math.round(usage.heapTotal / 1024 / 1024), // MB
-		external: Math.round(usage.external / 1024 / 1024), // MB
+		rss: Math.round(usage.rss / 1024 / 1024),
+		heapUsed: Math.round(usage.heapUsed / 1024 / 1024),
+		heapTotal: Math.round(usage.heapTotal / 1024 / 1024),
+		external: Math.round(usage.external / 1024 / 1024),
 	};
 }
 
+/** Determines if the current RSS usage exceeds the safe threshold for dynamic rendering. */
 export function isLowMemory(): boolean {
 	const usage = getMemoryUsage();
-	// Consider low memory if RSS > 400MB (leaving 112MB for system)
 	return usage.rss > 400;
 }
 
+/**
+ * Returns a comprehensive memory status report with recommendations.
+ */
 export function getMemoryStatus(): MemoryStatus {
 	const usage = getMemoryUsage();
 	const lowMem = isLowMemory();
@@ -43,6 +49,9 @@ export function getMemoryStatus(): MemoryStatus {
 	};
 }
 
+/**
+ * Logs the current memory status to the provided logger.
+ */
 export function logMemoryStatus(logger: Logger): MemoryStatus {
 	const status = getMemoryStatus();
 	logger.info(

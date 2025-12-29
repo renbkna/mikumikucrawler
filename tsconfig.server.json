@@ -12,7 +12,7 @@
 		"noEmit": true,
 		"allowJs": true,
 		"checkJs": false,
-		"types": ["node"]
+		"types": ["bun"]
 	},
 	"include": ["server/**/*"]
 }

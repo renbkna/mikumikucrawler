@@ -14,8 +14,7 @@ The following files have been created/updated for Docker deployment:
 
 1. `Dockerfile` - Main Docker configuration
 2. `.dockerignore` - Excludes unnecessary files from build
-3. `server/utils/helpers.js` - Updated Chrome path detection for Docker
-4. `server/crawler/CrawlSession.js` - Orchestrates the modular crawler pieces so Docker instances stay in sync
+3. `server/crawler/CrawlSession.js` - Orchestrates the modular crawler pieces so Docker instances stay in sync
 5. `server/crawler/modules/` - Houses `crawlQueue`, `crawlState`, `pagePipeline`, and `linkExtractor` for granular control
 
 ## Local Testing
@@ -96,26 +95,24 @@ The Docker container is configured to work with these environment variables:
 
 - `PORT` - Set automatically by Render
 - `NODE_ENV=production` - Set automatically
-- `PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome` - Set in Dockerfile
-- `PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true` - Set in Dockerfile
 
 ## What the Docker Setup Does
 
-1. **Base Image**: Uses Node.js 20 with Debian Bullseye (good Puppeteer compatibility)
-2. **System Dependencies**: Installs all required libraries for Chrome/Puppeteer
-3. **Chrome Installation**: Installs Google Chrome Stable from official repository
-4. **Dependencies**: Installs your npm packages
-5. **Build**: Runs `npm run build` to build frontend assets
+1. **Base Image**: Uses Node.js 20 slim with Chrome dependencies
+2. **System Dependencies**: Installs all required libraries for Puppeteer
+3. **Browser Installation**: Puppeteer auto-downloads Chromium during `bun install`
+4. **Dependencies**: Installs packages via Bun
+5. **Build**: Runs `bun run build` to build frontend assets
 6. **Configuration**: Sets up proper environment for Puppeteer
-7. **Health Check**: Includes a health check endpoint
+7. **Health Check**: Includes a health check endpoint at `/health`
 8. **Optimization**: Uses Docker layer caching for faster builds
 
 ## Troubleshooting
 
-### If Puppeteer fails to find Chrome
+### If Puppeteer fails to find browsers
 
 1. Check the deployment logs on Render
-2. The Chrome path detection will log which paths it's trying
+2. Puppeteer will log if browser binaries are missing
 3. Ensure the container built successfully
 
 ### If the build fails
@@ -132,19 +129,19 @@ The Docker container is configured to work with these environment variables:
 
 ## Features Included
 
-- ✅ Puppeteer with Chrome support
-- ✅ Health check endpoint
+- ✅ Puppeteer with Chromium support
+- ✅ Health check endpoint at `/health`
 - ✅ Production optimizations
 - ✅ Docker layer caching
 - ✅ Security configurations for Puppeteer
 - ✅ Frontend build process
-- ✅ Automatic dependency installation
+- ✅ Automatic dependency installation via Bun
 
 ## Performance Notes
 
 - First deployment may take 5-10 minutes (installing Chrome, building)
 - Subsequent deployments will be faster due to Docker layer caching
-- Chrome executable is around 100MB but necessary for Puppeteer
+- Browser binaries are large but necessary for Puppeteer
 - Container includes health checks for Render's monitoring
 
 Your application should now be successfully running on Render with full Puppeteer support!

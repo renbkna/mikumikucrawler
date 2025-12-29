@@ -3,7 +3,6 @@ import { memo, useEffect, useRef, useState } from "react";
 import { TOAST_DEFAULTS } from "../constants";
 import type { Toast } from "../types";
 
-// Moved outside component to prevent recreation on every render
 const TOAST_STYLES = {
 	success: "bg-emerald-50 border-2 border-emerald-200 text-emerald-700",
 	error: "bg-rose-50 border-2 border-rose-200 text-rose-700",
@@ -30,6 +29,7 @@ interface ToastNotificationProps {
 	onDismiss: (id: number) => void;
 }
 
+/** Individual notification card that automatically dismisses after a timeout. */
 export const ToastNotification = memo(function ToastNotification({
 	toast,
 	onDismiss,

@@ -1,19 +1,16 @@
 import { Fragment, memo, useEffect, useRef, useState } from "react";
 import { SEQUENCE_TIMINGS } from "../constants";
 
-// TIMING CONFIGURATION (in milliseconds)
-
-// SEQUENCE_TIMINGS moved to constants.ts
-
 const RIPPLE_ANIMATION_DURATION_MS = 1500;
 
 interface TheatreOverlayProps {
 	status: "idle" | "blackout" | "counting" | "beam" | "live";
 	onComplete: () => void;
 	onBeamStart: () => void;
-	volume?: number; // 0-100
+	volume?: number;
 }
 
+/** Manages the immersive countdown and transition sequence before a crawl begins. */
 export const TheatreOverlay = memo(function TheatreOverlay({
 	status,
 	onComplete,
@@ -25,10 +22,9 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 	const audioRef = useRef<HTMLAudioElement | null>(null);
 	const timeoutsRef = useRef<NodeJS.Timeout[]>([]);
 	const hasStartedRef = useRef(false);
-	const rippleCountRef = useRef(0); // Track ripple count to avoid stale closure
-	const audioHandlerRef = useRef<(() => void) | null>(null); // Store handler for cleanup
+	const rippleCountRef = useRef(0);
+	const audioHandlerRef = useRef<(() => void) | null>(null);
 
-	// Handle state changes (Stopping audio only on IDLE)
 	useEffect(() => {
 		if (status === "idle") {
 			hasStartedRef.current = false;
@@ -45,20 +41,15 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 		}
 	}, [status]);
 
-	// Dynamic volume sync
 	useEffect(() => {
 		if (audioRef.current) {
 			audioRef.current.volume = Math.max(0, Math.min(1, volume / 100));
 		}
 	}, [volume]);
 
-	// Trigger ripples on count change and clean them up
 	useEffect(() => {
-		// Only trigger ripples for numbers, not for "READY?"
 		if (count && count !== "READY?") {
 			const id = Date.now();
-			// Use ref to track count, avoiding stale closure
-			// Use refs or callback to avoid stale closures, and wrapping in rAF to suppress lint warning about sync state updates
 			requestAnimationFrame(() => {
 				const color =
 					rippleCountRef.current % 2 === 0 ? "miku-pink" : "miku-teal";
@@ -66,7 +57,6 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 				setRipples((prev) => [...prev, { id, color }]);
 			});
 
-			// Clean up ripple after animation completes
 			const cleanupTimer = setTimeout(() => {
 				setRipples((prev) => prev.filter((r) => r.id !== id));
 			}, RIPPLE_ANIMATION_DURATION_MS + 100);
@@ -75,35 +65,31 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 		}
 	}, [count]);
 
-	// Handle the Sequence
+	/** Orchestrates the countdown sequence synced with background audio. */
 	useEffect(() => {
 		if (status === "blackout" && !hasStartedRef.current) {
 			hasStartedRef.current = true;
 
-			// Reuse existing audio or create lazily
 			let audio = audioRef.current;
 			if (!audio) {
 				audio = new Audio("/audio.mp3");
 				audioRef.current = audio;
 			}
 
-			// Reset audio for replay
 			audio.currentTime = 0;
 			audio.volume = Math.max(0, Math.min(1, volume / 100));
 
-			// Clean up any previous handler first
 			if (audioHandlerRef.current && audio) {
 				audio.removeEventListener("timeupdate", audioHandlerRef.current);
 			}
 
-			// Restore the specific loop from the previous version
+			/** Loops specific high-energy section of the audio track. */
 			const handleTimeUpdate = () => {
 				if (audio && audio.currentTime > 17.53) {
 					audio.currentTime = 15.86;
 				}
 			};
 
-			// Store handler reference for cleanup
 			audioHandlerRef.current = handleTimeUpdate;
 			audio.addEventListener("timeupdate", handleTimeUpdate);
 
@@ -119,7 +105,6 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 				timeoutsRef.current.push(id);
 			};
 
-			// Schedule the sequence based on configuration
 			addTimeout(() => setCount("1"), SEQUENCE_TIMINGS.COUNT_1);
 			addTimeout(() => setCount("2"), SEQUENCE_TIMINGS.COUNT_2);
 			addTimeout(() => setCount("3"), SEQUENCE_TIMINGS.COUNT_3);
@@ -137,7 +122,6 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 
 		return () => {
 			timeoutsRef.current.forEach(clearTimeout);
-			// Clean up audio listener to prevent memory leak
 			if (audioHandlerRef.current && audioRef.current) {
 				audioRef.current.removeEventListener(
 					"timeupdate",
@@ -152,14 +136,12 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 
 	return (
 		<div className="fixed inset-0 z-[100] flex items-center justify-center bg-black overflow-hidden">
-			{/* Cute Sparkles Background - Persistent */}
 			<div className="absolute inset-0 opacity-30 pointer-events-none">
 				<div className="absolute top-1/4 left-1/4 w-2 h-2 bg-miku-pink rounded-full animate-ping" />
 				<div className="absolute top-3/4 right-1/4 w-3 h-3 bg-miku-teal rounded-full animate-ping delay-300" />
 				<div className="absolute bottom-10 left-1/2 w-2 h-2 bg-white rounded-full animate-ping delay-700" />
 			</div>
 
-			{/* Independent Ripples Layer */}
 			<div className="absolute inset-0 flex items-center justify-center pointer-events-none">
 				{ripples.map((ripple) => (
 					<Fragment key={ripple.id}>
@@ -186,7 +168,6 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 				))}
 			</div>
 
-			{/* Count Text - Re-renders on count change for pop effect */}
 			{count && (
 				<div
 					key={count}

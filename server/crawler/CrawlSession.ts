@@ -1,17 +1,21 @@
-import type Database from "better-sqlite3";
+import type { Database } from "bun:sqlite";
 import { URL } from "node:url";
-import type { Socket } from "socket.io";
 import type { Logger } from "winston";
-import type { QueueItem, SanitizedCrawlOptions } from "../types.js";
+import type {
+	CrawlerSocket,
+	QueueItem,
+	SanitizedCrawlOptions,
+} from "../types.js";
 import { getRobotsRules } from "../utils/helpers.js";
 import { DynamicRenderer } from "./dynamicRenderer.js";
 import { CrawlQueue } from "./modules/crawlQueue.js";
 import { CrawlState } from "./modules/crawlState.js";
 import { createPagePipeline } from "./modules/pagePipeline.js";
 
+/** Manages the lifecycle of a single crawl operation. */
 export class CrawlSession {
-	private readonly socket: Socket;
-	private readonly dbPromise: Promise<Database.Database>;
+	private readonly socket: CrawlerSocket;
+	private readonly dbPromise: Promise<Database>;
 	private readonly logger: Logger;
 	private readonly options: SanitizedCrawlOptions;
 	private readonly state: CrawlState;
@@ -20,17 +24,24 @@ export class CrawlSession {
 	private readonly queue: CrawlQueue;
 	private readonly pipeline: (item: QueueItem) => Promise<void>;
 
+	/**
+	 * Creates a new crawl session.
+	 *
+	 * @param socket - WebSocket for real-time communication
+	 * @param options - Validated user configuration
+	 * @param dbPromise - Promise resolving to the SQLite database
+	 * @param logger - Winston logger instance
+	 */
 	constructor(
-		socket: Socket,
+		socket: CrawlerSocket,
 		options: SanitizedCrawlOptions,
-		dbPromise: Promise<Database.Database>,
+		dbPromise: Promise<Database>,
 		logger: Logger,
 	) {
 		this.socket = socket;
 		this.dbPromise = dbPromise;
 		this.logger = logger;
 
-		// Options are already validated by sanitizeOptions in socketHandlers.ts
 		this.options = {
 			target: options.target,
 			crawlDepth: options.crawlDepth,
@@ -86,6 +97,7 @@ export class CrawlSession {
 		this.queue.processItem = this.pipeline;
 	}
 
+	/** Initializes the renderer, checks robots.txt, and starts the crawl queue. */
 	async start(): Promise<void> {
 		try {
 			const initResult = await this.dynamicRenderer.initialize();
@@ -114,7 +126,7 @@ export class CrawlSession {
 						);
 
 						const db = await this.dbPromise;
-						db.prepare(
+						db.query(
 							"INSERT OR REPLACE INTO domain_settings (domain, allowed) VALUES (?, 0)",
 						).run(this.targetDomain);
 
@@ -152,6 +164,7 @@ export class CrawlSession {
 		}
 	}
 
+	/** Safely stops the crawl session and cleans up resources. */
 	async stop(): Promise<void> {
 		if (!this.state.isActive) {
 			return;

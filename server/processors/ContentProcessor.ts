@@ -46,6 +46,7 @@ interface PDFResult {
 	isEmpty: boolean;
 }
 
+/** Processes various content types (HTML, JSON, PDF) and extracts structured data. */
 export class ContentProcessor {
 	private readonly logger: Logger;
 
@@ -53,9 +54,7 @@ export class ContentProcessor {
 		this.logger = logger;
 	}
 
-	/**
-	 * Main processing function - extracts all meaningful data from content
-	 */
+	/** Extracts metadata, content, links, and media from raw source data. */
 	async processContent(
 		content: string | Buffer,
 		url: string,
@@ -74,32 +73,16 @@ export class ContentProcessor {
 
 		try {
 			if (contentType.includes("text/html")) {
-				// Ensure content is a string
 				const htmlContent =
 					typeof content === "string" ? content : String(content);
 
-				// Debug logging
-				this.logger.debug(
-					`Processing HTML content for ${url}, length: ${
-						htmlContent.length
-					}, type: ${typeof htmlContent}`,
-				);
-
-				// Load content with Cheerio
 				const cheerioInstance: CheerioAPI = cheerio.load(htmlContent);
 
-				// Validate that cheerio instance is properly loaded
 				if (typeof cheerioInstance !== "function") {
 					throw new TypeError("Cheerio failed to load content");
 				}
 
-				this.logger.debug(
-					`Cheerio loaded successfully for ${url}, type: ${typeof cheerioInstance}`,
-				);
-
-				// Extract structured data
 				try {
-					this.logger.debug(`Calling extractStructuredData for ${url}`);
 					result.extractedData = extractStructuredData(cheerioInstance);
 				} catch (err) {
 					const message = err instanceof Error ? err.message : "Unknown error";
@@ -107,7 +90,6 @@ export class ContentProcessor {
 					result.extractedData = {};
 				}
 
-				// Extract and clean main content
 				try {
 					(result.extractedData as ExtractedData).mainContent =
 						extractMainContent(cheerioInstance);
@@ -117,12 +99,10 @@ export class ContentProcessor {
 					(result.extractedData as ExtractedData).mainContent = "";
 				}
 
-				// Analyze content
 				result.analysis = analyzeContent(
 					(result.extractedData as ExtractedData).mainContent || "",
 				);
 
-				// Process media
 				try {
 					result.media = extractMediaInfo(cheerioInstance, url);
 				} catch (err) {
@@ -131,7 +111,6 @@ export class ContentProcessor {
 					result.media = [];
 				}
 
-				// Process links
 				try {
 					result.links = processLinks(cheerioInstance, url);
 				} catch (err) {
@@ -140,7 +119,6 @@ export class ContentProcessor {
 					result.links = [];
 				}
 
-				// Extract metadata
 				try {
 					result.metadata = extractMetadata(
 						cheerioInstance,
@@ -151,7 +129,6 @@ export class ContentProcessor {
 					result.metadata = {};
 				}
 
-				// Content quality assessment
 				try {
 					(result.analysis as ContentAnalysis).quality = assessContentQuality(
 						cheerioInstance,
@@ -167,11 +144,9 @@ export class ContentProcessor {
 					};
 				}
 			} else if (contentType.includes("application/pdf")) {
-				// PDF processing would go here
 				const pdfResult = await this.processPDF();
 				result.extractedData = { mainContent: pdfResult.text || "" };
 			} else if (contentType.includes("application/json")) {
-				// JSON processing
 				const jsonResult = processJSON(
 					typeof content === "string" ? content : content.toString(),
 				);
@@ -189,7 +164,6 @@ export class ContentProcessor {
 				timestamp: new Date().toISOString(),
 			});
 
-			// Provide fallback data to prevent crashes
 			result.extractedData = { mainContent: "" };
 			result.analysis = {
 				wordCount: 0,
@@ -208,11 +182,14 @@ export class ContentProcessor {
 		return result;
 	}
 
+	/**
+	 * Place-holder for PDF text extraction. Currently logs a warning.
+	 *
+	 * @returns PDFResult with error message
+	 */
 	async processPDF(): Promise<PDFResult> {
-		// PDF processing requires the pdf-parse library which is not included
-		// Log a warning and return a structured response indicating this
 		this.logger.warn(
-			"PDF processing requested but not implemented. Consider adding pdf-parse dependency.",
+			"PDF processing requested but not implemented (requires pdf-parse).",
 		);
 
 		return {

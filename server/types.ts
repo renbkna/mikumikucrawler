@@ -1,18 +1,16 @@
-// Shared types for the server
-// Re-export frontend types that are also used on the backend
 export type {
 	CrawledPage,
 	CrawlOptions,
+	ProcessedPageData,
 	QueueStats,
 	Stats,
 } from "../src/types.js";
 
-import type Database from "better-sqlite3";
-import type { Socket, Server as SocketIOServer } from "socket.io";
+import type { Database } from "bun:sqlite";
 import type { Logger } from "winston";
+import type { ServerToClientEvents } from "../src/types/socket.js";
 import type { CrawlOptions, Stats } from "../src/types.js";
 
-// Queue item for crawling
 export interface QueueItem {
 	url: string;
 	depth: number;
@@ -20,7 +18,6 @@ export interface QueueItem {
 	parentUrl?: string;
 }
 
-// Raw options from client before validation
 export interface RawCrawlOptions {
 	target?: string;
 	crawlDepth?: number;
@@ -35,13 +32,11 @@ export interface RawCrawlOptions {
 	saveMedia?: boolean;
 }
 
-// Validated and sanitized options
 export interface SanitizedCrawlOptions extends CrawlOptions {
 	filterDuplicates?: boolean;
 	screenshots?: boolean;
 }
 
-// Dynamic render result
 export interface DynamicRenderResult {
 	isDynamic: boolean;
 	content: string;
@@ -53,7 +48,6 @@ export interface DynamicRenderResult {
 	lastModified?: string;
 }
 
-// Fetch result from pagePipeline
 export interface FetchResult {
 	content: string;
 	statusCode: number;
@@ -65,7 +59,6 @@ export interface FetchResult {
 	isDynamic: boolean;
 }
 
-// Processed content from ContentProcessor
 export interface ProcessedContent {
 	url?: string;
 	contentType?: string;
@@ -114,13 +107,11 @@ export interface ProcessedContent {
 	}>;
 }
 
-// Crawl state stats
 export interface CrawlStats extends Stats {
 	isActive?: boolean;
 	startTime?: number;
 }
 
-// Link extracted from page
 export interface ExtractedLink {
 	url: string;
 	text?: string;
@@ -130,7 +121,6 @@ export interface ExtractedLink {
 	domain?: string;
 }
 
-// Media info
 export interface MediaInfo {
 	type: "image" | "video" | "audio";
 	url: string;
@@ -141,15 +131,35 @@ export interface MediaInfo {
 	poster?: string;
 }
 
-// Type aliases for external libraries
-export type DatabaseInstance = Database.Database;
-export type SocketInstance = Socket;
-export type SocketServer = SocketIOServer;
+export type DatabaseInstance = Database;
+export interface CrawlerSocket {
+	id: string;
+	emit<K extends keyof ServerToClientEvents>(
+		event: K,
+		...args: Parameters<ServerToClientEvents[K]>
+	): void;
+}
+export type SocketInstance = CrawlerSocket;
 export type LoggerInstance = Logger;
 
-// Clamp number options
 export interface ClampOptions {
 	min: number;
 	max: number;
 	fallback: number;
+}
+
+export interface DatabaseStatement {
+	get(...params: unknown[]): unknown;
+	all(...params: unknown[]): unknown[];
+	run(...params: unknown[]): void;
+}
+
+export interface DatabaseLike {
+	query(sql: string): DatabaseStatement;
+}
+
+export interface LoggerLike {
+	warn(message: string): void;
+	info(message: string): void;
+	error(message: string): void;
 }

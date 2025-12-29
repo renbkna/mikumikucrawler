@@ -11,6 +11,7 @@ interface ConfigurationViewProps {
 	onSave: () => void;
 }
 
+/** Provides an interface for adjusting crawl depth, concurrency, and behavioral policies. */
 export function ConfigurationView({
 	isOpen,
 	onClose,
@@ -32,7 +33,6 @@ export function ConfigurationView({
 	};
 
 	return (
-		// eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- <dialog> is interactive; click is for backdrop-close
 		<dialog
 			open={isOpen}
 			className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm m-0 p-0 w-full h-full max-w-none max-h-none border-none bg-transparent"
@@ -67,7 +67,6 @@ export function ConfigurationView({
 				</div>
 
 				<div className="space-y-6">
-					{/* Performance Settings */}
 					<div className="p-5 border-2 border-miku-teal/10 rounded-2xl bg-miku-teal/5">
 						<h3 className="flex items-center mb-4 text-lg font-bold text-miku-teal">
 							<Coffee className="w-5 h-5 mr-2" />
@@ -122,10 +121,7 @@ export function ConfigurationView({
 											5,
 											Math.max(0, Number(e.target.value) || 0),
 										);
-										onOptionsChange({
-											...options,
-											retryLimit: value,
-										});
+										onOptionsChange({ ...options, retryLimit: value });
 									}}
 									className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
 									min="0"
@@ -138,7 +134,6 @@ export function ConfigurationView({
 						</div>
 					</div>
 
-					{/* Content & Behavior Settings */}
 					<div className="p-5 border-2 border-miku-pink/10 rounded-2xl bg-miku-pink/5">
 						<h3 className="flex items-center mb-4 text-lg font-bold text-miku-pink">
 							<Database className="w-5 h-5 mr-2" />
@@ -150,8 +145,8 @@ export function ConfigurationView({
 							{[
 								{
 									id: "dynamic",
-									label: "Use Dynamic Content (JavaScript Rendering)",
-									desc: "(Slower but handles modern websites better)",
+									label: "Use Dynamic Content (JS Rendering)",
+									desc: "(Slower but handles SPAs better)",
 									checked: options.dynamic,
 								},
 								{
@@ -163,7 +158,7 @@ export function ConfigurationView({
 								{
 									id: "contentOnly",
 									label: "Metadata Only",
-									desc: "(Don't store full page content - saves memory)",
+									desc: "(Don't store full page content)",
 									checked: options.contentOnly,
 								},
 								{
