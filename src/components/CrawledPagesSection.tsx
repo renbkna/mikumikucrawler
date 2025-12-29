@@ -16,6 +16,7 @@ import {
 	useState,
 } from "react";
 import { Virtuoso } from "react-virtuoso";
+import { api } from "../api/client";
 import type { CrawledPage } from "../types";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 
@@ -65,18 +66,17 @@ const CrawledPageCard = memo(function CrawledPageCard({
 		setFetchError(null);
 
 		try {
-			const backendUrl =
-				import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
-			const response = await fetch(
-				`${backendUrl}/api/pages/${page.id}/content`,
-			);
+			const { data, error } = await api.api
+				.pages({ id: page.id })
+				.content.get();
 
-			if (!response.ok) {
-				throw new Error(`Failed to load: ${response.statusText}`);
+			if (error) {
+				throw new Error(
+					(error.value as { error?: string })?.error || "Failed to load",
+				);
 			}
 
-			const data = await response.json();
-			if (data.status === "ok" && data.content) {
+			if (data?.status === "ok" && data.content) {
 				setFetchedContent(data.content);
 			} else {
 				throw new Error("Invalid response format");
@@ -122,7 +122,6 @@ const CrawledPageCard = memo(function CrawledPageCard({
 				</span>
 			</button>
 
-			{/* Quick Stats Tags */}
 			{hasProcessedData && !isExpanded && (
 				<div className="flex flex-wrap gap-2 mt-4">
 					<span className="cute-badge text-blue-500 border-blue-100 flex items-center gap-1">
@@ -140,7 +139,6 @@ const CrawledPageCard = memo(function CrawledPageCard({
 				</div>
 			)}
 
-			{/* Expanded Content */}
 			{isExpanded && (
 				<div className="mt-4 pt-4 border-t-2 border-miku-pink/10 space-y-4 animate-pop">
 					{page.description && (
@@ -149,7 +147,6 @@ const CrawledPageCard = memo(function CrawledPageCard({
 						</p>
 					)}
 
-					{/* Actions */}
 					<div className="flex gap-2">
 						<button
 							type="button"
@@ -158,10 +155,11 @@ const CrawledPageCard = memo(function CrawledPageCard({
 							disabled={isLoadingContent}
 						>
 							<Code className="w-3 h-3" />
-							{(() => {
-								if (isLoadingContent) return "Loading...";
-								return showSource ? "Hide Source" : "View Source";
-							})()}
+							{isLoadingContent
+								? "Loading..."
+								: showSource
+									? "Hide Source"
+									: "View Source"}
 						</button>
 					</div>
 
@@ -178,47 +176,37 @@ const CrawledPageCard = memo(function CrawledPageCard({
 								</span>
 							</div>
 
-							{(() => {
-								if (isLoadingContent) {
-									return (
-										<div className="h-40 flex items-center justify-center text-slate-500 gap-2">
-											<SparkleIcon
-												className="animate-spin text-miku-teal"
-												size={24}
-											/>
-											<span className="text-sm font-bold">
-												Fetching content...
-											</span>
-										</div>
-									);
-								}
-								if (fetchError) {
-									return (
-										<div className="h-40 flex flex-col items-center justify-center text-rose-400 gap-2 p-4 text-center">
-											<AlertCircle size={24} />
-											<span className="text-sm font-bold">
-												Error loading content
-											</span>
-											<span className="text-xs opacity-75">{fetchError}</span>
-											<button
-												type="button"
-												onClick={(e) => {
-													setFetchedContent(null);
-													handleToggleSource(e);
-												}}
-												className="mt-2 px-3 py-1 bg-rose-500/20 hover:bg-rose-500/30 rounded text-xs text-rose-300 transition-colors"
-											>
-												Retry
-											</button>
-										</div>
-									);
-								}
-								return (
-									<pre className="text-xs text-emerald-400 font-mono overflow-x-auto whitespace-pre-wrap break-all max-h-60 custom-scrollbar">
-										{fetchedContent || "No content available"}
-									</pre>
-								);
-							})()}
+							{isLoadingContent ? (
+								<div className="h-40 flex items-center justify-center text-slate-500 gap-2">
+									<SparkleIcon
+										className="animate-spin text-miku-teal"
+										size={24}
+									/>
+									<span className="text-sm font-bold">Fetching content...</span>
+								</div>
+							) : fetchError ? (
+								<div className="h-40 flex flex-col items-center justify-center text-rose-400 gap-2 p-4 text-center">
+									<AlertCircle size={24} />
+									<span className="text-sm font-bold">
+										Error loading content
+									</span>
+									<span className="text-xs opacity-75">{fetchError}</span>
+									<button
+										type="button"
+										onClick={(e) => {
+											setFetchedContent(null);
+											handleToggleSource(e);
+										}}
+										className="mt-2 px-3 py-1 bg-rose-500/20 hover:bg-rose-500/30 rounded text-xs text-rose-300 transition-colors"
+									>
+										Retry
+									</button>
+								</div>
+							) : (
+								<pre className="text-xs text-emerald-400 font-mono overflow-x-auto whitespace-pre-wrap break-all max-h-60 custom-scrollbar">
+									{fetchedContent || "No content available"}
+								</pre>
+							)}
 						</div>
 					)}
 				</div>
@@ -238,6 +226,7 @@ interface CrawledPagesSectionProps {
 	pageLimit?: number;
 }
 
+/** Displays a searchable list of captured pages with virtualized scrolling for performance. */
 export const CrawledPagesSection = memo(function CrawledPagesSection({
 	crawledPages,
 	displayedPages,
@@ -246,15 +235,12 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 	onClearFilter,
 	pageLimit,
 }: CrawledPagesSectionProps) {
-	// Local state for immediate UI feedback, debounced propagation
 	const [localFilter, setLocalFilter] = useState(filterText);
 
-	// Sync external filterText changes to local state
 	useEffect(() => {
 		setLocalFilter(filterText);
 	}, [filterText]);
 
-	// Debounce filter propagation (200ms)
 	useEffect(() => {
 		const timer = setTimeout(() => {
 			if (localFilter !== filterText) {
@@ -268,7 +254,6 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 		setLocalFilter(e.target.value);
 	}, []);
 
-	// Stable Footer component for Virtuoso
 	const footerComponents = useMemo(
 		() =>
 			pageLimit && crawledPages.length >= pageLimit
@@ -279,7 +264,6 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 
 	return (
 		<div className="space-y-4 h-full flex flex-col">
-			{/* Filter Bar - Kawaii Style */}
 			<div className="bg-white rounded-2xl p-2 flex items-center gap-3 border-2 border-miku-pink/20 shrink-0">
 				<div className="p-2 rounded-xl bg-miku-pink/10 text-miku-pink">
 					<Filter className="w-5 h-5" />
@@ -302,40 +286,31 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 				)}
 			</div>
 
-			{/* Pages Grid */}
 			<div className="flex-1 overflow-hidden">
-				{(() => {
-					if (crawledPages.length === 0) {
-						return (
-							<div className="h-full flex flex-col items-center justify-center text-miku-text/40">
-								<NoteIcon
-									className="text-miku-teal/30 mb-4 animate-float"
-									size={48}
-								/>
-								<p className="font-bold text-lg">No pages crawled yet...</p>
-								<p className="text-sm mt-1 font-medium flex items-center gap-1">
-									Start the Miku Beam to begin!{" "}
-									<HeartIcon className="text-miku-pink" size={12} />
-								</p>
-							</div>
-						);
-					}
-					if (displayedPages.length > 0) {
-						return (
-							<Virtuoso
-								style={{ height: "100%" }}
-								data={displayedPages}
-								itemContent={(_index, page) => <CrawledPageCard page={page} />}
-								components={footerComponents}
-							/>
-						);
-					}
-					return (
-						<div className="text-center py-12 text-miku-text/40">
-							<p className="font-medium">No pages match your filter</p>
-						</div>
-					);
-				})()}
+				{crawledPages.length === 0 ? (
+					<div className="h-full flex flex-col items-center justify-center text-miku-text/40">
+						<NoteIcon
+							className="text-miku-teal/30 mb-4 animate-float"
+							size={48}
+						/>
+						<p className="font-bold text-lg">No pages crawled yet...</p>
+						<p className="text-sm mt-1 font-medium flex items-center gap-1">
+							Start the Miku Beam to begin!{" "}
+							<HeartIcon className="text-miku-pink" size={12} />
+						</p>
+					</div>
+				) : displayedPages.length > 0 ? (
+					<Virtuoso
+						style={{ height: "100%" }}
+						data={displayedPages}
+						itemContent={(_index, page) => <CrawledPageCard page={page} />}
+						{...(footerComponents ? { components: footerComponents } : {})}
+					/>
+				) : (
+					<div className="text-center py-12 text-miku-text/40">
+						<p className="font-medium">No pages match your filter</p>
+					</div>
+				)}
 			</div>
 		</div>
 	);

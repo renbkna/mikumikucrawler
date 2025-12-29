@@ -6,6 +6,7 @@ interface ProgressBarProps {
 	progress: number;
 }
 
+/** Visual indicator of the crawl completion state with themed animations. */
 export const ProgressBar = memo(function ProgressBar({
 	progress,
 }: ProgressBarProps) {
@@ -27,26 +28,21 @@ export const ProgressBar = memo(function ProgressBar({
 				</div>
 			</div>
 
-			{/* Progress Bar Container */}
 			<div className="relative h-6 rounded-full bg-white/50 overflow-hidden shadow-inner border-2 border-miku-pink/20">
-				{/* Cute dots pattern */}
 				<div
 					className="absolute inset-0 opacity-20"
 					style={{
 						backgroundImage: "radial-gradient(#39C5BB 1px, transparent 1px)",
 						backgroundSize: "8px 8px",
 					}}
-				></div>
+				/>
 
-				{/* Progress Fill - Kawaii gradient */}
 				<div
 					className="relative h-full transition-all duration-700 ease-out energy-bar rounded-full"
 					style={{ width: `${progress}%` }}
 				>
-					{/* Shine Effect */}
-					<div className="absolute inset-0 bg-gradient-to-b from-white/40 to-transparent"></div>
+					<div className="absolute inset-0 bg-gradient-to-b from-white/40 to-transparent" />
 
-					{/* Leading Sparkle */}
 					{progress > 0 && progress < 100 && (
 						<div className="absolute right-1 top-1/2 -translate-y-1/2">
 							<SparkleIcon className="text-white animate-ping" size={12} />
@@ -55,7 +51,6 @@ export const ProgressBar = memo(function ProgressBar({
 				</div>
 			</div>
 
-			{/* Status Message */}
 			<div className="mt-3 text-center h-6">
 				{progress > 0 && progress < 100 && (
 					<span className="text-sm font-bold text-miku-pink animate-pulse flex items-center justify-center gap-1">

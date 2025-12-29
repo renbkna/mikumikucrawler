@@ -1,6 +1,12 @@
-// Shared between client and server
+export interface ExtractedLink {
+	url: string;
+	text?: string;
+	title?: string;
+	isInternal?: boolean;
+	type?: string;
+	domain?: string;
+}
 
-// Stats types
 export interface Stats {
 	pagesScanned: number;
 	linksFound: number;
@@ -14,8 +20,17 @@ export interface Stats {
 		minutes: number;
 		seconds: number;
 	};
-	pagesPerSecond?: string;
+	pagesPerSecond?: number | string;
 	successRate?: string;
+	lastProcessed?: {
+		url: string;
+		title?: string;
+		wordCount?: number;
+		qualityScore?: number;
+		language?: string;
+		mediaCount?: number;
+		linksCount?: number;
+	};
 }
 
 export interface QueueStats {
@@ -25,7 +40,6 @@ export interface QueueStats {
 	pagesPerSecond: number;
 }
 
-// Crawl options
 export interface CrawlOptions {
 	target: string;
 	crawlMethod: "links" | "content" | "media" | "full";
@@ -40,15 +54,16 @@ export interface CrawlOptions {
 	saveMedia: boolean;
 }
 
-// Page content
 export interface CrawledPage {
+	id?: number | null;
 	url: string;
-	content: string;
+	content?: string;
 	title?: string;
 	description?: string;
 	contentType?: string;
 	domain?: string;
 	processedData?: ProcessedPageData;
+	links?: ExtractedLink[];
 }
 
 export interface ProcessedPageData {
@@ -98,15 +113,19 @@ export interface ProcessedPageData {
 	language: string;
 }
 
-// Socket events - Client to Server
+/**
+ * Socket events sent from the Client to the Server.
+ */
 export interface ClientToServerEvents {
 	startAttack: (options: CrawlOptions) => void;
 	stopAttack: () => void;
 	getPageDetails: (url: string) => void;
-	exportData: (format: "json" | "csv") => void;
+	exportData: (format: string) => void;
 }
 
-// Socket events - Server to Client
+/**
+ * Socket events sent from the Server to the Client.
+ */
 export interface ServerToClientEvents {
 	connect: () => void;
 	disconnect: () => void;
@@ -118,7 +137,9 @@ export interface ServerToClientEvents {
 	error: (error: { message: string }) => void;
 	attackEnd: (finalStats: Stats) => void;
 	pageDetails: (data: CrawledPage | null) => void;
+	exportStart: (data: { format: string }) => void;
+	exportChunk: (data: { data: string }) => void;
+	exportComplete: (data: { count: number }) => void;
 }
 
-// Export format
 export type ExportFormat = "json" | "csv";

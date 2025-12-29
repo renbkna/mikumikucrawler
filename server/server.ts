@@ -1,89 +1,133 @@
-import compression from "compression";
-import cors from "cors";
-import dotenv from "dotenv";
-import express, { type Request, type Response } from "express";
-import rateLimit from "express-rate-limit";
-import helmet from "helmet";
-import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Server } from "socket.io";
+import { cors } from "@elysiajs/cors";
+import { staticPlugin } from "@elysiajs/static";
+import { swagger } from "@elysiajs/swagger";
+import dotenv from "dotenv";
+import { Elysia } from "elysia";
+import { rateLimit } from "elysia-rate-limit";
+
+import { setupDatabase } from "./config/database.js";
+import { setupLogging } from "./config/logging.js";
+import type { CrawlSession } from "./crawler/CrawlSession.js";
+import {
+	createWebSocketHandlers,
+	WebSocketMessageSchema,
+} from "./handlers/socketHandlers.js";
+import { apiRoutes } from "./routes/apiRoutes.js";
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-import { setupDatabase } from "./config/database.js";
-import { setupLogging } from "./config/logging.js";
-import { setupSocketHandlers } from "./handlers/socketHandlers.js";
-import { setupApiRoutes } from "./routes/apiRoutes.js";
-
 const logger = await setupLogging();
-const dbPromise = setupDatabase();
+const db = setupDatabase();
+const activeCrawls = new Map<string, CrawlSession>();
 
-const app = express();
-const server = http.createServer(app);
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
-const io = new Server(server, {
-	cors: {
-		origin: FRONTEND_URL,
-		methods: ["GET", "POST"],
-		credentials: true,
-	},
-	maxHttpBufferSize: 5e6, // 5MB
-	pingTimeout: 60000,
-});
+const PORT = process.env.PORT || 3000;
 
-app.use(
-	cors({
-		origin: FRONTEND_URL,
-		credentials: true,
-	}),
+const { handleMessage, handleClose } = createWebSocketHandlers(
+	activeCrawls,
+	Promise.resolve(db),
+	logger,
 );
-app.use(
-	helmet({
-		contentSecurityPolicy: false, // Disable CSP for SPA compatibility; configure as needed
-	}),
-);
-app.use(compression());
-app.use(express.json({ limit: "2mb" }));
-app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
-const globalLimiter = rateLimit({
-	windowMs: 15 * 60 * 1000, // 15 minutes
-	max: 1000,
-	standardHeaders: true,
-	legacyHeaders: false,
-	message: { error: "Too many requests, please try again later." },
-});
-app.use(globalLimiter);
+const distPath = path.join(__dirname, "..", "dist");
 
-const activeCrawls = setupSocketHandlers(io, dbPromise, logger);
-const apiRoutes = setupApiRoutes(dbPromise, activeCrawls, logger);
-
-app.use("/api", apiRoutes);
-app.get("/health", (_req: Request, res: Response) => {
-	res.json({
+const app = new Elysia()
+	.decorate("db", db)
+	.decorate("logger", logger)
+	.decorate("activeCrawls", activeCrawls)
+	.use(
+		cors({
+			origin: (request) => {
+				const origin = request.headers.get("origin");
+				if (origin?.startsWith("http://localhost:517")) {
+					return true;
+				}
+				return origin === FRONTEND_URL;
+			},
+			credentials: true,
+		}),
+	)
+	.use(
+		rateLimit({
+			max: 100,
+			duration: 60_000,
+			skip: (request) =>
+				request.url.includes("/ws") || request.url.includes("/health"),
+		}),
+	)
+	.use(
+		swagger({
+			documentation: {
+				info: {
+					title: "Miku Crawler API",
+					version: "3.0.0",
+					description:
+						"High-performance web crawler API with real-time WebSocket updates.",
+				},
+				tags: [
+					{ name: "Stats", description: "System and crawler statistics" },
+					{ name: "Content", description: "Crawled page content access" },
+				],
+			},
+		}),
+	)
+	.use(
+		staticPlugin({
+			assets: path.join(distPath, "assets"),
+			prefix: "/assets",
+		}),
+	)
+	.use(apiRoutes)
+	.ws("/ws", {
+		body: WebSocketMessageSchema,
+		// biome-ignore lint/suspicious/noExplicitAny: Elysia WS types mismatch
+		open(ws: any) {
+			logger.info(`Client connected: ${ws.id}`);
+		},
+		// biome-ignore lint/suspicious/noExplicitAny: Elysia WS types mismatch
+		message: handleMessage as any,
+		// biome-ignore lint/suspicious/noExplicitAny: Elysia WS types mismatch
+		close: handleClose as any,
+	})
+	.get("/health", () => ({
 		status: "ok",
 		activeCrawls: activeCrawls.size,
 		uptime: process.uptime(),
 		memoryUsage: process.memoryUsage(),
+	}))
+	.onError(({ code, error, set }) => {
+		if (code === "NOT_FOUND") {
+			set.status = 404;
+			return { error: "Not Found" };
+		}
+		logger.error(`Global Error: ${error}`);
+		const errorMessage = (error as Error)?.message || "Internal Server Error";
+		return { error: errorMessage };
+	})
+	.get("*", async ({ path: reqPath }) => {
+		const filePath = path.join(distPath, reqPath);
+		const file = Bun.file(filePath);
+		if (await file.exists()) {
+			return file;
+		}
+
+		if (reqPath.startsWith("/api")) {
+			return Response.json({ error: "Not Found" }, { status: 404 });
+		}
+
+		return Bun.file(path.join(distPath, "index.html"));
 	});
-});
 
-// Serve the built React frontend in production
-const distPath = path.join(__dirname, "..", "dist");
-app.use(express.static(distPath));
-
-// SPA catch-all route: serves index.html for any non-API route
-app.get("{*splat}", (_req: Request, res: Response) => {
-	res.sendFile(path.join(distPath, "index.html"));
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-	logger.info(`Miku Crawler backend running on port ${PORT}`);
+const instance = app.listen(PORT, (server) => {
+	logger.info(`Miku Crawler backend running on port ${server.port} (Elysia)`);
+	logger.info(
+		`Swagger documentation available at http://localhost:${server.port}/swagger`,
+	);
 });
 
 async function gracefulShutdown(signal: string): Promise<void> {
@@ -99,7 +143,6 @@ async function gracefulShutdown(signal: string): Promise<void> {
 	}
 
 	try {
-		const db = await dbPromise;
 		db.close();
 		logger.info("Database connection closed");
 	} catch (error) {
@@ -107,14 +150,14 @@ async function gracefulShutdown(signal: string): Promise<void> {
 		logger.warn(`Failed to close database cleanly: ${message}`);
 	}
 
-	server.close(() => {
-		logger.info("Server closed");
-		logger.close();
-		process.exit(0);
-	});
+	instance.stop();
+	logger.info("Server closed");
+	logger.close();
+	process.exit(0);
 }
 
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
 export default app;
+export type App = typeof app;

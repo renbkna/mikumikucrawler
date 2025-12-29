@@ -1,8 +1,7 @@
-// Extended interfaces for better type safety
 export interface Stats {
 	pagesScanned: number;
 	linksFound: number;
-	totalData: number; // in KB
+	totalData: number;
 	mediaFiles?: number;
 	successCount?: number;
 	failureCount?: number;
@@ -27,6 +26,53 @@ export interface StatsPayload extends Partial<Stats> {
 	log?: string;
 }
 
+export interface ProcessedPageData {
+	extractedData: {
+		mainContent?: string;
+		jsonLd?: Record<string, unknown>[];
+		microdata?: Record<string, unknown>;
+		openGraph?: Record<string, string>;
+		twitterCards?: Record<string, string>;
+		schema?: Record<string, unknown>;
+	};
+	metadata: {
+		title?: string;
+		description?: string;
+		author?: string;
+		publishDate?: string;
+		modifiedDate?: string;
+		canonical?: string;
+		robots?: string;
+		viewport?: string;
+		charset?: string;
+		generator?: string;
+	};
+	analysis: {
+		wordCount: number;
+		readingTime: number;
+		language: string;
+		keywords: Array<{ word: string; count: number }>;
+		sentiment: string;
+		readabilityScore: number;
+		quality?: {
+			score: number;
+			factors: Record<string, number | boolean>;
+			issues: string[];
+		};
+	};
+	media: Array<{
+		type: string;
+		url: string;
+		alt?: string;
+		title?: string;
+		width?: string;
+		height?: string;
+		poster?: string;
+	}>;
+	qualityScore: number;
+	language: string;
+}
+
 export interface CrawledPage {
 	id: number;
 	url: string;
@@ -35,55 +81,9 @@ export interface CrawledPage {
 	description?: string;
 	contentType?: string;
 	domain?: string;
-	processedData?: {
-		extractedData: {
-			mainContent?: string;
-			jsonLd?: Record<string, unknown>[];
-			microdata?: Record<string, unknown>;
-			openGraph?: Record<string, string>;
-			twitterCards?: Record<string, string>;
-			schema?: Record<string, unknown>;
-		};
-		metadata: {
-			title?: string;
-			description?: string;
-			author?: string;
-			publishDate?: string;
-			modifiedDate?: string;
-			canonical?: string;
-			robots?: string;
-			viewport?: string;
-			charset?: string;
-			generator?: string;
-		};
-		analysis: {
-			wordCount: number;
-			readingTime: number;
-			language: string;
-			keywords: Array<{ word: string; count: number }>;
-			sentiment: string;
-			readabilityScore: number;
-			quality?: {
-				score: number;
-				factors: Record<string, number | boolean>;
-				issues: string[];
-			};
-		};
-		media: Array<{
-			type: string;
-			url: string;
-			alt?: string;
-			title?: string;
-			width?: string;
-			height?: string;
-			poster?: string;
-		}>;
-		qualityScore: number;
-		language: string;
-	};
+	processedData?: ProcessedPageData;
 }
 
-// Crawl configuration options
 export interface CrawlOptions {
 	target: string;
 	crawlMethod: "links" | "content" | "media" | "full";
@@ -98,7 +98,6 @@ export interface CrawlOptions {
 	saveMedia: boolean;
 }
 
-// Toast notification system
 export interface Toast {
 	id: number;
 	type: "success" | "error" | "info" | "warning";

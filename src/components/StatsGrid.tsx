@@ -16,6 +16,7 @@ interface StatsGridProps {
 	isAttacking: boolean;
 }
 
+/** Summarizes session metrics into high-level status cards. */
 export const StatsGrid = memo(function StatsGrid({
 	stats,
 	queueStats,
@@ -23,7 +24,6 @@ export const StatsGrid = memo(function StatsGrid({
 }: StatsGridProps) {
 	return (
 		<div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-			{/* Pages Scanned Card */}
 			<div className="cute-card p-6 relative overflow-hidden group">
 				<div className="absolute -right-6 -top-6 w-24 h-24 bg-miku-teal/10 rounded-full group-hover:scale-150 transition-transform duration-500" />
 
@@ -51,7 +51,6 @@ export const StatsGrid = memo(function StatsGrid({
 				</div>
 			</div>
 
-			{/* Links Found Card */}
 			<div className="cute-card p-6 relative overflow-hidden group">
 				<div className="absolute -right-6 -top-6 w-24 h-24 bg-miku-pink/10 rounded-full group-hover:scale-150 transition-transform duration-500" />
 
@@ -82,7 +81,6 @@ export const StatsGrid = memo(function StatsGrid({
 				</div>
 			</div>
 
-			{/* Data Card */}
 			<div className="cute-card p-6 relative overflow-hidden group">
 				<div className="absolute -right-6 -top-6 w-24 h-24 bg-purple-100 rounded-full group-hover:scale-150 transition-transform duration-500" />
 

@@ -3,6 +3,9 @@ import type { CheerioAPI } from "cheerio";
 import type { Element } from "domhandler";
 import type { ExtractedLink, MediaInfo } from "../types.js";
 
+/** Pre-compiled regex for downloadable file extensions */
+const DOWNLOAD_EXTENSIONS = /\.(pdf|doc|docx|xls|xlsx|zip|rar)$/i;
+
 interface StructuredData {
 	jsonLd: unknown[];
 	microdata: Record<string, unknown[]>;
@@ -24,11 +27,19 @@ interface PageMetadata {
 	generator: string;
 }
 
+/**
+ * Sanitizes text by removing redundant whitespace and trimming.
+ */
 export function cleanText(text: string | null | undefined): string {
 	if (!text) return "";
 	return text.replaceAll(/\s+/g, " ").trim();
 }
 
+/**
+ * Extracts structured data (JSON-LD, Microdata, OG, Twitter) from HTML.
+ *
+ * @param cheerioInstance - Loaded HTML document
+ */
 export function extractStructuredData(
 	cheerioInstance: CheerioAPI,
 ): StructuredData {
@@ -55,7 +66,7 @@ export function extractStructuredData(
 					structured.jsonLd.push(jsonData);
 				}
 			} catch {
-				// ignore invalid JSON-LD
+				// Silent fail for malformed JSON-LD
 			}
 		},
 	);
@@ -82,9 +93,7 @@ export function extractStructuredData(
 
 	cheerioInstance("[itemscope]").each((_: number, element: Element) => {
 		const itemType = cheerioInstance(element).attr("itemtype");
-		if (!itemType) {
-			return;
-		}
+		if (!itemType) return;
 
 		const microItem = extractMicrodataItem(cheerioInstance, element);
 		if (!structured.microdata[itemType]) {
@@ -96,6 +105,12 @@ export function extractStructuredData(
 	return structured;
 }
 
+/**
+ * Identifies the primary content body using common selectors or heuristic cloning.
+ *
+ * @param cheerioInstance - Loaded HTML document
+ * @returns Cleaned primary text content
+ */
 export function extractMainContent(cheerioInstance: CheerioAPI): string {
 	if (typeof cheerioInstance !== "function") {
 		throw new TypeError(
@@ -139,6 +154,12 @@ export function extractMainContent(cheerioInstance: CheerioAPI): string {
 	return mainContent;
 }
 
+/**
+ * Extracts image, video, and audio sources with associated metadata.
+ *
+ * @param cheerioInstance - Loaded HTML document
+ * @param baseUrl - Base URL for resolving relative paths
+ */
 export function extractMediaInfo(
 	cheerioInstance: CheerioAPI,
 	baseUrl: string,
@@ -154,9 +175,7 @@ export function extractMediaInfo(
 		const alt = cheerioInstance(element).attr("alt") || "";
 		const title = cheerioInstance(element).attr("title") || "";
 
-		if (!src) {
-			return;
-		}
+		if (!src) return;
 
 		try {
 			const absoluteUrl = new URL(src, baseUrl).href;
@@ -169,7 +188,7 @@ export function extractMediaInfo(
 				height: cheerioInstance(element).attr("height"),
 			});
 		} catch {
-			// ignore invalid URLs
+			// Silent fail for malformed URLs
 		}
 	});
 
@@ -180,7 +199,7 @@ export function extractMediaInfo(
 				const absoluteUrl = new URL(src, baseUrl).href;
 				media.push({ type: "video", url: absoluteUrl });
 			} catch {
-				// ignore invalid URLs
+				// Silent fail for malformed URLs
 			}
 		}
 	});
@@ -192,7 +211,7 @@ export function extractMediaInfo(
 				const absoluteUrl = new URL(src, baseUrl).href;
 				media.push({ type: "audio", url: absoluteUrl });
 			} catch {
-				// ignore invalid URLs
+				// Silent fail for malformed URLs
 			}
 		}
 	});
@@ -200,6 +219,12 @@ export function extractMediaInfo(
 	return media;
 }
 
+/**
+ * Parses and classifies hyperlinks into logical categories (social, download, etc).
+ *
+ * @param cheerioInstance - Loaded HTML document
+ * @param baseUrl - Base URL for resolving relative paths
+ */
 export function processLinks(
 	cheerioInstance: CheerioAPI,
 	baseUrl: string,
@@ -216,9 +241,7 @@ export function processLinks(
 		const text = cheerioInstance(element).text().trim();
 		const title = cheerioInstance(element).attr("title") || "";
 
-		if (!href) {
-			return;
-		}
+		if (!href) return;
 
 		try {
 			const url = new URL(href, baseUrl);
@@ -234,13 +257,18 @@ export function processLinks(
 				domain: url.hostname,
 			});
 		} catch {
-			// ignore invalid URLs
+			// Silent fail for malformed URLs
 		}
 	});
 
 	return links;
 }
 
+/**
+ * Extracts page-level metadata (title, description, author, dates).
+ *
+ * @param cheerioInstance - Loaded HTML document
+ */
 export function extractMetadata(cheerioInstance: CheerioAPI): PageMetadata {
 	if (typeof cheerioInstance !== "function") {
 		throw new TypeError("Invalid Cheerio instance passed to extractMetadata");
@@ -287,21 +315,20 @@ export function extractMetadata(cheerioInstance: CheerioAPI): PageMetadata {
 
 	metadata.canonical =
 		cheerioInstance('link[rel="canonical"]').attr("href") || "";
-
 	metadata.robots =
 		cheerioInstance('meta[name="robots"]').attr("content") || "";
-
 	metadata.viewport =
 		cheerioInstance('meta[name="viewport"]').attr("content") || "";
-
 	metadata.charset = cheerioInstance("meta[charset]").attr("charset") || "";
-
 	metadata.generator =
 		cheerioInstance('meta[name="generator"]').attr("content") || "";
 
 	return metadata;
 }
 
+/**
+ * Recursive helper to extract properties from a microdata itemscope.
+ */
 function extractMicrodataItem(
 	cheerioInstance: CheerioAPI,
 	element: Element,
@@ -315,9 +342,7 @@ function extractMicrodataItem(
 			cheerioInstance(child).attr("content") ||
 			cheerioInstance(child).text().trim();
 
-		if (!prop) {
-			return;
-		}
+		if (!prop) return;
 
 		const existing = item[prop];
 		if (Array.isArray(existing)) {
@@ -332,6 +357,9 @@ function extractMicrodataItem(
 	return item;
 }
 
+/**
+ * Categorizes a URL based on its destination and anchor text.
+ */
 function classifyLink(url: URL, text: string): string {
 	const href = url.href.toLowerCase();
 	const linkText = text.toLowerCase();
@@ -345,13 +373,11 @@ function classifyLink(url: URL, text: string): string {
 		return "social";
 	}
 
-	if (/\.(pdf|doc|docx|xls|xlsx|zip|rar)$/.exec(href)) {
+	if (DOWNLOAD_EXTENSIONS.test(href)) {
 		return "download";
 	}
 
-	if (href.startsWith("mailto:")) {
-		return "email";
-	}
+	if (href.startsWith("mailto:")) return "email";
 
 	if (
 		linkText.includes("home") ||

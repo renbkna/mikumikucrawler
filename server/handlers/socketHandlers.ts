@@ -1,19 +1,27 @@
-import type Database from "better-sqlite3";
-import ipaddr from "ipaddr.js";
+import type { Database } from "bun:sqlite";
 import dns from "node:dns";
 import net from "node:net";
-import type { Socket, Server as SocketIOServer } from "socket.io";
+import { t } from "elysia";
+import ipaddr from "ipaddr.js";
 import type { Logger } from "winston";
 import { CrawlSession } from "../crawler/CrawlSession.js";
 import type {
 	ClampOptions,
+	CrawlerSocket,
 	RawCrawlOptions,
 	SanitizedCrawlOptions,
 } from "../types.js";
 
 const ALLOWED_CRAWL_METHODS = new Set(["links", "content", "media", "full"]);
 const ALLOWED_IP_RANGES = new Set(["unicast", "global"]);
+const ALLOWED_EXPORT_FORMATS = new Set(["json", "csv"]);
 
+/** Regex to detect CSV injection characters at start of cell values */
+const CSV_INJECTION_REGEX = /^[=+\-@|\t]/;
+
+/**
+ * Checks if an IP address is valid and within allowed unicast/global ranges.
+ */
 function isInvalidIpAddress(address: string): boolean {
 	let parsed: ipaddr.IPv4 | ipaddr.IPv6;
 	try {
@@ -33,6 +41,7 @@ function isInvalidIpAddress(address: string): boolean {
 	return !ALLOWED_IP_RANGES.has(range);
 }
 
+/** Validates that the hostname resolves to a public IP address to prevent SSRF. */
 async function assertPublicHostname(hostname: string): Promise<void> {
 	if (!hostname) {
 		throw new Error("Target host is not allowed");
@@ -78,6 +87,9 @@ async function assertPublicHostname(hostname: string): Promise<void> {
 	}
 }
 
+/**
+ * Ensures a number stays within specified bounds, falling back to a default if invalid.
+ */
 function clampNumber(
 	value: unknown,
 	{ min, max, fallback }: ClampOptions,
@@ -89,6 +101,7 @@ function clampNumber(
 	return Math.min(max, Math.max(min, Math.floor(parsed)));
 }
 
+/** Sanitizes and validates crawl options provided by the client. */
 export async function sanitizeOptions(
 	rawOptions: RawCrawlOptions = {},
 ): Promise<SanitizedCrawlOptions> {
@@ -168,201 +181,260 @@ export async function sanitizeOptions(
 	};
 }
 
-export function setupSocketHandlers(
-	io: SocketIOServer,
-	dbPromise: Promise<Database.Database>,
+export const WebSocketMessageSchema = t.Object({
+	type: t.String(),
+	data: t.Optional(t.Any()),
+});
+
+type WebSocketMessage = typeof WebSocketMessageSchema.static;
+
+/** Creates the WebSocket message handler logic for crawler interactions. */
+export function createWebSocketHandlers(
+	activeCrawls: Map<string, CrawlSession>,
+	dbPromise: Promise<Database>,
 	logger: Logger,
-): Map<string, CrawlSession> {
-	const activeCrawls = new Map<string, CrawlSession>();
+) {
+	const handleMessage = async (
+		ws: {
+			id: string;
+			send(data: string | object): number;
+			data: { id: string };
+		},
+		message: WebSocketMessage,
+	) => {
+		const socketWrapper: CrawlerSocket = {
+			id: ws.data.id || ws.id,
+			emit: (event, ...args) => {
+				ws.send({ type: event, data: args[0] });
+			},
+		};
 
-	io.on("connection", (socket: Socket) => {
-		logger.info(`Client connected: ${socket.id}`);
-		let crawlSession: CrawlSession | null = null;
-
-		socket.on("startAttack", async (options: RawCrawlOptions) => {
-			if (crawlSession) {
-				await crawlSession.stop();
-			}
-
-			let validatedOptions: SanitizedCrawlOptions;
-			try {
-				validatedOptions = await sanitizeOptions(options);
-			} catch (validationError) {
-				const message =
-					validationError instanceof Error
-						? validationError.message
-						: "Invalid options";
-				logger.warn(`Invalid crawl options from ${socket.id}: ${message}`);
-				socket.emit("crawlError", { message });
-				return;
-			}
-
-			logger.info(
-				`Starting new crawl session for ${socket.id} with target: ${validatedOptions.target}`,
-			);
-
-			crawlSession = new CrawlSession(
-				socket,
-				validatedOptions,
-				dbPromise,
-				logger,
-			);
-			activeCrawls.set(socket.id, crawlSession);
-			crawlSession.start();
-		});
-
-		socket.on("stopAttack", async () => {
-			logger.info(`Stopping crawl session for ${socket.id}`);
-			if (crawlSession) {
-				await crawlSession.stop();
-				activeCrawls.delete(socket.id);
-				crawlSession = null;
-			}
-		});
-
-		socket.on("getPageDetails", async (url: string) => {
-			try {
-				if (!url) return;
-
-				const db = await dbPromise;
-				const page = db.prepare(`SELECT * FROM pages WHERE url = ?`).get(url) as
-					| { id: number }
-					| undefined;
-
-				if (page) {
-					const links = db
-						.prepare(`SELECT * FROM links WHERE source_id = ?`)
-						.all(page.id);
-
-					socket.emit("pageDetails", { ...page, links });
-				} else {
-					socket.emit("pageDetails", null);
-				}
-			} catch (err) {
-				const message = err instanceof Error ? err.message : "Unknown error";
-				logger.error(`Error getting page details: ${message}`);
-				socket.emit("crawlError", { message: "Failed to get page details" });
-			}
-		});
-
-		socket.on("exportData", async (format: string) => {
-			const ALLOWED_EXPORT_FORMATS = new Set(["json", "csv"]);
-
-			// Validate and sanitize format
-			const sanitizedFormat =
-				typeof format === "string" ? format.toLowerCase().trim() : "";
-
-			if (!ALLOWED_EXPORT_FORMATS.has(sanitizedFormat)) {
-				socket.emit("crawlError", {
-					message: 'Invalid export format. Use "json" or "csv".',
-				});
-				return;
-			}
-
-			try {
-				const db = await dbPromise;
-				const stmt =
-					db.prepare(`SELECT id, url, domain, crawled_at, status_code,
-                                   data_length, title, description FROM pages`);
-
-				socket.emit("exportStart", { format: sanitizedFormat });
-
-				const CHUNK_SIZE = 500;
-				let chunk: string[] = [];
-				let isFirstChunk = true;
-				let rowCount = 0;
-
-				const iterator = stmt.iterate();
-
-				if (sanitizedFormat === "json") {
-					socket.emit("exportChunk", { data: "[" }); // Start JSON array
+		switch (message.type) {
+			case "startAttack": {
+				const options = message.data as RawCrawlOptions;
+				const existingSession = activeCrawls.get(socketWrapper.id);
+				if (existingSession) {
+					await existingSession.stop();
 				}
 
-				const escapeCsvCell = (value: unknown): string => {
-					if (value === null || value === undefined) return '""';
-					// Handle objects/arrays by stringifying them, use explicit type checks
-					let stringValue: string;
-					if (typeof value === "object") {
-						stringValue = JSON.stringify(value);
-					} else if (typeof value === "string") {
-						stringValue = value;
+				let validatedOptions: SanitizedCrawlOptions;
+				try {
+					validatedOptions = await sanitizeOptions(options);
+				} catch (validationError) {
+					const message =
+						validationError instanceof Error
+							? validationError.message
+							: "Invalid options";
+					logger.warn(
+						`Invalid crawl options from ${socketWrapper.id}: ${message}`,
+					);
+					socketWrapper.emit("crawlError", { message });
+					return;
+				}
+
+				logger.info(
+					`Starting new crawl session for ${socketWrapper.id} with target: ${validatedOptions.target}`,
+				);
+
+				const crawlSession = new CrawlSession(
+					socketWrapper,
+					validatedOptions,
+					dbPromise,
+					logger,
+				);
+				activeCrawls.set(socketWrapper.id, crawlSession);
+				crawlSession.start();
+				break;
+			}
+
+			case "stopAttack": {
+				logger.info(`Stopping crawl session for ${socketWrapper.id}`);
+				const session = activeCrawls.get(socketWrapper.id);
+				if (session) {
+					await session.stop();
+					activeCrawls.delete(socketWrapper.id);
+				}
+				break;
+			}
+
+			case "getPageDetails": {
+				const url = message.data as string;
+				try {
+					if (!url) return;
+
+					const db = await dbPromise;
+					const pageRecord = db
+						.query(`SELECT * FROM pages WHERE url = ?`)
+						.get(url) as
+						| {
+								id: number;
+								url: string;
+								content: string;
+								title: string;
+								description: string;
+								content_type: string;
+								domain: string;
+						  }
+						| undefined;
+
+					if (pageRecord) {
+						const links = db
+							.query(`SELECT * FROM links WHERE source_id = ?`)
+							.all(pageRecord.id);
+
+						const mappedPage: CrawledPage = {
+							id: pageRecord.id,
+							url: pageRecord.url,
+							content: pageRecord.content,
+							title: pageRecord.title,
+							description: pageRecord.description,
+							contentType: pageRecord.content_type,
+							domain: pageRecord.domain,
+							links: links as unknown as [],
+						};
+
+						const mappedLinks = (
+							links as { target_url: string; text: string }[]
+						).map((l) => ({
+							url: l.target_url,
+							text: l.text,
+						}));
+
+						socketWrapper.emit("pageDetails", {
+							...mappedPage,
+							links: mappedLinks,
+						});
 					} else {
-						stringValue = String(
-							value as string | number | boolean | bigint | symbol,
-						);
+						socketWrapper.emit("pageDetails", null);
 					}
-					// Prevent formula injection: =, +, -, @, |, and tab can trigger exploits
-					if (/^[=+\-@|\t]/.test(stringValue)) {
-						stringValue = `'${stringValue}`;
-					}
-					stringValue = stringValue.replaceAll('"', '""');
-					return `"${stringValue}"`;
-				};
+				} catch (err) {
+					const message = err instanceof Error ? err.message : "Unknown error";
+					logger.error(`Error getting page details: ${message}`);
+					socketWrapper.emit("crawlError", {
+						message: "Failed to get page details",
+					});
+				}
+				break;
+			}
 
-				for (const row of iterator) {
-					rowCount++;
-					const rowObj = row as Record<string, unknown>;
+			case "exportData": {
+				const format = (message.data as string) || "json";
 
-					if (sanitizedFormat === "csv" && isFirstChunk && rowCount === 1) {
-						const csvHeaders = Object.keys(rowObj).join(",");
-						socket.emit("exportChunk", { data: `${csvHeaders}\n` });
-					}
+				const sanitizedFormat =
+					typeof format === "string" ? format.toLowerCase().trim() : "";
+
+				if (!ALLOWED_EXPORT_FORMATS.has(sanitizedFormat)) {
+					socketWrapper.emit("crawlError", {
+						message: 'Invalid export format. Use "json" or "csv".',
+					});
+					return;
+				}
+
+				try {
+					const db = await dbPromise;
+					const rows = db
+						.query(
+							`SELECT id, url, domain, crawled_at, status_code,
+                                       data_length, title, description FROM pages`,
+						)
+						.all() as Record<string, unknown>[];
+
+					socketWrapper.emit("exportStart", { format: sanitizedFormat });
+
+					const CHUNK_SIZE = 500;
+					let chunk: string[] = [];
+					let isFirstChunk = true;
+					let rowCount = 0;
 
 					if (sanitizedFormat === "json") {
-						// For JSON, we need comma separation between objects, but not before the first one
-						const prefix: string = !isFirstChunk || chunk.length > 0 ? "," : "";
-						chunk.push(prefix + JSON.stringify(rowObj, null, 2));
-					} else {
-						// CSV
-						const csvRow = Object.keys(rowObj)
-							.map((key) => escapeCsvCell(rowObj[key]))
-							.join(",");
-						chunk.push(csvRow);
+						socketWrapper.emit("exportChunk", { data: "[" });
 					}
 
-					if (chunk.length >= CHUNK_SIZE) {
+					const escapeCsvCell = (value: unknown): string => {
+						if (value === null || value === undefined) return '""';
+						let stringValue: string;
+						if (typeof value === "object") {
+							stringValue = JSON.stringify(value);
+						} else if (typeof value === "string") {
+							stringValue = value;
+						} else {
+							stringValue = String(
+								value as string | number | boolean | bigint | symbol,
+							);
+						}
+
+						if (CSV_INJECTION_REGEX.test(stringValue)) {
+							stringValue = `'${stringValue}`;
+						}
+						stringValue = stringValue.replaceAll('"', '""');
+						return `"${stringValue}"`;
+					};
+
+					for (const rowObj of rows) {
+						rowCount++;
+
+						if (sanitizedFormat === "csv" && isFirstChunk && rowCount === 1) {
+							const csvHeaders = Object.keys(rowObj).join(",");
+							socketWrapper.emit("exportChunk", { data: `${csvHeaders}\n` });
+						}
+
+						if (sanitizedFormat === "json") {
+							const prefix: string =
+								!isFirstChunk || chunk.length > 0 ? "," : "";
+							chunk.push(prefix + JSON.stringify(rowObj, null, 2));
+						} else {
+							const csvRow = Object.keys(rowObj)
+								.map((key) => escapeCsvCell(rowObj[key]))
+								.join(",");
+							chunk.push(csvRow);
+						}
+
+						if (chunk.length >= CHUNK_SIZE) {
+							const data =
+								sanitizedFormat === "json"
+									? chunk.join("")
+									: `${chunk.join("\n")}\n`;
+							socketWrapper.emit("exportChunk", { data });
+							chunk = [];
+							isFirstChunk = false;
+							await new Promise((resolve) => setImmediate(resolve));
+						}
+					}
+
+					if (chunk.length > 0) {
 						const data =
 							sanitizedFormat === "json"
 								? chunk.join("")
 								: `${chunk.join("\n")}\n`;
-						socket.emit("exportChunk", { data });
-						chunk = [];
-						isFirstChunk = false;
-
-						// Tiny delay to allow event loop to breathe if needed
-						await new Promise((resolve) => setImmediate(resolve));
+						socketWrapper.emit("exportChunk", { data });
 					}
-				}
 
-				// Flush remaining chunk
-				if (chunk.length > 0) {
-					const data =
-						sanitizedFormat === "json"
-							? chunk.join("")
-							: `${chunk.join("\n")}\n`;
-					socket.emit("exportChunk", { data });
-				}
+					if (sanitizedFormat === "json") {
+						socketWrapper.emit("exportChunk", { data: "]" });
+					}
 
-				if (sanitizedFormat === "json") {
-					socket.emit("exportChunk", { data: "]" }); // End JSON array
+					socketWrapper.emit("exportComplete", { count: rowCount });
+				} catch (err) {
+					const message = err instanceof Error ? err.message : "Unknown error";
+					logger.error(`Error exporting data: ${message}`);
+					socketWrapper.emit("crawlError", {
+						message: "Failed to export data",
+					});
 				}
-
-				socket.emit("exportComplete", { count: rowCount });
-			} catch (err) {
-				const message = err instanceof Error ? err.message : "Unknown error";
-				logger.error(`Error exporting data: ${message}`);
-				socket.emit("crawlError", { message: "Failed to export data" });
+				break;
 			}
-		});
+		}
+	};
 
-		socket.on("disconnect", () => {
-			if (crawlSession) {
-				crawlSession.stop();
-				activeCrawls.delete(socket.id);
-			}
-			logger.info(`Client disconnected: ${socket.id}`);
-		});
-	});
+	const handleClose = (ws: { id: string; data: { id: string } }) => {
+		const id = ws.data.id || ws.id;
+		const session = activeCrawls.get(id);
+		if (session) {
+			session.stop();
+			activeCrawls.delete(id);
+		}
+		logger.info(`Client disconnected: ${id}`);
+	};
 
-	return activeCrawls;
+	return { handleMessage, handleClose };
 }

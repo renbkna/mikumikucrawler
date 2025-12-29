@@ -26,14 +26,14 @@
 		"rules": {
 			"recommended": true,
 			"correctness": {
-				"useExhaustiveDependencies": "warn",
+				"useExhaustiveDependencies": "error",
 				"useHookAtTopLevel": "error"
 			},
 			"a11y": {
 				"recommended": true
 			},
 			"style": {
-				"noNonNullAssertion": "off"
+				"noNonNullAssertion": "error"
 			}
 		}
 	},

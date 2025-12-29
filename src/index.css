@@ -5,14 +5,11 @@ html {
 }
 
 :root {
-	/* Miku's Signature Colors - Accessibility Adjusted */
-	/* Original: #39c5bb (fails on white) -> Darkened for AA compliance */
 	--miku-teal: #2a918a;
 	--miku-teal-soft: #7dd8d2;
 	--miku-teal-pale: #c5f0ed;
 	--miku-teal-dark: #1d6661;
 
-	/* Original: #ffb7c5 (fails on white) -> Darkened for AA compliance */
 	--miku-pink: #d65d7a;
 	--miku-pink-soft: #ffd4de;
 	--miku-pink-pale: #fff0f3;
@@ -20,16 +17,13 @@ html {
 
 	--miku-accent: #e0509d;
 
-	/* Kawaii Backgrounds */
 	--kawaii-bg: linear-gradient(135deg, #fff5f7 0%, #f0fffe 50%, #fff5f7 100%);
 	--kawaii-card: rgba(255, 255, 255, 0.9);
 
-	/* Text */
 	--miku-text: #4a5568;
 	--miku-text-soft: #718096;
 	--miku-text-light: #a0aec0;
 
-	/* Cute Shadows */
 	--shadow-cute:
 		0 4px 20px rgba(57, 197, 187, 0.15), 0 2px 8px rgba(255, 183, 197, 0.1);
 	--shadow-hover:
@@ -46,7 +40,6 @@ html {
 	--color-miku-primary: var(--miku-teal);
 	--color-miku-secondary: var(--miku-pink);
 
-	/* Kawaii Animations */
 	--animate-float: float 3s ease-in-out infinite;
 	--animate-bounce-slow: bounce-slow 2s ease-in-out infinite;
 	--animate-wiggle: wiggle 0.5s ease-in-out;
@@ -133,10 +126,6 @@ html {
 	}
 }
 
-/* ================================================
-   ACCESSIBILITY - Reduced Motion
-   ================================================ */
-
 @media (prefers-reduced-motion: reduce) {
 	*,
 	::before,
@@ -147,10 +136,6 @@ html {
 		scroll-behavior: auto;
 	}
 }
-
-/* ================================================
-   BASE - Soft Kawaii Background
-   ================================================ */
 
 body {
 	background: var(--kawaii-bg);
@@ -165,7 +150,6 @@ button {
 	cursor: pointer;
 }
 
-/* Cute floating decorations */
 body::before,
 body::after {
 	content: "";
@@ -200,10 +184,6 @@ body::after {
 	left: -50px;
 	animation: float 10s ease-in-out infinite reverse;
 }
-
-/* ================================================
-   KAWAII CARD SYSTEM
-   ================================================ */
 
 .glass-panel {
 	background: var(--kawaii-card);
@@ -252,10 +232,6 @@ body::after {
 	border-color: var(--miku-pink-soft);
 }
 
-/* ================================================
-   KAWAII BUTTONS
-   ================================================ */
-
 .cute-button {
 	background: linear-gradient(135deg, var(--miku-teal), var(--miku-teal-soft));
 	color: white;
@@ -293,10 +269,6 @@ body::after {
 	transform: translateY(0) scale(0.98);
 }
 
-/* ================================================
-   KAWAII INPUT
-   ================================================ */
-
 .cute-input {
 	background: white;
 	border: 2px solid var(--miku-pink-pale);
@@ -315,15 +287,10 @@ body::after {
 .cute-input:focus {
 	outline: none;
 	border-color: var(--miku-teal);
-	/* Uses teal-dark for focus ring to ensure visibility */
 	box-shadow:
 		0 0 0 3px rgba(42, 145, 138, 0.2),
 		0 4px 12px rgba(57, 197, 187, 0.15);
 }
-
-/* ================================================
-   CUTE DECORATIONS
-   ================================================ */
 
 .sparkle {
 	animation: sparkle 1.5s ease-in-out infinite;
@@ -343,7 +310,6 @@ body::after {
 	background-clip: text;
 }
 
-/* Cute pill badges */
 .cute-badge {
 	display: inline-flex;
 	align-items: center;
@@ -362,10 +328,6 @@ body::after {
 	transform: scale(1.05);
 	border-color: var(--miku-teal);
 }
-
-/* ================================================
-   SCROLLBAR - Kawaii Style
-   ================================================ */
 
 ::-webkit-scrollbar {
 	width: 10px;
@@ -386,10 +348,6 @@ body::after {
 	background: linear-gradient(180deg, var(--miku-teal), var(--miku-accent));
 }
 
-/* ================================================
-   ENERGY BAR - Cute Version
-   ================================================ */
-
 .energy-bar {
 	background: linear-gradient(
 		90deg,
@@ -401,10 +359,6 @@ body::after {
 	animation: gradient-shift 2s ease infinite;
 	border-radius: 50px;
 }
-
-/* ================================================
-   UTILITY CLASSES
-   ================================================ */
 
 .text-shadow-cute {
 	text-shadow: 0 2px 4px rgba(57, 197, 187, 0.2);

@@ -1,9 +1,16 @@
 import { URL } from "node:url";
-import type { Socket } from "socket.io";
 import type { Logger } from "winston";
-import type { QueueItem, SanitizedCrawlOptions } from "../../types.js";
+import { CRAWL_QUEUE_CONSTANTS } from "../../constants.js";
+import type {
+	CrawlerSocket,
+	QueueItem,
+	SanitizedCrawlOptions,
+} from "../../types.js";
 import type { CrawlState } from "./crawlState.js";
 
+/**
+ * Internal utility to pause execution for a given duration.
+ */
 const sleep = (ms: number): Promise<void> =>
 	new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -11,16 +18,17 @@ interface CrawlQueueOptions {
 	options: SanitizedCrawlOptions;
 	state: CrawlState;
 	logger: Logger;
-	socket: Socket;
+	socket: CrawlerSocket;
 	processItem: (item: QueueItem) => Promise<void>;
 	onIdle?: () => Promise<void>;
 }
 
+/** Manages the crawl queue with concurrency control and domain-specific delays. */
 export class CrawlQueue {
 	private readonly options: SanitizedCrawlOptions;
 	private readonly state: CrawlState;
 	private readonly logger: Logger;
-	private readonly socket: Socket;
+	private readonly socket: CrawlerSocket;
 	public processItem: (item: QueueItem) => Promise<void>;
 	private readonly onIdle: () => Promise<void>;
 	private readonly queue: QueueItem[];
@@ -49,25 +57,30 @@ export class CrawlQueue {
 		this.loopPromise = null;
 	}
 
+	/**
+	 * Adds a new item to the queue if it hasn't been visited yet.
+	 */
 	enqueue(item: QueueItem): void {
-		if (this.state.hasVisited(item.url)) {
-			return;
-		}
+		if (this.state.hasVisited(item.url)) return;
 		this.queue.push(item);
 	}
 
+	/**
+	 * Schedules a retry for an item after a specified delay.
+	 */
 	scheduleRetry(item: QueueItem, delay: number): void {
 		const timer = setTimeout(() => {
 			this.retryTimers.delete(timer);
-			if (!this.state.isActive) {
-				return;
-			}
+			if (!this.state.isActive) return;
 			this.enqueue(item);
 		}, delay);
 
 		this.retryTimers.add(timer);
 	}
 
+	/**
+	 * Cancels all pending retry timers.
+	 */
 	clearRetries(): void {
 		for (const timer of this.retryTimers) {
 			clearTimeout(timer);
@@ -75,15 +88,17 @@ export class CrawlQueue {
 		this.retryTimers.clear();
 	}
 
+	/**
+	 * Starts the processing loop and returns a promise that resolves when the queue is empty and idle.
+	 */
 	start(): Promise<void> {
 		this.loopPromise ??= this.loop();
 		return this.loopPromise;
 	}
 
+	/** Main loop that processes the queue while respecting rate limits and domain etiquette. */
 	private async loop(): Promise<void> {
 		const domainProcessing = new Map<string, number>();
-		const DOMAIN_CACHE_CLEANUP_THRESHOLD = 500;
-		const DOMAIN_ENTRY_EXPIRY_MS = 60000; // 1 minute
 
 		while (
 			(this.queue.length > 0 || this.activeCount > 0) &&
@@ -91,11 +106,16 @@ export class CrawlQueue {
 		) {
 			let deferredDelay: number | null = null;
 
-			// Periodically clean up old domain entries to prevent unbounded growth
-			if (domainProcessing.size > DOMAIN_CACHE_CLEANUP_THRESHOLD) {
+			if (
+				domainProcessing.size >
+				CRAWL_QUEUE_CONSTANTS.DOMAIN_CACHE_CLEANUP_THRESHOLD
+			) {
 				const now = Date.now();
 				for (const [domain, nextAllowed] of domainProcessing) {
-					if (now > nextAllowed + DOMAIN_ENTRY_EXPIRY_MS) {
+					if (
+						now >
+						nextAllowed + CRAWL_QUEUE_CONSTANTS.DOMAIN_ENTRY_EXPIRY_MS
+					) {
 						domainProcessing.delete(domain);
 					}
 				}
@@ -107,9 +127,7 @@ export class CrawlQueue {
 				this.state.isActive
 			) {
 				const item = this.queue.shift();
-				if (!item) {
-					break;
-				}
+				if (!item) break;
 
 				try {
 					const url = new URL(item.url);
@@ -126,9 +144,7 @@ export class CrawlQueue {
 								? waitTime
 								: Math.min(deferredDelay, waitTime);
 						this.queue.push(item);
-						if (this.queue.length === 1) {
-							break;
-						}
+						if (this.queue.length === 1) break;
 						continue;
 					}
 
@@ -158,13 +174,16 @@ export class CrawlQueue {
 					this.queue.length,
 					this.activeCount,
 				);
-				this.socket.volatile.emit("queueStats", snapshot);
+				this.socket.emit("queueStats", snapshot);
 			}
 
 			const sleepDuration =
 				deferredDelay === null
-					? 100
-					: Math.max(Math.min(deferredDelay, this.options.crawlDelay), 50);
+					? CRAWL_QUEUE_CONSTANTS.DEFAULT_SLEEP_MS
+					: Math.max(
+							Math.min(deferredDelay, this.options.crawlDelay),
+							CRAWL_QUEUE_CONSTANTS.MIN_SLEEP_MS,
+						);
 
 			await sleep(sleepDuration);
 		}
@@ -174,6 +193,9 @@ export class CrawlQueue {
 		}
 	}
 
+	/**
+	 * Returns a promise that resolves when the current queue processing is complete.
+	 */
 	async awaitIdle(): Promise<void> {
 		if (this.loopPromise) {
 			await this.loopPromise;
