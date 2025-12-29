@@ -1,9 +1,10 @@
 # Use Node.js base image with Chrome dependencies
 FROM node:20-slim
 
-# Install Chrome dependencies and curl (required for Bun install)
+# Install Chrome dependencies, curl, and unzip (required for Bun install)
 RUN apt-get update && apt-get install -y \
     curl \
+    unzip \
     wget \
     gnupg \
     ca-certificates \
