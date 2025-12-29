@@ -1,22 +1,14 @@
-import axios from "axios";
-import type Database from "better-sqlite3";
-// Import robots-parser - types declared in server/types/modules.d.ts
 import robotsParser from "robots-parser";
-import type { Logger } from "winston";
+import type { DatabaseLike, LoggerLike } from "../types.js";
 
-// Configure Puppeteer - Fix for rendering environments like Render.com
-const isProd = process.env.NODE_ENV === "production";
-
-// Robots.txt cache with TTL and size limit
 const ROBOTS_CACHE_MAX_SIZE = 100;
-const ROBOTS_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const ROBOTS_CACHE_TTL_MS = 60 * 60 * 1000;
 
 interface CacheEntry<T> {
 	value: T;
 	expiresAt: number;
 }
 
-// Use the interface from our module declaration
 interface RobotsResult {
 	isAllowed(url: string, userAgent?: string): boolean;
 	isDisallowed(url: string, userAgent?: string): boolean;
@@ -39,7 +31,6 @@ class RobotsCache {
 		const entry = this.cache.get(domain);
 		if (!entry) return false;
 
-		// Check if expired
 		if (Date.now() > entry.expiresAt) {
 			this.cache.delete(domain);
 			return false;
@@ -59,7 +50,6 @@ class RobotsCache {
 	}
 
 	set(domain: string, value: RobotsResult): void {
-		// Evict oldest entries if at capacity
 		if (this.cache.size >= this.maxSize) {
 			const oldestKey = this.cache.keys().next().value;
 			if (oldestKey) {
@@ -84,11 +74,11 @@ interface RobotsOptions {
 	allowOnFailure?: boolean;
 }
 
-// Helper function to get robots.txt rules
+/** Fetches and parses robots.txt for a domain with database persistence and TTL-based caching. */
 export async function getRobotsRules(
 	domain: string,
-	dbPromise: Promise<Database.Database>,
-	logger: Logger,
+	dbPromise: Promise<DatabaseLike>,
+	logger: LoggerLike,
 	{ allowOnFailure = true }: RobotsOptions = {},
 ): Promise<RobotsResult | null> {
 	if (robotsCache.has(domain)) {
@@ -98,7 +88,7 @@ export async function getRobotsRules(
 	try {
 		const db = await dbPromise;
 		const domainSettings = db
-			.prepare("SELECT robots_txt FROM domain_settings WHERE domain = ?")
+			.query("SELECT robots_txt FROM domain_settings WHERE domain = ?")
 			.get(domain) as { robots_txt?: string } | undefined;
 
 		if (domainSettings?.robots_txt) {
@@ -117,11 +107,24 @@ export async function getRobotsRules(
 
 		for (const protocol of protocols) {
 			try {
-				const response = await axios.get(`${protocol}://${domain}/robots.txt`, {
-					timeout: 5000,
-					maxRedirects: 3,
+				const controller = new AbortController();
+				const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+				const response = await fetch(`${protocol}://${domain}/robots.txt`, {
+					signal: controller.signal,
+					headers: {
+						"User-Agent": "MikuCrawler",
+					},
+					redirect: "follow",
 				});
-				robotsTxt = response.data;
+
+				clearTimeout(timeoutId);
+
+				if (!response.ok) {
+					throw new Error(`HTTP error! status: ${response.status}`);
+				}
+
+				robotsTxt = await response.text();
 				successfulProtocol = protocol;
 				break;
 			} catch (error) {
@@ -144,7 +147,7 @@ export async function getRobotsRules(
 		const robotsUrl = `${successfulProtocol || "http"}://${domain}/robots.txt`;
 		const robots = robotsParser(robotsUrl, robotsTxt);
 
-		db.prepare(
+		db.query(
 			"INSERT OR REPLACE INTO domain_settings (domain, robots_txt) VALUES (?, ?)",
 		).run(domain, robotsTxt);
 
@@ -168,10 +171,7 @@ interface NormalizeResult {
 }
 
 /**
- * Normalize a URL for consistent handling across the codebase.
- * - Adds http:// protocol if missing
- * - Removes trailing slashes
- * - Removes hash fragments
+ * Normalizes a URL by enforcing protocol, removing hash fragments, and stripping trailing slashes.
  */
 export function normalizeUrl(url: string): NormalizeResult {
 	if (!url || typeof url !== "string") {
@@ -180,7 +180,6 @@ export function normalizeUrl(url: string): NormalizeResult {
 
 	let normalizedUrl = url.trim();
 
-	// Add protocol if missing
 	if (!/^https?:\/\//i.test(normalizedUrl)) {
 		normalizedUrl = `http://${normalizedUrl}`;
 	}
@@ -188,18 +187,14 @@ export function normalizeUrl(url: string): NormalizeResult {
 	try {
 		const parsed = new URL(normalizedUrl);
 
-		// Only allow http and https protocols
 		if (!["http:", "https:"].includes(parsed.protocol)) {
 			return { error: "Only HTTP and HTTPS URLs are supported" };
 		}
 
-		// Remove hash fragment
 		parsed.hash = "";
 
-		// Get the normalized URL
 		let result = parsed.toString();
 
-		// Remove trailing slash (except for root path)
 		if (result.endsWith("/") && parsed.pathname !== "/") {
 			result = result.slice(0, -1);
 		}
@@ -221,11 +216,10 @@ interface MetadataResult {
 	description: string;
 }
 
-// Helper function to extract metadata from HTML
+/** Extracts title and description metadata from a Cheerio-loaded HTML document. */
 export function extractMetadata($: CheerioLike): MetadataResult {
 	const title = $("title").text().trim() || "";
 
-	// Extract description from meta tags
 	let description = "";
 	$('meta[name="description"]').each((_: number, el: unknown) => {
 		description = $(el as string).attr("content") || "";
@@ -238,59 +232,3 @@ export function extractMetadata($: CheerioLike): MetadataResult {
 
 	return { title, description };
 }
-
-// Enhanced Chrome path detection for different environments
-export const getChromePaths = async (): Promise<string[]> => {
-	const basePaths: string[] = [];
-
-	// Try to get Puppeteer's bundled Chrome first (most reliable)
-	try {
-		const puppeteer = await import("puppeteer");
-		const puppeteerPath =
-			(puppeteer.default?.executablePath?.() as string | undefined) ||
-			(
-				puppeteer as unknown as { executablePath?: () => string }
-			).executablePath?.();
-		if (puppeteerPath) {
-			basePaths.push(puppeteerPath);
-		}
-	} catch {
-		// Puppeteer not available or executablePath failed, continue with fallbacks
-	}
-
-	// Custom environment variable (highest priority after Puppeteer)
-	if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-		basePaths.push(process.env.PUPPETEER_EXECUTABLE_PATH);
-	}
-	if (process.env.CHROME_BIN) {
-		basePaths.push(process.env.CHROME_BIN);
-	}
-
-	if (isProd) {
-		// Production paths (cloud hosting and Docker)
-		basePaths.push(
-			// Docker containers (Google Chrome Stable)
-			"/usr/bin/google-chrome-stable",
-			"/usr/bin/google-chrome",
-			"/usr/bin/chromium-browser",
-			"/usr/bin/chromium",
-			// Additional Docker paths
-			"/opt/google/chrome/chrome",
-			"/opt/google/chrome/google-chrome",
-		);
-	} else {
-		// Development paths - system Chrome installations
-		basePaths.push(
-			// Windows
-			"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-			"C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-			// Linux
-			"/usr/bin/google-chrome",
-			"/usr/bin/chromium-browser",
-			// macOS
-			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-		);
-	}
-
-	return basePaths.filter(Boolean); // Remove undefined/null paths
-};

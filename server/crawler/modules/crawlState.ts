@@ -4,6 +4,7 @@ import type {
 	SanitizedCrawlOptions,
 } from "../../types.js";
 
+/** Tracks the ongoing progress, statistics, and domain state of a crawl session. */
 export class CrawlState {
 	private readonly options: SanitizedCrawlOptions;
 	private readonly startTime: number;
@@ -29,30 +30,52 @@ export class CrawlState {
 		};
 	}
 
+	/**
+	 * Checks if the session is still active and hasn't hit the page limit.
+	 */
 	canProcessMore(): boolean {
 		return this.isActive && this.stats.pagesScanned < this.options.maxPages;
 	}
 
+	/**
+	 * Permanently stops the crawl session.
+	 */
 	stop(): void {
 		this.isActive = false;
 	}
 
+	/**
+	 * Checks if a URL has already been visited in this session.
+	 */
 	hasVisited(url: string): boolean {
 		return this.visited.has(url);
 	}
 
+	/**
+	 * Records a URL as visited.
+	 */
 	markVisited(url: string): void {
 		this.visited.add(url);
 	}
 
+	/**
+	 * Sets a domain-specific crawl delay.
+	 */
 	setDomainDelay(domain: string, delay: number): void {
 		this.domainDelays.set(domain, delay);
 	}
 
+	/**
+	 * Gets the crawl delay for a domain, falling back to the global default.
+	 */
 	getDomainDelay(domain: string): number {
 		return this.domainDelays.get(domain) ?? this.options.crawlDelay;
 	}
 
+	/**
+	 * Records a successful page crawl and updates metrics.
+	 * @param contentLength - Raw size of the page content in bytes.
+	 */
 	recordSuccess(contentLength: number): void {
 		this.stats.pagesScanned += 1;
 		this.stats.successCount = (this.stats.successCount ?? 0) + 1;
@@ -62,26 +85,41 @@ export class CrawlState {
 		}
 	}
 
+	/**
+	 * Records a failed crawl attempt.
+	 */
 	recordFailure(): void {
 		this.stats.failureCount = (this.stats.failureCount ?? 0) + 1;
 	}
 
+	/**
+	 * Records a skipped URL (e.g., disallowed by robots.txt).
+	 */
 	recordSkip(): void {
 		this.stats.skippedCount = (this.stats.skippedCount ?? 0) + 1;
 	}
 
+	/**
+	 * Adds newly discovered links to the total count.
+	 */
 	addLinks(count: number): void {
 		if (count > 0) {
 			this.stats.linksFound += count;
 		}
 	}
 
+	/**
+	 * Adds newly discovered media files to the total count.
+	 */
 	addMedia(count: number): void {
 		if (count > 0) {
 			this.stats.mediaFiles = (this.stats.mediaFiles ?? 0) + count;
 		}
 	}
 
+	/**
+	 * Generates a point-in-time snapshot of the crawler's performance metrics.
+	 */
 	snapshotQueueMetrics(queueLength: number, activeCount: number): QueueStats {
 		const elapsedSeconds = Math.max(
 			Math.floor((Date.now() - this.startTime) / 1000),
@@ -99,6 +137,9 @@ export class CrawlState {
 		};
 	}
 
+	/**
+	 * Computes the final statistics including totals, rates, and elapsed time.
+	 */
 	buildFinalStats(): CrawlStats & {
 		elapsedTime: { hours: number; minutes: number; seconds: number };
 		pagesPerSecond: string;

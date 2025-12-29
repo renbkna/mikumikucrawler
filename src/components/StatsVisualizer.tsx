@@ -5,6 +5,7 @@ interface StatsVisualizerProps {
 	stats: Stats;
 }
 
+/** Renders success rate, speed, and elapsed time using themed progress indicators. */
 export function StatsVisualizer({ stats }: Readonly<StatsVisualizerProps>) {
 	return (
 		<div className="glass-panel p-6 mt-4">
@@ -12,9 +13,7 @@ export function StatsVisualizer({ stats }: Readonly<StatsVisualizerProps>) {
 				<PieChart className="w-5 h-5 mr-2" />♪ Crawl Statistics ♪
 			</h3>
 
-			{/* Progress bars */}
 			<div className="space-y-4">
-				{/* Page success rate */}
 				{stats.successRate && (
 					<div>
 						<div className="flex justify-between mb-2 text-sm text-miku-text font-medium">
@@ -27,12 +26,11 @@ export function StatsVisualizer({ stats }: Readonly<StatsVisualizerProps>) {
 							<div
 								className="h-full bg-gradient-to-r from-emerald-400 to-emerald-300 rounded-full transition-all duration-500"
 								style={{ width: stats.successRate }}
-							></div>
+							/>
 						</div>
 					</div>
 				)}
 
-				{/* Pages/second performance */}
 				{stats.pagesPerSecond && (
 					<div>
 						<div className="flex justify-between mb-2 text-sm text-miku-text font-medium">
@@ -47,13 +45,12 @@ export function StatsVisualizer({ stats }: Readonly<StatsVisualizerProps>) {
 								style={{
 									width: `${Math.min(Number(stats.pagesPerSecond) * 20, 100)}%`,
 								}}
-							></div>
+							/>
 						</div>
 					</div>
 				)}
 			</div>
 
-			{/* Elapsed time */}
 			{stats.elapsedTime && (
 				<div className="mt-6 text-center">
 					<div className="inline-block cute-badge">

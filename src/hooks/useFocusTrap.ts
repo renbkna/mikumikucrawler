@@ -22,7 +22,6 @@ export function useFocusTrap<T extends HTMLElement>(
 	useEffect(() => {
 		if (!isOpen) return;
 
-		// Focus initial element when modal opens
 		const focusTimer = setTimeout(() => {
 			initialFocusRef.current?.focus();
 		}, 0);
@@ -33,7 +32,6 @@ export function useFocusTrap<T extends HTMLElement>(
 				return;
 			}
 
-			// Focus trap
 			if (e.key === "Tab" && modalRef.current) {
 				const focusableElements =
 					modalRef.current.querySelectorAll<HTMLElement>(

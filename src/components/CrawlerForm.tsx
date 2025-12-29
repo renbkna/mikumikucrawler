@@ -25,6 +25,7 @@ interface CrawlerFormProps {
 	connectionState: ConnectionState;
 }
 
+/** Handles user input for the target URL and provides controls to initiate or stop crawls. */
 export const CrawlerForm = memo(function CrawlerForm({
 	target,
 	setTarget,
@@ -46,7 +47,6 @@ export const CrawlerForm = memo(function CrawlerForm({
 		}
 	};
 
-	// Compute connection status styles to avoid nested ternary
 	const connectionStyles = (() => {
 		switch (connectionState) {
 			case "connected":
@@ -58,7 +58,6 @@ export const CrawlerForm = memo(function CrawlerForm({
 		}
 	})();
 
-	// Compute button label to avoid nested ternary
 	const buttonLabel = (() => {
 		if (connectionState === "connecting") return "Connecting~";
 		if (isAttacking) {
@@ -78,8 +77,8 @@ export const CrawlerForm = memo(function CrawlerForm({
 	return (
 		<div className="relative mb-8 space-y-6">
 			<div className="glass-panel rounded-[28px] p-8 relative overflow-hidden group">
-				<div className="absolute -right-10 -top-10 w-32 h-32 bg-miku-teal/10 rounded-full blur-2xl group-hover:bg-miku-teal/20 transition-colors duration-500"></div>
-				<div className="absolute -left-10 -bottom-10 w-32 h-32 bg-miku-pink/10 rounded-full blur-2xl group-hover:bg-miku-pink/20 transition-colors duration-500"></div>
+				<div className="absolute -right-10 -top-10 w-32 h-32 bg-miku-teal/10 rounded-full blur-2xl group-hover:bg-miku-teal/20 transition-colors duration-500" />
+				<div className="absolute -left-10 -bottom-10 w-32 h-32 bg-miku-pink/10 rounded-full blur-2xl group-hover:bg-miku-pink/20 transition-colors duration-500" />
 
 				<div className="relative z-10 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-6 items-end">
 					<div className="space-y-3">
@@ -150,8 +149,8 @@ export const CrawlerForm = memo(function CrawlerForm({
 							disabled={connectionState !== "connected" && !isAttacking}
 							className={`relative px-7 py-4 rounded-2xl font-black text-white shadow-xl transition-all duration-300 hover:scale-105 active:scale-95 flex items-center gap-3 text-base disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 overflow-hidden ${
 								isAttacking
-									? "bg-gradient-to-r from-rose-500 via-pink-600 to-rose-500 shadow-miku-pink/40" // Darker pinks for white text
-									: "bg-gradient-to-r from-teal-600 via-teal-500 to-emerald-600 shadow-miku-teal/40" // Darker teals for white text
+									? "bg-gradient-to-r from-rose-500 via-pink-600 to-rose-500 shadow-miku-pink/40"
+									: "bg-gradient-to-r from-teal-600 via-teal-500 to-emerald-600 shadow-miku-teal/40"
 							}`}
 							aria-label={isAttacking ? "Stop Crawl" : "Start Miku Beam Crawl"}
 						>
@@ -175,7 +174,7 @@ export const CrawlerForm = memo(function CrawlerForm({
 								{buttonLabel}
 							</span>
 
-							<span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700"></span>
+							<span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700" />
 						</button>
 
 						<button

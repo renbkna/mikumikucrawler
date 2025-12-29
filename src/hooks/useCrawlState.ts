@@ -4,6 +4,9 @@ import type { CrawledPage, CrawlOptions, QueueStats, Stats } from "../types";
 
 type PageAction = { type: "add"; page: CrawledPage } | { type: "reset" };
 
+/**
+ * Reducer function to manage the list of captured pages with buffer limits.
+ */
 function pagesReducer(state: CrawledPage[], action: PageAction): CrawledPage[] {
 	switch (action.type) {
 		case "add": {
@@ -19,9 +22,6 @@ function pagesReducer(state: CrawledPage[], action: PageAction): CrawledPage[] {
 	}
 }
 
-// ===========================================
-// 📦 INITIAL STATS STATE
-// ===========================================
 const INITIAL_STATS: Stats = {
 	pagesScanned: 0,
 	linksFound: 0,
@@ -33,34 +33,23 @@ const INITIAL_STATS: Stats = {
 };
 
 export interface UseCrawlStateReturn {
-	// Crawl options
 	target: string;
 	setTarget: (target: string) => void;
 	crawlOptions: CrawlOptions;
 	setCrawlOptions: React.Dispatch<React.SetStateAction<CrawlOptions>>;
 	handleTargetChange: (newTarget: string) => void;
-
-	// Stats
 	stats: Stats;
 	setStats: React.Dispatch<React.SetStateAction<Stats>>;
 	queueStats: QueueStats | null;
 	setQueueStats: React.Dispatch<React.SetStateAction<QueueStats | null>>;
 	resetStats: () => void;
-
-	// Pages
 	crawledPages: CrawledPage[];
 	addPage: (page: CrawledPage) => void;
 	resetPages: () => void;
-
-	// Progress
 	progress: number;
 	setProgress: React.Dispatch<React.SetStateAction<number>>;
-
-	// Logs
 	logs: string[];
 	setLogs: React.Dispatch<React.SetStateAction<string[]>>;
-
-	// Filter
 	filterText: string;
 	setFilterText: React.Dispatch<React.SetStateAction<string>>;
 	filteredPages: CrawledPage[];
@@ -69,8 +58,8 @@ export interface UseCrawlStateReturn {
 	clearFilter: () => void;
 }
 
+/** Centralizes the state for crawl configuration, statistics, and captured data. */
 export function useCrawlState(): UseCrawlStateReturn {
-	// Target and options
 	const [target, setTarget] = useState("");
 	const [crawlOptions, setCrawlOptions] = useState<CrawlOptions>({
 		target: "",
@@ -86,23 +75,13 @@ export function useCrawlState(): UseCrawlStateReturn {
 		saveMedia: CRAWLER_DEFAULTS.SAVE_MEDIA,
 	});
 
-	// Stats
 	const [stats, setStats] = useState<Stats>(INITIAL_STATS);
 	const [queueStats, setQueueStats] = useState<QueueStats | null>(null);
-
-	// Pages (using reducer for optimized updates)
 	const [crawledPages, dispatchPages] = useReducer(pagesReducer, []);
-
-	// Progress
 	const [progress, setProgress] = useState(0);
-
-	// Logs
 	const [logs, setLogs] = useState<string[]>([]);
-
-	// Filter
 	const [filterText, setFilterText] = useState("");
 
-	// Handlers
 	const handleTargetChange = useCallback((newTarget: string) => {
 		setTarget(newTarget);
 		setCrawlOptions((prev) => ({ ...prev, target: newTarget }));
@@ -123,7 +102,6 @@ export function useCrawlState(): UseCrawlStateReturn {
 
 	const clearFilter = useCallback(() => setFilterText(""), []);
 
-	// Memoized filtered pages computation for performance
 	const filteredPages = useMemo(() => {
 		if (!filterText.trim()) return crawledPages;
 		const lowerFilter = filterText.toLowerCase();
@@ -136,7 +114,6 @@ export function useCrawlState(): UseCrawlStateReturn {
 	}, [crawledPages, filterText]);
 
 	const isFilterActive = filterText.trim().length > 0;
-	// Both filteredPages and crawledPages are already memoized, no need for additional memo
 	const displayedPages = isFilterActive ? filteredPages : crawledPages;
 
 	return {

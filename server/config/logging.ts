@@ -10,7 +10,6 @@ const ensureDirectoryExists = async (dir: string): Promise<void> => {
 	}
 };
 
-// ANSI color codes for professional output
 const colors = {
 	reset: "\x1b[0m",
 	dim: "\x1b[2m",
@@ -55,7 +54,7 @@ export const setupLogging = async (): Promise<Logger> => {
 		transports: [
 			new winston.transports.Console({
 				format: winston.format.printf(({ level, message, stack }) => {
-					// Strip ANSI codes from level to get raw name
+					// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escape codes are necessary here
 					const rawLevel = level.replaceAll(/\u001b\[[0-9;]*m/gu, "");
 					const style = levelStyles[rawLevel] || {
 						color: colors.gray,
@@ -65,10 +64,8 @@ export const setupLogging = async (): Promise<Logger> => {
 					const time = `${colors.dim}${formatTime()}${colors.reset}`;
 					const tag = `${style.color}${colors.bold}${style.label}${colors.reset}`;
 
-					// Format: HH:MM:SS TAG message
 					let output = `${time} ${tag} ${message}`;
 
-					// Add stack trace for errors
 					if (stack && typeof stack === "string") {
 						output += `\n${colors.dim}${stack}${colors.reset}`;
 					}

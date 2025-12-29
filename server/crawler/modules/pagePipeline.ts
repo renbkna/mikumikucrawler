@@ -1,14 +1,14 @@
+import type { Database } from "bun:sqlite";
 import { URL } from "node:url";
-import axios from "axios";
-import type Database from "better-sqlite3";
 import * as cheerio from "cheerio";
 import sanitizeHtml from "sanitize-html";
-import type { Socket } from "socket.io";
 import type { Logger } from "winston";
 import { ContentProcessor } from "../../processors/ContentProcessor.js";
 import type {
+	CrawlerSocket,
 	ExtractedLink,
 	ProcessedContent,
+	ProcessedPageData,
 	QueueItem,
 	SanitizedCrawlOptions,
 } from "../../types.js";
@@ -19,25 +19,21 @@ import type { CrawlState } from "./crawlState.js";
 import { extractLinks } from "./linkExtractor.js";
 
 const MEDIA_CONTENT_REGEX = /image|video|audio|application\/(pdf|zip)/i;
-const AXIOS_OPTIONS = {
-	timeout: 15000,
-	maxContentLength: 5 * 1024 * 1024,
-	headers: {
-		"User-Agent":
-			"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-		Accept:
-			"text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-		"Accept-Language": "en-US,en;q=0.5",
-		"Accept-Encoding": "gzip, deflate",
-	},
+const FETCH_HEADERS = {
+	"User-Agent":
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+	Accept:
+		"text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+	"Accept-Language": "en-US,en;q=0.5",
+	"Accept-Encoding": "gzip, deflate",
 };
 
 interface PagePipelineParams {
 	options: SanitizedCrawlOptions;
 	state: CrawlState;
 	logger: Logger;
-	socket: Socket;
-	dbPromise: Promise<Database.Database>;
+	socket: CrawlerSocket;
+	dbPromise: Promise<Database>;
 	dynamicRenderer: DynamicRenderer;
 	queue: CrawlQueue;
 	targetDomain: string;
@@ -50,9 +46,13 @@ interface PageRecord {
 	description: string;
 	contentType: string;
 	domain: string;
-	processedData: Record<string, unknown>;
+	processedData: ProcessedPageData;
 }
 
+/**
+ * Orchestrates the fetching, processing, and persistence of crawled pages.
+ * Returns an async function that processes a single QueueItem.
+ */
 export function createPagePipeline({
 	options,
 	state,
@@ -65,6 +65,9 @@ export function createPagePipeline({
 }: PagePipelineParams): (item: QueueItem) => Promise<void> {
 	const contentProcessor = new ContentProcessor(logger);
 
+	/**
+	 * Creates a processed content object for error cases.
+	 */
 	const buildFallbackProcessedContent = (
 		error: Error | null,
 	): ProcessedContent => ({
@@ -84,6 +87,9 @@ export function createPagePipeline({
 		errors: error ? [{ type: "processor_error", message: error.message }] : [],
 	});
 
+	/**
+	 * Constructs a descriptive log message for the crawl result.
+	 */
 	const buildEnhancedLog = (
 		item: QueueItem,
 		statusCode: number,
@@ -126,12 +132,15 @@ export function createPagePipeline({
 		return segments.filter(Boolean).join(" | ");
 	};
 
+	/**
+	 * Emits a real-time stats update to the connected client.
+	 */
 	const emitStatsUpdate = (
 		log: string,
 		processedContent: ProcessedContent,
 		item: QueueItem,
 	): void => {
-		socket.volatile.emit("stats", {
+		socket.emit("stats", {
 			...state.stats,
 			log,
 			lastProcessed: {
@@ -145,10 +154,16 @@ export function createPagePipeline({
 		});
 	};
 
+	/**
+	 * Emits a fully processed page to the client.
+	 */
 	const emitPageToClient = (page: PageRecord): void => {
 		socket.emit("pageContent", page);
 	};
 
+	/**
+	 * Fetches content from a URL using dynamic renderer if enabled, otherwise falls back to static fetch.
+	 */
 	const fetchContent = async (item: QueueItem) => {
 		let content = "";
 		let contentType = "";
@@ -176,18 +191,35 @@ export function createPagePipeline({
 
 		if (!content) {
 			logger.info(`Using static crawling for ${item.url}`);
-			const response = await axios.get(item.url, AXIOS_OPTIONS);
-			content = response.data;
-			statusCode = response.status;
-			contentType = response.headers["content-type"] || "";
-			contentLength = Number.parseInt(
-				response.headers["content-length"] || "0",
-				10,
-			);
-			lastModified = response.headers["last-modified"] ?? null;
+			const controller = new AbortController();
+			const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+			try {
+				const response = await fetch(item.url, {
+					headers: FETCH_HEADERS,
+					signal: controller.signal,
+					redirect: "follow",
+				});
+				clearTimeout(timeoutId);
+
+				if (!response.ok) {
+					throw new Error(`HTTP error! status: ${response.status}`);
+				}
+
+				content = await response.text();
+				statusCode = response.status;
+				contentType = response.headers.get("content-type") || "";
+				contentLength = Number.parseInt(
+					response.headers.get("content-length") || "0",
+					10,
+				);
+				lastModified = response.headers.get("last-modified") ?? null;
+			} catch (error) {
+				clearTimeout(timeoutId);
+				throw error;
+			}
 		}
 
-		// Extract metadata from HTML content for title/description
 		if (contentType.includes("text/html") && (!title || !description)) {
 			const $ = cheerio.load(content);
 			const metadata = extractMetadata($);
@@ -216,7 +248,7 @@ export function createPagePipeline({
 	};
 
 	interface StorePageRecordParams {
-		db: Database.Database;
+		db: Database;
 		item: QueueItem;
 		domain: string;
 		sanitizedContent: string;
@@ -230,6 +262,9 @@ export function createPagePipeline({
 		processedContent: ProcessedContent;
 	}
 
+	/**
+	 * Persists a crawled page and its analysis to the database.
+	 */
 	const storePageRecord = ({
 		db,
 		item,
@@ -262,9 +297,8 @@ export function createPagePipeline({
 				)?.length || 0,
 		};
 
-		// Use RETURNING to get ID in one query (SQLite 3.35+)
 		const row = db
-			.prepare(
+			.query(
 				`INSERT INTO pages
         (url, domain, content_type, status_code, data_length, title, description, content, is_dynamic, last_modified,
          main_content, word_count, reading_time, language, keywords, quality_score, structured_data,
@@ -319,8 +353,11 @@ export function createPagePipeline({
 		return row?.id ?? null;
 	};
 
+	/**
+	 * Persists discovered links between pages to the database.
+	 */
 	const handleLinkPersistence = (
-		db: Database.Database,
+		db: Database,
 		pageId: number | null,
 		links: ExtractedLink[],
 	): void => {
@@ -328,7 +365,7 @@ export function createPagePipeline({
 			return;
 		}
 
-		const insertStmt = db.prepare(
+		const insertStmt = db.query(
 			"INSERT OR IGNORE INTO links (source_id, target_url, text) VALUES (?, ?, ?)",
 		);
 
@@ -351,6 +388,9 @@ export function createPagePipeline({
 		}
 	};
 
+	/**
+	 * Enqueues newly discovered links if they satisfy crawl depth and robots.txt policies.
+	 */
 	const enqueueLinksWithPolicies = async (
 		links: ExtractedLink[],
 		item: QueueItem,
@@ -379,7 +419,6 @@ export function createPagePipeline({
 			return;
 		}
 
-		// Use the batched processor
 		await processLinkBatch({
 			links: filteredLinks,
 			item,
@@ -402,7 +441,6 @@ export function createPagePipeline({
 			return;
 		}
 
-		// Check if session is still active before starting any async work
 		if (!state.isActive) {
 			logger.info(`Skipping ${item.url} - session no longer active`);
 			return;
@@ -450,7 +488,6 @@ export function createPagePipeline({
 		const url = new URL(item.url);
 		const domain = url.hostname;
 
-		// Sanitize HTML FIRST, then process the clean content (single parse)
 		const sanitizedContent = contentType.includes("text/html")
 			? sanitizeHtml(content, {
 					allowedTags: sanitizeHtml.defaults.allowedTags.concat(["img"]),
@@ -463,7 +500,6 @@ export function createPagePipeline({
 
 		let processedContent: ProcessedContent;
 		try {
-			// Process the sanitized content instead of raw - one parse, not two
 			processedContent = await contentProcessor.processContent(
 				sanitizedContent,
 				item.url,
@@ -496,8 +532,6 @@ export function createPagePipeline({
 
 		let links: ExtractedLink[] = [];
 		if (contentType.includes("text/html")) {
-			// Explicitly load sanitized content to ensure we don't extract links
-			// from malicious scripts or hidden elements that were stripped out.
 			const parser = cheerio.load(sanitizedContent);
 			links = extractLinks(parser, item.url, options);
 			state.addLinks(links.length);
@@ -528,12 +562,40 @@ export function createPagePipeline({
 			contentType,
 			domain,
 			processedData: {
-				extractedData: processedContent.extractedData || {},
-				metadata: processedContent.metadata || {},
-				analysis: processedContent.analysis || {},
+				extractedData: {
+					mainContent: processedContent.extractedData?.mainContent,
+					jsonLd: (processedContent.extractedData?.jsonLd || []) as Record<
+						string,
+						unknown
+					>[],
+					microdata: processedContent.extractedData?.microdata,
+					openGraph: processedContent.extractedData?.openGraph,
+					twitterCards: processedContent.extractedData?.twitterCards,
+					schema: processedContent.extractedData?.schema,
+				},
+				metadata: {
+					title: processedContent.metadata?.title,
+					description: processedContent.metadata?.description,
+					author: processedContent.metadata?.author,
+					publishDate: processedContent.metadata?.publishDate,
+					modifiedDate: processedContent.metadata?.modifiedDate,
+					canonical: processedContent.metadata?.canonical,
+					robots: processedContent.metadata?.robots,
+					viewport: processedContent.metadata?.viewport,
+					charset: processedContent.metadata?.charset,
+					generator: processedContent.metadata?.generator,
+				},
+				analysis: {
+					wordCount: processedContent.analysis?.wordCount || 0,
+					readingTime: processedContent.analysis?.readingTime || 0,
+					language: processedContent.analysis?.language || "unknown",
+					keywords: processedContent.analysis?.keywords || [],
+					sentiment: processedContent.analysis?.sentiment || "neutral",
+					readabilityScore: processedContent.analysis?.readabilityScore || 0,
+					quality: processedContent.analysis?.quality,
+				},
 				media: processedContent.media || [],
 				qualityScore: processedContent.analysis?.quality?.score || 0,
-				keywords: processedContent.analysis?.keywords || [],
 				language: processedContent.analysis?.language || "unknown",
 			},
 		});
@@ -549,12 +611,12 @@ interface ProcessLinkBatchOptions {
 	targetDomain: string;
 	options: SanitizedCrawlOptions;
 	state: CrawlState;
-	dbPromise: Promise<Database.Database>;
+	dbPromise: Promise<Database>;
 	logger: Logger;
 	queue: CrawlQueue;
 }
 
-// Helper for batched link processing with proper concurrency limiting
+/** Processes a batch of links concurrently while respecting robots.txt rules and domain delays. */
 async function processLinkBatch({
 	links,
 	item,
@@ -602,7 +664,6 @@ async function processLinkBatch({
 		}
 	};
 
-	// Worker pool pattern for proper concurrency control
 	const runTask = async (
 		iterator: IterableIterator<ExtractedLink>,
 	): Promise<void> => {

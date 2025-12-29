@@ -22,6 +22,10 @@ import { useSocket, useToast } from "./hooks";
 import { useCrawlState } from "./hooks/useCrawlState";
 import type { CrawledPage, QueueStats, Stats } from "./types";
 
+/**
+ * Main application component for Miku Miku Crawler.
+ * Manages global UI state, WebSocket connectivity, and orchestration of the crawling process.
+ */
 function App() {
 	const [isAttacking, setIsAttacking] = useState(false);
 	const [theatreStatus, setTheatreStatus] = useState<
@@ -245,7 +249,6 @@ function App() {
 
 			const normalizedTarget = validationResult.url;
 
-			// Update target if it was normalized
 			if (normalizedTarget !== target) {
 				setTarget(normalizedTarget);
 				setCrawlOptions((prev) => ({ ...prev, target: normalizedTarget }));
@@ -259,7 +262,6 @@ function App() {
 				return;
 			}
 
-			// Reset state
 			resetStats();
 			resetPages();
 			setFilterText("");
@@ -361,15 +363,12 @@ function App() {
 				</div>
 
 				<main className="relative z-10 max-w-7xl mx-auto space-y-8">
-					{/* Header - Compact Kawaii Style */}
 					<header className="flex items-center justify-center py-6">
 						<div className="glass-panel px-6 py-4 inline-flex items-center gap-3">
-							{/* Logo icon */}
 							<div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-miku-teal to-miku-pink flex items-center justify-center shadow-md">
 								<Music className="w-5 h-5 text-white" />
 							</div>
 
-							{/* Title */}
 							<div>
 								<h1 className="text-2xl font-black tracking-tight flex items-center gap-0.5">
 									<span className="text-miku-teal-dark">Miku</span>
@@ -383,7 +382,6 @@ function App() {
 								</p>
 							</div>
 
-							{/* Animated heart */}
 							<div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-miku-pink to-miku-accent flex items-center justify-center shadow-md">
 								<Heart
 									className="w-5 h-5 text-white animate-heart-beat"
@@ -393,12 +391,10 @@ function App() {
 						</div>
 					</header>
 
-					{/* Main Control Panel */}
 					<section
 						aria-label="Crawler Control"
 						className="glass-panel p-8 relative overflow-hidden group hover:shadow-xl transition-all duration-500"
 					>
-						{/* Miku Banner - Integrated here */}
 						<MikuBanner active={theatreStatus === "beam" || isAttacking} />
 
 						<CrawlerForm
@@ -413,7 +409,6 @@ function App() {
 						/>
 					</section>
 
-					{/* Stats & Progress */}
 					<section
 						aria-label="Statistics"
 						className="grid grid-cols-1 lg:grid-cols-3 gap-6"
@@ -430,7 +425,6 @@ function App() {
 						</div>
 					</section>
 
-					{/* Action Buttons */}
 					<ActionButtons
 						crawledPages={crawledPages}
 						setOpenExportDialog={setOpenExportDialog}
@@ -438,10 +432,8 @@ function App() {
 						setShowDetails={setShowDetails}
 					/>
 
-					{/* Extended Stats */}
 					{showDetails && <StatsVisualizer stats={stats} />}
 
-					{/* Logs & Results */}
 					<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 						<section
 							aria-labelledby="logs-heading"
@@ -494,7 +486,6 @@ function App() {
 					</div>
 				</main>
 
-				{/* Footer - Kawaii Style */}
 				<footer className="mt-12 pb-8 text-center">
 					<div className="inline-block glass-panel px-8 py-4 rounded-full">
 						<div className="flex items-center gap-4">
@@ -540,7 +531,6 @@ function App() {
 				</footer>
 			</div>
 
-			{/* Configuration Dialog */}
 			<ConfigurationView
 				isOpen={openedConfig}
 				onClose={() => setOpenedConfig(false)}
@@ -551,7 +541,6 @@ function App() {
 				}}
 			/>
 
-			{/* Export Dialog */}
 			<ExportDialog
 				isOpen={openExportDialog}
 				onClose={() => setOpenExportDialog(false)}

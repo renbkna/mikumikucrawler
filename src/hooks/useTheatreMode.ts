@@ -11,12 +11,18 @@ export interface UseTheatreModeReturn {
 	resetTheatre: () => void;
 }
 
+/**
+ * Manages the immersive "Theatre Mode" state transitions and UI blackout.
+ */
 export function useTheatreMode(): UseTheatreModeReturn {
 	const [theatreStatus, setTheatreStatus] = useState<TheatreStatus>("idle");
 
 	const isUIHidden =
 		theatreStatus === "blackout" || theatreStatus === "counting";
 
+	/**
+	 * Initiates the theatre blackout sequence.
+	 */
 	const startTheatre = useCallback((skipAnimation = false) => {
 		if (skipAnimation) {
 			setTheatreStatus("live");
@@ -25,14 +31,23 @@ export function useTheatreMode(): UseTheatreModeReturn {
 		}
 	}, []);
 
+	/**
+	 * Transitions to the "Beam" animation phase.
+	 */
 	const handleBeamStart = useCallback(() => {
 		setTheatreStatus("beam");
 	}, []);
 
+	/**
+	 * Completes the animation and shows the live crawler UI.
+	 */
 	const handleTheatreComplete = useCallback(() => {
 		setTheatreStatus("live");
 	}, []);
 
+	/**
+	 * Resets the theatre state to its idle (hidden) status.
+	 */
 	const resetTheatre = useCallback(() => {
 		setTheatreStatus("idle");
 	}, []);

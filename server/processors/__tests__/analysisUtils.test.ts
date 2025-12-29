@@ -1,29 +1,30 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { describe, expect, test } from "bun:test";
 import { analyzeContent, processJSON } from "../analysisUtils.js";
 
-test("analyzeContent produces keyword and sentiment insights", () => {
-	const sample =
-		"This article is amazing and wonderful. I love the great insights it provides.";
-	const analysis = analyzeContent(sample);
+describe("analyzeContent", () => {
+	test("produces keyword and sentiment insights", () => {
+		const sample =
+			"This article is amazing and wonderful. I love the great insights it provides.";
+		const analysis = analyzeContent(sample);
 
-	assert.strictEqual(analysis.sentiment, "positive");
-	assert.ok(analysis.wordCount > 0);
-	assert.ok(Array.isArray(analysis.keywords));
-	assert.ok(analysis.keywords.length > 0);
+		expect(analysis.sentiment).toBe("positive");
+		expect(analysis.wordCount).toBeGreaterThan(0);
+		expect(Array.isArray(analysis.keywords)).toBe(true);
+		expect(analysis.keywords.length).toBeGreaterThan(0);
+	});
 });
 
-test("processJSON parses valid payloads", () => {
-	const payload = '{"items":[{"name":"miku"},{"name":"rin"}] }';
-	const result = processJSON(payload);
+describe("processJSON", () => {
+	test("parses valid payloads", () => {
+		const payload = '{"items":[{"name":"miku"},{"name":"rin"}] }';
+		const result = processJSON(payload);
 
-	assert.strictEqual(result.type, "json");
-	assert.strictEqual(result.keys.includes("items"), true);
-	assert.strictEqual(result.structure.type, "object");
-});
+		expect(result.keys?.includes("items")).toBe(true);
+		expect(result.structure).toContain("Object with 1 keys");
+	});
 
-test("processJSON reports invalid payloads", () => {
-	const result = processJSON("{not-valid");
-	assert.strictEqual(result.type, "json");
-	assert.strictEqual(result.error, "Invalid JSON");
+	test("reports invalid payloads", () => {
+		const result = processJSON("{not-valid");
+		expect(result.error).toBe("Invalid JSON");
+	});
 });

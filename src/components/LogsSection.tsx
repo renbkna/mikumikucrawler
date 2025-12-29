@@ -26,6 +26,7 @@ interface LogsSectionProps {
 	logContainerRef: RefObject<HTMLDivElement>;
 }
 
+/** Displays a real-time stream of system logs with virtualized scrolling. */
 export const LogsSection = memo(function LogsSection({
 	logs,
 	setLogs,
@@ -33,11 +34,9 @@ export const LogsSection = memo(function LogsSection({
 }: LogsSectionProps) {
 	return (
 		<div className="h-full flex flex-col relative">
-			{/* Cute notebook binding effect */}
-			<div className="absolute left-6 top-0 bottom-0 w-px border-r-2 border-dashed border-miku-teal/20 z-0"></div>
+			<div className="absolute left-6 top-0 bottom-0 w-px border-r-2 border-dashed border-miku-teal/20 z-0" />
 
 			<div className="flex-1 rounded-[20px] relative z-10 flex flex-col h-full overflow-hidden">
-				{/* Header */}
 				<div className="flex items-center justify-between mb-2 pl-8 pt-6 pr-6 shrink-0">
 					<div className="flex items-center gap-3">
 						<div className="p-2 rounded-xl bg-gradient-to-br from-miku-teal/20 to-miku-teal/10 text-miku-teal border border-miku-teal/20">
@@ -59,7 +58,6 @@ export const LogsSection = memo(function LogsSection({
 					</button>
 				</div>
 
-				{/* Logs Container */}
 				<div className="flex-1 pl-2" ref={logContainerRef}>
 					{logs.length > 0 ? (
 						<Virtuoso
@@ -67,7 +65,6 @@ export const LogsSection = memo(function LogsSection({
 							data={logs}
 							itemContent={(index, log) => {
 								const stableIndex = logs.length - index;
-								// Index is stable for prepend-only lists
 								return (
 									<LogItem
 										key={`log-${index}`}

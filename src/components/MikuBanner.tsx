@@ -4,6 +4,7 @@ interface MikuBannerProps {
 	active: boolean;
 }
 
+/** Visual header banner that reflects the current crawler activity state. */
 export const MikuBanner = ({ active }: MikuBannerProps) => {
 	return (
 		<div
@@ -13,10 +14,8 @@ export const MikuBanner = ({ active }: MikuBannerProps) => {
 					: "shadow-lg border-miku-pink/20"
 			}`}
 		>
-			{/* Background gradient */}
 			<div className="absolute inset-0 bg-gradient-to-br from-miku-teal/5 via-white/50 to-miku-pink/5" />
 
-			{/* The GIF */}
 			<img
 				src="/miku1.gif"
 				alt="Miku Beam"
@@ -26,7 +25,6 @@ export const MikuBanner = ({ active }: MikuBannerProps) => {
 				}`}
 			/>
 
-			{/* Cute sparkle decorations - only visible when active */}
 			{active && (
 				<div className="absolute inset-0 pointer-events-none">
 					<SparkleIcon
@@ -51,13 +49,10 @@ export const MikuBanner = ({ active }: MikuBannerProps) => {
 				</div>
 			)}
 
-			{/* Active overlay with beam text */}
 			{active && (
 				<>
-					{/* Soft glow overlay */}
 					<div className="absolute inset-0 bg-gradient-to-t from-miku-teal/20 via-transparent to-miku-pink/10 animate-pulse mix-blend-overlay" />
 
-					{/* Bottom text - stylized beam text */}
 					<div className="absolute bottom-0 left-0 right-0">
 						<div className="bg-gradient-to-t from-black/60 via-black/30 to-transparent pt-12 pb-4 px-4">
 							<div className="flex items-center justify-center gap-3">
