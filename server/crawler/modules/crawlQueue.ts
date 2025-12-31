@@ -1,11 +1,12 @@
 import { URL } from "node:url";
-import type { Logger } from "winston";
+import type { Logger } from "../../config/logging.js";
 import { CRAWL_QUEUE_CONSTANTS } from "../../constants.js";
 import type {
 	CrawlerSocket,
 	QueueItem,
 	SanitizedCrawlOptions,
 } from "../../types.js";
+import { getErrorMessage } from "../../utils/helpers.js";
 import type { CrawlState } from "./crawlState.js";
 
 /**
@@ -32,7 +33,8 @@ export class CrawlQueue {
 	public processItem: (item: QueueItem) => Promise<void>;
 	private readonly onIdle: () => Promise<void>;
 	private readonly queue: QueueItem[];
-	private activeCount: number;
+	/** Tracks active items by URL for atomic add/remove (avoids race conditions) */
+	private readonly activeItems: Set<string>;
 	private readonly retryTimers: Set<ReturnType<typeof setTimeout>>;
 	private loopPromise: Promise<void> | null;
 
@@ -52,9 +54,14 @@ export class CrawlQueue {
 		this.onIdle = onIdle;
 
 		this.queue = [];
-		this.activeCount = 0;
+		this.activeItems = new Set();
 		this.retryTimers = new Set();
 		this.loopPromise = null;
+	}
+
+	/** Returns the current number of actively processing items */
+	get activeCount(): number {
+		return this.activeItems.size;
 	}
 
 	/**
@@ -150,18 +157,20 @@ export class CrawlQueue {
 
 					domainProcessing.set(domain, now + domainDelay);
 
-					this.activeCount += 1;
+					// Use Set for atomic tracking (avoids race conditions with counter)
+					this.activeItems.add(item.url);
 					Promise.resolve(this.processItem(item))
 						.catch((error: Error) => {
 							this.logger.error(`Error in queue processing: ${error.message}`);
 							this.state.recordFailure();
 						})
 						.finally(() => {
-							this.activeCount = Math.max(0, this.activeCount - 1);
+							this.activeItems.delete(item.url);
 						});
 				} catch (err) {
-					const message = err instanceof Error ? err.message : "Unknown error";
-					this.logger.error(`Error in queue processing: ${message}`);
+					this.logger.error(
+						`Error in queue processing: ${getErrorMessage(err)}`,
+					);
 					this.state.recordFailure();
 				}
 			}

@@ -3,10 +3,11 @@ import dns from "node:dns";
 import net from "node:net";
 import { t } from "elysia";
 import ipaddr from "ipaddr.js";
-import type { Logger } from "winston";
+import type { Logger } from "../config/logging.js";
 import { CrawlSession } from "../crawler/CrawlSession.js";
 import type {
 	ClampOptions,
+	CrawledPage,
 	CrawlerSocket,
 	RawCrawlOptions,
 	SanitizedCrawlOptions,
@@ -290,7 +291,6 @@ export function createWebSocketHandlers(
 							description: pageRecord.description,
 							contentType: pageRecord.content_type,
 							domain: pageRecord.domain,
-							links: links as unknown as [],
 						};
 
 						const mappedLinks = (
