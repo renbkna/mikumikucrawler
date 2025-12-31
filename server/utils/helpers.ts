@@ -1,4 +1,5 @@
 import robotsParser from "robots-parser";
+import { config } from "../config/env.js";
 import type { DatabaseLike, LoggerLike } from "../types.js";
 
 /**
@@ -136,7 +137,7 @@ export async function getRobotsRules(
 				const response = await fetch(`${protocol}://${domain}/robots.txt`, {
 					signal: controller.signal,
 					headers: {
-						"User-Agent": "MikuCrawler",
+						"User-Agent": config.userAgent,
 					},
 					redirect: "follow",
 				});

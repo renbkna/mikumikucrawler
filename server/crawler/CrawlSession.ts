@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { URL } from "node:url";
+import { config } from "../config/env.js";
 import type { Logger } from "../config/logging.js";
 import type {
 	CrawlerSocket,
@@ -113,7 +114,10 @@ export class CrawlSession {
 						this.logger,
 					);
 
-					if (robots && !robots.isAllowed(this.options.target, "MikuCrawler")) {
+					if (
+						robots &&
+						!robots.isAllowed(this.options.target, config.userAgent)
+					) {
 						this.socket.emit("stats", {
 							...this.state.stats,
 							log: `[Crawler] Robots.txt disallows crawling this target; stopping.`,
@@ -131,7 +135,7 @@ export class CrawlSession {
 						return;
 					}
 
-					const crawlDelay = robots?.getCrawlDelay?.("MikuCrawler");
+					const crawlDelay = robots?.getCrawlDelay?.(config.userAgent);
 					if (crawlDelay) {
 						const delayMs = Math.max(
 							crawlDelay * 1000,

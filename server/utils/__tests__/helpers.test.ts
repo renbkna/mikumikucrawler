@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { config } from "../../config/env.js";
 import type { DatabaseLike, LoggerLike } from "../../types.js";
 import { getErrorMessage, getRobotsRules } from "../helpers.js";
 
@@ -21,8 +22,9 @@ describe("getRobotsRules", () => {
 		const logger = createLogger();
 		const db = createMockDb();
 
-		// biome-ignore lint/suspicious/noExplicitAny: Mocking global fetch
-		global.fetch = mock(() => Promise.reject(new Error("network down"))) as any;
+		globalThis.fetch = mock(() =>
+			Promise.reject(new Error("network down")),
+		) as unknown as typeof fetch;
 
 		const robots = await getRobotsRules(
 			"fallback.example",
@@ -31,17 +33,18 @@ describe("getRobotsRules", () => {
 		);
 
 		expect(robots).toBeTruthy();
-		expect(robots?.isAllowed("http://fallback.example/", "MikuCrawler")).toBe(
-			true,
-		);
+		expect(
+			robots?.isAllowed("http://fallback.example/", config.userAgent),
+		).toBe(true);
 	});
 
 	test("can surface null when allowOnFailure is false", async () => {
 		const logger = createLogger();
 		const db = createMockDb();
 
-		// biome-ignore lint/suspicious/noExplicitAny: Mocking global fetch
-		global.fetch = mock(() => Promise.reject(new Error("network down"))) as any;
+		globalThis.fetch = mock(() =>
+			Promise.reject(new Error("network down")),
+		) as unknown as typeof fetch;
 
 		const robots = await getRobotsRules(
 			"strict.example",

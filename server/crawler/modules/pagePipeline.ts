@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { URL } from "node:url";
 import * as cheerio from "cheerio";
 import sanitizeHtml from "sanitize-html";
+import { config } from "../../config/env.js";
 import type { Logger } from "../../config/logging.js";
 import { FETCH_HEADERS } from "../../constants.js";
 import { ContentProcessor } from "../../processors/ContentProcessor.js";
@@ -637,13 +638,13 @@ async function processLinkBatch({
 
 			if (linkDomain !== domain && linkDomain !== targetDomain) {
 				const robots = await getRobotsRules(linkDomain, dbPromise, logger);
-				if (robots && !robots.isAllowed(link.url, "MikuCrawler")) {
+				if (robots && !robots.isAllowed(link.url, config.userAgent)) {
 					logger.debug(`Skipping ${link.url} - disallowed by robots.txt`);
 					state.recordSkip();
 					return;
 				}
 
-				const crawlDelay = robots?.getCrawlDelay?.("MikuCrawler");
+				const crawlDelay = robots?.getCrawlDelay?.(config.userAgent);
 				if (crawlDelay) {
 					const delayMs = Math.max(crawlDelay * 1000, options.crawlDelay);
 					state.setDomainDelay(linkDomain, delayMs);

@@ -13,8 +13,8 @@ import { staticPlugin } from "@elysiajs/static";
 import { swagger } from "@elysiajs/swagger";
 import { Elysia } from "elysia";
 import { rateLimit } from "elysia-rate-limit";
-
 import { setupDatabase } from "./config/database.js";
+import { config } from "./config/env.js";
 import { setupLogging } from "./config/logging.js";
 import type { CrawlSession } from "./crawler/CrawlSession.js";
 import {
@@ -33,8 +33,14 @@ const logger = await setupLogging();
 const db = setupDatabase();
 const activeCrawls = new Map<string, CrawlSession>();
 
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
-const PORT = process.env.PORT || 3000;
+logger.info(`Starting Miku Crawler in ${config.env} mode`);
+logger.info(`Configured Frontend URL: ${config.frontendUrl}`);
+logger.info(`Database Path: ${config.dbPath}`);
+if (config.isRender)
+	logger.info("Platform: Render.com (Constrained Memory Mode active)");
+
+const FRONTEND_URL = config.frontendUrl;
+const PORT = config.port;
 
 // Pass the database as a Promise to handlers that might need async access (e.g., inside closures)
 const { handleMessage, handleClose } = createWebSocketHandlers(
