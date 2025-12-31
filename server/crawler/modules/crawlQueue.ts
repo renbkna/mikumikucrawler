@@ -103,7 +103,17 @@ export class CrawlQueue {
 		return this.loopPromise;
 	}
 
-	/** Main loop that processes the queue while respecting rate limits and domain etiquette. */
+	/**
+	 * Main processing loop.
+	 *
+	 * Implements a "polite" crawling strategy:
+	 * 1. Respects per-domain delays (Robots.txt or config).
+	 * 2. Manages concurrency limits.
+	 * 3. Handles queue draining and idle states.
+	 *
+	 * Uses a non-blocking delay system where we calculate the next allowed time
+	 * for a domain and sleep effectively.
+	 */
 	private async loop(): Promise<void> {
 		const domainProcessing = new Map<string, number>();
 
@@ -113,6 +123,7 @@ export class CrawlQueue {
 		) {
 			let deferredDelay: number | null = null;
 
+			// Periodically clean up processing history to prevent memory leaks in long crawls
 			if (
 				domainProcessing.size >
 				CRAWL_QUEUE_CONSTANTS.DOMAIN_CACHE_CLEANUP_THRESHOLD
@@ -144,6 +155,7 @@ export class CrawlQueue {
 					const now = Date.now();
 					const domainDelay = this.state.getDomainDelay(domain);
 
+					// If this domain is still cooling down, push back to queue and calculate wait
 					if (now < nextAllowed) {
 						const waitTime = nextAllowed - now;
 						deferredDelay =
@@ -151,7 +163,7 @@ export class CrawlQueue {
 								? waitTime
 								: Math.min(deferredDelay, waitTime);
 						this.queue.push(item);
-						if (this.queue.length === 1) break;
+						if (this.queue.length === 1) break; // Avoid busy loop if only 1 item
 						continue;
 					}
 
@@ -186,6 +198,8 @@ export class CrawlQueue {
 				this.socket.emit("queueStats", snapshot);
 			}
 
+			// Dynamic sleep: Wait only as long as needed for the next domain slot,
+			// or default sleep if nothing specific is blocking.
 			const sleepDuration =
 				deferredDelay === null
 					? CRAWL_QUEUE_CONSTANTS.DEFAULT_SLEEP_MS

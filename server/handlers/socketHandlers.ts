@@ -54,6 +54,7 @@ async function assertPublicHostname(hostname: string): Promise<void> {
 			: hostname;
 
 	const lower = normalizedHost.toLowerCase();
+	// Block explicit localhost to prevent internal service scanning
 	if (lower === "localhost") {
 		throw new Error("Target host is not allowed");
 	}
@@ -68,6 +69,7 @@ async function assertPublicHostname(hostname: string): Promise<void> {
 
 	let records: dns.LookupAddress[];
 	try {
+		// Resolve all IPs for the hostname to ensure none point to internal ranges
 		records = await dns.promises.lookup(normalizedHost, {
 			all: true,
 			verbatim: false,
@@ -363,6 +365,8 @@ export function createWebSocketHandlers(
 							);
 						}
 
+						// Prepend single quote if cell starts with dangerous characters
+						// to prevent Formula Injection in Excel/Sheets.
 						if (CSV_INJECTION_REGEX.test(stringValue)) {
 							stringValue = `'${stringValue}`;
 						}

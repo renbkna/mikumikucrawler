@@ -34,6 +34,15 @@ const PageLimitFooter = memo(function PageLimitFooter({
 	);
 });
 
+const VirtuosoFooter = ({
+	context,
+}: {
+	context?: { pageLimit?: number; showFooter: boolean };
+}) => {
+	if (!context?.showFooter || !context.pageLimit) return null;
+	return <PageLimitFooter pageLimit={context.pageLimit} />;
+};
+
 const CrawledPageCard = memo(function CrawledPageCard({
 	page,
 }: {
@@ -89,6 +98,48 @@ const CrawledPageCard = memo(function CrawledPageCard({
 		} finally {
 			setIsLoadingContent(false);
 		}
+	};
+
+	const sourceButtonText = useMemo(() => {
+		if (isLoadingContent) return "Loading...";
+		return showSource ? "Hide Source" : "View Source";
+	}, [isLoadingContent, showSource]);
+
+	const renderSourceContent = () => {
+		if (isLoadingContent) {
+			return (
+				<div className="h-40 flex items-center justify-center text-slate-500 gap-2">
+					<SparkleIcon className="animate-spin text-miku-teal" size={24} />
+					<span className="text-sm font-bold">Fetching content...</span>
+				</div>
+			);
+		}
+
+		if (fetchError) {
+			return (
+				<div className="h-40 flex flex-col items-center justify-center text-rose-400 gap-2 p-4 text-center">
+					<AlertCircle size={24} />
+					<span className="text-sm font-bold">Error loading content</span>
+					<span className="text-xs opacity-75">{fetchError}</span>
+					<button
+						type="button"
+						onClick={(e) => {
+							setFetchedContent(null);
+							handleToggleSource(e);
+						}}
+						className="mt-2 px-3 py-1 bg-rose-500/20 hover:bg-rose-500/30 rounded text-xs text-rose-300 transition-colors"
+					>
+						Retry
+					</button>
+				</div>
+			);
+		}
+
+		return (
+			<pre className="text-xs text-emerald-400 font-mono overflow-x-auto whitespace-pre-wrap break-all max-h-60 custom-scrollbar">
+				{fetchedContent || "No content available"}
+			</pre>
+		);
 	};
 
 	return (
@@ -156,11 +207,7 @@ const CrawledPageCard = memo(function CrawledPageCard({
 							disabled={isLoadingContent}
 						>
 							<Code className="w-3 h-3" />
-							{isLoadingContent
-								? "Loading..."
-								: showSource
-									? "Hide Source"
-									: "View Source"}
+							{sourceButtonText}
 						</button>
 					</div>
 
@@ -177,37 +224,7 @@ const CrawledPageCard = memo(function CrawledPageCard({
 								</span>
 							</div>
 
-							{isLoadingContent ? (
-								<div className="h-40 flex items-center justify-center text-slate-500 gap-2">
-									<SparkleIcon
-										className="animate-spin text-miku-teal"
-										size={24}
-									/>
-									<span className="text-sm font-bold">Fetching content...</span>
-								</div>
-							) : fetchError ? (
-								<div className="h-40 flex flex-col items-center justify-center text-rose-400 gap-2 p-4 text-center">
-									<AlertCircle size={24} />
-									<span className="text-sm font-bold">
-										Error loading content
-									</span>
-									<span className="text-xs opacity-75">{fetchError}</span>
-									<button
-										type="button"
-										onClick={(e) => {
-											setFetchedContent(null);
-											handleToggleSource(e);
-										}}
-										className="mt-2 px-3 py-1 bg-rose-500/20 hover:bg-rose-500/30 rounded text-xs text-rose-300 transition-colors"
-									>
-										Retry
-									</button>
-								</div>
-							) : (
-								<pre className="text-xs text-emerald-400 font-mono overflow-x-auto whitespace-pre-wrap break-all max-h-60 custom-scrollbar">
-									{fetchedContent || "No content available"}
-								</pre>
-							)}
+							{renderSourceContent()}
 						</div>
 					)}
 				</div>
@@ -218,6 +235,10 @@ const CrawledPageCard = memo(function CrawledPageCard({
 
 CrawledPageCard.displayName = "CrawledPageCard";
 
+const renderPageItem = (_index: number, page: CrawledPage) => (
+	<CrawledPageCard page={page} />
+);
+
 interface CrawledPagesSectionProps {
 	crawledPages: CrawledPage[];
 	displayedPages: CrawledPage[];
@@ -227,7 +248,6 @@ interface CrawledPagesSectionProps {
 	pageLimit?: number;
 }
 
-/** Displays a searchable list of captured pages with virtualized scrolling for performance. */
 export const CrawledPagesSection = memo(function CrawledPagesSection({
 	crawledPages,
 	displayedPages,
@@ -235,7 +255,7 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 	onFilterChange,
 	onClearFilter,
 	pageLimit,
-}: CrawledPagesSectionProps) {
+}: Readonly<CrawledPagesSectionProps>) {
 	const [localFilter, setLocalFilter] = useState(filterText);
 
 	useEffect(() => {
@@ -255,13 +275,49 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 		setLocalFilter(e.target.value);
 	}, []);
 
-	const footerComponents = useMemo(
-		() =>
-			pageLimit && crawledPages.length >= pageLimit
-				? { Footer: () => <PageLimitFooter pageLimit={pageLimit} /> }
-				: undefined,
-		[pageLimit, crawledPages.length],
+	const virtuosoComponents = useMemo(
+		() => ({
+			Footer: VirtuosoFooter,
+		}),
+		[],
 	);
+
+	const listContent = useMemo(() => {
+		if (crawledPages.length === 0) {
+			return (
+				<div className="h-full flex flex-col items-center justify-center text-miku-text/40">
+					<NoteIcon
+						className="text-miku-teal/30 mb-4 animate-float"
+						size={48}
+					/>
+					<p className="font-bold text-lg">No pages crawled yet...</p>
+					<p className="text-sm mt-1 font-medium flex items-center gap-1">
+						Start the Miku Beam to begin!{" "}
+						<HeartIcon className="text-miku-pink" size={12} />
+					</p>
+				</div>
+			);
+		}
+
+		if (displayedPages.length > 0) {
+			const showFooter = !!(pageLimit && crawledPages.length >= pageLimit);
+			return (
+				<Virtuoso
+					style={{ height: "100%" }}
+					data={displayedPages}
+					context={{ pageLimit, showFooter }}
+					itemContent={renderPageItem}
+					components={virtuosoComponents}
+				/>
+			);
+		}
+
+		return (
+			<div className="text-center py-12 text-miku-text/40">
+				<p className="font-medium">No pages match your filter</p>
+			</div>
+		);
+	}, [crawledPages.length, displayedPages, pageLimit, virtuosoComponents]);
 
 	return (
 		<div className="space-y-4 h-full flex flex-col">
@@ -287,32 +343,7 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 				)}
 			</div>
 
-			<div className="flex-1 overflow-hidden">
-				{crawledPages.length === 0 ? (
-					<div className="h-full flex flex-col items-center justify-center text-miku-text/40">
-						<NoteIcon
-							className="text-miku-teal/30 mb-4 animate-float"
-							size={48}
-						/>
-						<p className="font-bold text-lg">No pages crawled yet...</p>
-						<p className="text-sm mt-1 font-medium flex items-center gap-1">
-							Start the Miku Beam to begin!{" "}
-							<HeartIcon className="text-miku-pink" size={12} />
-						</p>
-					</div>
-				) : displayedPages.length > 0 ? (
-					<Virtuoso
-						style={{ height: "100%" }}
-						data={displayedPages}
-						itemContent={(_index, page) => <CrawledPageCard page={page} />}
-						{...(footerComponents ? { components: footerComponents } : {})}
-					/>
-				) : (
-					<div className="text-center py-12 text-miku-text/40">
-						<p className="font-medium">No pages match your filter</p>
-					</div>
-				)}
-			</div>
+			<div className="flex-1 overflow-hidden">{listContent}</div>
 		</div>
 	);
 });

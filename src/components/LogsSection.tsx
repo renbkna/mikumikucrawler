@@ -20,18 +20,26 @@ const LogItem = memo(function LogItem({
 	);
 });
 
+const renderLogItem = (
+	index: number,
+	log: string,
+	context?: { totalLogs: number },
+) => {
+	const stableIndex = (context?.totalLogs || 0) - index;
+	return <LogItem log={log} stableIndex={stableIndex} />;
+};
+
 interface LogsSectionProps {
 	logs: string[];
 	setLogs: (logs: string[]) => void;
 	logContainerRef: RefObject<HTMLDivElement>;
 }
 
-/** Displays a real-time stream of system logs with virtualized scrolling. */
 export const LogsSection = memo(function LogsSection({
 	logs,
 	setLogs,
 	logContainerRef,
-}: LogsSectionProps) {
+}: Readonly<LogsSectionProps>) {
 	return (
 		<div className="h-full flex flex-col relative">
 			<div className="absolute left-6 top-0 bottom-0 w-px border-r-2 border-dashed border-miku-teal/20 z-0" />
@@ -63,16 +71,8 @@ export const LogsSection = memo(function LogsSection({
 						<Virtuoso
 							style={{ height: "100%" }}
 							data={logs}
-							itemContent={(index, log) => {
-								const stableIndex = logs.length - index;
-								return (
-									<LogItem
-										key={`log-${index}`}
-										log={log}
-										stableIndex={stableIndex}
-									/>
-								);
-							}}
+							context={{ totalLogs: logs.length }}
+							itemContent={renderLogItem}
 						/>
 					) : (
 						<div className="h-full flex flex-col items-center justify-center text-miku-text/40 italic">

@@ -16,7 +16,6 @@ interface StatsGridProps {
 	isAttacking: boolean;
 }
 
-/** Summarizes session metrics into high-level status cards. */
 export const StatsGrid = memo(function StatsGrid({
 	stats,
 	queueStats,

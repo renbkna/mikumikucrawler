@@ -4,7 +4,6 @@ interface MikuBeamProps {
 	active: boolean;
 }
 
-/** Full-screen visual effect triggered during peak crawl activity. */
 export const MikuBeam: React.FC<MikuBeamProps> = ({ active }) => {
 	if (!active) return null;
 

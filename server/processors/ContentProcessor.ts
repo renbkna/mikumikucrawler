@@ -57,7 +57,12 @@ function safeExtract<T>(
 	}
 }
 
-/** Processes various content types (HTML, JSON) and extracts structured data. */
+/**
+ * Orchestrates the extraction and analysis pipeline for raw page content.
+ *
+ * This class coordinates multiple utility modules to extract structured data,
+ * analyze sentiment, and assess quality in a single pass.
+ */
 export class ContentProcessor {
 	private readonly logger: Logger;
 

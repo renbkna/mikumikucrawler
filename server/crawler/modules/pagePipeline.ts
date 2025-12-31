@@ -609,7 +609,14 @@ interface ProcessLinkBatchOptions {
 	queue: CrawlQueue;
 }
 
-/** Processes a batch of links concurrently while respecting robots.txt rules and domain delays. */
+/**
+ * Processes a batch of links concurrently while respecting robots.txt rules and domain delays.
+ *
+ * NOTE: We use a limited concurrency model (ProcessLinkBatchOptions.CONCURRENCY) here
+ * rather than blasting all links at once to avoid:
+ * 1. Overwhelming the robots.txt parser/cache.
+ * 2. Spiking event loop lag with thousands of microtasks.
+ */
 async function processLinkBatch({
 	links,
 	item,

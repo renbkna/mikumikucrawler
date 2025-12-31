@@ -5,10 +5,6 @@ interface UseFocusTrapOptions {
 	onClose: () => void;
 }
 
-/**
- * Custom hook to manage focus trapping within modals/dialogs.
- * Handles Escape key to close, Tab key cycling, and initial focus.
- */
 export function useFocusTrap<T extends HTMLElement>(
 	options: UseFocusTrapOptions,
 ): {

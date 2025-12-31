@@ -29,7 +29,6 @@ interface ToastNotificationProps {
 	onDismiss: (id: number) => void;
 }
 
-/** Individual notification card that automatically dismisses after a timeout. */
 export const ToastNotification = memo(function ToastNotification({
 	toast,
 	onDismiss,
