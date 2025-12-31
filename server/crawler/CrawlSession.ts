@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { URL } from "node:url";
-import type { Logger } from "winston";
+import type { Logger } from "../config/logging.js";
 import type {
 	CrawlerSocket,
 	QueueItem,

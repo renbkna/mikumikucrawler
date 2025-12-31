@@ -1,7 +1,8 @@
 import type { CheerioAPI } from "cheerio";
 import * as cheerio from "cheerio";
-import type { Logger } from "winston";
+import type { Logger } from "../config/logging.js";
 import type { ProcessedContent } from "../types.js";
+import { getErrorMessage } from "../utils/helpers.js";
 import {
 	analyzeContent,
 	assessContentQuality,
@@ -38,15 +39,25 @@ interface ContentAnalysis {
 	};
 }
 
-interface PDFResult {
-	type: string;
-	text: string;
-	pages: number;
-	error: string;
-	isEmpty: boolean;
+/**
+ * Safely executes an extraction function and returns a fallback on error.
+ * Reduces repetitive try-catch blocks in content processing.
+ */
+function safeExtract<T>(
+	fn: () => T,
+	fallback: T,
+	logger: Logger,
+	context: string,
+): T {
+	try {
+		return fn();
+	} catch (err) {
+		logger.warn(`Failed to ${context}: ${getErrorMessage(err)}`);
+		return fallback;
+	}
 }
 
-/** Processes various content types (HTML, JSON, PDF) and extracts structured data. */
+/** Processes various content types (HTML, JSON) and extracts structured data. */
 export class ContentProcessor {
 	private readonly logger: Logger;
 
@@ -73,132 +84,136 @@ export class ContentProcessor {
 
 		try {
 			if (contentType.includes("text/html")) {
-				const htmlContent =
-					typeof content === "string" ? content : String(content);
-
-				const cheerioInstance: CheerioAPI = cheerio.load(htmlContent);
-
-				if (typeof cheerioInstance !== "function") {
-					throw new TypeError("Cheerio failed to load content");
-				}
-
-				try {
-					result.extractedData = extractStructuredData(cheerioInstance);
-				} catch (err) {
-					const message = err instanceof Error ? err.message : "Unknown error";
-					this.logger.warn(`Failed to extract structured data: ${message}`);
-					result.extractedData = {};
-				}
-
-				try {
-					(result.extractedData as ExtractedData).mainContent =
-						extractMainContent(cheerioInstance);
-				} catch (err) {
-					const message = err instanceof Error ? err.message : "Unknown error";
-					this.logger.warn(`Failed to extract main content: ${message}`);
-					(result.extractedData as ExtractedData).mainContent = "";
-				}
-
-				result.analysis = analyzeContent(
-					(result.extractedData as ExtractedData).mainContent || "",
-				);
-
-				try {
-					result.media = extractMediaInfo(cheerioInstance, url);
-				} catch (err) {
-					const message = err instanceof Error ? err.message : "Unknown error";
-					this.logger.warn(`Failed to extract media info: ${message}`);
-					result.media = [];
-				}
-
-				try {
-					result.links = processLinks(cheerioInstance, url);
-				} catch (err) {
-					const message = err instanceof Error ? err.message : "Unknown error";
-					this.logger.warn(`Failed to process links: ${message}`);
-					result.links = [];
-				}
-
-				try {
-					result.metadata = extractMetadata(
-						cheerioInstance,
-					) as unknown as Record<string, string>;
-				} catch (err) {
-					const message = err instanceof Error ? err.message : "Unknown error";
-					this.logger.warn(`Failed to extract metadata: ${message}`);
-					result.metadata = {};
-				}
-
-				try {
-					(result.analysis as ContentAnalysis).quality = assessContentQuality(
-						cheerioInstance,
-						(result.extractedData as ExtractedData).mainContent || "",
-					);
-				} catch (err) {
-					const message = err instanceof Error ? err.message : "Unknown error";
-					this.logger.warn(`Failed to assess content quality: ${message}`);
-					(result.analysis as ContentAnalysis).quality = {
-						score: 0,
-						factors: {},
-						issues: ["Quality assessment failed"],
-					};
-				}
-			} else if (contentType.includes("application/pdf")) {
-				const pdfResult = await this.processPDF();
-				result.extractedData = { mainContent: pdfResult.text || "" };
+				this.processHtml(content, url, result);
 			} else if (contentType.includes("application/json")) {
-				const jsonResult = processJSON(
-					typeof content === "string" ? content : content.toString(),
-				);
-				result.extractedData = {
-					mainContent: JSON.stringify(jsonResult.data || jsonResult.raw || ""),
-				};
+				this.processJson(content, result);
+			} else if (contentType.includes("application/pdf")) {
+				// PDF processing requires pdf-parse library which is not installed
+				result.errors.push({
+					type: "unsupported_content",
+					message: "PDF processing not available. Install pdf-parse to enable.",
+					timestamp: new Date().toISOString(),
+				});
+				result.extractedData = { mainContent: "" };
 			}
 		} catch (error) {
-			const errorMessage =
-				error instanceof Error ? error.message : "Unknown error";
-			this.logger.error(`Content processing error for ${url}: ${errorMessage}`);
+			this.logger.error(
+				`Content processing error for ${url}: ${getErrorMessage(error)}`,
+			);
 			result.errors.push({
 				type: "processing_error",
-				message: errorMessage,
+				message: getErrorMessage(error),
 				timestamp: new Date().toISOString(),
 			});
-
-			result.extractedData = { mainContent: "" };
-			result.analysis = {
-				wordCount: 0,
-				readingTime: 0,
-				language: "unknown",
-				keywords: [],
-				sentiment: "neutral",
-				readabilityScore: 0,
-				quality: { score: 0, factors: {}, issues: ["Processing failed"] },
-			};
-			result.metadata = {};
-			result.media = [];
-			result.links = [];
+			this.setErrorDefaults(result);
 		}
 
 		return result;
 	}
 
-	/**
-	 * Place-holder for PDF text extraction. Currently logs a warning.
-	 *
-	 * @returns PDFResult with error message
-	 */
-	async processPDF(): Promise<PDFResult> {
-		this.logger.warn(
-			"PDF processing requested but not implemented (requires pdf-parse).",
+	/** Processes HTML content and populates the result object. */
+	private processHtml(
+		content: string | Buffer,
+		url: string,
+		result: ProcessedContent,
+	): void {
+		const htmlContent = typeof content === "string" ? content : String(content);
+		const $: CheerioAPI = cheerio.load(htmlContent);
+
+		if (typeof $ !== "function") {
+			throw new TypeError("Cheerio failed to load content");
+		}
+
+		// Extract structured data (JSON-LD, microdata, OpenGraph, etc.)
+		const structuredData = safeExtract(
+			() => extractStructuredData($),
+			{
+				jsonLd: [],
+				microdata: {},
+				openGraph: {},
+				twitterCards: {},
+				schema: {},
+			},
+			this.logger,
+			"extract structured data",
 		);
 
-		return {
-			type: "pdf",
-			text: "",
-			pages: 0,
-			error:
-				"PDF text extraction is not available. Install pdf-parse to enable this feature.",
-			isEmpty: true,
+		// Extract main text content
+		const mainContent = safeExtract(
+			() => extractMainContent($),
+			"",
+			this.logger,
+			"extract main content",
+		);
+
+		result.extractedData = {
+			...structuredData,
+			mainContent,
+		} as ExtractedData;
+
+		// Analyze content (word count, language, keywords, sentiment)
+		result.analysis = analyzeContent(mainContent);
+
+		// Extract media (images, videos, audio)
+		result.media = safeExtract(
+			() => extractMediaInfo($, url),
+			[],
+			this.logger,
+			"extract media info",
+		);
+
+		// Extract and classify links
+		result.links = safeExtract(
+			() => processLinks($, url),
+			[],
+			this.logger,
+			"process links",
+		);
+
+		// Extract metadata (title, description, etc.)
+		result.metadata = safeExtract(
+			() => extractMetadata($) as unknown as Record<string, string>,
+			{},
+			this.logger,
+			"extract metadata",
+		);
+
+		// Assess content quality
+		(result.analysis as ContentAnalysis).quality = safeExtract(
+			() => assessContentQuality($, mainContent),
+			{ score: 0, factors: {}, issues: ["Quality assessment failed"] },
+			this.logger,
+			"assess content quality",
+		);
+	}
+
+	/** Processes JSON content and populates the result object. */
+	private processJson(
+		content: string | Buffer,
+		result: ProcessedContent,
+	): void {
+		const jsonString =
+			typeof content === "string" ? content : content.toString();
+		const jsonResult = processJSON(jsonString);
+		result.extractedData = {
+			mainContent: JSON.stringify(jsonResult.data || jsonResult.raw || ""),
 		};
+	}
+
+	/** Sets default values for result object when processing fails. */
+	private setErrorDefaults(result: ProcessedContent): void {
+		result.extractedData = { mainContent: "" };
+		result.analysis = {
+			wordCount: 0,
+			readingTime: 0,
+			language: "unknown",
+			keywords: [],
+			sentiment: "neutral",
+			readabilityScore: 0,
+			quality: { score: 0, factors: {}, issues: ["Processing failed"] },
+		};
+		result.metadata = {};
+		result.media = [];
+		result.links = [];
 	}
 }

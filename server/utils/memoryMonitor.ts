@@ -1,4 +1,4 @@
-import type { Logger } from "winston";
+import type { Logger } from "../config/logging.js";
 
 interface MemoryUsage {
 	rss: number;

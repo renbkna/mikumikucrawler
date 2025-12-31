@@ -2,6 +2,8 @@ import { Fragment, memo, useEffect, useRef, useState } from "react";
 import { SEQUENCE_TIMINGS } from "../constants";
 
 const RIPPLE_ANIMATION_DURATION_MS = 1500;
+const LOOP_START = 15.86;
+const LOOP_END = 17.53;
 
 interface TheatreOverlayProps {
 	status: "idle" | "blackout" | "counting" | "beam" | "live";
@@ -21,32 +23,82 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 	const [ripples, setRipples] = useState<{ id: number; color: string }[]>([]);
 	const audioRef = useRef<HTMLAudioElement | null>(null);
 	const timeoutsRef = useRef<NodeJS.Timeout[]>([]);
-	const hasStartedRef = useRef(false);
+	const sequenceStartedRef = useRef(false);
 	const rippleCountRef = useRef(0);
-	const audioHandlerRef = useRef<(() => void) | null>(null);
 
+	// Stable refs for callbacks to avoid effect re-runs
+	const onBeamStartRef = useRef(onBeamStart);
+	const onCompleteRef = useRef(onComplete);
+	onBeamStartRef.current = onBeamStart;
+	onCompleteRef.current = onComplete;
+
+	// Audio should play when status is not "idle"
+	const shouldPlayAudio = status !== "idle";
+
+	/** Audio lifecycle - completely separate from countdown */
 	useEffect(() => {
-		if (status === "idle") {
-			hasStartedRef.current = false;
-			requestAnimationFrame(() => {
-				setCount(null);
-				setRipples([]);
-			});
-			if (audioRef.current) {
-				audioRef.current.pause();
-				audioRef.current.currentTime = 0;
-			}
-			timeoutsRef.current.forEach(clearTimeout);
-			timeoutsRef.current = [];
-		}
-	}, [status]);
+		// Create audio element once
+		if (!audioRef.current) {
+			// Cache-bust to avoid browser cache issues
+			const audio = new Audio(`/audio.mp3?v=${Date.now()}`);
+			audioRef.current = audio;
 
+			// Loop handler - stays attached for component lifetime
+			const handleTimeUpdate = () => {
+				if (audio.currentTime > LOOP_END) {
+					audio.currentTime = LOOP_START;
+				}
+			};
+			audio.addEventListener("timeupdate", handleTimeUpdate);
+
+			// Cleanup only on unmount
+			return () => {
+				audio.removeEventListener("timeupdate", handleTimeUpdate);
+				audio.pause();
+				audioRef.current = null;
+			};
+		}
+	}, []); // Empty deps - only runs once
+
+	/** Control audio play/pause based on status */
+	useEffect(() => {
+		const audio = audioRef.current;
+		if (!audio) return;
+
+		if (shouldPlayAudio) {
+			// Only reset and play when transitioning from idle
+			if (audio.paused) {
+				audio.currentTime = 0;
+				audio.play().catch((e) => console.error("Audio play failed", e));
+			}
+		} else {
+			audio.pause();
+			audio.currentTime = 0;
+		}
+	}, [shouldPlayAudio]);
+
+	/** Volume control - separate effect */
 	useEffect(() => {
 		if (audioRef.current) {
 			audioRef.current.volume = Math.max(0, Math.min(1, volume / 100));
 		}
 	}, [volume]);
 
+	/** Reset state when returning to idle */
+	useEffect(() => {
+		if (status === "idle") {
+			sequenceStartedRef.current = false;
+			setCount(null);
+			setRipples([]);
+			// Clear any remaining timeouts
+			for (const id of timeoutsRef.current) {
+				clearTimeout(id);
+			}
+			timeoutsRef.current = [];
+		}
+	}, [status]);
+
+	/** Ripple animation effect */
 	useEffect(() => {
 		if (count && count !== "READY?") {
 			const id = Date.now();
@@ -65,74 +117,41 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 		}
 	}, [count]);
 
-	/** Orchestrates the countdown sequence synced with background audio. */
+	/** Countdown sequence - runs once when blackout starts */
 	useEffect(() => {
-		if (status === "blackout" && !hasStartedRef.current) {
-			hasStartedRef.current = true;
-
-			let audio = audioRef.current;
-			if (!audio) {
-				audio = new Audio("/audio.mp3");
-				audioRef.current = audio;
-			}
-
-			audio.currentTime = 0;
-			audio.volume = Math.max(0, Math.min(1, volume / 100));
-
-			if (audioHandlerRef.current && audio) {
-				audio.removeEventListener("timeupdate", audioHandlerRef.current);
-			}
-
-			/** Loops specific high-energy section of the audio track. */
-			const handleTimeUpdate = () => {
-				if (audio && audio.currentTime > 17.53) {
-					audio.currentTime = 15.86;
-				}
-			};
-
-			audioHandlerRef.current = handleTimeUpdate;
-			audio.addEventListener("timeupdate", handleTimeUpdate);
-
-			const playPromise = audio.play();
-			if (playPromise !== undefined) {
-				playPromise.catch((e) => {
-					console.error("Audio play failed", e);
-				});
-			}
-
-			const addTimeout = (fn: () => void, delay: number) => {
-				const id = setTimeout(fn, delay);
-				timeoutsRef.current.push(id);
-			};
-
-			addTimeout(() => setCount("1"), SEQUENCE_TIMINGS.COUNT_1);
-			addTimeout(() => setCount("2"), SEQUENCE_TIMINGS.COUNT_2);
-			addTimeout(() => setCount("3"), SEQUENCE_TIMINGS.COUNT_3);
-			addTimeout(() => setCount("READY?"), SEQUENCE_TIMINGS.READY);
-
-			addTimeout(() => {
-				setCount(null);
-				onBeamStart();
-			}, SEQUENCE_TIMINGS.BEAM_START);
-
-			addTimeout(() => {
-				onComplete();
-			}, SEQUENCE_TIMINGS.COMPLETE);
+		if (status !== "blackout" || sequenceStartedRef.current) {
+			return;
 		}
 
-		return () => {
-			timeoutsRef.current.forEach(clearTimeout);
-			if (audioHandlerRef.current && audioRef.current) {
-				audioRef.current.removeEventListener(
-					"timeupdate",
-					audioHandlerRef.current,
-				);
-				audioHandlerRef.current = null;
-			}
-		};
-	}, [status, onBeamStart, onComplete, volume]);
+		sequenceStartedRef.current = true;
 
-	if (status === "idle" || status === "live") return null;
+		const timeouts: NodeJS.Timeout[] = [];
+		const addTimeout = (fn: () => void, delay: number) => {
+			const id = setTimeout(fn, delay);
+			timeouts.push(id);
+		};
+
+		addTimeout(() => setCount("1"), SEQUENCE_TIMINGS.COUNT_1);
+		addTimeout(() => setCount("2"), SEQUENCE_TIMINGS.COUNT_2);
+		addTimeout(() => setCount("3"), SEQUENCE_TIMINGS.COUNT_3);
+		addTimeout(() => setCount("READY?"), SEQUENCE_TIMINGS.READY);
+
+		addTimeout(() => {
+			setCount(null);
+			onBeamStartRef.current();
+		}, SEQUENCE_TIMINGS.BEAM_START);
+
+		addTimeout(() => {
+			onCompleteRef.current();
+		}, SEQUENCE_TIMINGS.COMPLETE);
+
+		timeoutsRef.current = timeouts;
+
+		// No cleanup - timeouts are managed by the idle effect
+	}, [status]);
+
+	if (status === "idle") return null;
+	if (status === "live") return <div className="hidden" />;
 
 	return (
 		<div className="fixed inset-0 z-[100] flex items-center justify-center bg-black overflow-hidden">

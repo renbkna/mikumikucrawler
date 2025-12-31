@@ -76,8 +76,9 @@ const CrawledPageCard = memo(function CrawledPageCard({
 				);
 			}
 
-			if (data?.status === "ok" && data.content) {
-				setFetchedContent(data.content);
+			const response = data as { status: string; content?: string } | null;
+			if (response?.status === "ok" && response.content) {
+				setFetchedContent(response.content);
 			} else {
 				throw new Error("Invalid response format");
 			}
