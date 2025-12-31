@@ -1,5 +1,6 @@
 import { createWriteStream, existsSync, mkdirSync } from "node:fs";
 import pino, { type Logger } from "pino";
+import { config } from "./env.js";
 
 const ensureDirectoryExists = (dir: string): void => {
 	if (!existsSync(dir)) {
@@ -8,7 +9,7 @@ const ensureDirectoryExists = (dir: string): void => {
 };
 
 /** Re-export Logger type for consumers */
-export type { Logger };
+export type { Logger } from "pino";
 
 /**
  * Extended logger interface with close method for graceful shutdown.
@@ -25,26 +26,30 @@ export interface AppLogger extends Logger {
 export const setupLogging = async (): Promise<AppLogger> => {
 	ensureDirectoryExists("./logs");
 
-	const level = process.env.LOG_LEVEL || "info";
+	const level = config.logLevel;
 
 	// Create file streams for log destinations
 	const errorStream = createWriteStream("./logs/error.log", { flags: "a" });
 	const allStream = createWriteStream("./logs/crawler.log", { flags: "a" });
 
+	const isProduction = config.isProduction;
+
 	// Create multi-stream transport using pino.multistream
 	const streams = pino.multistream([
-		// Console with pretty printing
+		// Console output
 		{
 			level: "debug",
-			stream: pino.transport({
-				target: "pino-pretty",
-				options: {
-					colorize: true,
-					translateTime: "HH:MM:ss",
-					ignore: "pid,hostname",
-					levelFirst: true,
-				},
-			}),
+			stream: isProduction
+				? process.stdout
+				: pino.transport({
+						target: "pino-pretty",
+						options: {
+							colorize: true,
+							translateTime: "HH:MM:ss",
+							ignore: "pid,hostname",
+							levelFirst: true,
+						},
+					}),
 		},
 		// All logs to crawler.log (JSON format for parsing)
 		{ level: "debug", stream: allStream },

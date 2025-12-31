@@ -15,17 +15,14 @@ export const UI_LIMITS = {
 	MAX_PAGE_BUFFER: 200,
 	INITIAL_VISIBLE_COUNT: 20,
 	LOAD_MORE_COUNT: 20,
-	MAX_LOGS: 30,
+	MAX_LOGS: 100,
 } as const;
 
 export const SOCKET_CONFIG = {
-	TRANSPORTS: ["websocket", "polling"] as const,
 	RECONNECTION_ATTEMPTS: 10,
 	RECONNECTION_DELAY: 1000,
 	RECONNECTION_DELAY_MAX: 5000,
 	TIMEOUT: 20000,
-	CONNECT_DELAY: 500,
-	FORCE_NEW: true,
 } as const;
 
 export const TOAST_DEFAULTS = {
