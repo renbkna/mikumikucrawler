@@ -13,6 +13,12 @@ export interface UseTheatreModeReturn {
 
 /**
  * Manages the immersive "Theatre Mode" state transitions and UI blackout.
+ *
+ * This hook acts as a simple state machine:
+ * idle -> blackout (UI hide) -> beam (Animation) -> live (Show stats)
+ *
+ * We use 'blackout' to hide all potentially distracting UI elements before
+ * the Miku Beam animation starts, ensuring a clean visual experience.
  */
 export function useTheatreMode(): UseTheatreModeReturn {
 	const [theatreStatus, setTheatreStatus] = useState<TheatreStatus>("idle");
@@ -22,6 +28,7 @@ export function useTheatreMode(): UseTheatreModeReturn {
 
 	/**
 	 * Initiates the theatre blackout sequence.
+	 * If skipAnimation is true, we jump directly to 'live' (useful for quick restarts).
 	 */
 	const startTheatre = useCallback((skipAnimation = false) => {
 		if (skipAnimation) {
@@ -33,6 +40,7 @@ export function useTheatreMode(): UseTheatreModeReturn {
 
 	/**
 	 * Transitions to the "Beam" animation phase.
+	 * Triggered after the countdown/blackout completes.
 	 */
 	const handleBeamStart = useCallback(() => {
 		setTheatreStatus("beam");
@@ -47,6 +55,7 @@ export function useTheatreMode(): UseTheatreModeReturn {
 
 	/**
 	 * Resets the theatre state to its idle (hidden) status.
+	 * Used when the crawl is stopped or reset.
 	 */
 	const resetTheatre = useCallback(() => {
 		setTheatreStatus("idle");

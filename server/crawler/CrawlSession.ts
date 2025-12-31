@@ -24,14 +24,6 @@ export class CrawlSession {
 	private readonly queue: CrawlQueue;
 	private readonly pipeline: (item: QueueItem) => Promise<void>;
 
-	/**
-	 * Creates a new crawl session.
-	 *
-	 * @param socket - WebSocket for real-time communication
-	 * @param options - Validated user configuration
-	 * @param dbPromise - Promise resolving to the SQLite database
-	 * @param logger - Winston logger instance
-	 */
 	constructor(
 		socket: CrawlerSocket,
 		options: SanitizedCrawlOptions,
@@ -97,7 +89,12 @@ export class CrawlSession {
 		this.queue.processItem = this.pipeline;
 	}
 
-	/** Initializes the renderer, checks robots.txt, and starts the crawl queue. */
+	/**
+	 * Initializes the crawl pipeline:
+	 * 1. Preps the dynamic renderer (Playwright) if enabled.
+	 * 2. Checks robots.txt compliance for the target domain.
+	 * 3. Seeds the queue with the initial URL.
+	 */
 	async start(): Promise<void> {
 		try {
 			const initResult = await this.dynamicRenderer.initialize();
@@ -164,7 +161,10 @@ export class CrawlSession {
 		}
 	}
 
-	/** Safely stops the crawl session and cleans up resources. */
+	/**
+	 * Stops the crawler, clearing the queue and closing the renderer.
+	 * Idempotent.
+	 */
 	async stop(): Promise<void> {
 		if (!this.state.isActive) {
 			return;

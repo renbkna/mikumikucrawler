@@ -1,4 +1,5 @@
 import { Coffee, Database } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { useFocusTrap } from "../hooks";
 import type { CrawlOptions } from "../types";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
@@ -11,7 +12,6 @@ interface ConfigurationViewProps {
 	onSave: () => void;
 }
 
-/** Provides an interface for adjusting crawl depth, concurrency, and behavioral policies. */
 export function ConfigurationView({
 	isOpen,
 	onClose,
@@ -19,32 +19,42 @@ export function ConfigurationView({
 	onOptionsChange,
 	onSave,
 }: Readonly<ConfigurationViewProps>) {
+	const dialogRef = useRef<HTMLDialogElement>(null);
 	const { modalRef, initialFocusRef } = useFocusTrap<HTMLDivElement>({
 		isOpen,
 		onClose,
 	});
 
-	if (!isOpen) return null;
+	useEffect(() => {
+		const dialog = dialogRef.current;
+		if (!dialog) return;
 
-	const handleBackdropClick = (e: React.MouseEvent) => {
-		if (e.target === e.currentTarget) {
-			onClose();
+		if (isOpen && !dialog.open) {
+			dialog.showModal();
+		} else if (!isOpen && dialog.open) {
+			dialog.close();
 		}
-	};
+	}, [isOpen]);
+
+	if (!isOpen) return null;
 
 	return (
 		<dialog
-			open={isOpen}
-			className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm m-0 p-0 w-full h-full max-w-none max-h-none border-none bg-transparent"
-			onClick={handleBackdropClick}
-			onKeyDown={(e) => {
-				if (e.key === "Escape") onClose();
-			}}
+			ref={dialogRef}
 			aria-labelledby="config-dialog-title"
+			className="fixed inset-0 z-50 flex items-center justify-center p-4 m-0 w-full h-full bg-transparent border-none backdrop:bg-black/20 backdrop:backdrop-blur-sm"
+			onClose={onClose}
 		>
+			<button
+				type="button"
+				className="absolute inset-0 w-full h-full bg-transparent border-none cursor-default"
+				onClick={onClose}
+				aria-label="Close dialog"
+				tabIndex={-1}
+			/>
 			<div
 				ref={modalRef}
-				className="w-full max-w-xl p-6 bg-white rounded-3xl shadow-xl border-2 border-miku-pink/20 max-h-[90vh] overflow-y-auto animate-pop"
+				className="relative w-full max-w-xl p-6 bg-white rounded-3xl shadow-xl border-2 border-miku-pink/20 max-h-[90vh] overflow-y-auto animate-pop focus:outline-none"
 			>
 				<div className="flex items-center justify-between mb-6">
 					<h2

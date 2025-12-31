@@ -1,10 +1,9 @@
 import { Heart, Music, Sparkles } from "lucide-react";
 
 interface HeaderProps {
-	isLightTheme: boolean;
+	readonly isLightTheme: boolean;
 }
 
-/** Legacy header component with decorative floating icons. */
 export function Header({ isLightTheme }: HeaderProps) {
 	return (
 		<div className="text-center relative py-8">
@@ -35,7 +34,7 @@ export function Header({ isLightTheme }: HeaderProps) {
 						} flex items-center justify-center gap-2`}
 					>
 						<span className="text-miku-primary">♪</span>
-						Web crawling is cuter with Miku!
+						{" Web crawling is cuter with Miku! "}
 						<span className="text-miku-secondary">♪</span>
 					</p>
 

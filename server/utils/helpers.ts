@@ -15,8 +15,8 @@ export function getErrorMessage(error: unknown): string {
 	return String(error);
 }
 
-const ROBOTS_CACHE_MAX_SIZE = 100;
-const ROBOTS_CACHE_TTL_MS = 60 * 60 * 1000;
+const ROBOTS_CACHE_MAX_SIZE = 100; // Cap to prevent memory leaks in long-running processes
+const ROBOTS_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour cache
 
 interface CacheEntry<T> {
 	value: T;
@@ -65,6 +65,7 @@ class RobotsCache {
 
 	set(domain: string, value: RobotsResult): void {
 		if (this.cache.size >= this.maxSize) {
+			// Simple FIFO eviction
 			const oldestKey = this.cache.keys().next().value;
 			if (oldestKey) {
 				this.cache.delete(oldestKey);
@@ -88,7 +89,15 @@ interface RobotsOptions {
 	allowOnFailure?: boolean;
 }
 
-/** Fetches and parses robots.txt for a domain with database persistence and TTL-based caching. */
+/**
+ * Fetches and parses robots.txt for a domain with database persistence and TTL-based caching.
+ *
+ * Strategy:
+ * 1. Check in-memory cache.
+ * 2. Check database.
+ * 3. Fetch from network (trying HTTPS then HTTP).
+ * 4. On failure, optionally allow all (default).
+ */
 export async function getRobotsRules(
 	domain: string,
 	dbPromise: Promise<DatabaseLike>,

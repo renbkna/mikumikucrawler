@@ -1,4 +1,5 @@
 import { Download } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { useFocusTrap } from "../hooks";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 
@@ -8,36 +9,47 @@ interface ExportDialogProps {
 	onExport: (format: string) => void;
 }
 
-/** Modal dialog for selecting the desired output format (JSON/CSV) for captured data. */
 export function ExportDialog({
 	isOpen,
 	onClose,
 	onExport,
 }: Readonly<ExportDialogProps>) {
+	const dialogRef = useRef<HTMLDialogElement>(null);
 	const { modalRef, initialFocusRef } = useFocusTrap<HTMLDivElement>({
 		isOpen,
 		onClose,
 	});
 
-	if (!isOpen) return null;
+	useEffect(() => {
+		const dialog = dialogRef.current;
+		if (!dialog) return;
 
-	const handleBackdropClick = (e: React.MouseEvent) => {
-		if (e.target === e.currentTarget) onClose();
-	};
+		if (isOpen && !dialog.open) {
+			dialog.showModal();
+		} else if (!isOpen && dialog.open) {
+			dialog.close();
+		}
+	}, [isOpen]);
+
+	if (!isOpen) return null;
 
 	return (
 		<dialog
-			open={isOpen}
-			className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm m-0 p-0 w-full h-full max-w-none max-h-none border-none bg-transparent"
-			onClick={handleBackdropClick}
-			onKeyDown={(e) => {
-				if (e.key === "Escape") onClose();
-			}}
+			ref={dialogRef}
 			aria-labelledby="export-dialog-title"
+			className="fixed inset-0 z-50 flex items-center justify-center p-4 m-0 w-full h-full bg-transparent border-none backdrop:bg-black/20 backdrop:backdrop-blur-sm"
+			onClose={onClose}
 		>
+			<button
+				type="button"
+				className="absolute inset-0 w-full h-full bg-transparent border-none cursor-default"
+				onClick={onClose}
+				aria-label="Close dialog"
+				tabIndex={-1}
+			/>
 			<div
 				ref={modalRef}
-				className="w-full max-w-md p-6 bg-white rounded-3xl shadow-xl border-2 border-miku-pink/20 animate-pop"
+				className="relative w-full max-w-md p-6 bg-white rounded-3xl shadow-xl border-2 border-miku-pink/20 animate-pop focus:outline-none"
 			>
 				<h2
 					id="export-dialog-title"

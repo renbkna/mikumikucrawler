@@ -108,6 +108,8 @@ export function extractStructuredData(
 /**
  * Identifies the primary content body using common selectors or heuristic cloning.
  *
+ * Checks for common CMS class names (WordPress, Ghost, etc.) and semantic tags first.
+ *
  * @param cheerioInstance - Loaded HTML document
  * @returns Cleaned primary text content
  */

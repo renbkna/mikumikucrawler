@@ -37,37 +37,22 @@ export class CrawlState {
 		return this.isActive && this.stats.pagesScanned < this.options.maxPages;
 	}
 
-	/**
-	 * Permanently stops the crawl session.
-	 */
 	stop(): void {
 		this.isActive = false;
 	}
 
-	/**
-	 * Checks if a URL has already been visited in this session.
-	 */
 	hasVisited(url: string): boolean {
 		return this.visited.has(url);
 	}
 
-	/**
-	 * Records a URL as visited.
-	 */
 	markVisited(url: string): void {
 		this.visited.add(url);
 	}
 
-	/**
-	 * Sets a domain-specific crawl delay.
-	 */
 	setDomainDelay(domain: string, delay: number): void {
 		this.domainDelays.set(domain, delay);
 	}
 
-	/**
-	 * Gets the crawl delay for a domain, falling back to the global default.
-	 */
 	getDomainDelay(domain: string): number {
 		return this.domainDelays.get(domain) ?? this.options.crawlDelay;
 	}
@@ -85,32 +70,20 @@ export class CrawlState {
 		}
 	}
 
-	/**
-	 * Records a failed crawl attempt.
-	 */
 	recordFailure(): void {
 		this.stats.failureCount = (this.stats.failureCount ?? 0) + 1;
 	}
 
-	/**
-	 * Records a skipped URL (e.g., disallowed by robots.txt).
-	 */
 	recordSkip(): void {
 		this.stats.skippedCount = (this.stats.skippedCount ?? 0) + 1;
 	}
 
-	/**
-	 * Adds newly discovered links to the total count.
-	 */
 	addLinks(count: number): void {
 		if (count > 0) {
 			this.stats.linksFound += count;
 		}
 	}
 
-	/**
-	 * Adds newly discovered media files to the total count.
-	 */
 	addMedia(count: number): void {
 		if (count > 0) {
 			this.stats.mediaFiles = (this.stats.mediaFiles ?? 0) + count;

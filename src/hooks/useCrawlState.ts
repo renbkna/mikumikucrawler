@@ -6,6 +6,9 @@ type PageAction = { type: "add"; page: CrawledPage } | { type: "reset" };
 
 /**
  * Reducer function to manage the list of captured pages with buffer limits.
+ *
+ * NOTE: We enforce UI_LIMITS.MAX_PAGE_BUFFER to prevent the browser DOM
+ * from crashing due to too many rendered rows during long crawls.
  */
 function pagesReducer(state: CrawledPage[], action: PageAction): CrawledPage[] {
 	switch (action.type) {

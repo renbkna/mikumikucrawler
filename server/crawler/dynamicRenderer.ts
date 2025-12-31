@@ -19,7 +19,12 @@ interface InitializeResult {
 	fallbackLog?: string;
 }
 
-/** Handles dynamic page rendering using Puppeteer to support SPA and JS-heavy sites. */
+/**
+ * Handles dynamic page rendering using Puppeteer to support SPA and JS-heavy sites.
+ *
+ * NOTE: This is resource-intensive. We use aggressive recycling and memory
+ * checks to prevent the crawler from crashing the host system.
+ */
 export class DynamicRenderer {
 	private readonly options: SanitizedCrawlOptions;
 	private readonly logger: Logger;
@@ -49,6 +54,7 @@ export class DynamicRenderer {
 
 		this._uncaughtExceptionHandler = async (err: Error): Promise<void> => {
 			this.logger.error(`Uncaught Exception: ${err.message}`);
+			// Ensure browser dies with the process to prevent orphaned Chromium tasks
 			await cleanup();
 			process.exit(1);
 		};

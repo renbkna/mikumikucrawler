@@ -65,7 +65,14 @@ export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
 		};
 	}, []);
 
-	/** Establishes connection to the backend and sets up event listeners. */
+	/**
+	 * Establishes connection to the backend and sets up event listeners.
+	 *
+	 * Handles environment-specific URL resolution:
+	 * - Vite proxies in dev.
+	 * - Production URL injection.
+	 * - Protocol switching (http -> ws).
+	 */
 	const connect = useCallback(() => {
 		if (
 			socketRef.current?.readyState === WebSocket.OPEN ||
@@ -106,6 +113,8 @@ export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
 				setConnectionState("disconnected");
 				socketRef.current = null;
 
+				// Exponential backoff with jitter would be ideal, but simple exponential
+				// clamped to RECONNECTION_DELAY_MAX is sufficient for this UI.
 				const delay = Math.min(
 					SOCKET_CONFIG.RECONNECTION_DELAY * 2 ** reconnectAttemptsRef.current,
 					SOCKET_CONFIG.RECONNECTION_DELAY_MAX,
