@@ -113,6 +113,16 @@ export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
 				setConnectionState("disconnected");
 				socketRef.current = null;
 
+				if (
+					reconnectAttemptsRef.current >= SOCKET_CONFIG.RECONNECTION_ATTEMPTS
+				) {
+					handlersRef.current.addToast(
+						"error",
+						"Max reconnection attempts reached. Please refresh.",
+					);
+					return;
+				}
+
 				// Exponential backoff with jitter would be ideal, but simple exponential
 				// clamped to RECONNECTION_DELAY_MAX is sufficient for this UI.
 				const delay = Math.min(

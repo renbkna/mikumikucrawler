@@ -491,7 +491,7 @@ function App() {
 							/>
 							<span className="text-sm text-miku-text font-bold">
 								Miku Miku Crawler{" "}
-								<span className="text-miku-teal-dark">v2.0</span>
+								<span className="text-miku-teal-dark">v3.0.0</span>
 							</span>
 							<HeartIcon
 								className="text-miku-teal animate-heart-beat"

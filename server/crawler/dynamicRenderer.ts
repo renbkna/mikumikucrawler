@@ -1,4 +1,5 @@
 import puppeteer, { type Browser, type Page } from "puppeteer";
+import { config } from "../config/env.js";
 import type { Logger } from "../config/logging.js";
 import {
 	DYNAMIC_RENDERER_CONSTANTS,
@@ -96,7 +97,7 @@ export class DynamicRenderer {
 		const memoryStatus = logMemoryStatus(this.logger);
 		const constrainedEnvironment =
 			memoryStatus.isLowMemory ||
-			(process.env.RENDER && memoryStatus.heapUsed > 50);
+			(config.isRender && memoryStatus.heapUsed > 50);
 
 		if (constrainedEnvironment) {
 			this.disableDynamic("Skipping Puppeteer due to constrained memory");
@@ -132,8 +133,11 @@ export class DynamicRenderer {
 
 		this.logger.info("Launching Puppeteer (Chromium)...");
 
+		const executablePath = config.puppeteer.executablePath;
+
 		this.browser = await puppeteer.launch({
 			headless: true,
+			executablePath,
 			timeout: DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.COMPLEX_NAVIGATION,
 			args: [
 				"--no-sandbox",
@@ -157,7 +161,7 @@ export class DynamicRenderer {
 	async recycleIfNeeded(): Promise<void> {
 		if (!this.browser) return;
 
-		const recycleThreshold = process.env.RENDER
+		const recycleThreshold = config.isRender
 			? DYNAMIC_RENDERER_CONSTANTS.RECYCLE_THRESHOLD.RENDER_ENV
 			: DYNAMIC_RENDERER_CONSTANTS.RECYCLE_THRESHOLD.DEFAULT;
 		if (this.pageCount <= recycleThreshold) {

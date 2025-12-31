@@ -1,8 +1,9 @@
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import path from "node:path";
+import { config } from "./env.js";
 
-const DB_PATH = process.env.DB_PATH || "./data/crawler.db";
+const DB_PATH = config.dbPath;
 
 const ensureDirectoryExists = (filePath: string) => {
 	const dir = path.dirname(filePath);
