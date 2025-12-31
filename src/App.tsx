@@ -22,10 +22,6 @@ import { useSocket, useToast } from "./hooks";
 import { useCrawlState } from "./hooks/useCrawlState";
 import type { CrawledPage, QueueStats, Stats } from "./types";
 
-/**
- * Main application component for Miku Miku Crawler.
- * Manages global UI state, WebSocket connectivity, and orchestration of the crawling process.
- */
 function App() {
 	const [isAttacking, setIsAttacking] = useState(false);
 	const [theatreStatus, setTheatreStatus] = useState<

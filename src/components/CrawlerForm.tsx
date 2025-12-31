@@ -25,7 +25,6 @@ interface CrawlerFormProps {
 	connectionState: ConnectionState;
 }
 
-/** Handles user input for the target URL and provides controls to initiate or stop crawls. */
 export const CrawlerForm = memo(function CrawlerForm({
 	target,
 	setTarget,

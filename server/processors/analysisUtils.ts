@@ -310,6 +310,7 @@ export function analyzeContent(text: string): AnalysisResult {
 	let sentimentLabel = "neutral";
 	try {
 		const result = sentiment.analyze(cleanText);
+		// Heuristic thresholds: +/- 2 allows for some mild sentiment words without skewing the result.
 		if (result.score > 2) sentimentLabel = "positive";
 		else if (result.score < -2) sentimentLabel = "negative";
 	} catch {
@@ -326,6 +327,7 @@ export function analyzeContent(text: string): AnalysisResult {
 		0,
 	);
 	const avgSyllablesPerWord = wordCount > 0 ? syllableCount / wordCount : 0;
+	// Flesch Reading Ease formula
 	const readabilityScore = Math.max(
 		0,
 		Math.min(
@@ -351,6 +353,7 @@ export function analyzeContent(text: string): AnalysisResult {
 
 /**
  * Detects the syllable count in a word using heuristic vowel pattern matching.
+ * NOTE: This is an approximation (English-centric), not a dictionary lookup.
  */
 function countSyllables(word: string): number {
 	word = word.toLowerCase().replaceAll(/[^a-z]/g, "");
@@ -365,6 +368,9 @@ function countSyllables(word: string): number {
 
 /**
  * Assesses page quality based on metadata presence, content length, and accessibility markers.
+ *
+ * Uses a baseline score of 50 and penalizes/rewards based on key SEO/UX factors.
+ * This is a heuristic scoring system, not a definitive quality metric.
  *
  * @param cheerioInstance - Loaded HTML document
  * @param mainContent - Primary extracted text body

@@ -3,7 +3,12 @@ import type { CheerioAPI } from "cheerio";
 import type { SanitizedCrawlOptions } from "../../types.js";
 import { normalizeUrl } from "../../utils/helpers.js";
 
-/** Pre-compiled regex for file extensions to skip (hoisted to avoid recompilation per-link) */
+/**
+ * Pre-compiled regex for file extensions to skip.
+ * We skip these because:
+ * 1. Binary/Media files shouldn't be parsed as HTML for links.
+ * 2. Source code/Config files (git, gitignore) aren't relevant for web crawling.
+ */
 const SKIP_EXTENSIONS =
 	/\.(css|js|json|xml|txt|md|csv|svg|ico|git|gitignore)$/i;
 

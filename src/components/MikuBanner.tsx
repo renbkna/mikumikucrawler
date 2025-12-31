@@ -4,7 +4,6 @@ interface MikuBannerProps {
 	active: boolean;
 }
 
-/** Visual header banner that reflects the current crawler activity state. */
 export const MikuBanner = ({ active }: MikuBannerProps) => {
 	return (
 		<div
@@ -19,7 +18,6 @@ export const MikuBanner = ({ active }: MikuBannerProps) => {
 			<img
 				src="/miku1.gif"
 				alt="Miku Beam"
-				loading="lazy"
 				className={`w-full h-full object-cover transition-all duration-500 ${
 					active ? "opacity-100 scale-105" : "opacity-70 grayscale-[20%]"
 				}`}

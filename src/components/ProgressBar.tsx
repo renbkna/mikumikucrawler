@@ -6,7 +6,6 @@ interface ProgressBarProps {
 	progress: number;
 }
 
-/** Visual indicator of the crawl completion state with themed animations. */
 export const ProgressBar = memo(function ProgressBar({
 	progress,
 }: ProgressBarProps) {

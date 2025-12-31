@@ -9,13 +9,12 @@ interface ActionButtonsProps {
 	setShowDetails: (show: boolean) => void;
 }
 
-/** Group of buttons for global actions like data export and toggling extended statistics. */
 export function ActionButtons({
 	crawledPages,
 	setOpenExportDialog,
 	showDetails,
 	setShowDetails,
-}: ActionButtonsProps) {
+}: Readonly<ActionButtonsProps>) {
 	return (
 		<div className="flex flex-wrap gap-4 mb-4">
 			<button

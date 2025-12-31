@@ -1,4 +1,11 @@
-import { Fragment, memo, useEffect, useRef, useState } from "react";
+import {
+	Fragment,
+	memo,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { SEQUENCE_TIMINGS } from "../constants";
 
 const RIPPLE_ANIMATION_DURATION_MS = 1500;
@@ -12,13 +19,12 @@ interface TheatreOverlayProps {
 	volume?: number;
 }
 
-/** Manages the immersive countdown and transition sequence before a crawl begins. */
 export const TheatreOverlay = memo(function TheatreOverlay({
 	status,
 	onComplete,
 	onBeamStart,
 	volume = 80,
-}: TheatreOverlayProps) {
+}: Readonly<TheatreOverlayProps>) {
 	const [count, setCount] = useState<string | null>(null);
 	const [ripples, setRipples] = useState<{ id: number; color: string }[]>([]);
 	const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -99,55 +105,52 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 	}, [status]);
 
 	/** Ripple animation effect */
+	const triggerRipple = useCallback((id: number) => {
+		const color = rippleCountRef.current % 2 === 0 ? "miku-pink" : "miku-teal";
+		rippleCountRef.current += 1;
+		setRipples((prev) => [...prev, { id, color }]);
+	}, []);
+
 	useEffect(() => {
-		if (count && count !== "READY?") {
-			const id = Date.now();
-			requestAnimationFrame(() => {
-				const color =
-					rippleCountRef.current % 2 === 0 ? "miku-pink" : "miku-teal";
-				rippleCountRef.current += 1;
-				setRipples((prev) => [...prev, { id, color }]);
-			});
+		if (!count || count === "READY?") return;
 
-			const cleanupTimer = setTimeout(() => {
-				setRipples((prev) => prev.filter((r) => r.id !== id));
-			}, RIPPLE_ANIMATION_DURATION_MS + 100);
+		const id = Date.now();
+		requestAnimationFrame(() => triggerRipple(id));
 
-			return () => clearTimeout(cleanupTimer);
-		}
-	}, [count]);
+		const cleanupTimer = setTimeout(() => {
+			setRipples((prev) => prev.filter((r) => r.id !== id));
+		}, RIPPLE_ANIMATION_DURATION_MS + 100);
+
+		return () => clearTimeout(cleanupTimer);
+	}, [count, triggerRipple]);
 
 	/** Countdown sequence - runs once when blackout starts */
 	useEffect(() => {
-		if (status !== "blackout" || sequenceStartedRef.current) {
-			return;
-		}
+		if (status !== "blackout" || sequenceStartedRef.current) return;
 
 		sequenceStartedRef.current = true;
-
 		const timeouts: NodeJS.Timeout[] = [];
-		const addTimeout = (fn: () => void, delay: number) => {
-			const id = setTimeout(fn, delay);
-			timeouts.push(id);
-		};
 
-		addTimeout(() => setCount("1"), SEQUENCE_TIMINGS.COUNT_1);
-		addTimeout(() => setCount("2"), SEQUENCE_TIMINGS.COUNT_2);
-		addTimeout(() => setCount("3"), SEQUENCE_TIMINGS.COUNT_3);
-		addTimeout(() => setCount("READY?"), SEQUENCE_TIMINGS.READY);
+		const sequence = [
+			{ fn: () => setCount("1"), delay: SEQUENCE_TIMINGS.COUNT_1 },
+			{ fn: () => setCount("2"), delay: SEQUENCE_TIMINGS.COUNT_2 },
+			{ fn: () => setCount("3"), delay: SEQUENCE_TIMINGS.COUNT_3 },
+			{ fn: () => setCount("READY?"), delay: SEQUENCE_TIMINGS.READY },
+			{
+				fn: () => {
+					setCount(null);
+					onBeamStartRef.current();
+				},
+				delay: SEQUENCE_TIMINGS.BEAM_START,
+			},
+			{ fn: () => onCompleteRef.current(), delay: SEQUENCE_TIMINGS.COMPLETE },
+		];
 
-		addTimeout(() => {
-			setCount(null);
-			onBeamStartRef.current();
-		}, SEQUENCE_TIMINGS.BEAM_START);
-
-		addTimeout(() => {
-			onCompleteRef.current();
-		}, SEQUENCE_TIMINGS.COMPLETE);
+		for (const item of sequence) {
+			timeouts.push(setTimeout(item.fn, item.delay));
+		}
 
 		timeoutsRef.current = timeouts;
-
-		// No cleanup - timeouts are managed by the idle effect
 	}, [status]);
 
 	if (status === "idle") return null;

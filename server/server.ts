@@ -1,3 +1,11 @@
+/**
+ * Miku Crawler API Entry Point
+ *
+ * Sets up the Elysia server, configures middleware (CORS, Rate Limit, Swagger),
+ * initializes the database and logging, and handles graceful shutdown.
+ *
+ * NOTE: We use Bun's native ESM support.
+ */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cors } from "@elysiajs/cors";
@@ -28,6 +36,7 @@ const activeCrawls = new Map<string, CrawlSession>();
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 const PORT = process.env.PORT || 3000;
 
+// Pass the database as a Promise to handlers that might need async access (e.g., inside closures)
 const { handleMessage, handleClose } = createWebSocketHandlers(
 	activeCrawls,
 	Promise.resolve(db),
@@ -130,6 +139,10 @@ const instance = app.listen(PORT, (server) => {
 	);
 });
 
+/**
+ * Ensures clean teardown of database connections and active crawl sessions
+ * on process termination (SIGTERM/SIGINT).
+ */
 async function gracefulShutdown(signal: string): Promise<void> {
 	logger.info(`${signal} received, shutting down gracefully`);
 

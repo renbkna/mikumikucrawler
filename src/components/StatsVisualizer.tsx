@@ -43,6 +43,7 @@ export function StatsVisualizer({ stats }: Readonly<StatsVisualizerProps>) {
 							<div
 								className="h-full bg-gradient-to-r from-miku-teal to-teal-300 rounded-full transition-all duration-500"
 								style={{
+									// Scale: 5 pages/sec = 100% width (Arbitrary visual cap)
 									width: `${Math.min(Number(stats.pagesPerSecond) * 20, 100)}%`,
 								}}
 							/>
