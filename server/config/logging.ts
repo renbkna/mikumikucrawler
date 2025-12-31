@@ -1,89 +1,71 @@
-import { existsSync, mkdir } from "node:fs";
-import { promisify } from "node:util";
-import winston, { type Logger } from "winston";
+import { createWriteStream, existsSync, mkdirSync } from "node:fs";
+import pino, { type Logger } from "pino";
 
-const mkdirAsync = promisify(mkdir);
-
-const ensureDirectoryExists = async (dir: string): Promise<void> => {
+const ensureDirectoryExists = (dir: string): void => {
 	if (!existsSync(dir)) {
-		await mkdirAsync(dir, { recursive: true });
+		mkdirSync(dir, { recursive: true });
 	}
 };
 
-const colors = {
-	reset: "\x1b[0m",
-	dim: "\x1b[2m",
-	bold: "\x1b[1m",
-	cyan: "\x1b[36m",
-	yellow: "\x1b[33m",
-	red: "\x1b[31m",
-	green: "\x1b[32m",
-	magenta: "\x1b[35m",
-	gray: "\x1b[90m",
-};
+/** Re-export Logger type for consumers */
+export type { Logger };
 
-const levelStyles: Record<string, { color: string; label: string }> = {
-	error: { color: colors.red, label: "ERR" },
-	warn: { color: colors.yellow, label: "WRN" },
-	info: { color: colors.cyan, label: "INF" },
-	debug: { color: colors.magenta, label: "DBG" },
-	verbose: { color: colors.gray, label: "VRB" },
-};
+/**
+ * Extended logger interface with close method for graceful shutdown.
+ * Pino doesn't have a native close method, so we add one for file stream cleanup.
+ */
+export interface AppLogger extends Logger {
+	close(): void;
+}
 
-const formatTime = (): string => {
-	const now = new Date();
-	return [
-		String(now.getHours()).padStart(2, "0"),
-		String(now.getMinutes()).padStart(2, "0"),
-		String(now.getSeconds()).padStart(2, "0"),
-	].join(":");
-};
+/**
+ * Sets up Pino logger with console output (pretty-printed) and file transports.
+ * Pino is ~5x faster than Winston with lower memory footprint.
+ */
+export const setupLogging = async (): Promise<AppLogger> => {
+	ensureDirectoryExists("./logs");
 
-export const setupLogging = async (): Promise<Logger> => {
-	await ensureDirectoryExists("./logs");
+	const level = process.env.LOG_LEVEL || "info";
 
-	return winston.createLogger({
-		level: process.env.LOG_LEVEL || "info",
-		format: winston.format.combine(
-			winston.format.timestamp(),
-			winston.format.errors({ stack: true }),
-			winston.format.splat(),
-			winston.format.json(),
-		),
-		defaultMeta: { service: "miku-crawler" },
-		transports: [
-			new winston.transports.Console({
-				format: winston.format.printf(({ level, message, stack }) => {
-					// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escape codes are necessary here
-					const rawLevel = level.replaceAll(/\u001b\[[0-9;]*m/gu, "");
-					const style = levelStyles[rawLevel] || {
-						color: colors.gray,
-						label: "LOG",
-					};
+	// Create file streams for log destinations
+	const errorStream = createWriteStream("./logs/error.log", { flags: "a" });
+	const allStream = createWriteStream("./logs/crawler.log", { flags: "a" });
 
-					const time = `${colors.dim}${formatTime()}${colors.reset}`;
-					const tag = `${style.color}${colors.bold}${style.label}${colors.reset}`;
-
-					let output = `${time} ${tag} ${message}`;
-
-					if (stack && typeof stack === "string") {
-						output += `\n${colors.dim}${stack}${colors.reset}`;
-					}
-
-					return output;
-				}),
+	// Create multi-stream transport using pino.multistream
+	const streams = pino.multistream([
+		// Console with pretty printing
+		{
+			level: "debug",
+			stream: pino.transport({
+				target: "pino-pretty",
+				options: {
+					colorize: true,
+					translateTime: "HH:MM:ss",
+					ignore: "pid,hostname",
+					levelFirst: true,
+				},
 			}),
-			new winston.transports.File({
-				filename: "logs/error.log",
-				level: "error",
-				maxsize: 10485760,
-				maxFiles: 5,
-			}),
-			new winston.transports.File({
-				filename: "logs/crawler.log",
-				maxsize: 10485760,
-				maxFiles: 10,
-			}),
-		],
-	});
+		},
+		// All logs to crawler.log (JSON format for parsing)
+		{ level: "debug", stream: allStream },
+		// Error-only logs to error.log
+		{ level: "error", stream: errorStream },
+	]);
+
+	const logger = pino(
+		{
+			level,
+			base: { service: "miku-crawler" },
+			timestamp: pino.stdTimeFunctions.isoTime,
+		},
+		streams,
+	) as AppLogger;
+
+	// Add close method for graceful shutdown
+	logger.close = () => {
+		errorStream.end();
+		allStream.end();
+	};
+
+	return logger;
 };

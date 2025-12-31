@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { DatabaseLike, LoggerLike } from "../../types.js";
-import { getRobotsRules } from "../helpers.js";
+import { getErrorMessage, getRobotsRules } from "../helpers.js";
 
 const createLogger = (): LoggerLike => ({
 	warn: mock(() => {}),
@@ -51,5 +51,28 @@ describe("getRobotsRules", () => {
 		);
 
 		expect(robots).toBeNull();
+	});
+});
+
+describe("getErrorMessage", () => {
+	test("extracts message from Error instance", () => {
+		const error = new Error("test error message");
+		expect(getErrorMessage(error)).toBe("test error message");
+	});
+
+	test("returns string directly if error is string", () => {
+		expect(getErrorMessage("string error")).toBe("string error");
+	});
+
+	test("converts non-Error objects to string", () => {
+		expect(getErrorMessage({ code: 500 })).toBe("[object Object]");
+		expect(getErrorMessage(42)).toBe("42");
+		expect(getErrorMessage(null)).toBe("null");
+		expect(getErrorMessage(undefined)).toBe("undefined");
+	});
+
+	test("handles TypeError correctly", () => {
+		const error = new TypeError("type error message");
+		expect(getErrorMessage(error)).toBe("type error message");
 	});
 });

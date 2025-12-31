@@ -94,8 +94,12 @@ export const setupDatabase = (): Database => {
 			for (const col of newColumns) {
 				try {
 					dbInstance.exec(`ALTER TABLE pages ADD COLUMN ${col}`);
-				} catch {
-					// Migration might have already been applied
+				} catch (err) {
+					// SQLite returns "duplicate column name" if column already exists
+					const message = err instanceof Error ? err.message : String(err);
+					if (!message.includes("duplicate column")) {
+						console.error(`Migration failed for column ${col}:`, message);
+					}
 				}
 			}
 		}

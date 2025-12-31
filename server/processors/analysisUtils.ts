@@ -1,3 +1,4 @@
+/// <reference path="../types/sentiment.d.ts" />
 import type { CheerioAPI } from "cheerio";
 import languageDetect from "languagedetect";
 import Sentiment from "sentiment";

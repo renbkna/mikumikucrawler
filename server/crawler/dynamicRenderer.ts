@@ -1,11 +1,17 @@
 import puppeteer, { type Browser, type Page } from "puppeteer";
-import type { Logger } from "winston";
-import { DYNAMIC_RENDERER_CONSTANTS } from "../constants.js";
+import type { Logger } from "../config/logging.js";
+import {
+	DYNAMIC_RENDERER_CONSTANTS,
+	FETCH_HEADERS,
+	SITE_COOKIES,
+	SITE_SELECTORS,
+} from "../constants.js";
 import type {
 	DynamicRenderResult,
 	QueueItem,
 	SanitizedCrawlOptions,
 } from "../types.js";
+import { getErrorMessage } from "../utils/helpers.js";
 import { logMemoryStatus } from "../utils/memoryMonitor.js";
 
 interface InitializeResult {
@@ -99,8 +105,9 @@ export class DynamicRenderer {
 			await this.launchBrowser();
 			return { dynamicEnabled: this.isEnabled() };
 		} catch (err) {
-			const message = err instanceof Error ? err.message : "Unknown error";
-			this.disableDynamic(`Failed to launch Puppeteer: ${message}`);
+			this.disableDynamic(
+				`Failed to launch Puppeteer: ${getErrorMessage(err)}`,
+			);
 			return {
 				dynamicEnabled: false,
 				fallbackLog:
@@ -156,8 +163,50 @@ export class DynamicRenderer {
 			await this.browser.close();
 			await this.launchBrowser();
 		} catch (err) {
-			const message = err instanceof Error ? err.message : "Unknown error";
-			this.logger.warn(`Error recycling browser: ${message}`);
+			this.logger.warn(`Error recycling browser: ${getErrorMessage(err)}`);
+		}
+	}
+
+	/**
+	 * Safely extracts page content, title, and description in a single evaluate call.
+	 * This minimizes race conditions where the frame could detach between operations.
+	 */
+	private async safeExtractContent(
+		page: Page,
+	): Promise<{ content: string; title: string; description: string } | null> {
+		try {
+			// Check if page is still usable
+			if (page.isClosed()) {
+				return null;
+			}
+
+			// Get content first (most important)
+			const content = await page.content();
+
+			// Extract title and description in a single evaluate to minimize frame access
+			const metadata = await page.evaluate(() => {
+				const title = document.title || "";
+				const descMeta = document.querySelector('meta[name="description"]');
+				const description = descMeta?.getAttribute("content") || "";
+				return { title, description };
+			});
+
+			return {
+				content,
+				title: metadata.title,
+				description: metadata.description,
+			};
+		} catch (err) {
+			const message = getErrorMessage(err);
+			// Frame detachment is expected on SPAs - return null to trigger static fallback
+			if (
+				message.includes("detached Frame") ||
+				message.includes("Execution context was destroyed") ||
+				message.includes("Target closed")
+			) {
+				return null;
+			}
+			throw err;
 		}
 	}
 
@@ -171,8 +220,9 @@ export class DynamicRenderer {
 			try {
 				await this.launchBrowser();
 			} catch (err) {
-				const message = err instanceof Error ? err.message : "Unknown error";
-				this.disableDynamic(`Failed to relaunch Puppeteer: ${message}`);
+				this.disableDynamic(
+					`Failed to relaunch Puppeteer: ${getErrorMessage(err)}`,
+				);
 				return null;
 			}
 		}
@@ -184,15 +234,18 @@ export class DynamicRenderer {
 		const page = await this.browser.newPage();
 		this.pageCount++;
 
+		// Track if navigation happens mid-extraction (SPA route changes)
+		let navigationOccurred = false;
+		const navigationHandler = () => {
+			navigationOccurred = true;
+		};
+
 		try {
-			await page.setUserAgent(
-				"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-			);
+			await page.setUserAgent(FETCH_HEADERS["User-Agent"]);
 			await page.setViewport(DYNAMIC_RENDERER_CONSTANTS.VIEWPORT);
 			await page.setExtraHTTPHeaders({
-				Accept:
-					"text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-				"Accept-Language": "en-US,en;q=0.5",
+				Accept: FETCH_HEADERS.Accept,
+				"Accept-Language": FETCH_HEADERS["Accept-Language"],
 				DNT: "1",
 			});
 
@@ -222,15 +275,32 @@ export class DynamicRenderer {
 
 			await this.setCookiesForPage(page, item.url);
 
+			// Start tracking navigation after initial page load
+			page.on("framenavigated", navigationHandler);
+
 			if (isComplex) {
 				await this.waitForComplexContent(page, item.url);
 			}
 
-			const content = await page.content();
-			const title = await page.title();
-			const description = await page
-				.$eval('meta[name="description"]', (el) => el.getAttribute("content"))
-				.catch(() => "");
+			// Abort if SPA navigated away during wait
+			if (navigationOccurred) {
+				this.logger.debug(
+					`Navigation occurred during rendering of ${item.url}, falling back to static`,
+				);
+				page.off("framenavigated", navigationHandler);
+				await this.closePageSafely(page);
+				return null;
+			}
+
+			// Use safe extraction to handle frame detachment gracefully
+			const extracted = await this.safeExtractContent(page);
+			if (!extracted || navigationOccurred) {
+				page.off("framenavigated", navigationHandler);
+				await this.closePageSafely(page);
+				return null; // Fall back to static crawling
+			}
+
+			const { content, title, description } = extracted;
 
 			if (this.options.screenshots) {
 				try {
@@ -245,14 +315,13 @@ export class DynamicRenderer {
 						quality: 70,
 					});
 				} catch (error_) {
-					const message =
-						error_ instanceof Error ? error_.message : "Unknown error";
 					this.logger.debug(
-						`Screenshot capture failed for ${item.url}: ${message}`,
+						`Screenshot capture failed for ${item.url}: ${getErrorMessage(error_)}`,
 					);
 				}
 			}
 
+			page.off("framenavigated", navigationHandler);
 			await page.close();
 
 			return {
@@ -266,22 +335,27 @@ export class DynamicRenderer {
 				lastModified,
 			};
 		} catch (err) {
+			page.off("framenavigated", navigationHandler);
 			await this.closePageSafely(page);
 
 			const errorMessage = err instanceof Error ? err.message : "";
+
+			// Handle recoverable browser/page errors by falling back to static crawling
 			if (
 				errorMessage.includes("Target closed") ||
 				errorMessage.includes("Session closed") ||
-				errorMessage.includes("Connection closed")
+				errorMessage.includes("Connection closed") ||
+				errorMessage.includes("detached Frame") ||
+				errorMessage.includes("Execution context was destroyed")
 			) {
-				this.logger.warn(
-					`Browser session error detected, falling back to static crawling for ${item.url}`,
+				this.logger.debug(
+					`Browser context error for ${item.url}, falling back to static crawling`,
 				);
 				return null;
 			}
 
 			if (errorMessage.includes("Timeout")) {
-				this.logger.warn(
+				this.logger.debug(
 					`Navigation timeout for ${item.url}, falling back to static crawling`,
 				);
 				return null;
@@ -293,32 +367,17 @@ export class DynamicRenderer {
 
 	/**
 	 * Waits for specific elements on well-known complex JS sites to ensure content is loaded.
+	 * Selectors are configured in SITE_SELECTORS constant for easy maintenance.
 	 */
 	async waitForComplexContent(page: Page, url: string): Promise<void> {
 		try {
-			let selectorToWait: string | null = null;
 			const additionalWaitTime =
 				DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.ADDITIONAL_WAIT;
 
-			if (url.includes("youtube.com/watch")) {
-				selectorToWait = "h1.ytd-video-primary-info-renderer";
-			} else if (url.includes("twitter.com") || url.includes("x.com")) {
-				selectorToWait = '[data-testid="tweet"]';
-			} else if (url.includes("linkedin.com")) {
-				selectorToWait = ".feed-container-theme";
-			} else if (url.includes("instagram.com")) {
-				selectorToWait = '[role="main"]';
-			} else if (url.includes("reddit.com")) {
-				selectorToWait = '[data-testid="post-container"]';
-			} else if (url.includes("facebook.com") || url.includes("meta.com")) {
-				selectorToWait = '[role="main"]';
-			} else if (url.includes("github.com")) {
-				selectorToWait = ".js-repo-root, .repository-content";
-			} else if (url.includes("medium.com")) {
-				selectorToWait = "article";
-			} else if (url.includes("stackoverflow.com")) {
-				selectorToWait = ".question, .answer";
-			}
+			// Find matching selector from configuration
+			const selectorToWait = Object.entries(SITE_SELECTORS).find(([pattern]) =>
+				url.includes(pattern),
+			)?.[1];
 
 			if (selectorToWait) {
 				await page.waitForSelector(selectorToWait, {
@@ -329,48 +388,35 @@ export class DynamicRenderer {
 
 			await new Promise((resolve) => setTimeout(resolve, additionalWaitTime));
 		} catch (error_) {
-			const message =
-				error_ instanceof Error ? error_.message : "Unknown error";
 			this.logger.warn(
-				`Complex site selector wait failed for ${url}: ${message}`,
+				`Complex site selector wait failed for ${url}: ${getErrorMessage(error_)}`,
 			);
 		}
 	}
 
 	/**
 	 * Sets necessary cookies (e.g., for age verification) to bypass interstitial pages.
+	 * Cookies are configured in SITE_COOKIES constant for easy maintenance.
 	 */
 	async setCookiesForPage(page: Page, url: string): Promise<void> {
 		try {
 			const urlDomain = new URL(url).hostname;
-			const cookiesToSet: Array<{
-				name: string;
-				value: string;
-				domain: string;
-				path: string;
-			}> = [];
 
-			if (url.includes("youtube.com")) {
-				cookiesToSet.push(
-					{ name: "CONSENT", value: "YES+", domain: urlDomain, path: "/" },
-					{ name: "PREF", value: "tz=UTC", domain: urlDomain, path: "/" },
-				);
-			} else if (url.includes("reddit.com")) {
-				cookiesToSet.push({
-					name: "over18",
-					value: "1",
+			// Find matching cookies from configuration
+			const siteCookies = Object.entries(SITE_COOKIES).find(([pattern]) =>
+				url.includes(pattern),
+			)?.[1];
+
+			if (siteCookies && siteCookies.length > 0) {
+				const cookiesToSet = siteCookies.map((cookie) => ({
+					...cookie,
 					domain: urlDomain,
 					path: "/",
-				});
-			}
-
-			if (cookiesToSet.length > 0) {
+				}));
 				await page.setCookie(...cookiesToSet);
 			}
 		} catch (error_) {
-			const message =
-				error_ instanceof Error ? error_.message : "Unknown error";
-			this.logger.debug(`Cookie setting failed: ${message}`);
+			this.logger.debug(`Cookie setting failed: ${getErrorMessage(error_)}`);
 		}
 	}
 
@@ -383,8 +429,7 @@ export class DynamicRenderer {
 				await page.close();
 			}
 		} catch (error_) {
-			const message =
-				error_ instanceof Error ? error_.message : "Unknown error";
+			const message = getErrorMessage(error_);
 			// Targets might be closed asynchronously during cleanup
 			if (
 				!message.includes("Target closed") &&
@@ -412,8 +457,7 @@ export class DynamicRenderer {
 			await this.browser.close();
 			this.logger.info("Puppeteer closed.");
 		} catch (err) {
-			const message = err instanceof Error ? err.message : "Unknown error";
-			this.logger.error(`Error closing browser: ${message}`);
+			this.logger.error(`Error closing browser: ${getErrorMessage(err)}`);
 		} finally {
 			this.browser = null;
 			this.pageCount = 0;

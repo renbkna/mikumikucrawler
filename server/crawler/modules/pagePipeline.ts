@@ -2,7 +2,8 @@ import type { Database } from "bun:sqlite";
 import { URL } from "node:url";
 import * as cheerio from "cheerio";
 import sanitizeHtml from "sanitize-html";
-import type { Logger } from "winston";
+import type { Logger } from "../../config/logging.js";
+import { FETCH_HEADERS } from "../../constants.js";
 import { ContentProcessor } from "../../processors/ContentProcessor.js";
 import type {
 	CrawlerSocket,
@@ -19,14 +20,6 @@ import type { CrawlState } from "./crawlState.js";
 import { extractLinks } from "./linkExtractor.js";
 
 const MEDIA_CONTENT_REGEX = /image|video|audio|application\/(pdf|zip)/i;
-const FETCH_HEADERS = {
-	"User-Agent":
-		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-	Accept:
-		"text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-	"Accept-Language": "en-US,en;q=0.5",
-	"Accept-Encoding": "gzip, deflate",
-};
 
 interface PagePipelineParams {
 	options: SanitizedCrawlOptions;

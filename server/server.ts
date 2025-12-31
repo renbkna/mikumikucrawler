@@ -3,7 +3,6 @@ import { fileURLToPath } from "node:url";
 import { cors } from "@elysiajs/cors";
 import { staticPlugin } from "@elysiajs/static";
 import { swagger } from "@elysiajs/swagger";
-import dotenv from "dotenv";
 import { Elysia } from "elysia";
 import { rateLimit } from "elysia-rate-limit";
 
@@ -15,8 +14,9 @@ import {
 	WebSocketMessageSchema,
 } from "./handlers/socketHandlers.js";
 import { apiRoutes } from "./routes/apiRoutes.js";
+import { getErrorMessage } from "./utils/helpers.js";
 
-dotenv.config();
+// Bun natively loads .env files - no dotenv needed
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -137,8 +137,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
 		try {
 			await session.stop();
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			logger.error(`Error stopping crawl session: ${message}`);
+			logger.error(`Error stopping crawl session: ${getErrorMessage(error)}`);
 		}
 	}
 
@@ -146,8 +145,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
 		db.close();
 		logger.info("Database connection closed");
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		logger.warn(`Failed to close database cleanly: ${message}`);
+		logger.warn(`Failed to close database cleanly: ${getErrorMessage(error)}`);
 	}
 
 	instance.stop();

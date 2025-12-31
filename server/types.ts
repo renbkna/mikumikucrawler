@@ -7,9 +7,9 @@ export type {
 } from "../src/types.js";
 
 import type { Database } from "bun:sqlite";
-import type { Logger } from "winston";
 import type { ServerToClientEvents } from "../src/types/socket.js";
 import type { CrawlOptions, Stats } from "../src/types.js";
+import type { Logger } from "./config/logging.js";
 
 export interface QueueItem {
 	url: string;

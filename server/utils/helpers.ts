@@ -1,6 +1,20 @@
 import robotsParser from "robots-parser";
 import type { DatabaseLike, LoggerLike } from "../types.js";
 
+/**
+ * Extracts a message from an unknown error value.
+ * Use this instead of inline `err instanceof Error ? err.message : String(error)` checks.
+ */
+export function getErrorMessage(error: unknown): string {
+	if (error instanceof Error) {
+		return error.message;
+	}
+	if (typeof error === "string") {
+		return error;
+	}
+	return String(error);
+}
+
 const ROBOTS_CACHE_MAX_SIZE = 100;
 const ROBOTS_CACHE_TTL_MS = 60 * 60 * 1000;
 
@@ -10,8 +24,8 @@ interface CacheEntry<T> {
 }
 
 interface RobotsResult {
-	isAllowed(url: string, userAgent?: string): boolean;
-	isDisallowed(url: string, userAgent?: string): boolean;
+	isAllowed(url: string, userAgent?: string): boolean | undefined;
+	isDisallowed(url: string, userAgent?: string): boolean | undefined;
 	getCrawlDelay(userAgent?: string): number | undefined;
 	getSitemaps(): string[];
 }
