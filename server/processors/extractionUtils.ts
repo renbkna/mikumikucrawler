@@ -65,8 +65,9 @@ export function extractStructuredData(
 					const jsonData = JSON.parse(html);
 					structured.jsonLd.push(jsonData);
 				}
-			} catch {
-				// Silent fail for malformed JSON-LD
+			} catch (err) {
+				// Malformed JSON-LD is common on third-party sites; log for debugging
+				console.debug(`Malformed JSON-LD: ${err instanceof Error ? err.message : err}`);
 			}
 		},
 	);
@@ -189,8 +190,9 @@ export function extractMediaInfo(
 				width: cheerioInstance(element).attr("width"),
 				height: cheerioInstance(element).attr("height"),
 			});
-		} catch {
-			// Silent fail for malformed URLs
+		} catch (err) {
+			// Malformed URLs are common in user content
+			console.debug(`Malformed image URL: ${err instanceof Error ? err.message : err}`);
 		}
 	});
 
@@ -200,8 +202,8 @@ export function extractMediaInfo(
 			try {
 				const absoluteUrl = new URL(src, baseUrl).href;
 				media.push({ type: "video", url: absoluteUrl });
-			} catch {
-				// Silent fail for malformed URLs
+			} catch (err) {
+				console.debug(`Malformed video URL: ${err instanceof Error ? err.message : err}`);
 			}
 		}
 	});
@@ -212,8 +214,8 @@ export function extractMediaInfo(
 			try {
 				const absoluteUrl = new URL(src, baseUrl).href;
 				media.push({ type: "audio", url: absoluteUrl });
-			} catch {
-				// Silent fail for malformed URLs
+			} catch (err) {
+				console.debug(`Malformed audio URL: ${err instanceof Error ? err.message : err}`);
 			}
 		}
 	});
@@ -258,8 +260,8 @@ export function processLinks(
 				type: linkType,
 				domain: url.hostname,
 			});
-		} catch {
-			// Silent fail for malformed URLs
+		} catch (err) {
+			console.debug(`Malformed link URL: ${err instanceof Error ? err.message : err}`);
 		}
 	});
 
