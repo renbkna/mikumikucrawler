@@ -67,7 +67,9 @@ export function extractStructuredData(
 				}
 			} catch (err) {
 				// Malformed JSON-LD is common on third-party sites; log for debugging
-				console.debug(`Malformed JSON-LD: ${err instanceof Error ? err.message : err}`);
+				console.debug(
+					`Malformed JSON-LD: ${err instanceof Error ? err.message : err}`,
+				);
 			}
 		},
 	);
@@ -192,7 +194,9 @@ export function extractMediaInfo(
 			});
 		} catch (err) {
 			// Malformed URLs are common in user content
-			console.debug(`Malformed image URL: ${err instanceof Error ? err.message : err}`);
+			console.debug(
+				`Malformed image URL: ${err instanceof Error ? err.message : err}`,
+			);
 		}
 	});
 
@@ -203,7 +207,9 @@ export function extractMediaInfo(
 				const absoluteUrl = new URL(src, baseUrl).href;
 				media.push({ type: "video", url: absoluteUrl });
 			} catch (err) {
-				console.debug(`Malformed video URL: ${err instanceof Error ? err.message : err}`);
+				console.debug(
+					`Malformed video URL: ${err instanceof Error ? err.message : err}`,
+				);
 			}
 		}
 	});
@@ -215,7 +221,9 @@ export function extractMediaInfo(
 				const absoluteUrl = new URL(src, baseUrl).href;
 				media.push({ type: "audio", url: absoluteUrl });
 			} catch (err) {
-				console.debug(`Malformed audio URL: ${err instanceof Error ? err.message : err}`);
+				console.debug(
+					`Malformed audio URL: ${err instanceof Error ? err.message : err}`,
+				);
 			}
 		}
 	});
@@ -261,7 +269,9 @@ export function processLinks(
 				domain: url.hostname,
 			});
 		} catch (err) {
-			console.debug(`Malformed link URL: ${err instanceof Error ? err.message : err}`);
+			console.debug(
+				`Malformed link URL: ${err instanceof Error ? err.message : err}`,
+			);
 		}
 	});
 

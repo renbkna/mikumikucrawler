@@ -107,6 +107,82 @@ describe("CrawlQueue", () => {
 		expect(queue.activeCount).toBe(0);
 	});
 
+	test("enqueue ignores duplicate URLs already in queue", async () => {
+		const logger = createMockLogger();
+		const socket = createMockSocket();
+		const options = createMockOptions();
+		const state = new CrawlState(socket, logger);
+
+		let processCount = 0;
+		const processItem = mock(async () => {
+			processCount++;
+		});
+
+		const queue = new CrawlQueue({
+			options,
+			state,
+			logger,
+			socket,
+			processItem,
+		});
+
+		// Enqueue the same URL twice
+		queue.enqueue({ url: "https://example.com/dup", depth: 0, retries: 0 });
+		queue.enqueue({ url: "https://example.com/dup", depth: 0, retries: 0 });
+
+		// Start processing
+		const startPromise = queue.start();
+
+		// Wait for processing to happen
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		state.stop();
+		await startPromise;
+
+		// Should only have processed once
+		expect(processCount).toBe(1);
+	});
+
+	test("enqueue ignores URLs currently being processed", async () => {
+		const logger = createMockLogger();
+		const socket = createMockSocket();
+		const options = createMockOptions({ maxConcurrentRequests: 2 });
+		const state = new CrawlState(socket, logger);
+
+		let processCount = 0;
+		const processItem = mock(async () => {
+			processCount++;
+			// Keep it busy for a bit
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		});
+
+		const queue = new CrawlQueue({
+			options,
+			state,
+			logger,
+			socket,
+			processItem,
+		});
+
+		// Enqueue first time
+		queue.enqueue({ url: "https://example.com/active", depth: 0, retries: 0 });
+
+		const startPromise = queue.start();
+
+		// Wait for it to become active
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		// Try to enqueue again while it's active
+		queue.enqueue({ url: "https://example.com/active", depth: 0, retries: 0 });
+
+		// Wait for everything to finish
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		state.stop();
+		await startPromise;
+
+		// Should only have processed once
+		expect(processCount).toBe(1);
+	});
+
 	test("scheduleRetry adds item back to queue after delay", async () => {
 		const logger = createMockLogger();
 		const socket = createMockSocket();
