@@ -430,11 +430,11 @@ export function createWebSocketHandlers(
 		}
 	};
 
-	const handleClose = (ws: { id: string; data: { id: string } }) => {
+	const handleClose = async (ws: { id: string; data: { id: string } }) => {
 		const id = ws.data.id || ws.id;
 		const session = activeCrawls.get(id);
 		if (session) {
-			session.stop();
+			await session.stop();
 			activeCrawls.delete(id);
 		}
 		logger.info(`Client disconnected: ${id}`);

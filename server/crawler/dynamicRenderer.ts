@@ -27,14 +27,51 @@ interface InitializeResult {
  * checks to prevent the crawler from crashing the host system.
  */
 export class DynamicRenderer {
+	private static readonly instances = new Set<DynamicRenderer>();
+	private static handlersRegistered = false;
+
 	private readonly options: SanitizedCrawlOptions;
 	private readonly logger: Logger;
 	private browser: Browser | null;
 	private pageCount: number;
 	private enabled: boolean;
-	private _handlersRegistered: boolean;
-	private readonly _cleanupHandler: () => Promise<void>;
-	private readonly _uncaughtExceptionHandler: (err: Error) => Promise<void>;
+
+	/**
+	 * Registers process-level cleanup handlers once for all instances.
+	 * Uses a static Set to track active renderers and clean them all on exit.
+	 */
+	private static registerGlobalHandlers(): void {
+		if (DynamicRenderer.handlersRegistered) return;
+
+		const cleanupAll = async (): Promise<void> => {
+			const closePromises = [...DynamicRenderer.instances].map((instance) =>
+				instance.close().catch(() => {}),
+			);
+			await Promise.all(closePromises);
+		};
+
+		const exitHandler = (): void => {
+			// Sync cleanup on exit - best effort
+			for (const instance of DynamicRenderer.instances) {
+				if (instance.browser) {
+					instance.browser.close().catch(() => {});
+				}
+			}
+		};
+
+		const uncaughtHandler = async (err: Error): Promise<void> => {
+			console.error(`Uncaught Exception: ${err.message}`);
+			await cleanupAll();
+			process.exit(1);
+		};
+
+		process.on("exit", exitHandler);
+		process.on("SIGINT", cleanupAll);
+		process.on("SIGTERM", cleanupAll);
+		process.on("uncaughtException", uncaughtHandler);
+
+		DynamicRenderer.handlersRegistered = true;
+	}
 
 	constructor(options: SanitizedCrawlOptions, logger: Logger) {
 		this.options = options;
@@ -42,29 +79,10 @@ export class DynamicRenderer {
 		this.browser = null;
 		this.pageCount = 0;
 		this.enabled = options.dynamic !== false;
-		this._handlersRegistered = false;
 
-		const cleanup = async (): Promise<void> => {
-			if (this.browser) {
-				this.logger.info("Process exiting, closing Puppeteer...");
-				await this.close();
-			}
-		};
-
-		this._cleanupHandler = cleanup.bind(this);
-
-		this._uncaughtExceptionHandler = async (err: Error): Promise<void> => {
-			this.logger.error(`Uncaught Exception: ${err.message}`);
-			// Ensure browser dies with the process to prevent orphaned Chromium tasks
-			await cleanup();
-			process.exit(1);
-		};
-
-		process.on("exit", this._cleanupHandler);
-		process.on("SIGINT", this._cleanupHandler);
-		process.on("SIGTERM", this._cleanupHandler);
-		process.on("uncaughtException", this._uncaughtExceptionHandler);
-		this._handlersRegistered = true;
+		// Register instance for cleanup tracking
+		DynamicRenderer.instances.add(this);
+		DynamicRenderer.registerGlobalHandlers();
 	}
 
 	/**
@@ -451,16 +469,11 @@ export class DynamicRenderer {
 	}
 
 	/**
-	 * Closes the browser and removes process-level event listeners.
+	 * Closes the browser and removes this instance from cleanup tracking.
 	 */
 	async close(): Promise<void> {
-		if (this._handlersRegistered) {
-			process.off("exit", this._cleanupHandler);
-			process.off("SIGINT", this._cleanupHandler);
-			process.off("SIGTERM", this._cleanupHandler);
-			process.off("uncaughtException", this._uncaughtExceptionHandler);
-			this._handlersRegistered = false;
-		}
+		// Remove from instance tracking
+		DynamicRenderer.instances.delete(this);
 
 		if (!this.browser) return;
 		try {

@@ -18,7 +18,6 @@ import { extractMetadata, getRobotsRules } from "../../utils/helpers.js";
 import type { DynamicRenderer } from "../dynamicRenderer.js";
 import type { CrawlQueue } from "./crawlQueue.js";
 import type { CrawlState } from "./crawlState.js";
-import { extractLinks } from "./linkExtractor.js";
 
 const MEDIA_CONTENT_REGEX = /image|video|audio|application\/(pdf|zip)/i;
 
@@ -524,12 +523,30 @@ export function createPagePipeline({
 			processedContent,
 		});
 
+		// Reuse links already extracted by ContentProcessor instead of re-parsing HTML
 		let links: ExtractedLink[] = [];
-		if (contentType.includes("text/html")) {
-			const parser = cheerio.load(sanitizedContent);
-			links = extractLinks(parser, item.url, options);
-			state.addLinks(links.length);
-			handleLinkPersistence(db, pageId, links);
+		if (contentType.includes("text/html") && processedContent.links?.length) {
+			const baseHost = new URL(item.url).hostname;
+
+			// Convert ContentProcessor links to crawlable links format
+			links = processedContent.links
+				.filter((link) => {
+					// Skip non-HTTP protocols
+					if (!link.url?.startsWith("http")) return false;
+					// Skip external links unless full crawl mode
+					if (options.crawlMethod !== "full" && !link.isInternal) return false;
+					// Skip file extensions that aren't HTML
+					if (/\.(css|js|json|xml|txt|md|csv|svg|ico|git|gitignore)$/i.test(link.url)) return false;
+					return true;
+				})
+				.map((link) => ({
+					url: link.url,
+					text: link.text || "",
+					isInternal: link.isInternal ?? link.domain === baseHost,
+				}));
+
+			state.addLinks(processedContent.links.length);
+			handleLinkPersistence(db, pageId, processedContent.links);
 		}
 
 		if (
