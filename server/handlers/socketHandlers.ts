@@ -3,6 +3,7 @@ import dns from "node:dns";
 import net from "node:net";
 import { t } from "elysia";
 import ipaddr from "ipaddr.js";
+import type { SocketCrawledPage } from "../../src/types/socket.js";
 import type { Logger } from "../config/logging.js";
 import { CrawlSession } from "../crawler/CrawlSession.js";
 import type {
@@ -305,7 +306,7 @@ export function createWebSocketHandlers(
 						socketWrapper.emit("pageDetails", {
 							...mappedPage,
 							links: mappedLinks,
-						});
+						} as SocketCrawledPage);
 					} else {
 						socketWrapper.emit("pageDetails", null);
 					}

@@ -35,6 +35,8 @@ export class CrawlQueue {
 	private readonly queue: QueueItem[];
 	/** Tracks active items by URL for atomic add/remove (avoids race conditions) */
 	private readonly activeItems: Set<string>;
+	/** Tracks items currently in the queue to prevent duplicates */
+	private readonly queuedUrls: Set<string>;
 	private readonly retryTimers: Set<ReturnType<typeof setTimeout>>;
 	private loopPromise: Promise<void> | null;
 
@@ -55,6 +57,7 @@ export class CrawlQueue {
 
 		this.queue = [];
 		this.activeItems = new Set();
+		this.queuedUrls = new Set();
 		this.retryTimers = new Set();
 		this.loopPromise = null;
 	}
@@ -68,7 +71,14 @@ export class CrawlQueue {
 	 * Adds a new item to the queue if it hasn't been visited yet.
 	 */
 	enqueue(item: QueueItem): void {
-		if (this.state.hasVisited(item.url)) return;
+		if (
+			this.state.hasVisited(item.url) ||
+			this.activeItems.has(item.url) ||
+			this.queuedUrls.has(item.url)
+		) {
+			return;
+		}
+		this.queuedUrls.add(item.url);
 		this.queue.push(item);
 	}
 
@@ -79,6 +89,8 @@ export class CrawlQueue {
 		const timer = setTimeout(() => {
 			this.retryTimers.delete(timer);
 			if (!this.state.isActive) return;
+			// Force re-queue even if it was previously tracked, as we need to retry
+			this.queuedUrls.delete(item.url);
 			this.enqueue(item);
 		}, delay);
 
@@ -116,11 +128,19 @@ export class CrawlQueue {
 	 */
 	private async loop(): Promise<void> {
 		const domainProcessing = new Map<string, number>();
+		// Track all active promises so we can await them on shutdown
+		const processingPromises = new Set<Promise<void>>();
 
 		while (
 			(this.queue.length > 0 || this.activeCount > 0) &&
-			this.state.isActive
+			(this.state.isActive || this.activeCount > 0) // Keep looping if we have active items to drain
 		) {
+			// If stopped, just wait for active items to finish
+			if (!this.state.isActive && this.queue.length > 0) {
+				this.queue.length = 0; // Clear pending queue
+				this.queuedUrls.clear();
+			}
+
 			let deferredDelay: number | null = null;
 
 			// Periodically clean up processing history to prevent memory leaks in long crawls
@@ -146,6 +166,7 @@ export class CrawlQueue {
 			) {
 				const item = this.queue.shift();
 				if (!item) break;
+				this.queuedUrls.delete(item.url);
 
 				try {
 					const url = new URL(item.url);
@@ -162,7 +183,11 @@ export class CrawlQueue {
 							deferredDelay === null
 								? waitTime
 								: Math.min(deferredDelay, waitTime);
+
+						// Re-queue safely
 						this.queue.push(item);
+						this.queuedUrls.add(item.url);
+
 						if (this.queue.length === 1) break; // Avoid busy loop if only 1 item
 						continue;
 					}
@@ -171,14 +196,18 @@ export class CrawlQueue {
 
 					// Use Set for atomic tracking (avoids race conditions with counter)
 					this.activeItems.add(item.url);
-					Promise.resolve(this.processItem(item))
+
+					const task = Promise.resolve(this.processItem(item))
 						.catch((error: Error) => {
 							this.logger.error(`Error in queue processing: ${error.message}`);
 							this.state.recordFailure();
 						})
 						.finally(() => {
 							this.activeItems.delete(item.url);
+							processingPromises.delete(task);
 						});
+
+					processingPromises.add(task);
 				} catch (err) {
 					this.logger.error(
 						`Error in queue processing: ${getErrorMessage(err)}`,
@@ -198,6 +227,12 @@ export class CrawlQueue {
 				this.socket.emit("queueStats", snapshot);
 			}
 
+			// If we are shutting down, just wait for the next task to finish
+			if (!this.state.isActive && this.activeCount > 0) {
+				await Promise.race(processingPromises);
+				continue;
+			}
+
 			// Dynamic sleep: Wait only as long as needed for the next domain slot,
 			// or default sleep if nothing specific is blocking.
 			const sleepDuration =
@@ -209,6 +244,11 @@ export class CrawlQueue {
 						);
 
 			await sleep(sleepDuration);
+		}
+
+		// Ensure everything is truly done
+		if (processingPromises.size > 0) {
+			await Promise.all(processingPromises);
 		}
 
 		if (this.state.isActive) {

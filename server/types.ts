@@ -1,15 +1,19 @@
-export type {
-	CrawledPage,
-	CrawlOptions,
-	ProcessedPageData,
-	QueueStats,
-	Stats,
-} from "../src/types.js";
-
 import type { Database } from "bun:sqlite";
+import type {
+	ContentAnalysis,
+	CrawlOptions,
+	ExtractedData,
+	ExtractedLink,
+	MediaInfo,
+	PageMetadata,
+	ProcessingError,
+	Stats,
+} from "../src/types/shared.js";
 import type { ServerToClientEvents } from "../src/types/socket.js";
-import type { CrawlOptions, Stats } from "../src/types.js";
 import type { Logger } from "./config/logging.js";
+
+// Re-export shared types
+export * from "../src/types/shared.js";
 
 export interface QueueItem {
 	url: string;
@@ -59,76 +63,26 @@ export interface FetchResult {
 	isDynamic: boolean;
 }
 
+/**
+ * Server-side superset of processed data.
+ * Includes 'links' which are extracted but not sent to frontend in the same structure.
+ */
 export interface ProcessedContent {
 	url?: string;
 	contentType?: string;
-	extractedData: {
-		mainContent?: string;
-		jsonLd?: unknown[];
-		microdata?: Record<string, unknown>;
-		openGraph?: Record<string, string>;
-		twitterCards?: Record<string, string>;
-		schema?: Record<string, unknown>;
-	};
-	metadata: Record<string, string>;
-	analysis: {
-		wordCount?: number;
-		readingTime?: number;
-		language?: string;
-		keywords?: Array<{ word: string; count: number }>;
-		sentiment?: string;
-		readabilityScore?: number;
-		quality?: {
-			score: number;
-			factors: Record<string, number | boolean>;
-			issues: string[];
-		};
-	};
-	media: Array<{
-		type: string;
-		url: string;
-		alt?: string;
-		title?: string;
-		width?: string;
-		height?: string;
-	}>;
-	links: Array<{
-		url: string;
-		text?: string;
-		title?: string;
-		isInternal?: boolean;
-		type?: string;
-		domain?: string;
-	}>;
-	errors: Array<{
-		type: string;
-		message: string;
-		timestamp?: string;
-	}>;
+	extractedData: ExtractedData;
+	// Server allows looser metadata typing (Record<string, string>) than frontend,
+	// but we can make it compatible or just use the Shared definition + index signature
+	metadata: PageMetadata;
+	analysis: ContentAnalysis;
+	media: MediaInfo[];
+	links: ExtractedLink[];
+	errors: ProcessingError[];
 }
 
 export interface CrawlStats extends Stats {
 	isActive?: boolean;
 	startTime?: number;
-}
-
-export interface ExtractedLink {
-	url: string;
-	text?: string;
-	title?: string;
-	isInternal?: boolean;
-	type?: string;
-	domain?: string;
-}
-
-export interface MediaInfo {
-	type: "image" | "video" | "audio";
-	url: string;
-	alt?: string;
-	title?: string;
-	width?: string;
-	height?: string;
-	poster?: string;
 }
 
 export type DatabaseInstance = Database;
