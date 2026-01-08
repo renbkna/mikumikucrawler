@@ -4,7 +4,12 @@ import * as cheerio from "cheerio";
 import sanitizeHtml from "sanitize-html";
 import { config } from "../../config/env.js";
 import type { Logger } from "../../config/logging.js";
-import { FETCH_HEADERS } from "../../constants.js";
+import {
+	BATCH_CONSTANTS,
+	FETCH_HEADERS,
+	RETRY_CONSTANTS,
+	TIMEOUT_CONSTANTS,
+} from "../../constants.js";
 import { ContentProcessor } from "../../processors/ContentProcessor.js";
 import type {
 	CrawlerSocket,
@@ -16,6 +21,7 @@ import type {
 } from "../../types.js";
 import { extractMetadata, getRobotsRules } from "../../utils/helpers.js";
 import type { DynamicRenderer } from "../dynamicRenderer.js";
+import { fetchContent } from "./fetcher.js";
 import type { CrawlQueue } from "./crawlQueue.js";
 import type { CrawlState } from "./crawlState.js";
 
@@ -57,6 +63,8 @@ export function createPagePipeline({
 	targetDomain,
 }: PagePipelineParams): (item: QueueItem) => Promise<void> {
 	const contentProcessor = new ContentProcessor(logger);
+	const STATS_THROTTLE_MS = 250;
+	let lastStatsEmitTime = 0;
 
 	/**
 	 * Creates a processed content object for error cases.
@@ -127,22 +135,29 @@ export function createPagePipeline({
 
 	/**
 	 * Emits a real-time stats update to the connected client.
+	 * Throttled to prevent flooding the socket/client during high-speed crawls.
 	 */
 	const emitStatsUpdate = (
 		log: string,
 		processedContent: ProcessedContent,
 		item: QueueItem,
 	): void => {
+		const now = Date.now();
+		if (now - lastStatsEmitTime < STATS_THROTTLE_MS) {
+			return;
+		}
+		lastStatsEmitTime = now;
+
 		socket.emit("stats", {
 			...state.stats,
 			log,
 			lastProcessed: {
 				url: item.url,
-				wordCount: processedContent.analysis?.wordCount || 0,
-				qualityScore: processedContent.analysis?.quality?.score || 0,
+				wordCount: processedContent.analysis?.wordCount ?? 0,
+				qualityScore: processedContent.analysis?.quality?.score ?? 0,
 				language: processedContent.analysis?.language || "unknown",
-				mediaCount: processedContent.media?.length || 0,
-				linksCount: processedContent.links?.length || 0,
+				mediaCount: processedContent.media?.length ?? 0,
+				linksCount: processedContent.links?.length ?? 0,
 			},
 		});
 	};
@@ -154,93 +169,7 @@ export function createPagePipeline({
 		socket.emit("pageContent", page);
 	};
 
-	/**
-	 * Fetches content from a URL using dynamic renderer if enabled, otherwise falls back to static fetch.
-	 */
-	const fetchContent = async (item: QueueItem) => {
-		let content = "";
-		let contentType = "";
-		let statusCode = 0;
-		let contentLength = 0;
-		let title = "";
-		let description = "";
-		let lastModified: string | null = null;
-		let isDynamic = false;
-
-		const dynamicResult = dynamicRenderer.isEnabled()
-			? await dynamicRenderer.render(item)
-			: null;
-
-		if (dynamicResult) {
-			content = dynamicResult.content;
-			statusCode = dynamicResult.statusCode;
-			contentType = dynamicResult.contentType;
-			contentLength = dynamicResult.contentLength;
-			title = dynamicResult.title;
-			description = dynamicResult.description;
-			lastModified = dynamicResult.lastModified ?? null;
-			isDynamic = true;
-		}
-
-		if (!content) {
-			logger.info(`Using static crawling for ${item.url}`);
-			const controller = new AbortController();
-			const timeoutId = setTimeout(() => controller.abort(), 15000);
-
-			try {
-				const response = await fetch(item.url, {
-					headers: FETCH_HEADERS,
-					signal: controller.signal,
-					redirect: "follow",
-				});
-				clearTimeout(timeoutId);
-
-				if (!response.ok) {
-					throw new Error(`HTTP error! status: ${response.status}`);
-				}
-
-				content = await response.text();
-				statusCode = response.status;
-				contentType = response.headers.get("content-type") || "";
-				contentLength = Number.parseInt(
-					response.headers.get("content-length") || "0",
-					10,
-				);
-				lastModified = response.headers.get("last-modified") ?? null;
-			} catch (error) {
-				clearTimeout(timeoutId);
-				throw error;
-			}
-		}
-
-		if (contentType.includes("text/html") && (!title || !description)) {
-			const $ = cheerio.load(content);
-			const metadata = extractMetadata($);
-			if (!title) {
-				title = metadata.title;
-			}
-			if (!description) {
-				description = metadata.description;
-			}
-		}
-
-		if (!contentLength && content) {
-			contentLength = Buffer.byteLength(content, "utf8");
-		}
-
-		return {
-			content,
-			statusCode,
-			contentType,
-			contentLength,
-			title,
-			description,
-			lastModified,
-			isDynamic,
-		};
-	};
-
-	interface StorePageRecordParams {
+	interface SaveResultParams {
 		db: Database;
 		item: QueueItem;
 		domain: string;
@@ -253,12 +182,14 @@ export function createPagePipeline({
 		isDynamic: boolean;
 		lastModified: string | null;
 		processedContent: ProcessedContent;
+		links: ExtractedLink[];
 	}
 
 	/**
-	 * Persists a crawled page and its analysis to the database.
+	 * Atomically persists the page record and its discovered links.
+	 * Uses a transaction to ensure data integrity: either both page and links are saved, or neither.
 	 */
-	const storePageRecord = ({
+	const saveCrawlResult = ({
 		db,
 		item,
 		domain,
@@ -271,7 +202,8 @@ export function createPagePipeline({
 		isDynamic,
 		lastModified,
 		processedContent,
-	}: StorePageRecordParams): number | null => {
+		links,
+	}: SaveResultParams): number | null => {
 		const enhancedData = {
 			mainContent: processedContent.extractedData?.mainContent || "",
 			wordCount: processedContent.analysis?.wordCount || 0,
@@ -290,37 +222,43 @@ export function createPagePipeline({
 				)?.length || 0,
 		};
 
-		const row = db
-			.query(
-				`INSERT INTO pages
-        (url, domain, content_type, status_code, data_length, title, description, content, is_dynamic, last_modified,
-         main_content, word_count, reading_time, language, keywords, quality_score, structured_data,
-         media_count, internal_links_count, external_links_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(url) DO UPDATE SET
-          domain = excluded.domain,
-          content_type = excluded.content_type,
-          status_code = excluded.status_code,
-          data_length = excluded.data_length,
-          title = excluded.title,
-          description = excluded.description,
-          content = excluded.content,
-          is_dynamic = excluded.is_dynamic,
-          last_modified = excluded.last_modified,
-          main_content = excluded.main_content,
-          word_count = excluded.word_count,
-          reading_time = excluded.reading_time,
-          language = excluded.language,
-          keywords = excluded.keywords,
-          quality_score = excluded.quality_score,
-          structured_data = excluded.structured_data,
-          media_count = excluded.media_count,
-          internal_links_count = excluded.internal_links_count,
-          external_links_count = excluded.external_links_count,
-          crawled_at = CURRENT_TIMESTAMP
-        RETURNING id`,
-			)
-			.get(
+		const insertPageQuery = db.query(
+			`INSERT INTO pages
+			(url, domain, content_type, status_code, data_length, title, description, content, is_dynamic, last_modified,
+			 main_content, word_count, reading_time, language, keywords, quality_score, structured_data,
+			 media_count, internal_links_count, external_links_count)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(url) DO UPDATE SET
+			  domain = excluded.domain,
+			  content_type = excluded.content_type,
+			  status_code = excluded.status_code,
+			  data_length = excluded.data_length,
+			  title = excluded.title,
+			  description = excluded.description,
+			  content = excluded.content,
+			  is_dynamic = excluded.is_dynamic,
+			  last_modified = excluded.last_modified,
+			  main_content = excluded.main_content,
+			  word_count = excluded.word_count,
+			  reading_time = excluded.reading_time,
+			  language = excluded.language,
+			  keywords = excluded.keywords,
+			  quality_score = excluded.quality_score,
+			  structured_data = excluded.structured_data,
+			  media_count = excluded.media_count,
+			  internal_links_count = excluded.internal_links_count,
+			  external_links_count = excluded.external_links_count,
+			  crawled_at = CURRENT_TIMESTAMP
+			RETURNING id`,
+		);
+
+		const insertLinkQuery = db.query(
+			"INSERT OR IGNORE INTO links (source_id, target_url, text) VALUES (?, ?, ?)",
+		);
+
+		// Transaction wrapper
+		const transaction = db.transaction(() => {
+			const row = insertPageQuery.get(
 				item.url,
 				domain,
 				contentType,
@@ -343,41 +281,23 @@ export function createPagePipeline({
 				enhancedData.externalLinksCount,
 			) as { id: number } | undefined;
 
-		return row?.id ?? null;
-	};
+			const pageId = row?.id ?? null;
 
-	/**
-	 * Persists discovered links between pages to the database.
-	 */
-	const handleLinkPersistence = (
-		db: Database,
-		pageId: number | null,
-		links: ExtractedLink[],
-	): void => {
-		if (!links.length || !pageId) {
-			return;
-		}
-
-		const insertStmt = db.query(
-			"INSERT OR IGNORE INTO links (source_id, target_url, text) VALUES (?, ?, ?)",
-		);
-
-		const transaction = db.transaction((linksToInsert: ExtractedLink[]) => {
-			for (const link of linksToInsert) {
-				try {
-					insertStmt.run(pageId, link.url, link.text || "");
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					logger.warn(`Failed to insert link: ${message}`);
+			if (pageId && links.length > 0) {
+				for (const link of links) {
+					insertLinkQuery.run(pageId, link.url, link.text || "");
 				}
 			}
+
+			return pageId;
 		});
 
 		try {
-			transaction(links);
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			logger.error(`Transaction failed for link persistence: ${message}`);
+			return transaction();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			logger.error(`Transaction failed for ${item.url}: ${message}`);
+			return null;
 		}
 	};
 
@@ -443,7 +363,7 @@ export function createPagePipeline({
 
 		let fetchResult: Awaited<ReturnType<typeof fetchContent>> | undefined;
 		try {
-			fetchResult = await fetchContent(item);
+			fetchResult = await fetchContent({ item, dynamicRenderer, logger });
 		} catch (error) {
 			state.recordFailure();
 			const message = error instanceof Error ? error.message : String(error);
@@ -455,7 +375,10 @@ export function createPagePipeline({
 
 			if (item.retries < options.retryLimit && state.isActive) {
 				const retries = item.retries + 1;
-				const backoffDelay = Math.min(1000 * 2 ** retries, 30000);
+				const backoffDelay = Math.min(
+					RETRY_CONSTANTS.BASE_DELAY * 2 ** retries,
+					RETRY_CONSTANTS.MAX_DELAY,
+				);
 				logger.info(
 					`Retrying ${item.url} in ${backoffDelay}ms (attempt ${retries}/${options.retryLimit})`,
 				);
@@ -506,9 +429,46 @@ export function createPagePipeline({
 			);
 		}
 
+		// Prepare links for persistence/queueing
+		let links: ExtractedLink[] = [];
+		if (contentType.includes("text/html") && processedContent.links?.length) {
+			const baseHost = new URL(item.url).hostname;
+			links = processedContent.links
+				.filter((link) => {
+					// Skip non-HTTP protocols
+					if (!link.url?.startsWith("http")) return false;
+					// Skip external links unless full crawl mode
+					if (options.crawlMethod !== "full" && !link.isInternal) return false;
+					// Skip file extensions that aren't HTML
+					if (
+						/\.(css|js|json|xml|txt|md|csv|svg|ico|git|gitignore)$/i.test(
+							link.url,
+						)
+					)
+						return false;
+					return true;
+				})
+				.map((link) => ({
+					url: link.url,
+					text: link.text || "",
+					isInternal: link.isInternal ?? link.domain === baseHost,
+				}));
+
+			state.addLinks(processedContent.links.length);
+		}
+
+		if (
+			options.saveMedia &&
+			(options.crawlMethod === "media" || options.crawlMethod === "full") &&
+			MEDIA_CONTENT_REGEX.test(contentType)
+		) {
+			state.addMedia(1);
+		}
+
 		const db = await dbPromise;
 
-		const pageId = storePageRecord({
+		// ATOMIC SAVE: Page + Links
+		const pageId = saveCrawlResult({
 			db,
 			item,
 			domain,
@@ -521,41 +481,8 @@ export function createPagePipeline({
 			isDynamic,
 			lastModified,
 			processedContent,
+			links,
 		});
-
-		// Reuse links already extracted by ContentProcessor instead of re-parsing HTML
-		let links: ExtractedLink[] = [];
-		if (contentType.includes("text/html") && processedContent.links?.length) {
-			const baseHost = new URL(item.url).hostname;
-
-			// Convert ContentProcessor links to crawlable links format
-			links = processedContent.links
-				.filter((link) => {
-					// Skip non-HTTP protocols
-					if (!link.url?.startsWith("http")) return false;
-					// Skip external links unless full crawl mode
-					if (options.crawlMethod !== "full" && !link.isInternal) return false;
-					// Skip file extensions that aren't HTML
-					if (/\.(css|js|json|xml|txt|md|csv|svg|ico|git|gitignore)$/i.test(link.url)) return false;
-					return true;
-				})
-				.map((link) => ({
-					url: link.url,
-					text: link.text || "",
-					isInternal: link.isInternal ?? link.domain === baseHost,
-				}));
-
-			state.addLinks(processedContent.links.length);
-			handleLinkPersistence(db, pageId, processedContent.links);
-		}
-
-		if (
-			options.saveMedia &&
-			(options.crawlMethod === "media" || options.crawlMethod === "full") &&
-			MEDIA_CONTENT_REGEX.test(contentType)
-		) {
-			state.addMedia(1);
-		}
 
 		const logMessage = buildEnhancedLog(
 			item,
@@ -646,7 +573,7 @@ async function processLinkBatch({
 	logger,
 	queue,
 }: ProcessLinkBatchOptions): Promise<void> {
-	const CONCURRENCY = 10;
+	const CONCURRENCY = BATCH_CONSTANTS.LINK_BATCH_CONCURRENCY;
 
 	const processSingleLink = async (link: ExtractedLink): Promise<void> => {
 		try {

@@ -9,8 +9,11 @@ export class CrawlState {
 	private readonly options: SanitizedCrawlOptions;
 	private readonly startTime: number;
 	public isActive: boolean;
+	public stopReason?: string;
 	private readonly visited: Set<string>;
 	private readonly domainDelays: Map<string, number>;
+	private consecutiveFailures: number;
+	private readonly CIRCUIT_BREAKER_THRESHOLD = 20;
 	public stats: CrawlStats;
 
 	constructor(options: SanitizedCrawlOptions) {
@@ -19,6 +22,7 @@ export class CrawlState {
 		this.isActive = true;
 		this.visited = new Set();
 		this.domainDelays = new Map();
+		this.consecutiveFailures = 0;
 		this.stats = {
 			pagesScanned: 0,
 			linksFound: 0,
@@ -37,8 +41,11 @@ export class CrawlState {
 		return this.isActive && this.stats.pagesScanned < this.options.maxPages;
 	}
 
-	stop(): void {
+	stop(reason?: string): void {
 		this.isActive = false;
+		if (reason && !this.stopReason) {
+			this.stopReason = reason;
+		}
 	}
 
 	hasVisited(url: string): boolean {
@@ -64,6 +71,7 @@ export class CrawlState {
 	recordSuccess(contentLength: number): void {
 		this.stats.pagesScanned += 1;
 		this.stats.successCount = (this.stats.successCount ?? 0) + 1;
+		this.consecutiveFailures = 0;
 
 		if (typeof contentLength === "number" && Number.isFinite(contentLength)) {
 			this.stats.totalData += Math.floor(contentLength / 1024);
@@ -72,6 +80,13 @@ export class CrawlState {
 
 	recordFailure(): void {
 		this.stats.failureCount = (this.stats.failureCount ?? 0) + 1;
+		this.consecutiveFailures++;
+
+		if (this.consecutiveFailures >= this.CIRCUIT_BREAKER_THRESHOLD) {
+			this.stop(
+				`Circuit breaker tripped: ${this.consecutiveFailures} consecutive failures`,
+			);
+		}
 	}
 
 	recordSkip(): void {
@@ -117,6 +132,7 @@ export class CrawlState {
 		elapsedTime: { hours: number; minutes: number; seconds: number };
 		pagesPerSecond: string;
 		successRate: string;
+		stopReason?: string;
 	} {
 		const elapsedSeconds = Math.max(
 			Math.floor((Date.now() - this.startTime) / 1000),
@@ -142,6 +158,7 @@ export class CrawlState {
 			elapsedTime,
 			pagesPerSecond: pagesPerSecond.toFixed(2),
 			successRate,
+			stopReason: this.stopReason,
 		};
 	}
 }

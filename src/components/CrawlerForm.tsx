@@ -9,7 +9,7 @@ import {
 	WifiOff,
 	Zap,
 } from "lucide-react";
-import { type ChangeEvent, memo } from "react";
+import { type ChangeEvent, memo, useState } from "react";
 import type { ConnectionState } from "../hooks";
 import type { CrawlOptions } from "../types";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
@@ -35,12 +35,38 @@ export const CrawlerForm = memo(function CrawlerForm({
 	setOpenedConfig,
 	connectionState,
 }: CrawlerFormProps) {
+	const [validationError, setValidationError] = useState<string | null>(null);
+
+	const validateUrl = (input: string): string | null => {
+		if (!input) return null;
+		const lower = input.toLowerCase();
+		// Simple checks for local/private networks
+		if (
+			lower.includes("localhost") ||
+			lower.includes("127.0.0.1") ||
+			lower.includes("::1") ||
+			lower.startsWith("192.168.") ||
+			lower.startsWith("10.")
+		) {
+			return "Local/Private networks are not allowed!";
+		}
+		return null;
+	};
+
 	const handleTargetChange = (e: ChangeEvent<HTMLInputElement>) => {
-		setTarget(e.target.value);
+		const val = e.target.value;
+		setTarget(val);
+		setValidationError(validateUrl(val));
 	};
 
 	const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-		if (e.key === "Enter" && !isAttacking && connectionState === "connected") {
+		if (
+			e.key === "Enter" &&
+			!isAttacking &&
+			connectionState === "connected" &&
+			!validationError &&
+			target
+		) {
 			e.preventDefault();
 			startAttack();
 		}
@@ -97,10 +123,20 @@ export const CrawlerForm = memo(function CrawlerForm({
 								onChange={handleTargetChange}
 								onKeyDown={handleKeyDown}
 								placeholder="https://example.com"
-								className="w-full px-6 py-4 rounded-2xl bg-white border-2 border-miku-pink/20 focus:border-miku-teal focus:ring-4 focus:ring-miku-teal/10 transition-all duration-300 outline-none text-gray-700 placeholder:text-gray-400 font-bold text-lg shadow-sm"
+								className={`w-full px-6 py-4 rounded-2xl bg-white border-2 focus:ring-4 transition-all duration-300 outline-none text-gray-700 placeholder:text-gray-400 font-bold text-lg shadow-sm ${
+									validationError
+										? "border-rose-300 focus:border-rose-500 focus:ring-rose-500/10"
+										: "border-miku-pink/20 focus:border-miku-teal focus:ring-miku-teal/10"
+								}`}
 								disabled={isAttacking}
 							/>
 						</div>
+						{validationError && (
+							<p className="text-rose-500 text-xs font-bold ml-4 animate-pulse flex items-center gap-1">
+								<WifiOff className="w-3 h-3" />
+								{validationError}
+							</p>
+						)}
 					</div>
 
 					<div className="flex gap-3 items-center">
@@ -125,8 +161,12 @@ export const CrawlerForm = memo(function CrawlerForm({
 							<button
 								type="button"
 								onClick={() => startAttack(true)}
-								disabled={connectionState !== "connected"}
-								className="relative p-4 rounded-2xl bg-gradient-to-br from-amber-400 via-yellow-500 to-orange-500 text-white hover:scale-110 transition-all duration-300 shadow-lg shadow-amber-300/40 flex items-center justify-center group/zap disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 overflow-hidden"
+								disabled={
+									connectionState !== "connected" ||
+									!!validationError ||
+									!target
+								}
+								className="relative p-4 rounded-2xl bg-gradient-to-br from-amber-400 via-yellow-500 to-orange-500 text-white hover:scale-110 transition-all duration-300 shadow-lg shadow-amber-300/40 flex items-center justify-center group/zap disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 overflow-hidden disabled:grayscale"
 								title="Lightning Strike! (Skip Animation)"
 								aria-label="Lightning Strike Attack (Skip Animation)"
 							>
@@ -145,8 +185,13 @@ export const CrawlerForm = memo(function CrawlerForm({
 						<button
 							type="button"
 							onClick={() => (isAttacking ? stopAttack() : startAttack())}
-							disabled={connectionState !== "connected" && !isAttacking}
-							className={`relative px-7 py-4 rounded-2xl font-black text-white shadow-xl transition-all duration-300 hover:scale-105 active:scale-95 flex items-center gap-3 text-base disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 overflow-hidden ${
+							disabled={
+								(connectionState !== "connected" ||
+									!!validationError ||
+									!target) &&
+								!isAttacking
+							}
+							className={`relative px-7 py-4 rounded-2xl font-black text-white shadow-xl transition-all duration-300 hover:scale-105 active:scale-95 flex items-center gap-3 text-base disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 overflow-hidden disabled:grayscale ${
 								isAttacking
 									? "bg-gradient-to-r from-rose-500 via-pink-600 to-rose-500 shadow-miku-pink/40"
 									: "bg-gradient-to-r from-teal-600 via-teal-500 to-emerald-600 shadow-miku-teal/40"

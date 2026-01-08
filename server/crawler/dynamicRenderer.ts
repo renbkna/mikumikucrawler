@@ -306,6 +306,9 @@ export class DynamicRenderer {
 			// Start tracking navigation after initial page load
 			page.on("framenavigated", navigationHandler);
 
+			// Attempt to bypass consent walls (Google/YouTube/GDPR)
+			await this.handleConsentModals(page, item.url);
+
 			if (isComplex) {
 				await this.waitForComplexContent(page, item.url);
 			}
@@ -390,6 +393,62 @@ export class DynamicRenderer {
 			}
 
 			throw err;
+		}
+	}
+
+	/**
+	 * Attempts to detect and click "Accept" buttons on consent walls (Google/YouTube/GDPR).
+	 * This allows the crawler to access the actual content behind the "Before you continue" screens.
+	 */
+	async handleConsentModals(page: Page, url: string): Promise<void> {
+		try {
+			// Check if we are potentially stuck on a consent screen
+			const isConsentScreen = await page.evaluate(() => {
+				const text = document.body.innerText.toLowerCase();
+				return (
+					text.includes("before you continue") ||
+					text.includes("agree to the use of cookies") ||
+					text.includes("accept all cookies")
+				);
+			});
+
+			if (isConsentScreen) {
+				this.logger.info(
+					`Potential consent wall detected on ${url}. Attempting to bypass...`,
+				);
+
+				const clicked = await page.evaluate(() => {
+					// Strategy: Find buttons with specific keywords and click the most likely "Accept" candidate
+					const keywords = ["accept all", "i agree", "accept", "agree", "allow"];
+					const buttons = Array.from(
+						document.querySelectorAll("button, input[type='submit']"),
+					) as HTMLElement[];
+
+					for (const keyword of keywords) {
+						const match = buttons.find((btn) => {
+							const text = btn.innerText?.toLowerCase() || "";
+							const label = btn.getAttribute("aria-label")?.toLowerCase() || "";
+							return text.includes(keyword) || label.includes(keyword);
+						});
+
+						if (match) {
+							match.click();
+							return true;
+						}
+					}
+					return false;
+				});
+
+				if (clicked) {
+					// Wait for the navigation or re-render that follows the click
+					await new Promise((resolve) => setTimeout(resolve, 2000));
+				}
+			}
+		} catch (error) {
+			// Do not fail the crawl if bypass fails; just log it
+			this.logger.debug(
+				`Consent bypass attempt failed: ${getErrorMessage(error)}`,
+			);
 		}
 	}
 

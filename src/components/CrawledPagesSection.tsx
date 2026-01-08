@@ -71,6 +71,11 @@ const CrawledPageCard = memo(function CrawledPageCard({
 
 		if (fetchedContent) return;
 
+		if (page.id === null) {
+			setFetchError("Cannot fetch content: Page ID is missing");
+			return;
+		}
+
 		setIsLoadingContent(true);
 		setFetchError(null);
 
@@ -197,6 +202,25 @@ const CrawledPageCard = memo(function CrawledPageCard({
 						<p className="text-sm text-miku-text/70 italic bg-miku-teal/5 p-4 rounded-xl border border-miku-teal/10">
 							"{page.description}"
 						</p>
+					)}
+
+					{processedData?.errors && processedData.errors.length > 0 && (
+						<div className="bg-rose-50 border border-rose-100 rounded-xl p-3 space-y-2">
+							<div className="flex items-center gap-2 text-rose-500 font-bold text-xs uppercase tracking-wide">
+								<AlertCircle size={14} />
+								Processing Errors
+							</div>
+							<ul className="space-y-1">
+								{processedData.errors.map((error, idx) => (
+									<li
+										key={`${error.type}-${idx}`}
+										className="text-xs text-rose-600 font-medium"
+									>
+										{error.message}
+									</li>
+								))}
+							</ul>
+						</div>
 					)}
 
 					<div className="flex gap-2">

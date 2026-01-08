@@ -5,6 +5,15 @@ export const CRAWL_QUEUE_CONSTANTS = {
 	MIN_SLEEP_MS: 50,
 } as const;
 
+export const TIMEOUT_CONSTANTS = {
+	STATIC_FETCH: 15000,
+} as const;
+
+export const RETRY_CONSTANTS = {
+	BASE_DELAY: 1000,
+	MAX_DELAY: 30000,
+} as const;
+
 /** Standard HTTP headers for crawling requests */
 export const FETCH_HEADERS = {
 	"User-Agent":
@@ -84,6 +93,7 @@ export const DYNAMIC_RENDERER_CONSTANTS = {
  */
 export const SITE_SELECTORS: Record<string, string> = {
 	"youtube.com/watch": "h1.ytd-video-primary-info-renderer",
+	"youtube.com/@": "ytd-rich-grid-media, #video-title",
 	"twitter.com": '[data-testid="tweet"]',
 	"x.com": '[data-testid="tweet"]',
 	"linkedin.com": ".feed-container-theme",

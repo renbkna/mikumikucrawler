@@ -1,7 +1,11 @@
 import type { CheerioAPI } from "cheerio";
 import * as cheerio from "cheerio";
 import type { Logger } from "../config/logging.js";
-import type { ProcessedContent } from "../types.js";
+import type {
+	ContentAnalysis,
+	ExtractedData,
+	ProcessedContent,
+} from "../types.js";
 import { getErrorMessage } from "../utils/helpers.js";
 import {
 	analyzeContent,
@@ -15,29 +19,6 @@ import {
 	extractStructuredData,
 	processLinks,
 } from "./extractionUtils.js";
-
-interface ExtractedData {
-	mainContent?: string;
-	jsonLd?: unknown[];
-	microdata?: Record<string, unknown>;
-	openGraph?: Record<string, string>;
-	twitterCards?: Record<string, string>;
-	schema?: Record<string, unknown>;
-}
-
-interface ContentAnalysis {
-	wordCount?: number;
-	readingTime?: number;
-	language?: string;
-	keywords?: Array<{ word: string; count: number }>;
-	sentiment?: string;
-	readabilityScore?: number;
-	quality?: {
-		score: number;
-		factors: Record<string, number | boolean>;
-		issues: string[];
-	};
-}
 
 /**
  * Safely executes an extraction function and returns a fallback on error.
