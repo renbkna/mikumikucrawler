@@ -1,3 +1,4 @@
+import DOMPurify from "dompurify";
 import {
 	AlertCircle,
 	ChevronDown,
@@ -110,6 +111,23 @@ const CrawledPageCard = memo(function CrawledPageCard({
 		return showSource ? "Hide Source" : "View Source";
 	}, [isLoadingContent, showSource]);
 
+	/**
+	 * Root cause fix: Sanitizes content before display to prevent XSS attacks.
+	 * While server-side sanitization exists, defense in depth requires client-side
+	 * sanitization as well. DOMPurify removes all dangerous HTML/script content.
+	 */
+	const sanitizedContent = useMemo(() => {
+		if (!fetchedContent) return "No content available";
+
+		// Configure DOMPurify to be very restrictive - we only want to display text
+		// Allow pre/code blocks for formatting but strip all script/event handlers
+		return DOMPurify.sanitize(fetchedContent, {
+			ALLOWED_TAGS: [], // No HTML tags allowed - pure text only
+			ALLOWED_ATTR: [], // No attributes allowed
+			KEEP_CONTENT: true, // Keep the text content
+		});
+	}, [fetchedContent]);
+
 	const renderSourceContent = () => {
 		if (isLoadingContent) {
 			return (
@@ -142,7 +160,7 @@ const CrawledPageCard = memo(function CrawledPageCard({
 
 		return (
 			<pre className="text-xs text-emerald-400 font-mono overflow-x-auto whitespace-pre-wrap break-all max-h-60 custom-scrollbar">
-				{fetchedContent || "No content available"}
+				{sanitizedContent}
 			</pre>
 		);
 	};

@@ -60,6 +60,7 @@ export class DynamicRenderer {
 		};
 
 		const uncaughtHandler = async (err: Error): Promise<void> => {
+			// biome-ignore lint/suspicious/noConsole: Process-level error handler - logger may not be available
 			console.error(`Uncaught Exception: ${err.message}`);
 			await cleanupAll();
 			process.exit(1);
@@ -419,7 +420,13 @@ export class DynamicRenderer {
 
 				const clicked = await page.evaluate(() => {
 					// Strategy: Find buttons with specific keywords and click the most likely "Accept" candidate
-					const keywords = ["accept all", "i agree", "accept", "agree", "allow"];
+					const keywords = [
+						"accept all",
+						"i agree",
+						"accept",
+						"agree",
+						"allow",
+					];
 					const buttons = Array.from(
 						document.querySelectorAll("button, input[type='submit']"),
 					) as HTMLElement[];

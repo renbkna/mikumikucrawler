@@ -75,7 +75,9 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 			// Only reset and play when transitioning from idle
 			if (audio.paused) {
 				audio.currentTime = 0;
-				audio.play().catch((e) => console.error("Audio play failed", e));
+				audio.play().catch(() => {
+					// Audio play failures are non-critical, silently ignore
+				});
 			}
 		} else {
 			audio.pause();

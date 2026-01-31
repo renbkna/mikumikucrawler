@@ -67,6 +67,7 @@ export function extractStructuredData(
 				}
 			} catch (err) {
 				// Malformed JSON-LD is common on third-party sites; log for debugging
+				// biome-ignore lint/suspicious/noConsole: Debug logging for malformed third-party content
 				console.debug(
 					`Malformed JSON-LD: ${err instanceof Error ? err.message : err}`,
 				);
@@ -194,6 +195,7 @@ export function extractMediaInfo(
 			});
 		} catch (err) {
 			// Malformed URLs are common in user content
+			// biome-ignore lint/suspicious/noConsole: Debug logging for malformed URLs
 			console.debug(
 				`Malformed image URL: ${err instanceof Error ? err.message : err}`,
 			);
@@ -207,6 +209,7 @@ export function extractMediaInfo(
 				const absoluteUrl = new URL(src, baseUrl).href;
 				media.push({ type: "video", url: absoluteUrl });
 			} catch (err) {
+				// biome-ignore lint/suspicious/noConsole: Debug logging for malformed URLs
 				console.debug(
 					`Malformed video URL: ${err instanceof Error ? err.message : err}`,
 				);
@@ -221,6 +224,7 @@ export function extractMediaInfo(
 				const absoluteUrl = new URL(src, baseUrl).href;
 				media.push({ type: "audio", url: absoluteUrl });
 			} catch (err) {
+				// biome-ignore lint/suspicious/noConsole: Debug logging for malformed URLs
 				console.debug(
 					`Malformed audio URL: ${err instanceof Error ? err.message : err}`,
 				);
@@ -269,6 +273,7 @@ export function processLinks(
 				domain: url.hostname,
 			});
 		} catch (err) {
+			// biome-ignore lint/suspicious/noConsole: Debug logging for malformed URLs
 			console.debug(
 				`Malformed link URL: ${err instanceof Error ? err.message : err}`,
 			);
@@ -350,13 +355,13 @@ function extractMicrodataItem(
 	const item: Record<string, string | string[]> = {};
 	const children = cheerioInstance(element).find("[itemprop]").toArray();
 
-	children.forEach((child: Element) => {
+	for (const child of children) {
 		const prop = cheerioInstance(child).attr("itemprop");
 		const value =
 			cheerioInstance(child).attr("content") ||
 			cheerioInstance(child).text().trim();
 
-		if (!prop) return;
+		if (!prop) continue;
 
 		const existing = item[prop];
 		if (Array.isArray(existing)) {
@@ -366,7 +371,7 @@ function extractMicrodataItem(
 		} else {
 			item[prop] = value;
 		}
-	});
+	}
 
 	return item;
 }

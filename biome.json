@@ -1,5 +1,5 @@
 {
-	"$schema": "https://biomejs.dev/schemas/2.3.10/schema.json",
+	"$schema": "https://biomejs.dev/schemas/2.3.13/schema.json",
 	"vcs": {
 		"enabled": true,
 		"clientKind": "git",
@@ -26,14 +26,42 @@
 		"rules": {
 			"recommended": true,
 			"correctness": {
+				"recommended": true,
 				"useExhaustiveDependencies": "error",
-				"useHookAtTopLevel": "error"
+				"useHookAtTopLevel": "error",
+				"noUnusedVariables": "error",
+				"noUnusedImports": "error",
+				"noUnreachable": "error",
+				"noUndeclaredVariables": "error"
 			},
 			"a11y": {
 				"recommended": true
 			},
 			"style": {
-				"noNonNullAssertion": "error"
+				"recommended": true,
+				"noNonNullAssertion": "error",
+				"useConst": "error",
+				"useTemplate": "error",
+				"noParameterAssign": "error"
+			},
+			"suspicious": {
+				"recommended": true,
+				"noExplicitAny": "error",
+				"noConsole": "warn",
+				"noDoubleEquals": "error"
+			},
+			"complexity": {
+				"recommended": true,
+				"noForEach": "warn"
+			},
+			"performance": {
+				"recommended": true,
+				"noDelete": "warn"
+			},
+			"security": {
+				"recommended": true,
+				"noDangerouslySetInnerHtml": "error",
+				"noGlobalEval": "error"
 			}
 		}
 	},
@@ -41,7 +69,8 @@
 		"formatter": {
 			"quoteStyle": "double",
 			"trailingCommas": "all"
-		}
+		},
+		"globals": ["Bun"]
 	},
 	"css": {
 		"parser": {

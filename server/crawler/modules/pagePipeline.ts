@@ -1,15 +1,9 @@
 import type { Database } from "bun:sqlite";
 import { URL } from "node:url";
-import * as cheerio from "cheerio";
 import sanitizeHtml from "sanitize-html";
 import { config } from "../../config/env.js";
 import type { Logger } from "../../config/logging.js";
-import {
-	BATCH_CONSTANTS,
-	FETCH_HEADERS,
-	RETRY_CONSTANTS,
-	TIMEOUT_CONSTANTS,
-} from "../../constants.js";
+import { BATCH_CONSTANTS, RETRY_CONSTANTS } from "../../constants.js";
 import { ContentProcessor } from "../../processors/ContentProcessor.js";
 import type {
 	CrawlerSocket,
@@ -19,13 +13,14 @@ import type {
 	QueueItem,
 	SanitizedCrawlOptions,
 } from "../../types.js";
-import { extractMetadata, getRobotsRules } from "../../utils/helpers.js";
+import { getRobotsRules } from "../../utils/helpers.js";
 import type { DynamicRenderer } from "../dynamicRenderer.js";
-import { fetchContent } from "./fetcher.js";
 import type { CrawlQueue } from "./crawlQueue.js";
 import type { CrawlState } from "./crawlState.js";
+import { fetchContent } from "./fetcher.js";
 
 const MEDIA_CONTENT_REGEX = /image|video|audio|application\/(pdf|zip)/i;
+const DB_OPERATION_TIMEOUT_MS = 30000; // 30 seconds max for DB operations
 
 interface PagePipelineParams {
 	options: SanitizedCrawlOptions;
@@ -46,6 +41,33 @@ interface PageRecord {
 	contentType: string;
 	domain: string;
 	processedData: ProcessedPageData;
+}
+
+/**
+ * Root cause fix: Wraps database operations with timeout protection.
+ * Prevents the crawler from hanging indefinitely on slow database queries.
+ */
+async function withTimeout<T>(
+	operation: () => T,
+	timeoutMs: number,
+	operationName: string,
+	logger: Logger,
+): Promise<T> {
+	return Promise.race([
+		Promise.resolve(operation()),
+		new Promise<never>((_, reject) => {
+			setTimeout(() => {
+				reject(
+					new Error(
+						`Database operation '${operationName}' timed out after ${timeoutMs}ms`,
+					),
+				);
+			}, timeoutMs);
+		}),
+	]).catch((error) => {
+		logger.error(`Database timeout: ${error.message}`);
+		throw error;
+	});
 }
 
 /**
@@ -188,22 +210,27 @@ export function createPagePipeline({
 	/**
 	 * Atomically persists the page record and its discovered links.
 	 * Uses a transaction to ensure data integrity: either both page and links are saved, or neither.
+	 *
+	 * Root cause fix: Added timeout protection to prevent hanging on slow DB operations.
 	 */
-	const saveCrawlResult = ({
-		db,
-		item,
-		domain,
-		sanitizedContent,
-		contentType,
-		statusCode,
-		contentLength,
-		title,
-		description,
-		isDynamic,
-		lastModified,
-		processedContent,
-		links,
-	}: SaveResultParams): number | null => {
+	const saveCrawlResult = async (
+		params: SaveResultParams,
+	): Promise<number | null> => {
+		const {
+			db,
+			item,
+			domain,
+			sanitizedContent,
+			contentType,
+			statusCode,
+			contentLength,
+			title,
+			description,
+			isDynamic,
+			lastModified,
+			processedContent,
+			links,
+		} = params;
 		const enhancedData = {
 			mainContent: processedContent.extractedData?.mainContent || "",
 			wordCount: processedContent.analysis?.wordCount || 0,
@@ -256,44 +283,52 @@ export function createPagePipeline({
 			"INSERT OR IGNORE INTO links (source_id, target_url, text) VALUES (?, ?, ?)",
 		);
 
-		// Transaction wrapper
-		const transaction = db.transaction(() => {
-			const row = insertPageQuery.get(
-				item.url,
-				domain,
-				contentType,
-				statusCode,
-				contentLength,
-				title,
-				description,
-				options.contentOnly ? null : sanitizedContent,
-				isDynamic ? 1 : 0,
-				lastModified,
-				enhancedData.mainContent,
-				enhancedData.wordCount,
-				enhancedData.readingTime,
-				enhancedData.language,
-				enhancedData.keywords,
-				enhancedData.qualityScore,
-				enhancedData.structuredData,
-				enhancedData.mediaCount,
-				enhancedData.internalLinksCount,
-				enhancedData.externalLinksCount,
-			) as { id: number } | undefined;
-
-			const pageId = row?.id ?? null;
-
-			if (pageId && links.length > 0) {
-				for (const link of links) {
-					insertLinkQuery.run(pageId, link.url, link.text || "");
-				}
-			}
-
-			return pageId;
-		});
-
+		// Root cause fix: Wrap transaction in timeout
 		try {
-			return transaction();
+			return await withTimeout(
+				() => {
+					// Transaction wrapper
+					const transaction = db.transaction(() => {
+						const row = insertPageQuery.get(
+							item.url,
+							domain,
+							contentType,
+							statusCode,
+							contentLength,
+							title,
+							description,
+							options.contentOnly ? null : sanitizedContent,
+							isDynamic ? 1 : 0,
+							lastModified,
+							enhancedData.mainContent,
+							enhancedData.wordCount,
+							enhancedData.readingTime,
+							enhancedData.language,
+							enhancedData.keywords,
+							enhancedData.qualityScore,
+							enhancedData.structuredData,
+							enhancedData.mediaCount,
+							enhancedData.internalLinksCount,
+							enhancedData.externalLinksCount,
+						) as { id: number } | undefined;
+
+						const pageId = row?.id ?? null;
+
+						if (pageId && links.length > 0) {
+							for (const link of links) {
+								insertLinkQuery.run(pageId, link.url, link.text || "");
+							}
+						}
+
+						return pageId;
+					});
+
+					return transaction();
+				},
+				DB_OPERATION_TIMEOUT_MS,
+				"saveCrawlResult",
+				logger,
+			);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			logger.error(`Transaction failed for ${item.url}: ${message}`);
@@ -321,14 +356,14 @@ export function createPagePipeline({
 		}
 
 		if (!options.respectRobots) {
-			filteredLinks.forEach((link: ExtractedLink) => {
+			for (const link of filteredLinks) {
 				queue.enqueue({
 					url: link.url,
 					depth: item.depth + 1,
 					retries: 0,
 					parentUrl: item.url,
 				});
-			});
+			}
 			return;
 		}
 
@@ -467,8 +502,8 @@ export function createPagePipeline({
 
 		const db = await dbPromise;
 
-		// ATOMIC SAVE: Page + Links
-		const pageId = saveCrawlResult({
+		// ATOMIC SAVE: Page + Links (with timeout protection)
+		const pageId = await saveCrawlResult({
 			db,
 			item,
 			domain,

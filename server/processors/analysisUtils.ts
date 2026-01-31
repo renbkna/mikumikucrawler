@@ -295,12 +295,12 @@ export function analyzeContent(text: string): AnalysisResult {
 
 	const stopWords = STOP_WORDS[language] || DEFAULT_STOP_WORDS;
 	const wordFreq: Record<string, number> = {};
-	words.forEach((word) => {
+	for (const word of words) {
 		const lower = word.toLowerCase().replaceAll(/[^a-z0-9]/g, "");
 		if (lower.length > 2 && !stopWords.has(lower)) {
 			wordFreq[lower] = (wordFreq[lower] || 0) + 1;
 		}
-	});
+	}
 
 	const keywords = Object.entries(wordFreq)
 		.sort((a, b) => b[1] - a[1])
@@ -356,13 +356,13 @@ export function analyzeContent(text: string): AnalysisResult {
  * NOTE: This is an approximation (English-centric), not a dictionary lookup.
  */
 function countSyllables(word: string): number {
-	word = word.toLowerCase().replaceAll(/[^a-z]/g, "");
-	if (word.length <= 3) return 1;
+	let processedWord = word.toLowerCase().replaceAll(/[^a-z]/g, "");
+	if (processedWord.length <= 3) return 1;
 
-	word = word.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, "");
-	word = word.replace(/^y/, "");
+	processedWord = processedWord.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, "");
+	processedWord = processedWord.replace(/^y/, "");
 
-	const matches = word.match(/[aeiouy]{1,2}/g);
+	const matches = processedWord.match(/[aeiouy]{1,2}/g);
 	return matches ? matches.length : 1;
 }
 

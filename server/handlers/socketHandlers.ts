@@ -1,8 +1,6 @@
 import type { Database } from "bun:sqlite";
-import dns from "node:dns";
-import net from "node:net";
+import crypto from "node:crypto";
 import { t } from "elysia";
-import ipaddr from "ipaddr.js";
 import type { SocketCrawledPage } from "../../src/types/socket.js";
 import type { Logger } from "../config/logging.js";
 import { CrawlSession } from "../crawler/CrawlSession.js";
@@ -13,83 +11,13 @@ import type {
 	RawCrawlOptions,
 	SanitizedCrawlOptions,
 } from "../types.js";
+import { assertPublicHostname } from "../utils/validation.js";
 
 const ALLOWED_CRAWL_METHODS = new Set(["links", "content", "media", "full"]);
-const ALLOWED_IP_RANGES = new Set(["unicast", "global"]);
 const ALLOWED_EXPORT_FORMATS = new Set(["json", "csv"]);
 
 /** Regex to detect CSV injection characters at start of cell values */
 const CSV_INJECTION_REGEX = /^[=+\-@|\t]/;
-
-/**
- * Checks if an IP address is valid and within allowed unicast/global ranges.
- */
-function isInvalidIpAddress(address: string): boolean {
-	let parsed: ipaddr.IPv4 | ipaddr.IPv6;
-	try {
-		parsed = ipaddr.parse(address);
-	} catch {
-		return true;
-	}
-
-	if (
-		parsed.kind() === "ipv6" &&
-		(parsed as ipaddr.IPv6).isIPv4MappedAddress()
-	) {
-		parsed = (parsed as ipaddr.IPv6).toIPv4Address();
-	}
-
-	const range = parsed.range();
-	return !ALLOWED_IP_RANGES.has(range);
-}
-
-/** Validates that the hostname resolves to a public IP address to prevent SSRF. */
-async function assertPublicHostname(hostname: string): Promise<void> {
-	if (!hostname) {
-		throw new Error("Target host is not allowed");
-	}
-
-	const normalizedHost =
-		hostname.startsWith("[") && hostname.endsWith("]")
-			? hostname.slice(1, -1)
-			: hostname;
-
-	const lower = normalizedHost.toLowerCase();
-	// Block explicit localhost to prevent internal service scanning
-	if (lower === "localhost") {
-		throw new Error("Target host is not allowed");
-	}
-
-	const ipType = net.isIP(normalizedHost);
-	if (ipType) {
-		if (isInvalidIpAddress(normalizedHost)) {
-			throw new Error("Target host is not allowed");
-		}
-		return;
-	}
-
-	let records: dns.LookupAddress[];
-	try {
-		// Resolve all IPs for the hostname to ensure none point to internal ranges
-		records = await dns.promises.lookup(normalizedHost, {
-			all: true,
-			verbatim: false,
-		});
-	} catch {
-		throw new Error("Unable to resolve target hostname");
-	}
-
-	if (!records?.length) {
-		throw new Error("Unable to resolve target hostname");
-	}
-
-	const hasInvalidRecord = records.some(({ address }) =>
-		isInvalidIpAddress(address),
-	);
-	if (hasInvalidRecord) {
-		throw new Error("Target host is not allowed");
-	}
-}
 
 /**
  * Ensures a number stays within specified bounds, falling back to a default if invalid.
@@ -192,12 +120,26 @@ export const WebSocketMessageSchema = t.Object({
 
 type WebSocketMessage = typeof WebSocketMessageSchema.static;
 
+/**
+ * Tracks active export operations per socket to prevent race conditions.
+ * Root cause fix: Each export gets a unique request ID, and we track
+ * which export operation is currently active per socket.
+ */
+interface ExportOperation {
+	requestId: string;
+	format: string;
+	startTime: number;
+}
+
 /** Creates the WebSocket message handler logic for crawler interactions. */
 export function createWebSocketHandlers(
 	activeCrawls: Map<string, CrawlSession>,
 	dbPromise: Promise<Database>,
 	logger: Logger,
 ) {
+	// Root cause fix: Track active exports per socket to prevent race conditions
+	const activeExports = new Map<string, ExportOperation>();
+
 	const handleMessage = async (
 		ws: {
 			id: string;
@@ -333,6 +275,27 @@ export function createWebSocketHandlers(
 					return;
 				}
 
+				// Root cause fix: Check if there's already an active export for this socket
+				const existingExport = activeExports.get(socketWrapper.id);
+				if (existingExport) {
+					logger.warn(
+						`Export already in progress for socket ${socketWrapper.id}, rejecting new request`,
+					);
+					socketWrapper.emit("crawlError", {
+						message: "An export is already in progress. Please wait.",
+					});
+					return;
+				}
+
+				// Root cause fix: Generate unique request ID for this export operation
+				const requestId = crypto.randomUUID();
+				const exportOp: ExportOperation = {
+					requestId,
+					format: sanitizedFormat,
+					startTime: Date.now(),
+				};
+				activeExports.set(socketWrapper.id, exportOp);
+
 				try {
 					const db = await dbPromise;
 					const rows = db
@@ -342,7 +305,11 @@ export function createWebSocketHandlers(
 						)
 						.all() as Record<string, unknown>[];
 
-					socketWrapper.emit("exportStart", { format: sanitizedFormat });
+					// Root cause fix: Include requestId in all export messages
+					socketWrapper.emit("exportStart", {
+						format: sanitizedFormat,
+						requestId,
+					});
 
 					const CHUNK_SIZE = 500;
 					let chunk: string[] = [];
@@ -350,7 +317,10 @@ export function createWebSocketHandlers(
 					let rowCount = 0;
 
 					if (sanitizedFormat === "json") {
-						socketWrapper.emit("exportChunk", { data: "[" });
+						socketWrapper.emit("exportChunk", {
+							data: "[",
+							requestId,
+						});
 					}
 
 					const escapeCsvCell = (value: unknown): string => {
@@ -380,7 +350,10 @@ export function createWebSocketHandlers(
 
 						if (sanitizedFormat === "csv" && isFirstChunk && rowCount === 1) {
 							const csvHeaders = Object.keys(rowObj).join(",");
-							socketWrapper.emit("exportChunk", { data: `${csvHeaders}\n` });
+							socketWrapper.emit("exportChunk", {
+								data: `${csvHeaders}\n`,
+								requestId,
+							});
 						}
 
 						if (sanitizedFormat === "json") {
@@ -399,7 +372,7 @@ export function createWebSocketHandlers(
 								sanitizedFormat === "json"
 									? chunk.join("")
 									: `${chunk.join("\n")}\n`;
-							socketWrapper.emit("exportChunk", { data });
+							socketWrapper.emit("exportChunk", { data, requestId });
 							chunk = [];
 							isFirstChunk = false;
 							await new Promise((resolve) => setImmediate(resolve));
@@ -411,20 +384,35 @@ export function createWebSocketHandlers(
 							sanitizedFormat === "json"
 								? chunk.join("")
 								: `${chunk.join("\n")}\n`;
-						socketWrapper.emit("exportChunk", { data });
+						socketWrapper.emit("exportChunk", { data, requestId });
 					}
 
 					if (sanitizedFormat === "json") {
-						socketWrapper.emit("exportChunk", { data: "]" });
+						socketWrapper.emit("exportChunk", { data: "]", requestId });
 					}
 
-					socketWrapper.emit("exportComplete", { count: rowCount });
+					// Root cause fix: Include requestId in completion message
+					socketWrapper.emit("exportComplete", { count: rowCount, requestId });
+					logger.info(
+						`Export completed for socket ${socketWrapper.id}: ${rowCount} rows in ${Date.now() - exportOp.startTime}ms`,
+					);
 				} catch (err) {
 					const message = err instanceof Error ? err.message : "Unknown error";
 					logger.error(`Error exporting data: ${message}`);
-					socketWrapper.emit("crawlError", {
-						message: "Failed to export data",
-					});
+					// Only include requestId if it was successfully assigned
+					if (requestId) {
+						socketWrapper.emit("crawlError", {
+							message: "Failed to export data",
+							requestId,
+						});
+					} else {
+						socketWrapper.emit("crawlError", {
+							message: "Failed to export data",
+						});
+					}
+				} finally {
+					// Root cause fix: Clean up active export tracking
+					activeExports.delete(socketWrapper.id);
 				}
 				break;
 			}
@@ -433,6 +421,10 @@ export function createWebSocketHandlers(
 
 	const handleClose = async (ws: { id: string; data: { id: string } }) => {
 		const id = ws.data.id || ws.id;
+
+		// Root cause fix: Clean up any active export for this socket
+		activeExports.delete(id);
+
 		const session = activeCrawls.get(id);
 		if (session) {
 			await session.stop();

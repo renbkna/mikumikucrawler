@@ -34,12 +34,26 @@ type WSMessage =
 	| { type: "stats"; data: StatsPayload }
 	| { type: "queueStats"; data: QueueStats }
 	| { type: "pageContent"; data: CrawledPage }
-	| { type: "exportStart"; data: { format: string } }
-	| { type: "exportChunk"; data: { data: string } }
-	| { type: "exportComplete"; data: unknown }
-	| { type: "crawlError" | "error"; data: { message: string } }
+	| { type: "exportStart"; data: { format: string; requestId: string } }
+	| { type: "exportChunk"; data: { data: string; requestId: string } }
+	| { type: "exportComplete"; data: { count: number; requestId: string } }
+	| {
+			type: "crawlError" | "error";
+			data: { message: string; requestId?: string };
+	  }
 	| { type: "attackEnd"; data: Stats }
 	| { type: "pageDetails"; data: CrawledPage | null };
+
+/**
+ * Root cause fix for race condition: Export operation state is now tracked
+ * per-request using requestId. This prevents data corruption when multiple
+ * exports are requested concurrently.
+ */
+interface ExportState {
+	requestId: string | null;
+	buffer: string[];
+	format: string;
+}
 
 /** Manages WebSocket connection and event orchestration for the crawler. */
 export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
@@ -53,6 +67,14 @@ export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
 	);
 	const reconnectAttemptsRef = useRef(0);
 	const isMountedRef = useRef(true);
+
+	// Root cause fix: Use refs for export state to persist across renders
+	// and prevent race conditions between concurrent exports
+	const exportStateRef = useRef<ExportState>({
+		requestId: null,
+		buffer: [],
+		format: "json",
+	});
 
 	useEffect(() => {
 		handlersRef.current = handlers;
@@ -96,8 +118,6 @@ export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
 
 		try {
 			const ws = new WebSocket(socketEndpoint);
-			const exportBuffer: string[] = [];
-			let exportFormat = "json";
 
 			ws.onopen = () => {
 				if (!isMountedRef.current) return;
@@ -142,6 +162,7 @@ export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
 			};
 
 			ws.onerror = (event) => {
+				// biome-ignore lint/suspicious/noConsole: WebSocket errors should be logged
 				console.error("WebSocket error:", event);
 			};
 
@@ -180,30 +201,65 @@ export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
 						case "pageContent":
 							handlersRef.current.onPageContent(data);
 							break;
-						case "exportStart":
-							exportBuffer.length = 0;
-							exportFormat = data.format;
+						// Root cause fix: Export handling now uses requestId to prevent race conditions
+						case "exportStart": {
+							// Initialize new export state with the request ID
+							exportStateRef.current = {
+								requestId: data.requestId,
+								buffer: [],
+								format: data.format,
+							};
 							handlersRef.current.addToast(
 								"info",
 								"Downloading export data...",
 								2000,
 							);
 							break;
-						case "exportChunk":
-							exportBuffer.push(data.data);
+						}
+						case "exportChunk": {
+							// Root cause fix: Only process chunks for the current export operation
+							if (data.requestId === exportStateRef.current.requestId) {
+								exportStateRef.current.buffer.push(data.data);
+							} else {
+								// biome-ignore lint/suspicious/noConsole: Debug warning for race condition
+								console.warn(
+									`Received export chunk for stale request ${data.requestId}, ignoring`,
+								);
+							}
 							break;
+						}
 						case "exportComplete": {
-							const fullData = exportBuffer.join("");
-							handlersRef.current.onExportResult({
-								data: fullData,
-								format: exportFormat,
-							});
-							exportBuffer.length = 0;
+							// Root cause fix: Only complete if requestId matches
+							if (data.requestId === exportStateRef.current.requestId) {
+								const fullData = exportStateRef.current.buffer.join("");
+								handlersRef.current.onExportResult({
+									data: fullData,
+									format: exportStateRef.current.format,
+								});
+								// Reset export state
+								exportStateRef.current = {
+									requestId: null,
+									buffer: [],
+									format: "json",
+								};
+							}
 							break;
 						}
 						case "crawlError":
 						case "error": {
 							const message = data?.message || "Unknown error";
+							// If this error is related to an export, handle it specially
+							if (
+								data.requestId &&
+								data.requestId === exportStateRef.current.requestId
+							) {
+								// Reset export state on export error
+								exportStateRef.current = {
+									requestId: null,
+									buffer: [],
+									format: "json",
+								};
+							}
 							handlersRef.current.onError(message);
 							break;
 						}
@@ -216,12 +272,14 @@ export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
 							break;
 					}
 				} catch (err) {
+					// biome-ignore lint/suspicious/noConsole: Error logging for debugging
 					console.error("Failed to parse WS message", err);
 				}
 			};
 
 			socketRef.current = ws;
 		} catch (error) {
+			// biome-ignore lint/suspicious/noConsole: Error logging for debugging
 			console.error("Socket initialization error:", error);
 			const delay = SOCKET_CONFIG.RECONNECTION_DELAY;
 			reconnectTimeoutRef.current = setTimeout(() => {

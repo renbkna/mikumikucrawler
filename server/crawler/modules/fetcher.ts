@@ -1,10 +1,10 @@
-import { URL } from "node:url";
 import * as cheerio from "cheerio";
+import type { Logger } from "../../config/logging.js";
 import { FETCH_HEADERS, TIMEOUT_CONSTANTS } from "../../constants.js";
 import type { FetchResult, QueueItem } from "../../types.js";
 import { extractMetadata } from "../../utils/helpers.js";
+import { secureFetch } from "../../utils/secureFetch.js";
 import type { DynamicRenderer } from "../dynamicRenderer.js";
-import type { Logger } from "../../config/logging.js";
 
 interface FetchOptions {
 	item: QueueItem;
@@ -14,6 +14,10 @@ interface FetchOptions {
 
 /**
  * Fetches content from a URL using dynamic renderer if enabled, otherwise falls back to static fetch.
+ *
+ * Security: Uses secureFetch which validates DNS resolutions and prevents rebinding attacks.
+ * The URL is validated at the socket handler level, but we double-check here with cached
+ * resolution to prevent TOCTOU (Time-of-Check-Time-of-Use) attacks.
  */
 export async function fetchContent({
 	item,
@@ -53,7 +57,9 @@ export async function fetchContent({
 		);
 
 		try {
-			const response = await fetch(item.url, {
+			// Root cause fix: Use secureFetch which validates DNS and prevents rebinding
+			const response = await secureFetch({
+				url: item.url,
 				headers: FETCH_HEADERS,
 				signal: controller.signal,
 				redirect: "follow",
