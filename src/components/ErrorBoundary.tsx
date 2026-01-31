@@ -23,6 +23,7 @@ export class ErrorBoundary extends Component<
 	}
 
 	componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
+		// biome-ignore lint/suspicious/noConsole: Error boundary should log errors
 		console.error("ErrorBoundary caught an error:", error, errorInfo);
 	}
 

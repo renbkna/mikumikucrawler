@@ -34,6 +34,31 @@ export interface ClientToServerEvents {
 }
 
 /**
+ * Export operation tracking to prevent race conditions.
+ * Root cause fix: Each export operation gets a unique request ID
+ * so the client can correlate chunks with the correct export.
+ */
+export interface ExportStartData {
+	format: string;
+	requestId: string;
+}
+
+export interface ExportChunkData {
+	data: string;
+	requestId: string;
+}
+
+export interface ExportCompleteData {
+	count: number;
+	requestId: string;
+}
+
+export interface ExportErrorData {
+	message: string;
+	requestId?: string;
+}
+
+/**
  * Socket events sent from the Server to the Client.
  */
 export interface ServerToClientEvents {
@@ -43,13 +68,14 @@ export interface ServerToClientEvents {
 	queueStats: (data: QueueStats) => void;
 	pageContent: (data: CrawledPage) => void;
 	exportResult: (data: { data: string; format: string }) => void;
-	crawlError: (error: { message: string }) => void;
-	error: (error: { message: string }) => void;
+	crawlError: (error: { message: string; requestId?: string }) => void;
+	error: (error: { message: string; requestId?: string }) => void;
 	attackEnd: (finalStats: Stats) => void;
 	pageDetails: (data: SocketCrawledPage | null) => void;
-	exportStart: (data: { format: string }) => void;
-	exportChunk: (data: { data: string }) => void;
-	exportComplete: (data: { count: number }) => void;
+	// Root cause fix: Export events now include requestId to prevent race conditions
+	exportStart: (data: ExportStartData) => void;
+	exportChunk: (data: ExportChunkData) => void;
+	exportComplete: (data: ExportCompleteData) => void;
 }
 
 export type ExportFormat = "json" | "csv";

@@ -2,10 +2,11 @@ import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./env.js";
+import type { Logger } from "./logging.js";
 
 const DB_PATH = config.dbPath;
 
-const ensureDirectoryExists = (filePath: string) => {
+const ensureDirectoryExists = (filePath: string): void => {
 	const dir = path.dirname(filePath);
 	if (!fs.existsSync(dir)) {
 		fs.mkdirSync(dir, { recursive: true });
@@ -14,7 +15,13 @@ const ensureDirectoryExists = (filePath: string) => {
 
 let dbInstance: Database | null = null;
 
-export const setupDatabase = (): Database => {
+/**
+ * Sets up the database with proper schema and migrations.
+ *
+ * @param logger - Optional logger for database operations. If not provided,
+ *                 errors during bootstrap will be thrown rather than logged.
+ */
+export const setupDatabase = (logger?: Logger): Database => {
 	ensureDirectoryExists(DB_PATH);
 
 	if (!dbInstance) {
@@ -99,13 +106,23 @@ export const setupDatabase = (): Database => {
 					// SQLite returns "duplicate column name" if column already exists
 					const message = err instanceof Error ? err.message : String(err);
 					if (!message.includes("duplicate column")) {
-						console.error(`Migration failed for column ${col}:`, message);
+						const errorMessage = `Migration failed for column ${col}: ${message}`;
+						if (logger) {
+							logger.error(errorMessage);
+						} else {
+							throw new Error(errorMessage);
+						}
 					}
 				}
 			}
 		}
 	} catch (e) {
-		console.error("Migration check failed", e);
+		const errorMessage = `Migration check failed: ${e instanceof Error ? e.message : String(e)}`;
+		if (logger) {
+			logger.error(errorMessage);
+		} else {
+			throw new Error(errorMessage);
+		}
 	}
 
 	return dbInstance;
