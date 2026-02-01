@@ -6,7 +6,10 @@ export const CRAWL_QUEUE_CONSTANTS = {
 } as const;
 
 export const TIMEOUT_CONSTANTS = {
-	STATIC_FETCH: 15000,
+	STATIC_FETCH: 10000, // 10s for HTTP requests
+	DYNAMIC_RENDER: 30000, // 30s for Puppeteer
+	CONTENT_PROCESSING: 5000, // 5s for HTML parsing/analysis
+	DATABASE_OPERATION: 10000, // 10s for DB queries
 } as const;
 
 export const RETRY_CONSTANTS = {

@@ -1,6 +1,7 @@
 import { createWriteStream, existsSync, mkdirSync } from "node:fs";
 import pino, { type Logger } from "pino";
 import { config } from "./env.js";
+import { createPrettyPrinter } from "./prettyPrinter.js";
 
 const ensureDirectoryExists = (dir: string): void => {
 	if (!existsSync(dir)) {
@@ -36,20 +37,10 @@ export const setupLogging = async (): Promise<AppLogger> => {
 
 	// Create multi-stream transport using pino.multistream
 	const streams = pino.multistream([
-		// Console output
+		// Console output with beautiful formatting
 		{
 			level: "debug",
-			stream: isProduction
-				? process.stdout
-				: pino.transport({
-						target: "pino-pretty",
-						options: {
-							colorize: true,
-							translateTime: "HH:MM:ss",
-							ignore: "pid,hostname",
-							levelFirst: true,
-						},
-					}),
+			stream: isProduction ? process.stdout : createPrettyPrinter(),
 		},
 		// All logs to crawler.log (JSON format for parsing)
 		{ level: "debug", stream: allStream },

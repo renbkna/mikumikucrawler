@@ -39,7 +39,7 @@ describe("CrawlQueue", () => {
 		const logger = createMockLogger();
 		const socket = createMockSocket();
 		const options = createMockOptions({ maxConcurrentRequests: 2 });
-		const state = new CrawlState(socket, logger);
+		const state = new CrawlState(options);
 
 		let processCount = 0;
 		const processItem = mock(async () => {
@@ -83,7 +83,7 @@ describe("CrawlQueue", () => {
 		const logger = createMockLogger();
 		const socket = createMockSocket();
 		const options = createMockOptions();
-		const state = new CrawlState(socket, logger);
+		const state = new CrawlState(options);
 
 		const queue = new CrawlQueue({
 			options,
@@ -111,7 +111,7 @@ describe("CrawlQueue", () => {
 		const logger = createMockLogger();
 		const socket = createMockSocket();
 		const options = createMockOptions();
-		const state = new CrawlState(socket, logger);
+		const state = new CrawlState(options);
 
 		let processCount = 0;
 		const processItem = mock(async () => {
@@ -146,7 +146,7 @@ describe("CrawlQueue", () => {
 		const logger = createMockLogger();
 		const socket = createMockSocket();
 		const options = createMockOptions({ maxConcurrentRequests: 2 });
-		const state = new CrawlState(socket, logger);
+		const state = new CrawlState(options);
 
 		let processCount = 0;
 		const processItem = mock(async () => {
@@ -187,7 +187,7 @@ describe("CrawlQueue", () => {
 		const logger = createMockLogger();
 		const socket = createMockSocket();
 		const options = createMockOptions();
-		const state = new CrawlState(socket, logger);
+		const state = new CrawlState(options);
 
 		const queue = new CrawlQueue({
 			options,
@@ -213,7 +213,7 @@ describe("CrawlQueue", () => {
 		const logger = createMockLogger();
 		const socket = createMockSocket();
 		const options = createMockOptions();
-		const state = new CrawlState(socket, logger);
+		const state = new CrawlState(options);
 
 		const queue = new CrawlQueue({
 			options,

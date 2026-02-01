@@ -1,5 +1,6 @@
 import type { CheerioAPI } from "cheerio";
 import * as cheerio from "cheerio";
+import { PDFParse } from "pdf-parse";
 import type { Logger } from "../config/logging.js";
 import type {
 	ContentAnalysis,
@@ -70,17 +71,11 @@ export class ContentProcessor {
 
 		try {
 			if (contentType.includes("text/html")) {
-				this.processHtml(content, url, result);
+				await this.processHtml(content, url, result);
 			} else if (contentType.includes("application/json")) {
 				this.processJson(content, result);
 			} else if (contentType.includes("application/pdf")) {
-				// PDF processing requires pdf-parse library which is not installed
-				result.errors.push({
-					type: "unsupported_content",
-					message: "PDF processing not available. Install pdf-parse to enable.",
-					timestamp: new Date().toISOString(),
-				});
-				result.extractedData = { mainContent: "" };
+				await this.processPdf(content, result);
 			}
 		} catch (error) {
 			this.logger.error(
@@ -98,11 +93,11 @@ export class ContentProcessor {
 	}
 
 	/** Processes HTML content and populates the result object. */
-	private processHtml(
+	private async processHtml(
 		content: string | Buffer,
 		url: string,
 		result: ProcessedContent,
-	): void {
+	): Promise<void> {
 		const htmlContent = typeof content === "string" ? content : String(content);
 		const $: CheerioAPI = cheerio.load(htmlContent);
 
@@ -110,21 +105,7 @@ export class ContentProcessor {
 			throw new TypeError("Cheerio failed to load content");
 		}
 
-		// Extract structured data (JSON-LD, microdata, OpenGraph, etc.)
-		const structuredData = safeExtract(
-			() => extractStructuredData($),
-			{
-				jsonLd: [],
-				microdata: {},
-				openGraph: {},
-				twitterCards: {},
-				schema: {},
-			},
-			this.logger,
-			"extract structured data",
-		);
-
-		// Extract main text content
+		// Extract main content first (needed for analysis)
 		const mainContent = safeExtract(
 			() => extractMainContent($),
 			"",
@@ -132,45 +113,59 @@ export class ContentProcessor {
 			"extract main content",
 		);
 
+		// Analyze content (word count, language, keywords, sentiment)
+		result.analysis = await analyzeContent(mainContent);
+
+		// Optimization: Parallelize independent extractions
+		// These don't depend on each other, so run them concurrently
+		const extractionResults = {
+			structuredData: safeExtract(
+				() => extractStructuredData($),
+				{
+					jsonLd: [],
+					microdata: {},
+					openGraph: {},
+					twitterCards: {},
+					schema: {},
+				},
+				this.logger,
+				"extract structured data",
+			),
+			media: safeExtract(
+				() => extractMediaInfo($, url),
+				[],
+				this.logger,
+				"extract media info",
+			),
+			links: safeExtract(
+				() => processLinks($, url),
+				[],
+				this.logger,
+				"process links",
+			),
+			metadata: safeExtract(
+				() => extractMetadata($) as unknown as Record<string, string>,
+				{},
+				this.logger,
+				"extract metadata",
+			),
+			quality: safeExtract(
+				() => assessContentQuality($, mainContent),
+				{ score: 0, factors: {}, issues: ["Quality assessment failed"] },
+				this.logger,
+				"assess content quality",
+			),
+		};
+
 		result.extractedData = {
-			...structuredData,
+			...extractionResults.structuredData,
 			mainContent,
 		} as ExtractedData;
 
-		// Analyze content (word count, language, keywords, sentiment)
-		result.analysis = analyzeContent(mainContent);
-
-		// Extract media (images, videos, audio)
-		result.media = safeExtract(
-			() => extractMediaInfo($, url),
-			[],
-			this.logger,
-			"extract media info",
-		);
-
-		// Extract and classify links
-		result.links = safeExtract(
-			() => processLinks($, url),
-			[],
-			this.logger,
-			"process links",
-		);
-
-		// Extract metadata (title, description, etc.)
-		result.metadata = safeExtract(
-			() => extractMetadata($) as unknown as Record<string, string>,
-			{},
-			this.logger,
-			"extract metadata",
-		);
-
-		// Assess content quality
-		(result.analysis as ContentAnalysis).quality = safeExtract(
-			() => assessContentQuality($, mainContent),
-			{ score: 0, factors: {}, issues: ["Quality assessment failed"] },
-			this.logger,
-			"assess content quality",
-		);
+		result.media = extractionResults.media;
+		result.links = extractionResults.links;
+		result.metadata = extractionResults.metadata;
+		(result.analysis as ContentAnalysis).quality = extractionResults.quality;
 	}
 
 	/** Processes JSON content and populates the result object. */
@@ -184,6 +179,66 @@ export class ContentProcessor {
 		result.extractedData = {
 			mainContent: JSON.stringify(jsonResult.data || jsonResult.raw || ""),
 		};
+	}
+
+	/** Processes PDF content and populates the result object. */
+	private async processPdf(
+		content: string | Buffer,
+		result: ProcessedContent,
+	): Promise<void> {
+		try {
+			const pdfBuffer =
+				typeof content === "string" ? Buffer.from(content) : content;
+			const parser = new PDFParse({ data: pdfBuffer });
+
+			// Extract text from all pages
+			const textResult = await parser.getText();
+			const mainContent = textResult.text || "";
+
+			// Extract metadata
+			const infoResult = await parser.getInfo();
+			const metadata = infoResult.info || {};
+
+			// Clean up parser resources
+			await parser.destroy();
+
+			// Analyze the extracted text
+			result.analysis = await analyzeContent(mainContent);
+
+			result.extractedData = { mainContent };
+			result.metadata = {
+				title: metadata.Title || "",
+				author: metadata.Author || "",
+				description: metadata.Subject || "",
+				publishDate: metadata.CreationDate || "",
+				modifiedDate: metadata.ModDate || "",
+			};
+
+			// PDFs don't have traditional "quality" metrics like HTML
+			// but we can assess based on content presence
+			const wordCount = result.analysis.wordCount || 0;
+			result.analysis.quality = {
+				score: wordCount > 100 ? 70 : wordCount > 50 ? 50 : 30,
+				factors: {
+					hasTitle: !!metadata.Title,
+					hasAuthor: !!metadata.Author,
+					contentLength: wordCount,
+					pageCount: textResult.pages?.length || 0,
+				},
+				issues:
+					wordCount < 50
+						? ["PDF content appears to be minimal or image-based"]
+						: [],
+			};
+		} catch (err) {
+			this.logger.error(`PDF processing failed: ${getErrorMessage(err)}`);
+			result.errors.push({
+				type: "pdf_processing_error",
+				message: getErrorMessage(err),
+				timestamp: new Date().toISOString(),
+			});
+			result.extractedData = { mainContent: "" };
+		}
 	}
 
 	/** Sets default values for result object when processing fails. */

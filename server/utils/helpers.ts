@@ -1,4 +1,3 @@
-import robotsParser from "robots-parser";
 import { config } from "../config/env.js";
 import type { DatabaseLike, LoggerLike } from "../types.js";
 
@@ -16,8 +15,15 @@ export function getErrorMessage(error: unknown): string {
 	return String(error);
 }
 
-const ROBOTS_CACHE_MAX_SIZE = 100; // Cap to prevent memory leaks in long-running processes
-const ROBOTS_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour cache
+const ROBOTS_CACHE_MAX_SIZE = 100;
+const ROBOTS_CACHE_TTL_MS = 60 * 60 * 1000;
+
+interface Rule {
+	userAgent: string;
+	allow: string[];
+	disallow: string[];
+	crawlDelay?: number;
+}
 
 interface CacheEntry<T> {
 	value: T;
@@ -29,6 +35,147 @@ interface RobotsResult {
 	isDisallowed(url: string, userAgent?: string): boolean | undefined;
 	getCrawlDelay(userAgent?: string): number | undefined;
 	getSitemaps(): string[];
+}
+
+class NativeRobotsParser implements RobotsResult {
+	private rules: Rule[] = [];
+	private sitemaps: string[] = [];
+
+	constructor(robotsTxt: string) {
+		this.parse(robotsTxt);
+	}
+
+	private parse(robotsTxt: string): void {
+		const lines = robotsTxt.split("\n");
+		let currentRule: Rule | null = null;
+
+		for (const line of lines) {
+			const trimmed = line.trim();
+			if (!trimmed || trimmed.startsWith("#")) continue;
+
+			const colonIndex = trimmed.indexOf(":");
+			if (colonIndex === -1) continue;
+
+			const directive = trimmed.slice(0, colonIndex).trim().toLowerCase();
+			const value = trimmed.slice(colonIndex + 1).trim();
+
+			switch (directive) {
+				case "user-agent":
+					if (currentRule) {
+						this.rules.push(currentRule);
+					}
+					currentRule = {
+						userAgent: value.toLowerCase(),
+						allow: [],
+						disallow: [],
+					};
+					break;
+				case "allow":
+					if (currentRule) {
+						currentRule.allow.push(value);
+					}
+					break;
+				case "disallow":
+					if (currentRule) {
+						currentRule.disallow.push(value);
+					}
+					break;
+				case "crawl-delay":
+					if (currentRule) {
+						currentRule.crawlDelay = parseFloat(value);
+					}
+					break;
+				case "sitemap":
+					this.sitemaps.push(value);
+					break;
+			}
+		}
+
+		if (currentRule) {
+			this.rules.push(currentRule);
+		}
+	}
+
+	private matchesRule(path: string, pattern: string): boolean {
+		// Convert robots.txt pattern to regex
+		// * matches any sequence of characters
+		// $ matches end of string
+		const regexPattern = pattern
+			.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+			.replace(/\*/g, ".*")
+			.replace(/\$/g, "$");
+
+		try {
+			const regex = new RegExp(regexPattern);
+			return regex.test(path);
+		} catch {
+			return path.startsWith(pattern);
+		}
+	}
+
+	private getPathFromUrl(url: string): string {
+		try {
+			return new URL(url).pathname;
+		} catch {
+			// If it's already a path, return as-is
+			return url.startsWith("/") ? url : `/${url}`;
+		}
+	}
+
+	private findMatchingRule(userAgent?: string): Rule | null {
+		if (!userAgent) {
+			// Return * rule if exists
+			return this.rules.find((r) => r.userAgent === "*") || null;
+		}
+
+		const ua = userAgent.toLowerCase();
+		// First try exact match
+		let rule = this.rules.find((r) => r.userAgent === ua);
+		if (rule) return rule;
+
+		// Try partial match
+		rule = this.rules.find((r) => ua.includes(r.userAgent));
+		if (rule) return rule;
+
+		// Return * rule as fallback
+		return this.rules.find((r) => r.userAgent === "*") || null;
+	}
+
+	isAllowed(url: string, userAgent?: string): boolean {
+		const path = this.getPathFromUrl(url);
+		const rule = this.findMatchingRule(userAgent);
+
+		if (!rule) return true;
+
+		// Check explicit allows first
+		for (const allowPattern of rule.allow) {
+			if (this.matchesRule(path, allowPattern)) {
+				return true;
+			}
+		}
+
+		// Then check disallows
+		for (const disallowPattern of rule.disallow) {
+			if (this.matchesRule(path, disallowPattern)) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	isDisallowed(url: string, userAgent?: string): boolean {
+		return !this.isAllowed(url, userAgent);
+	}
+
+	getCrawlDelay(userAgent?: string): number | undefined {
+		const rule = this.findMatchingRule(userAgent);
+		return rule?.crawlDelay;
+	}
+
+	getSitemaps(): string[] {
+		return [...this.sitemaps];
+	}
 }
 
 class RobotsCache {
@@ -66,7 +213,6 @@ class RobotsCache {
 
 	set(domain: string, value: RobotsResult): void {
 		if (this.cache.size >= this.maxSize) {
-			// Simple FIFO eviction
 			const oldestKey = this.cache.keys().next().value;
 			if (oldestKey) {
 				this.cache.delete(oldestKey);
@@ -116,17 +262,13 @@ export async function getRobotsRules(
 			.get(domain) as { robots_txt?: string } | undefined;
 
 		if (domainSettings?.robots_txt) {
-			const robots = robotsParser(
-				`http://${domain}/robots.txt`,
-				domainSettings.robots_txt,
-			);
+			const robots = new NativeRobotsParser(domainSettings.robots_txt);
 			robotsCache.set(domain, robots);
 			return robots;
 		}
 
 		const protocols = ["https", "http"];
 		let robotsTxt: string | null = null;
-		let successfulProtocol: string | null = null;
 		let lastError: Error | null = null;
 
 		for (const protocol of protocols) {
@@ -149,7 +291,6 @@ export async function getRobotsRules(
 				}
 
 				robotsTxt = await response.text();
-				successfulProtocol = protocol;
 				break;
 			} catch (error) {
 				lastError = error instanceof Error ? error : new Error(String(error));
@@ -163,13 +304,12 @@ export async function getRobotsRules(
 			if (!allowOnFailure) {
 				return null;
 			}
-			const fallback = robotsParser(`http://${domain}/robots.txt`, "");
+			const fallback = new NativeRobotsParser("");
 			robotsCache.set(domain, fallback);
 			return fallback;
 		}
 
-		const robotsUrl = `${successfulProtocol || "http"}://${domain}/robots.txt`;
-		const robots = robotsParser(robotsUrl, robotsTxt);
+		const robots = new NativeRobotsParser(robotsTxt);
 
 		db.query(
 			"INSERT OR REPLACE INTO domain_settings (domain, robots_txt) VALUES (?, ?)",
@@ -183,7 +323,7 @@ export async function getRobotsRules(
 		if (!allowOnFailure) {
 			return null;
 		}
-		const fallback = robotsParser(`http://${domain}/robots.txt`, "");
+		const fallback = new NativeRobotsParser("");
 		robotsCache.set(domain, fallback);
 		return fallback;
 	}

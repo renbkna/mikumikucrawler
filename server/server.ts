@@ -16,11 +16,13 @@ import { rateLimit } from "elysia-rate-limit";
 import { setupDatabase } from "./config/database.js";
 import { config } from "./config/env.js";
 import { setupLogging } from "./config/logging.js";
+import { createStartupBanner } from "./config/prettyPrinter.js";
 import type { CrawlSession } from "./crawler/CrawlSession.js";
 import {
 	createWebSocketHandlers,
 	WebSocketMessageSchema,
 } from "./handlers/socketHandlers.js";
+import { compression } from "./middleware/compression.js";
 import { apiRoutes } from "./routes/apiRoutes.js";
 import { getErrorMessage } from "./utils/helpers.js";
 
@@ -75,6 +77,7 @@ const app = new Elysia()
 				request.url.includes("/ws") || request.url.includes("/health"),
 		}),
 	)
+	.use(compression())
 	.use(
 		swagger({
 			documentation: {
@@ -124,10 +127,31 @@ const app = new Elysia()
 		const errorMessage = (error as Error)?.message || "Internal Server Error";
 		return { error: errorMessage };
 	})
-	.get("*", async ({ path: reqPath }) => {
+	.get("*", async ({ path: reqPath, headers }) => {
 		const filePath = path.join(distPath, reqPath);
 		const file = Bun.file(filePath);
 		if (await file.exists()) {
+			// Add cache headers for static assets
+			const isAsset =
+				/\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$/i.test(
+					reqPath,
+				);
+			if (isAsset) {
+				const etag = await file
+					.arrayBuffer()
+					.then((buf) => Bun.hash(buf).toString(16));
+				const ifNoneMatch = headers.get("if-none-match");
+				if (ifNoneMatch === etag) {
+					return new Response(null, { status: 304 });
+				}
+				return new Response(file, {
+					headers: {
+						"Content-Type": file.type,
+						"Cache-Control": "public, max-age=31536000, immutable",
+						ETag: etag,
+					},
+				});
+			}
 			return file;
 		}
 
@@ -139,9 +163,13 @@ const app = new Elysia()
 	});
 
 const instance = app.listen(PORT, (server) => {
-	logger.info(`Miku Crawler backend running on port ${server.port} (Elysia)`);
-	logger.info(
-		`Swagger documentation available at http://localhost:${server.port}/swagger`,
+	// biome-ignore lint/suspicious/noConsole: Startup banner is intentional output
+	console.log(
+		createStartupBanner({
+			port: server.port,
+			frontendUrl: FRONTEND_URL,
+			env: config.env,
+		}),
 	);
 });
 

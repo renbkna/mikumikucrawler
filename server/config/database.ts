@@ -26,7 +26,15 @@ export const setupDatabase = (logger?: Logger): Database => {
 
 	if (!dbInstance) {
 		dbInstance = new Database(DB_PATH);
-		dbInstance.exec("PRAGMA journal_mode = WAL;");
+		// Performance optimizations for read-heavy crawler workload
+		dbInstance.exec(`
+			PRAGMA journal_mode = WAL;
+			PRAGMA synchronous = NORMAL;
+			PRAGMA cache_size = -16000;		-- 16MB cache (reduced from 64MB)
+			PRAGMA temp_store = MEMORY;
+			PRAGMA mmap_size = 67108864;		-- 64MB mmap (reduced from 256MB)
+			PRAGMA busy_timeout = 5000;
+		`);
 	}
 
 	dbInstance.exec(`

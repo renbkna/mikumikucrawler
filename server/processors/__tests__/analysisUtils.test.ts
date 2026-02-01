@@ -2,10 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { analyzeContent, processJSON } from "../analysisUtils.js";
 
 describe("analyzeContent", () => {
-	test("produces keyword and sentiment insights", () => {
+	test("produces keyword and sentiment insights", async () => {
 		const sample =
 			"This article is amazing and wonderful. I love the great insights it provides.";
-		const analysis = analyzeContent(sample);
+		const analysis = await analyzeContent(sample);
 
 		expect(analysis.sentiment).toBe("positive");
 		expect(analysis.wordCount).toBeGreaterThan(0);
