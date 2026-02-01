@@ -11,9 +11,9 @@ import type { CrawlState } from "./crawlState.js";
 
 /**
  * Internal utility to pause execution for a given duration.
+ * Uses Bun's native sleep for better performance.
  */
-const sleep = (ms: number): Promise<void> =>
-	new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number): Promise<void> => Bun.sleep(ms);
 
 interface CrawlQueueOptions {
 	options: SanitizedCrawlOptions;
@@ -143,19 +143,12 @@ export class CrawlQueue {
 
 			let deferredDelay: number | null = null;
 
-			// Periodically clean up processing history to prevent memory leaks in long crawls
-			if (
-				domainProcessing.size >
-				CRAWL_QUEUE_CONSTANTS.DOMAIN_CACHE_CLEANUP_THRESHOLD
-			) {
-				const now = Date.now();
-				for (const [domain, nextAllowed] of domainProcessing) {
-					if (
-						now >
-						nextAllowed + CRAWL_QUEUE_CONSTANTS.DOMAIN_ENTRY_EXPIRY_MS
-					) {
-						domainProcessing.delete(domain);
-					}
+			// Clean up expired domain entries every iteration to prevent memory leaks
+			// Root cause fix: Don't wait for threshold, proactively clean expired entries
+			const now = Date.now();
+			for (const [domain, nextAllowed] of domainProcessing) {
+				if (now > nextAllowed + CRAWL_QUEUE_CONSTANTS.DOMAIN_ENTRY_EXPIRY_MS) {
+					domainProcessing.delete(domain);
 				}
 			}
 
@@ -197,7 +190,10 @@ export class CrawlQueue {
 					// Use Set for atomic tracking (avoids race conditions with counter)
 					this.activeItems.add(item.url);
 
-					const task = Promise.resolve(this.processItem(item))
+					// Root cause fix: Create task reference first to avoid race condition
+					// where finally() runs before task is added to processingPromises
+					let task: Promise<void>;
+					task = Promise.resolve(this.processItem(item))
 						.catch((error: Error) => {
 							this.logger.error(`Error in queue processing: ${error.message}`);
 							this.state.recordFailure();

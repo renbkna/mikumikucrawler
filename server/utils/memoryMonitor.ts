@@ -5,12 +5,14 @@ interface MemoryUsage {
 	heapUsed: number;
 	heapTotal: number;
 	external: number;
+	arrayBuffers: number;
 }
 
 interface MemoryStatus extends MemoryUsage {
 	isLowMemory: boolean;
 	recommendation: string;
 	totalEstimated: string;
+	percentUsed: number;
 }
 
 /**
@@ -23,13 +25,15 @@ export function getMemoryUsage(): MemoryUsage {
 		heapUsed: Math.round(usage.heapUsed / 1024 / 1024),
 		heapTotal: Math.round(usage.heapTotal / 1024 / 1024),
 		external: Math.round(usage.external / 1024 / 1024),
+		arrayBuffers: Math.round((usage.arrayBuffers || 0) / 1024 / 1024),
 	};
 }
 
 /** Determines if the current RSS usage exceeds the safe threshold for dynamic rendering. */
 export function isLowMemory(): boolean {
 	const usage = getMemoryUsage();
-	return usage.rss > 400;
+	// Reduced threshold since we optimized database memory usage
+	return usage.rss > 350;
 }
 
 /**
@@ -45,7 +49,8 @@ export function getMemoryStatus(): MemoryStatus {
 		recommendation: lowMem
 			? "Consider upgrading to at least 1GB RAM for Puppeteer support"
 			: "Memory levels OK for dynamic crawling",
-		totalEstimated: `${usage.rss}MB used of ~512MB available`,
+		totalEstimated: `${usage.rss}MB total | Heap: ${usage.heapUsed}MB`,
+		percentUsed: Math.round((usage.rss / 512) * 100),
 	};
 }
 
@@ -54,8 +59,17 @@ export function getMemoryStatus(): MemoryStatus {
  */
 export function logMemoryStatus(logger: Logger): MemoryStatus {
 	const status = getMemoryStatus();
+	const icon = status.isLowMemory ? "⚠️" : "✅";
 	logger.info(
-		`Memory Status: ${status.totalEstimated} | Heap: ${status.heapUsed}MB | ${status.recommendation}`,
+		`${icon} Memory: ${status.totalEstimated} | ${status.recommendation}`,
 	);
 	return status;
+}
+
+/**
+ * Gets a quick memory snapshot for debugging.
+ */
+export function getMemorySnapshot(): string {
+	const usage = getMemoryUsage();
+	return `RSS:${usage.rss}MB Heap:${usage.heapUsed}MB Ext:${usage.external}MB`;
 }
