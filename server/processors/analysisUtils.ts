@@ -1,10 +1,6 @@
-/// <reference path="../types/sentiment.d.ts" />
 import type { CheerioAPI } from "cheerio";
-import languageDetect from "languagedetect";
-import Sentiment from "sentiment";
-
-const lngDetector = new languageDetect();
-const sentiment = new Sentiment();
+import { franc } from "franc";
+import { analyzeSentiment } from "./sentimentAnalyzer.js";
 
 interface AnalysisResult {
 	wordCount: number;
@@ -277,7 +273,7 @@ const STOP_WORDS: Record<string, Set<string>> = {
 const DEFAULT_STOP_WORDS = STOP_WORDS.en;
 
 /** Analyzes text to determine word count, language, sentiment, and readability. */
-export function analyzeContent(text: string): AnalysisResult {
+export async function analyzeContent(text: string): Promise<AnalysisResult> {
 	const cleanText = (text || "").toString().trim();
 	const words = cleanText.split(/\s+/).filter((w) => w.length > 0);
 	const wordCount = words.length;
@@ -285,9 +281,39 @@ export function analyzeContent(text: string): AnalysisResult {
 
 	let language = "en";
 	try {
-		const detected = lngDetector.detect(cleanText, 1);
-		if (detected && detected.length > 0) {
-			language = detected[0][0] || "en";
+		// franc returns ISO 639-3 codes (e.g., 'eng', 'spa', 'fra')
+		const detected = franc(cleanText, { minLength: 10 });
+		if (detected && detected !== "und") {
+			// Map common ISO 639-3 codes to 639-1
+			const langMap: Record<string, string> = {
+				eng: "en",
+				spa: "es",
+				fra: "fr",
+				deu: "de",
+				ita: "it",
+				por: "pt",
+				rus: "ru",
+				jpn: "ja",
+				cmn: "zh",
+				kor: "ko",
+				ara: "ar",
+				nld: "nl",
+				pol: "pl",
+				tur: "tr",
+				vie: "vi",
+				tha: "th",
+				ind: "id",
+				ces: "cs",
+				ell: "el",
+				heb: "he",
+				swe: "sv",
+				hun: "hu",
+				fin: "fi",
+
+				dan: "da",
+				nor: "no",
+			};
+			language = langMap[detected] || "en";
 		}
 	} catch {
 		language = "en";
@@ -307,15 +333,9 @@ export function analyzeContent(text: string): AnalysisResult {
 		.slice(0, 10)
 		.map(([word, count]) => ({ word, count }));
 
-	let sentimentLabel = "neutral";
-	try {
-		const result = sentiment.analyze(cleanText);
-		// Heuristic thresholds: +/- 2 allows for some mild sentiment words without skewing the result.
-		if (result.score > 2) sentimentLabel = "positive";
-		else if (result.score < -2) sentimentLabel = "negative";
-	} catch {
-		sentimentLabel = "neutral";
-	}
+	// Analyze sentiment using ML-based transformers (async)
+	const sentimentResult = await analyzeSentiment(cleanText);
+	const sentimentLabel = sentimentResult.label;
 
 	const sentences = cleanText
 		.split(/[.!?]+/)

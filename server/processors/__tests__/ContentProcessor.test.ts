@@ -77,21 +77,20 @@ describe("ContentProcessor", () => {
 			expect(result.extractedData.mainContent).toBeDefined();
 		});
 
-		test("handles PDF content with unsupported error", async () => {
+		test("handles PDF content processing", async () => {
 			const logger = createMockLogger();
 			const processor = new ContentProcessor(logger);
 
+			// Test with invalid PDF data - should produce processing error
 			const result = await processor.processContent(
 				Buffer.from("fake pdf content"),
 				"https://example.com/doc.pdf",
 				"application/pdf",
 			);
 
+			// Invalid PDF data should produce a processing error
 			expect(result.errors.length).toBe(1);
-			expect(result.errors[0].type).toBe("unsupported_content");
-			expect(result.errors[0].message).toContain(
-				"PDF processing not available",
-			);
+			expect(result.errors[0].type).toBe("pdf_processing_error");
 		});
 
 		test("handles malformed HTML gracefully", async () => {

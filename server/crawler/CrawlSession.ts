@@ -8,6 +8,7 @@ import type {
 	SanitizedCrawlOptions,
 } from "../types.js";
 import { getRobotsRules } from "../utils/helpers.js";
+import { coalesceCrawl } from "../utils/requestCoalescer.js";
 import { DynamicRenderer } from "./dynamicRenderer.js";
 import { CrawlQueue } from "./modules/crawlQueue.js";
 import { CrawlState } from "./modules/crawlState.js";
@@ -87,7 +88,10 @@ export class CrawlSession {
 			targetDomain: this.targetDomain,
 		});
 
-		this.queue.processItem = this.pipeline;
+		// Use request coalescing to prevent duplicate simultaneous crawls
+		this.queue.processItem = async (item: QueueItem) => {
+			await coalesceCrawl(item.url, () => this.pipeline(item));
+		};
 	}
 
 	/**

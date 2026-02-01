@@ -168,6 +168,14 @@ export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
 
 			ws.onmessage = (event) => {
 				try {
+					// Security: Limit message size to prevent DOS
+					const MAX_MESSAGE_SIZE = 10 * 1024 * 1024; // 10MB
+					if (event.data.length > MAX_MESSAGE_SIZE) {
+						// biome-ignore lint/suspicious/noConsole: Security logging for message size exceeded
+						console.error("WebSocket message too large, dropping");
+						return;
+					}
+
 					const msg: WSMessage = JSON.parse(event.data);
 					const { type, data } = msg;
 
