@@ -198,6 +198,7 @@ export async function analyzeSentiment(text: string): Promise<SentimentResult> {
 	let positiveCount = 0;
 	let negativeCount = 0;
 	let negationActive = false;
+	let negationStartIndex = -1;
 
 	for (let i = 0; i < words.length; i++) {
 		const word = words[i].replace(/[^a-z]/g, ""); // Clean punctuation
@@ -206,11 +207,12 @@ export async function analyzeSentiment(text: string): Promise<SentimentResult> {
 		// Check for negation
 		if (negationWords.has(word)) {
 			negationActive = true;
+			negationStartIndex = i;
 			continue;
 		}
 
-		// End negation scope after 3 words (simplified)
-		if (negationActive && i > 0 && i % 4 === 0) {
+		// End negation scope after 3 words from the negation word
+		if (negationActive && i - negationStartIndex > 3) {
 			negationActive = false;
 		}
 

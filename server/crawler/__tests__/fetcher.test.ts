@@ -37,7 +37,7 @@ describe("fetchContent", () => {
 			Promise.resolve(mockResponse),
 		) as unknown as typeof fetch;
 
-		const item = { url: "https://example.com", depth: 0, retries: 0 };
+		const item = { url: "https://example.com", domain: "example.com", depth: 0, retries: 0 };
 		const logger = createMockLogger();
 		const renderer = createMockRenderer(false);
 
@@ -59,7 +59,7 @@ describe("fetchContent", () => {
 			Promise.resolve(mockResponse),
 		) as unknown as typeof fetch;
 
-		const item = { url: "https://example.com/404", depth: 0, retries: 0 };
+		const item = { url: "https://example.com/404", domain: "example.com", depth: 0, retries: 0 };
 		const logger = createMockLogger();
 		const renderer = createMockRenderer(false);
 
@@ -78,7 +78,7 @@ describe("fetchContent", () => {
 		// Mock fetch that hangs forever
 		global.fetch = mock(() => new Promise(() => {})) as unknown as typeof fetch;
 
-		const item = { url: "https://example.com/slow", depth: 0, retries: 0 };
+		const item = { url: "https://example.com/slow", domain: "example.com", depth: 0, retries: 0 };
 		const logger = createMockLogger();
 		const renderer = createMockRenderer(false);
 
