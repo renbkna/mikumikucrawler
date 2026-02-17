@@ -7,7 +7,7 @@ import type {
 	QueueItem,
 	SanitizedCrawlOptions,
 } from "../types.js";
-import { getRobotsRules } from "../utils/helpers.js";
+import { getErrorMessage, getRobotsRules } from "../utils/helpers.js";
 import { coalesceCrawl } from "../utils/requestCoalescer.js";
 import { DynamicRenderer } from "./dynamicRenderer.js";
 import { CrawlQueue } from "./modules/crawlQueue.js";
@@ -151,7 +151,7 @@ export class CrawlSession {
 						);
 					}
 				} catch (err) {
-					const message = err instanceof Error ? err.message : "Unknown error";
+					const message = getErrorMessage(err);
 					this.logger.error(`Error checking robots.txt: ${message}`);
 				}
 			}
@@ -159,7 +159,7 @@ export class CrawlSession {
 			this.queue.enqueue({ url: this.options.target, depth: 0, retries: 0 });
 			this.queue.start();
 		} catch (err) {
-			const message = err instanceof Error ? err.message : "Unknown error";
+			const message = getErrorMessage(err);
 			this.logger.error(`Error starting crawl: ${message}`);
 			this.socket.emit("stats", {
 				...this.state.stats,

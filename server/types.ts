@@ -17,6 +17,7 @@ export * from "../src/types/shared.js";
 
 export interface QueueItem {
 	url: string;
+	domain: string; // Pre-parsed at enqueue time to avoid repeated URL parsing
 	depth: number;
 	retries: number;
 	parentUrl?: string;

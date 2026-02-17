@@ -33,11 +33,15 @@ export class CrawlQueue {
 	public processItem: (item: QueueItem) => Promise<void>;
 	private readonly onIdle: () => Promise<void>;
 	private readonly queue: QueueItem[];
+	/** O(1) dequeue using head pointer instead of O(n) Array.shift() */
+	private queueHead = 0;
 	/** Tracks active items by URL for atomic add/remove (avoids race conditions) */
 	private readonly activeItems: Set<string>;
 	/** Tracks items currently in the queue to prevent duplicates */
 	private readonly queuedUrls: Set<string>;
 	private readonly retryTimers: Set<ReturnType<typeof setTimeout>>;
+	/** Last time domain entries were cleaned up (for lazy cleanup every 5s) */
+	private lastDomainCleanup = 0;
 	private loopPromise: Promise<void> | null;
 
 	constructor({
@@ -69,8 +73,9 @@ export class CrawlQueue {
 
 	/**
 	 * Adds a new item to the queue if it hasn't been visited yet.
+	 * Pre-parses the domain to avoid repeated URL parsing in the hot loop.
 	 */
-	enqueue(item: QueueItem): void {
+	enqueue(item: Omit<QueueItem, "domain"> & { url: string }): void {
 		if (
 			this.state.hasVisited(item.url) ||
 			this.activeItems.has(item.url) ||
@@ -78,8 +83,12 @@ export class CrawlQueue {
 		) {
 			return;
 		}
+
+		// Pre-parse domain at enqueue time to avoid expensive URL parsing in hot loop
+		const domain = new URL(item.url).hostname;
+
 		this.queuedUrls.add(item.url);
-		this.queue.push(item);
+		this.queue.push({ ...item, domain });
 	}
 
 	/**
@@ -132,41 +141,55 @@ export class CrawlQueue {
 		const processingPromises = new Set<Promise<void>>();
 
 		while (
-			(this.queue.length > 0 || this.activeCount > 0) &&
+			(this.queueHead < this.queue.length || this.activeCount > 0) &&
 			(this.state.isActive || this.activeCount > 0) // Keep looping if we have active items to drain
 		) {
 			// If stopped, just wait for active items to finish
-			if (!this.state.isActive && this.queue.length > 0) {
+			if (!this.state.isActive && this.queueHead < this.queue.length) {
 				this.queue.length = 0; // Clear pending queue
+				this.queueHead = 0;
 				this.queuedUrls.clear();
 			}
 
 			let deferredDelay: number | null = null;
 
-			// Clean up expired domain entries every iteration to prevent memory leaks
-			// Root cause fix: Don't wait for threshold, proactively clean expired entries
+			// Lazy cleanup: Only scan domain entries every 5 seconds instead of every tick
+			// This reduces O(domains) work to O(1) per iteration with periodic cleanup
 			const now = Date.now();
-			for (const [domain, nextAllowed] of domainProcessing) {
-				if (now > nextAllowed + CRAWL_QUEUE_CONSTANTS.DOMAIN_ENTRY_EXPIRY_MS) {
-					domainProcessing.delete(domain);
+			if (now - this.lastDomainCleanup > 5000) {
+				this.lastDomainCleanup = now;
+				for (const [domain, nextAllowed] of domainProcessing) {
+					if (
+						now >
+						nextAllowed + CRAWL_QUEUE_CONSTANTS.DOMAIN_ENTRY_EXPIRY_MS
+					) {
+						domainProcessing.delete(domain);
+					}
 				}
+			}
+
+			// Periodically compact queue to prevent unbounded growth from processed items
+			// This maintains O(1) dequeue while preventing memory leak from processed head
+			if (this.queueHead > 1000) {
+				this.queue.splice(0, this.queueHead);
+				this.queueHead = 0;
 			}
 
 			while (
 				this.activeCount < this.options.maxConcurrentRequests &&
-				this.queue.length > 0 &&
+				this.queueHead < this.queue.length &&
 				this.state.isActive
 			) {
-				const item = this.queue.shift();
+				// O(1) dequeue using head pointer instead of O(n) Array.shift()
+				const item = this.queue[this.queueHead++];
 				if (!item) break;
 				this.queuedUrls.delete(item.url);
 
 				try {
-					const url = new URL(item.url);
-					const domain = url.hostname;
+					// Domain is now pre-parsed at enqueue time - no expensive URL parsing here
+					const domain = item.domain;
 
 					const nextAllowed = domainProcessing.get(domain) || 0;
-					const now = Date.now();
 					const domainDelay = this.state.getDomainDelay(domain);
 
 					// If this domain is still cooling down, push back to queue and calculate wait
@@ -190,7 +213,7 @@ export class CrawlQueue {
 					// Use Set for atomic tracking (avoids race conditions with counter)
 					this.activeItems.add(item.url);
 
-					// Root cause fix: Create task reference first to avoid race condition
+					// Create task reference first to avoid race condition
 					// where finally() runs before task is added to processingPromises
 					let task: Promise<void>;
 					task = Promise.resolve(this.processItem(item))

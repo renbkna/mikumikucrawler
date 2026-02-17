@@ -33,7 +33,9 @@ describe("fetchContent", () => {
 			status: 200,
 			headers: { "content-type": "text/html" },
 		});
-		global.fetch = mock(() => Promise.resolve(mockResponse));
+		global.fetch = mock(() =>
+			Promise.resolve(mockResponse),
+		) as unknown as typeof fetch;
 
 		const item = { url: "https://example.com", depth: 0, retries: 0 };
 		const logger = createMockLogger();
@@ -53,7 +55,9 @@ describe("fetchContent", () => {
 
 	test("throws error on HTTP failure", async () => {
 		const mockResponse = new Response("Not Found", { status: 404 });
-		global.fetch = mock(() => Promise.resolve(mockResponse));
+		global.fetch = mock(() =>
+			Promise.resolve(mockResponse),
+		) as unknown as typeof fetch;
 
 		const item = { url: "https://example.com/404", depth: 0, retries: 0 };
 		const logger = createMockLogger();
@@ -72,7 +76,7 @@ describe("fetchContent", () => {
 
 	test("respects timeout", async () => {
 		// Mock fetch that hangs forever
-		global.fetch = mock(() => new Promise(() => {}));
+		global.fetch = mock(() => new Promise(() => {})) as unknown as typeof fetch;
 
 		const item = { url: "https://example.com/slow", depth: 0, retries: 0 };
 		const logger = createMockLogger();

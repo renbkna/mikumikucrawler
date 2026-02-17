@@ -2,6 +2,7 @@ import { URL } from "node:url";
 import type { CheerioAPI } from "cheerio";
 import type { Element } from "domhandler";
 import type { ExtractedLink, MediaInfo } from "../types.js";
+import { getErrorMessage } from "../utils/helpers.js";
 
 /** Pre-compiled regex for downloadable file extensions */
 const DOWNLOAD_EXTENSIONS = /\.(pdf|doc|docx|xls|xlsx|zip|rar)$/i;
@@ -68,9 +69,7 @@ export function extractStructuredData(
 			} catch (err) {
 				// Malformed JSON-LD is common on third-party sites; log for debugging
 				// biome-ignore lint/suspicious/noConsole: Debug logging for malformed third-party content
-				console.debug(
-					`Malformed JSON-LD: ${err instanceof Error ? err.message : err}`,
-				);
+				console.debug(`Malformed JSON-LD: ${getErrorMessage(err)}`);
 			}
 		},
 	);
@@ -196,9 +195,7 @@ export function extractMediaInfo(
 		} catch (err) {
 			// Malformed URLs are common in user content
 			// biome-ignore lint/suspicious/noConsole: Debug logging for malformed URLs
-			console.debug(
-				`Malformed image URL: ${err instanceof Error ? err.message : err}`,
-			);
+			console.debug(`Malformed image URL: ${getErrorMessage(err)}`);
 		}
 	});
 
@@ -210,9 +207,7 @@ export function extractMediaInfo(
 				media.push({ type: "video", url: absoluteUrl });
 			} catch (err) {
 				// biome-ignore lint/suspicious/noConsole: Debug logging for malformed URLs
-				console.debug(
-					`Malformed video URL: ${err instanceof Error ? err.message : err}`,
-				);
+				console.debug(`Malformed video URL: ${getErrorMessage(err)}`);
 			}
 		}
 	});
@@ -225,9 +220,7 @@ export function extractMediaInfo(
 				media.push({ type: "audio", url: absoluteUrl });
 			} catch (err) {
 				// biome-ignore lint/suspicious/noConsole: Debug logging for malformed URLs
-				console.debug(
-					`Malformed audio URL: ${err instanceof Error ? err.message : err}`,
-				);
+				console.debug(`Malformed audio URL: ${getErrorMessage(err)}`);
 			}
 		}
 	});
@@ -274,9 +267,7 @@ export function processLinks(
 			});
 		} catch (err) {
 			// biome-ignore lint/suspicious/noConsole: Debug logging for malformed URLs
-			console.debug(
-				`Malformed link URL: ${err instanceof Error ? err.message : err}`,
-			);
+			console.debug(`Malformed link URL: ${getErrorMessage(err)}`);
 		}
 	});
 

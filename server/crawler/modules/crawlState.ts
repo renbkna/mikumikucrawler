@@ -3,56 +3,7 @@ import type {
 	QueueStats,
 	SanitizedCrawlOptions,
 } from "../../types.js";
-
-/**
- * Simple LRU (Least Recently Used) cache implementation with size limits.
- * Root cause fix: Prevents unbounded memory growth by limiting the number
- * of tracked URLs and evicting least recently used entries when limit is reached.
- */
-class LRUCache<K, V> {
-	private cache: Map<K, V>;
-	private readonly maxSize: number;
-
-	constructor(maxSize: number) {
-		this.cache = new Map();
-		this.maxSize = maxSize;
-	}
-
-	has(key: K): boolean {
-		return this.cache.has(key);
-	}
-
-	get(key: K): V | undefined {
-		const value = this.cache.get(key);
-		if (value !== undefined) {
-			// Move to end (most recently used)
-			this.cache.delete(key);
-			this.cache.set(key, value);
-		}
-		return value;
-	}
-
-	set(key: K, value: V): void {
-		if (this.cache.has(key)) {
-			this.cache.delete(key);
-		} else if (this.cache.size >= this.maxSize) {
-			// Evict oldest entry (first in Map)
-			const firstKey = this.cache.keys().next().value;
-			if (firstKey !== undefined) {
-				this.cache.delete(firstKey);
-			}
-		}
-		this.cache.set(key, value);
-	}
-
-	get size(): number {
-		return this.cache.size;
-	}
-
-	clear(): void {
-		this.cache.clear();
-	}
-}
+import { LRUCache } from "../../utils/lruCache.js";
 
 /** Tracks the ongoing progress, statistics, and domain state of a crawl session. */
 export class CrawlState {
@@ -60,7 +11,7 @@ export class CrawlState {
 	private readonly startTime: number;
 	public isActive: boolean;
 	public stopReason?: string;
-	// Root cause fix: Use LRU cache instead of unbounded Set
+	// Use LRU cache instead of unbounded Set to prevent memory exhaustion
 	private readonly visited: LRUCache<string, boolean>;
 	private readonly domainDelays: Map<string, number>;
 	private consecutiveFailures: number;
@@ -72,7 +23,7 @@ export class CrawlState {
 		this.options = options;
 		this.startTime = Date.now();
 		this.isActive = true;
-		// Root cause fix: Limit visited cache to prevent memory exhaustion
+		// Limit visited cache to prevent memory exhaustion
 		// 50,000 URLs is a reasonable limit for most crawls while preventing
 		// memory issues (each URL ~100-200 bytes = ~10MB max)
 		this.visited = new LRUCache(50000);

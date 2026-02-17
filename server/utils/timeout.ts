@@ -11,11 +11,9 @@ export function withTimeout<T>(
 ): Promise<T> {
 	return Promise.race([
 		promise,
-		new Promise<never>((_, reject) =>
-			setTimeout(() => {
-				reject(new Error(`Timeout: ${operation} exceeded ${ms}ms`));
-			}, ms),
-		),
+		Bun.sleep(ms).then(() => {
+			throw new Error(`Timeout: ${operation} exceeded ${ms}ms`);
+		}),
 	]);
 }
 

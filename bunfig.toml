@@ -1,0 +1,15 @@
+# Bun configuration file
+# https://bun.sh/docs/runtime/bunfig
+
+# Use text-based lockfile for better Git diffs and team collaboration
+# Bun v1.1.39+: Git-friendly lockfile format
+[install]
+saveTextLockfile = true
+
+# Link workspace packages for monorepo support
+# Bun v1.2.22+: Better workspace support
+linkWorkspacePackages = true
+
+# Performance: Enable hoisting for faster installs
+# Bun v1.3.2+: Hoisted installs restored as default
+hoist = true
