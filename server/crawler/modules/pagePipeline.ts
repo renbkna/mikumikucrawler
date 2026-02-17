@@ -41,7 +41,6 @@ interface PageRecord {
 	contentType: string;
 	domain: string;
 	processedData: ProcessedPageData;
-	contentHash?: string | null;
 }
 
 /**
@@ -520,10 +519,6 @@ export function createPagePipeline({
 
 		const db = await dbPromise;
 
-		// Hash content for efficient duplicate detection using xxHash64 (20x faster than crypto)
-		const mainContent = processedContent.extractedData?.mainContent ?? "";
-		const contentHash = mainContent ? Bun.hash(mainContent).toString(16) : null;
-
 		// ATOMIC SAVE: Page + Links (with timeout protection)
 		const pageId = await saveCrawlResult({
 			db,
@@ -556,7 +551,6 @@ export function createPagePipeline({
 			description,
 			contentType,
 			domain,
-			contentHash,
 			processedData: {
 				extractedData: {
 					mainContent: processedContent.extractedData?.mainContent,

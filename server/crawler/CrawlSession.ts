@@ -46,7 +46,6 @@ export class CrawlSession {
 			retryLimit: options.retryLimit,
 			dynamic: options.dynamic,
 			respectRobots: options.respectRobots,
-			filterDuplicates: options.filterDuplicates !== false,
 			saveMedia: options.saveMedia,
 			contentOnly: options.contentOnly,
 		};

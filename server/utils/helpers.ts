@@ -97,11 +97,11 @@ class NativeRobotsParser implements RobotsResult {
 	private matchesRule(path: string, pattern: string): boolean {
 		// Convert robots.txt pattern to regex
 		// * matches any sequence of characters
-		// $ matches end of string
+		// $ matches end of string (must restore after escaping)
 		const regexPattern = pattern
 			.replace(/[.+^${}()|[\]\\]/g, "\\$&")
 			.replace(/\*/g, ".*")
-			.replace(/\$/g, "$");
+			.replace(/\\\$/g, "$");
 
 		try {
 			const regex = new RegExp(regexPattern);
@@ -145,21 +145,26 @@ class NativeRobotsParser implements RobotsResult {
 
 		if (!rule) return true;
 
-		// Check explicit allows first
+		// RFC 9309: longest matching pattern wins.
+		// For equal-length matches, Allow takes precedence over Disallow.
+		let longestAllow = -1;
 		for (const allowPattern of rule.allow) {
 			if (this.matchesRule(path, allowPattern)) {
-				return true;
+				longestAllow = Math.max(longestAllow, allowPattern.length);
 			}
 		}
 
-		// Then check disallows
+		let longestDisallow = -1;
 		for (const disallowPattern of rule.disallow) {
 			if (this.matchesRule(path, disallowPattern)) {
-				return false;
+				longestDisallow = Math.max(longestDisallow, disallowPattern.length);
 			}
 		}
 
-		return true;
+		// No matching rules means allowed
+		if (longestAllow === -1 && longestDisallow === -1) return true;
+		// Allow wins on equal length (per RFC 9309)
+		return longestAllow >= longestDisallow;
 	}
 
 	isDisallowed(url: string, userAgent?: string): boolean {
