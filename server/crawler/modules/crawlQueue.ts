@@ -236,11 +236,11 @@ export class CrawlQueue {
 			}
 
 			if (
-				(this.activeCount > 0 || this.queue.length > 0) &&
+				(this.activeCount > 0 || this.queueHead < this.queue.length) &&
 				this.state.isActive
 			) {
 				const snapshot = this.state.snapshotQueueMetrics(
-					this.queue.length,
+					this.queue.length - this.queueHead,
 					this.activeCount,
 				);
 				this.socket.emit("queueStats", snapshot);

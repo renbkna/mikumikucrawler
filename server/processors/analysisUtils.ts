@@ -483,14 +483,18 @@ export function processJSON(content: string): JSONProcessResult {
 		const data = JSON.parse(content);
 		const analysis: JSONProcessResult = {
 			data,
-			keys: Object.keys(data).slice(0, 20),
 			raw: content.substring(0, 500),
 		};
 
 		if (Array.isArray(data)) {
+			analysis.keys = [];
 			analysis.structure = `Array with ${data.length} items`;
-		} else if (typeof data === "object") {
+		} else if (data !== null && typeof data === "object") {
+			analysis.keys = Object.keys(data).slice(0, 20);
 			analysis.structure = `Object with ${Object.keys(data).length} keys`;
+		} else {
+			analysis.keys = [];
+			analysis.structure = `Primitive (${typeof data})`;
 		}
 
 		return analysis;
