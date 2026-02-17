@@ -1,7 +1,8 @@
+import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
 import { Elysia } from "elysia";
 
 /**
- * Compression middleware using Bun's native APIs.
+ * Compression middleware using Bun's native gzip and Node's zlib for Brotli.
  * Automatically compresses responses based on Accept-Encoding header.
  */
 export const compression = () => {
@@ -34,15 +35,18 @@ export const compression = () => {
 			let compressed: Uint8Array;
 			let encoding: string;
 
-			// Prefer Brotli, fallback to gzip
 			if (acceptEncoding.includes("br")) {
-				compressed = Bun.gzipSync(body, { level: 4 }); // level 4 is good balance
+				compressed = brotliCompressSync(Buffer.from(body), {
+					params: {
+						[zlibConstants.BROTLI_PARAM_QUALITY]: 4,
+					},
+				});
 				encoding = "br";
 			} else if (acceptEncoding.includes("gzip")) {
-				compressed = Bun.gzipSync(body, { level: 6 }); // default gzip level
+				compressed = Bun.gzipSync(body, { level: 6 });
 				encoding = "gzip";
 			} else {
-				return; // No compression support
+				return;
 			}
 
 			// Only use compressed if it's actually smaller

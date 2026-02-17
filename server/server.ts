@@ -72,8 +72,10 @@ const app = new Elysia()
 		rateLimit({
 			max: 100,
 			duration: 60_000,
-			skip: (request) =>
-				request.url.startsWith("/ws") || request.url.startsWith("/health"),
+			skip: (request) => {
+				const pathname = new URL(request.url).pathname;
+				return pathname.startsWith("/ws") || pathname.startsWith("/health");
+			},
 		}),
 	)
 	.use(compression())
@@ -137,9 +139,8 @@ const app = new Elysia()
 						reqPath,
 					);
 				if (isAsset) {
-					const etag = await file
-						.arrayBuffer()
-						.then((buf) => Bun.hash(buf).toString(16));
+					// Use file metadata for cheap ETag (avoids reading full file into memory)
+					const etag = `${file.size}-${file.lastModified}`;
 					const ifNoneMatch = headers.get("if-none-match");
 					if (ifNoneMatch === etag) {
 						return new Response(null, { status: 304 });

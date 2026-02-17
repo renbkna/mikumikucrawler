@@ -497,11 +497,12 @@ export function createWebSocketHandlers(
 				} catch (err) {
 					const message = getErrorMessage(err);
 					logger.error(`Error exporting data: ${message}`);
-					// requestId is always assigned at this point (line 377)
 					socketWrapper.emit("crawlError", {
 						message: "Failed to export data",
 						requestId,
 					});
+				} finally {
+					activeExports.delete(socketWrapper.id);
 				}
 				break;
 			}
