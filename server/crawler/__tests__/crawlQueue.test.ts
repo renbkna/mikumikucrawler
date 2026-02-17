@@ -197,7 +197,12 @@ describe("CrawlQueue", () => {
 			processItem: mock(async () => {}),
 		});
 
-		const item = { url: "https://example.com/retry", depth: 0, retries: 1 };
+		const item = {
+			url: "https://example.com/retry",
+			domain: "example.com",
+			depth: 0,
+			retries: 1,
+		};
 
 		// Schedule a retry with very short delay
 		queue.scheduleRetry(item, 10);
@@ -225,11 +230,21 @@ describe("CrawlQueue", () => {
 
 		// Schedule multiple retries
 		queue.scheduleRetry(
-			{ url: "https://example.com/1", depth: 0, retries: 1 },
+			{
+				url: "https://example.com/1",
+				domain: "example.com",
+				depth: 0,
+				retries: 1,
+			},
 			1000,
 		);
 		queue.scheduleRetry(
-			{ url: "https://example.com/2", depth: 0, retries: 1 },
+			{
+				url: "https://example.com/2",
+				domain: "example.com",
+				depth: 0,
+				retries: 1,
+			},
 			1000,
 		);
 

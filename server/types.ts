@@ -38,7 +38,6 @@ export interface RawCrawlOptions {
 }
 
 export interface SanitizedCrawlOptions extends CrawlOptions {
-	filterDuplicates?: boolean;
 	screenshots?: boolean;
 }
 
