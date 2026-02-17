@@ -329,7 +329,7 @@ export async function analyzeContent(text: string): Promise<AnalysisResult> {
 	}
 
 	const keywords = Object.entries(wordFreq)
-		.sort((a, b) => b[1] - a[1])
+		.toSorted((a, b) => b[1] - a[1])
 		.slice(0, 10)
 		.map(([word, count]) => ({ word, count }));
 

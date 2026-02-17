@@ -13,7 +13,7 @@ import type {
 	QueueItem,
 	SanitizedCrawlOptions,
 } from "../../types.js";
-import { getRobotsRules } from "../../utils/helpers.js";
+import { getErrorMessage, getRobotsRules } from "../../utils/helpers.js";
 import type { DynamicRenderer } from "../dynamicRenderer.js";
 import type { CrawlQueue } from "./crawlQueue.js";
 import type { CrawlState } from "./crawlState.js";
@@ -41,11 +41,11 @@ interface PageRecord {
 	contentType: string;
 	domain: string;
 	processedData: ProcessedPageData;
+	contentHash?: string | null;
 }
 
 /**
- * Root cause fix: Wraps database operations with timeout protection.
- * Prevents the crawler from hanging indefinitely on slow database queries.
+ * Wraps database operations with timeout protection to prevent hanging on slow queries.
  */
 async function withTimeout<T>(
 	operation: () => T,
@@ -55,14 +55,10 @@ async function withTimeout<T>(
 ): Promise<T> {
 	return Promise.race([
 		Promise.resolve(operation()),
-		new Promise<never>((_, reject) => {
-			setTimeout(() => {
-				reject(
-					new Error(
-						`Database operation '${operationName}' timed out after ${timeoutMs}ms`,
-					),
-				);
-			}, timeoutMs);
+		Bun.sleep(timeoutMs).then(() => {
+			throw new Error(
+				`Database operation '${operationName}' timed out after ${timeoutMs}ms`,
+			);
 		}),
 	]).catch((error) => {
 		logger.error(`Database timeout: ${error.message}`);
@@ -87,6 +83,12 @@ export function createPagePipeline({
 	const contentProcessor = new ContentProcessor(logger);
 	const STATS_THROTTLE_MS = 250;
 	let lastStatsEmitTime = 0;
+
+	// Performance optimization: Prepared statements cached at pipeline level
+	// These are initialized once the database is available and reused for all page saves
+	let dbInstance: Database | null = null;
+	let insertPageQuery: ReturnType<Database["prepare"]> | null = null;
+	let insertLinkQuery: ReturnType<Database["prepare"]> | null = null;
 
 	/**
 	 * Creates a processed content object for error cases.
@@ -210,8 +212,7 @@ export function createPagePipeline({
 	/**
 	 * Atomically persists the page record and its discovered links.
 	 * Uses a transaction to ensure data integrity: either both page and links are saved, or neither.
-	 *
-	 * Root cause fix: Added timeout protection to prevent hanging on slow DB operations.
+	 * Timeout protection prevents hanging on slow DB operations.
 	 */
 	const saveCrawlResult = async (
 		params: SaveResultParams,
@@ -232,64 +233,77 @@ export function createPagePipeline({
 			links,
 		} = params;
 		const enhancedData = {
-			mainContent: processedContent.extractedData?.mainContent || "",
-			wordCount: processedContent.analysis?.wordCount || 0,
-			readingTime: processedContent.analysis?.readingTime || 0,
-			language: processedContent.analysis?.language || "unknown",
-			keywords: JSON.stringify(processedContent.analysis?.keywords || []),
-			qualityScore: processedContent.analysis?.quality?.score || 0,
-			structuredData: JSON.stringify(processedContent.extractedData || {}),
-			mediaCount: processedContent.media?.length || 0,
+			mainContent: processedContent.extractedData?.mainContent ?? "",
+			wordCount: processedContent.analysis?.wordCount ?? 0,
+			readingTime: processedContent.analysis?.readingTime ?? 0,
+			language: processedContent.analysis?.language ?? "unknown",
+			keywords: JSON.stringify(processedContent.analysis?.keywords ?? []),
+			qualityScore: processedContent.analysis?.quality?.score ?? 0,
+			structuredData: JSON.stringify(processedContent.extractedData ?? {}),
+			mediaCount: processedContent.media?.length ?? 0,
 			internalLinksCount:
 				processedContent.links?.filter((link: ExtractedLink) => link.isInternal)
-					?.length || 0,
+					?.length ?? 0,
 			externalLinksCount:
 				processedContent.links?.filter(
 					(link: ExtractedLink) => !link.isInternal,
-				)?.length || 0,
+				)?.length ?? 0,
 		};
 
-		const insertPageQuery = db.query(
-			`INSERT INTO pages
-			(url, domain, content_type, status_code, data_length, title, description, content, is_dynamic, last_modified,
-			 main_content, word_count, reading_time, language, keywords, quality_score, structured_data,
-			 media_count, internal_links_count, external_links_count)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(url) DO UPDATE SET
-			  domain = excluded.domain,
-			  content_type = excluded.content_type,
-			  status_code = excluded.status_code,
-			  data_length = excluded.data_length,
-			  title = excluded.title,
-			  description = excluded.description,
-			  content = excluded.content,
-			  is_dynamic = excluded.is_dynamic,
-			  last_modified = excluded.last_modified,
-			  main_content = excluded.main_content,
-			  word_count = excluded.word_count,
-			  reading_time = excluded.reading_time,
-			  language = excluded.language,
-			  keywords = excluded.keywords,
-			  quality_score = excluded.quality_score,
-			  structured_data = excluded.structured_data,
-			  media_count = excluded.media_count,
-			  internal_links_count = excluded.internal_links_count,
-			  external_links_count = excluded.external_links_count,
-			  crawled_at = CURRENT_TIMESTAMP
-			RETURNING id`,
-		);
+		// Performance optimization: Initialize prepared statements once at factory level
+		// This avoids re-parsing SQL for every page save operation
+		if (!insertPageQuery || !insertLinkQuery || dbInstance !== db) {
+			dbInstance = db;
+			insertPageQuery = db.prepare(
+				`INSERT INTO pages
+				(url, domain, content_type, status_code, data_length, title, description, content, is_dynamic, last_modified,
+				 main_content, word_count, reading_time, language, keywords, quality_score, structured_data,
+				 media_count, internal_links_count, external_links_count)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(url) DO UPDATE SET
+				  domain = excluded.domain,
+				  content_type = excluded.content_type,
+				  status_code = excluded.status_code,
+				  data_length = excluded.data_length,
+				  title = excluded.title,
+				  description = excluded.description,
+				  content = excluded.content,
+				  is_dynamic = excluded.is_dynamic,
+				  last_modified = excluded.last_modified,
+				  main_content = excluded.main_content,
+				  word_count = excluded.word_count,
+				  reading_time = excluded.reading_time,
+				  language = excluded.language,
+				  keywords = excluded.keywords,
+				  quality_score = excluded.quality_score,
+				  structured_data = excluded.structured_data,
+				  media_count = excluded.media_count,
+				  internal_links_count = excluded.internal_links_count,
+				  external_links_count = excluded.external_links_count,
+				  crawled_at = CURRENT_TIMESTAMP
+				RETURNING id`,
+			);
+			insertLinkQuery = db.prepare(
+				"INSERT OR IGNORE INTO links (source_id, target_url, text) VALUES (?, ?, ?)",
+			);
+		}
 
-		const insertLinkQuery = db.query(
-			"INSERT OR IGNORE INTO links (source_id, target_url, text) VALUES (?, ?, ?)",
-		);
+		// Type guard: Ensure statements are initialized
+		if (!insertPageQuery || !insertLinkQuery) {
+			throw new Error("Database statements not initialized");
+		}
 
-		// Root cause fix: Wrap transaction in timeout
+		// Store references for use in callbacks (TypeScript needs this for narrowing)
+		const pageStmt = insertPageQuery;
+		const linkStmt = insertLinkQuery;
+
+		// Wrap transaction in timeout
 		try {
 			return await withTimeout(
 				() => {
 					// Transaction wrapper
 					const transaction = db.transaction(() => {
-						const row = insertPageQuery.get(
+						const row = pageStmt.get(
 							item.url,
 							domain,
 							contentType,
@@ -316,7 +330,7 @@ export function createPagePipeline({
 
 						if (pageId && links.length > 0) {
 							for (const link of links) {
-								insertLinkQuery.run(pageId, link.url, link.text || "");
+								linkStmt.run(pageId, link.url, link.text ?? "");
 							}
 						}
 
@@ -444,7 +458,11 @@ export function createPagePipeline({
 					allowedTags: sanitizeHtml.defaults.allowedTags.concat(["img"]),
 					allowedAttributes: {
 						...sanitizeHtml.defaults.allowedAttributes,
-						"*": ["class", "id", "style"],
+						// Only allow class/id on safe container elements, not style (XSS risk)
+						div: ["class", "id"],
+						span: ["class", "id"],
+						p: ["class", "id"],
+						img: ["class", "id", "src", "alt", "title", "width", "height"],
 					},
 				})
 			: content;
@@ -485,7 +503,7 @@ export function createPagePipeline({
 				})
 				.map((link) => ({
 					url: link.url,
-					text: link.text || "",
+					text: link.text ?? "",
 					isInternal: link.isInternal ?? link.domain === baseHost,
 				}));
 
@@ -501,6 +519,10 @@ export function createPagePipeline({
 		}
 
 		const db = await dbPromise;
+
+		// Hash content for efficient duplicate detection using xxHash64 (20x faster than crypto)
+		const mainContent = processedContent.extractedData?.mainContent ?? "";
+		const contentHash = mainContent ? Bun.hash(mainContent).toString(16) : null;
 
 		// ATOMIC SAVE: Page + Links (with timeout protection)
 		const pageId = await saveCrawlResult({
@@ -534,10 +556,11 @@ export function createPagePipeline({
 			description,
 			contentType,
 			domain,
+			contentHash,
 			processedData: {
 				extractedData: {
 					mainContent: processedContent.extractedData?.mainContent,
-					jsonLd: (processedContent.extractedData?.jsonLd || []) as Record<
+					jsonLd: (processedContent.extractedData?.jsonLd ?? []) as Record<
 						string,
 						unknown
 					>[],
@@ -559,17 +582,17 @@ export function createPagePipeline({
 					generator: processedContent.metadata?.generator,
 				},
 				analysis: {
-					wordCount: processedContent.analysis?.wordCount || 0,
-					readingTime: processedContent.analysis?.readingTime || 0,
-					language: processedContent.analysis?.language || "unknown",
-					keywords: processedContent.analysis?.keywords || [],
-					sentiment: processedContent.analysis?.sentiment || "neutral",
-					readabilityScore: processedContent.analysis?.readabilityScore || 0,
+					wordCount: processedContent.analysis?.wordCount ?? 0,
+					readingTime: processedContent.analysis?.readingTime ?? 0,
+					language: processedContent.analysis?.language ?? "unknown",
+					keywords: processedContent.analysis?.keywords ?? [],
+					sentiment: processedContent.analysis?.sentiment ?? "neutral",
+					readabilityScore: processedContent.analysis?.readabilityScore ?? 0,
 					quality: processedContent.analysis?.quality,
 				},
-				media: processedContent.media || [],
-				qualityScore: processedContent.analysis?.quality?.score || 0,
-				language: processedContent.analysis?.language || "unknown",
+				media: processedContent.media ?? [],
+				qualityScore: processedContent.analysis?.quality?.score ?? 0,
+				language: processedContent.analysis?.language ?? "unknown",
 			},
 		});
 
@@ -639,7 +662,7 @@ async function processLinkBatch({
 				parentUrl: item.url,
 			});
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
+			const message = getErrorMessage(err);
 			logger.debug(`Error processing link ${link.url}: ${message}`);
 		}
 	};
@@ -653,9 +676,10 @@ async function processLinkBatch({
 	};
 
 	const linksIterator = links.values();
-	const workers = new Array(Math.min(links.length, CONCURRENCY))
-		.fill(null)
-		.map(() => runTask(linksIterator));
+	const workerCount = Math.min(links.length, CONCURRENCY);
+	const workers = Array.from({ length: workerCount }, () =>
+		runTask(linksIterator),
+	);
 
 	await Promise.all(workers);
 }

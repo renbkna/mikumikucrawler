@@ -1,3 +1,4 @@
+import { config } from "../config/env.js";
 import type { Logger } from "../config/logging.js";
 
 interface MemoryUsage {
@@ -32,8 +33,8 @@ export function getMemoryUsage(): MemoryUsage {
 /** Determines if the current RSS usage exceeds the safe threshold for dynamic rendering. */
 export function isLowMemory(): boolean {
 	const usage = getMemoryUsage();
-	// Reduced threshold since we optimized database memory usage
-	return usage.rss > 350;
+	// Use configurable threshold based on environment (350MB for Render, 600MB otherwise)
+	return usage.rss > config.memoryThreshold;
 }
 
 /**

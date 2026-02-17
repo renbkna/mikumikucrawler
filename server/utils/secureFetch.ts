@@ -1,50 +1,28 @@
 import { lookup } from "node:dns/promises";
 import net from "node:net";
 import { URL } from "node:url";
-import ipaddr from "ipaddr.js";
+import { isInvalidIpAddress } from "./ipValidation.js";
+import { LRUCacheWithTTL } from "./lruCache.js";
 
-const ALLOWED_IP_RANGES = new Set(["unicast", "global"]);
-const RESOLUTION_CACHE = new Map<string, ResolutionEntry>();
 const CACHE_TTL_MS = 300000; // 5 minutes
+const MAX_CACHE_SIZE = 1000; // Maximum 1000 unique hostnames
 
-interface ResolutionEntry {
-	addresses: string[];
-	timestamp: number;
-}
+// Use bounded LRU cache to prevent memory exhaustion
+const RESOLUTION_CACHE = new LRUCacheWithTTL<string, string[]>(
+	MAX_CACHE_SIZE,
+	CACHE_TTL_MS,
+);
 
 interface SecureFetchOptions {
 	url: string;
 	signal?: AbortSignal;
 	headers?: Record<string, string>;
-	redirect?: RequestRedirect;
+	redirect?: "follow" | "error" | "manual";
 }
 
 interface ResolvedUrl {
 	url: string;
 	resolvedHost: string;
-}
-
-/**
- * Validates that an IP address is not in a private/reserved range.
- * Returns true if the IP is invalid or in a disallowed range.
- */
-function isInvalidIpAddress(address: string): boolean {
-	let parsed: ipaddr.IPv4 | ipaddr.IPv6;
-	try {
-		parsed = ipaddr.parse(address);
-	} catch {
-		return true;
-	}
-
-	if (
-		parsed.kind() === "ipv6" &&
-		(parsed as ipaddr.IPv6).isIPv4MappedAddress()
-	) {
-		parsed = (parsed as ipaddr.IPv6).toIPv4Address();
-	}
-
-	const range = parsed.range();
-	return !ALLOWED_IP_RANGES.has(range);
 }
 
 /**
@@ -77,9 +55,8 @@ async function validatePublicHostname(hostname: string): Promise<void> {
 
 	// Check cache first
 	const cached = RESOLUTION_CACHE.get(normalizedHost);
-	const now = Date.now();
-	if (cached && now - cached.timestamp < CACHE_TTL_MS) {
-		const hasInvalid = cached.addresses.some(isInvalidIpAddress);
+	if (cached) {
+		const hasInvalid = cached.some(isInvalidIpAddress);
 		if (hasInvalid) {
 			throw new Error("Target host is not allowed");
 		}
@@ -106,7 +83,7 @@ async function validatePublicHostname(hostname: string): Promise<void> {
 	}
 
 	// Cache the resolution
-	RESOLUTION_CACHE.set(normalizedHost, { addresses, timestamp: now });
+	RESOLUTION_CACHE.set(normalizedHost, addresses);
 }
 
 /**
@@ -128,10 +105,8 @@ export async function resolveUrlSecurely(
 
 /**
  * Performs a secure fetch that prevents DNS rebinding attacks.
- *
- * Root cause fix: We validate the hostname at resolution time AND
- * use the resolved IP directly in the request, preventing a malicious
- * DNS server from returning different IPs between validation and request.
+ * Validates the hostname at resolution time and uses the resolved IP directly,
+ * preventing a malicious DNS server from returning different IPs between validation and request.
  */
 export async function secureFetch(
 	options: SecureFetchOptions,

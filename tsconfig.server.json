@@ -3,7 +3,7 @@
 		"target": "ESNext",
 		"module": "Node16",
 		"moduleResolution": "Node16",
-		"lib": ["ESNext"],
+		"lib": ["ESNext", "DOM"],
 		"outDir": "./dist",
 		"strict": true,
 		"esModuleInterop": true,

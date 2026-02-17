@@ -1,5 +1,8 @@
 import { config } from "../config/env.js";
+import { REQUEST_CONSTANTS } from "../constants.js";
 import type { DatabaseLike, LoggerLike } from "../types.js";
+import { LRUCacheWithTTL } from "./lruCache.js";
+import { secureFetch } from "./secureFetch.js";
 
 /**
  * Extracts a message from an unknown error value.
@@ -16,18 +19,13 @@ export function getErrorMessage(error: unknown): string {
 }
 
 const ROBOTS_CACHE_MAX_SIZE = 100;
-const ROBOTS_CACHE_TTL_MS = 60 * 60 * 1000;
+const ROBOTS_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 interface Rule {
 	userAgent: string;
 	allow: string[];
 	disallow: string[];
 	crawlDelay?: number;
-}
-
-interface CacheEntry<T> {
-	value: T;
-	expiresAt: number;
 }
 
 interface RobotsResult {
@@ -178,59 +176,10 @@ class NativeRobotsParser implements RobotsResult {
 	}
 }
 
-class RobotsCache {
-	private cache: Map<string, CacheEntry<RobotsResult>>;
-	private maxSize: number;
-	private ttlMs: number;
-
-	constructor(maxSize = ROBOTS_CACHE_MAX_SIZE, ttlMs = ROBOTS_CACHE_TTL_MS) {
-		this.cache = new Map();
-		this.maxSize = maxSize;
-		this.ttlMs = ttlMs;
-	}
-
-	has(domain: string): boolean {
-		const entry = this.cache.get(domain);
-		if (!entry) return false;
-
-		if (Date.now() > entry.expiresAt) {
-			this.cache.delete(domain);
-			return false;
-		}
-		return true;
-	}
-
-	get(domain: string): RobotsResult | undefined {
-		const entry = this.cache.get(domain);
-		if (!entry) return undefined;
-
-		if (Date.now() > entry.expiresAt) {
-			this.cache.delete(domain);
-			return undefined;
-		}
-		return entry.value;
-	}
-
-	set(domain: string, value: RobotsResult): void {
-		if (this.cache.size >= this.maxSize) {
-			const oldestKey = this.cache.keys().next().value;
-			if (oldestKey) {
-				this.cache.delete(oldestKey);
-			}
-		}
-
-		this.cache.set(domain, {
-			value,
-			expiresAt: Date.now() + this.ttlMs,
-		});
-	}
-
-	clear(): void {
-		this.cache.clear();
-	}
-}
-
-const robotsCache = new RobotsCache();
+const robotsCache = new LRUCacheWithTTL<string, RobotsResult>(
+	ROBOTS_CACHE_MAX_SIZE,
+	ROBOTS_CACHE_TTL_MS,
+);
 
 interface RobotsOptions {
 	allowOnFailure?: boolean;
@@ -267,34 +216,37 @@ export async function getRobotsRules(
 			return robots;
 		}
 
-		const protocols = ["https", "http"];
+		// Try both protocols in parallel for faster resolution
+		const protocols = ["https", "http"] as const;
+		const fetchPromises = protocols.map(async (protocol) => {
+			const response = await secureFetch({
+				url: `${protocol}://${domain}/robots.txt`,
+				signal: AbortSignal.timeout(REQUEST_CONSTANTS.ROBOTS_FETCH_TIMEOUT_MS),
+				headers: {
+					"User-Agent": config.userAgent,
+				},
+				redirect: "follow",
+			});
+
+			if (!response.ok) {
+				throw new Error(`HTTP error! status: ${response.status}`);
+			}
+
+			return await response.text();
+		});
+
+		// Race to get the first successful response
 		let robotsTxt: string | null = null;
 		let lastError: Error | null = null;
 
-		for (const protocol of protocols) {
-			try {
-				const controller = new AbortController();
-				const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-				const response = await fetch(`${protocol}://${domain}/robots.txt`, {
-					signal: controller.signal,
-					headers: {
-						"User-Agent": config.userAgent,
-					},
-					redirect: "follow",
-				});
-
-				clearTimeout(timeoutId);
-
-				if (!response.ok) {
-					throw new Error(`HTTP error! status: ${response.status}`);
-				}
-
-				robotsTxt = await response.text();
-				break;
-			} catch (error) {
-				lastError = error instanceof Error ? error : new Error(String(error));
-			}
+		try {
+			robotsTxt = await Promise.any(fetchPromises);
+		} catch (aggregateError) {
+			// All promises rejected
+			lastError =
+				aggregateError instanceof Error
+					? aggregateError
+					: new Error(String(aggregateError));
 		}
 
 		if (!robotsTxt) {
@@ -318,7 +270,7 @@ export async function getRobotsRules(
 		robotsCache.set(domain, robots);
 		return robots;
 	} catch (err) {
-		const message = err instanceof Error ? err.message : "Unknown error";
+		const message = getErrorMessage(err);
 		logger.warn(`Failed to get robots.txt for ${domain}: ${message}`);
 		if (!allowOnFailure) {
 			return null;

@@ -18,6 +18,14 @@ export const config = {
 	logLevel: getEnv("LOG_LEVEL", "info"),
 	userAgent: getEnv("USER_AGENT", "MikuCrawler/3.0.0"),
 	isRender: getEnv("RENDER", "false") === "true",
+	// Memory threshold in MB for low memory detection (default: 350MB for Render, 600MB otherwise)
+	memoryThreshold: Number.parseInt(
+		getEnv(
+			"MEMORY_THRESHOLD_MB",
+			getEnv("RENDER", "false") === "true" ? "350" : "600",
+		),
+		10,
+	),
 	puppeteer: {
 		executablePath:
 			process.env.PUPPETEER_EXECUTABLE_PATH ||

@@ -26,8 +26,6 @@ import { compression } from "./middleware/compression.js";
 import { apiRoutes } from "./routes/apiRoutes.js";
 import { getErrorMessage } from "./utils/helpers.js";
 
-// Bun natively loads .env files - no dotenv needed
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -61,7 +59,8 @@ const app = new Elysia()
 		cors({
 			origin: (request) => {
 				const origin = request.headers.get("origin");
-				if (origin?.startsWith("http://localhost:517")) {
+				// Only allow Vite's default dev server port
+				if (origin === "http://localhost:5173") {
 					return true;
 				}
 				return origin === FRONTEND_URL;
@@ -74,7 +73,7 @@ const app = new Elysia()
 			max: 100,
 			duration: 60_000,
 			skip: (request) =>
-				request.url.includes("/ws") || request.url.includes("/health"),
+				request.url.startsWith("/ws") || request.url.startsWith("/health"),
 		}),
 	)
 	.use(compression())
@@ -116,7 +115,6 @@ const app = new Elysia()
 		status: "ok",
 		activeCrawls: activeCrawls.size,
 		uptime: process.uptime(),
-		memoryUsage: process.memoryUsage(),
 	}))
 	.onError(({ code, error, set }) => {
 		if (code === "NOT_FOUND") {
@@ -127,46 +125,49 @@ const app = new Elysia()
 		const errorMessage = (error as Error)?.message || "Internal Server Error";
 		return { error: errorMessage };
 	})
-	.get("*", async ({ path: reqPath, headers }) => {
-		const filePath = path.join(distPath, reqPath);
-		const file = Bun.file(filePath);
-		if (await file.exists()) {
-			// Add cache headers for static assets
-			const isAsset =
-				/\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$/i.test(
-					reqPath,
-				);
-			if (isAsset) {
-				const etag = await file
-					.arrayBuffer()
-					.then((buf) => Bun.hash(buf).toString(16));
-				const ifNoneMatch = headers.get("if-none-match");
-				if (ifNoneMatch === etag) {
-					return new Response(null, { status: 304 });
+	.get(
+		"*",
+		async ({ path: reqPath, headers }: { path: string; headers: Headers }) => {
+			const filePath = path.join(distPath, reqPath);
+			const file = Bun.file(filePath);
+			if (await file.exists()) {
+				// Add cache headers for static assets
+				const isAsset =
+					/\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$/i.test(
+						reqPath,
+					);
+				if (isAsset) {
+					const etag = await file
+						.arrayBuffer()
+						.then((buf) => Bun.hash(buf).toString(16));
+					const ifNoneMatch = headers.get("if-none-match");
+					if (ifNoneMatch === etag) {
+						return new Response(null, { status: 304 });
+					}
+					return new Response(file, {
+						headers: {
+							"Content-Type": file.type,
+							"Cache-Control": "public, max-age=31536000, immutable",
+							ETag: etag,
+						},
+					});
 				}
-				return new Response(file, {
-					headers: {
-						"Content-Type": file.type,
-						"Cache-Control": "public, max-age=31536000, immutable",
-						ETag: etag,
-					},
-				});
+				return file;
 			}
-			return file;
-		}
 
-		if (reqPath.startsWith("/api")) {
-			return Response.json({ error: "Not Found" }, { status: 404 });
-		}
+			if (reqPath.startsWith("/api")) {
+				return Response.json({ error: "Not Found" }, { status: 404 });
+			}
 
-		return Bun.file(path.join(distPath, "index.html"));
-	});
+			return Bun.file(path.join(distPath, "index.html"));
+		},
+	);
 
 const instance = app.listen(PORT, (server) => {
 	// biome-ignore lint/suspicious/noConsole: Startup banner is intentional output
 	console.log(
 		createStartupBanner({
-			port: server.port,
+			port: server.port ?? PORT,
 			frontendUrl: FRONTEND_URL,
 			env: config.env,
 		}),
