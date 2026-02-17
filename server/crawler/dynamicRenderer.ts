@@ -370,7 +370,7 @@ export class DynamicRenderer {
 			page.off("framenavigated", navigationHandler);
 			await this.closePageSafely(page);
 
-			const errorMessage = err instanceof Error ? err.message : "";
+			const errorMessage = getErrorMessage(err);
 
 			// Handle recoverable browser/page errors by falling back to static crawling
 			if (
@@ -448,7 +448,7 @@ export class DynamicRenderer {
 
 				if (clicked) {
 					// Wait for the navigation or re-render that follows the click
-					await new Promise((resolve) => setTimeout(resolve, 2000));
+					await Bun.sleep(2000);
 				}
 			}
 		} catch (error) {
@@ -480,7 +480,7 @@ export class DynamicRenderer {
 				this.logger.debug(`Waited for selector: ${selectorToWait} on ${url}`);
 			}
 
-			await new Promise((resolve) => setTimeout(resolve, additionalWaitTime));
+			await Bun.sleep(additionalWaitTime);
 		} catch (error_) {
 			this.logger.warn(
 				`Complex site selector wait failed for ${url}: ${getErrorMessage(error_)}`,

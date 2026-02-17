@@ -50,40 +50,28 @@ export async function fetchContent({
 
 	if (!content) {
 		logger.info(`Using static crawling for ${item.url}`);
-		const controller = new AbortController();
-		const timeoutId = setTimeout(
-			() => controller.abort(),
-			TIMEOUT_CONSTANTS.STATIC_FETCH,
-		);
 
-		try {
-			// Root cause fix: Use secureFetch which validates DNS and prevents rebinding
-			const response = await secureFetch({
-				url: item.url,
-				headers: FETCH_HEADERS,
-				signal: controller.signal,
-				redirect: "follow",
-			});
-			clearTimeout(timeoutId);
+		const response = await secureFetch({
+			url: item.url,
+			headers: FETCH_HEADERS,
+			signal: AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH),
+			redirect: "follow",
+		});
 
-			// Note: We don't throw on !ok here to allow processing error pages if they have content,
-			// but the original logic threw an error. We will preserve original behavior for consistency.
-			if (!response.ok) {
-				throw new Error(`HTTP error! status: ${response.status}`);
-			}
-
-			content = await response.text();
-			statusCode = response.status;
-			contentType = response.headers.get("content-type") || "";
-			contentLength = Number.parseInt(
-				response.headers.get("content-length") || "0",
-				10,
-			);
-			lastModified = response.headers.get("last-modified") ?? null;
-		} catch (error) {
-			clearTimeout(timeoutId);
-			throw error;
+		// Note: We don't throw on !ok here to allow processing error pages if they have content,
+		// but the original logic threw an error. We will preserve original behavior for consistency.
+		if (!response.ok) {
+			throw new Error(`HTTP error! status: ${response.status}`);
 		}
+
+		content = await response.text();
+		statusCode = response.status;
+		contentType = response.headers.get("content-type") || "";
+		contentLength = Number.parseInt(
+			response.headers.get("content-length") || "0",
+			10,
+		);
+		lastModified = response.headers.get("last-modified") ?? null;
 	}
 
 	if (contentType.includes("text/html") && (!title || !description)) {

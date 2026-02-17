@@ -1,6 +1,11 @@
 import { Elysia, t } from "elysia";
 import type { CrawlSession } from "../crawler/CrawlSession.js";
 import type { DatabaseLike, LoggerLike } from "../types.js";
+import { getErrorMessage } from "../utils/helpers.js";
+
+// Performance optimization: Cache stats for 60 seconds to reduce database load
+const STATS_CACHE_TTL_MS = 60000;
+let statsCache: { data: unknown; timestamp: number } | null = null;
 
 interface RouteContext {
 	db: DatabaseLike;
@@ -40,21 +45,26 @@ export const apiRoutes = new Elysia({ prefix: "/api" })
 	.get("/stats", (context) => {
 		const { db, activeCrawls, error, logger } =
 			context as unknown as RouteContext;
+
 		try {
-			const basicStats = db
+			// Performance optimization: Return cached stats if within TTL
+			const now = Date.now();
+			if (
+				statsCache &&
+				now - (statsCache as { data: unknown; timestamp: number }).timestamp <
+					STATS_CACHE_TTL_MS
+			) {
+				return (statsCache as { data: unknown; timestamp: number }).data;
+			}
+
+			// Optimized: Combined basic and enhanced stats into single query
+			const combinedStats = db
 				.query(`
 					SELECT
 						COUNT(*) as totalPages,
 						SUM(data_length) as totalDataSize,
 						COUNT(DISTINCT domain) as uniqueDomains,
-						MAX(crawled_at) as lastCrawled
-					FROM pages
-				`)
-				.get() as BasicStats;
-
-			const enhancedStats = db
-				.query(`
-					SELECT
+						MAX(crawled_at) as lastCrawled,
 						AVG(word_count) as avgWordCount,
 						AVG(quality_score) as avgQualityScore,
 						AVG(reading_time) as avgReadingTime,
@@ -62,9 +72,8 @@ export const apiRoutes = new Elysia({ prefix: "/api" })
 						SUM(internal_links_count) as totalInternalLinks,
 						SUM(external_links_count) as totalExternalLinks
 					FROM pages
-					WHERE word_count IS NOT NULL
 				`)
-				.get() as EnhancedStats;
+				.get() as BasicStats & EnhancedStats;
 
 			const languageStats = db
 				.query(`
@@ -96,25 +105,29 @@ export const apiRoutes = new Elysia({ prefix: "/api" })
 				`)
 				.all() as QualityStat[];
 
-			return {
+			const result = {
 				status: "ok",
 				stats: {
-					...basicStats,
+					...combinedStats,
 					activeCrawls: activeCrawls.size,
 					content: {
-						avgWordCount: Math.round(enhancedStats.avgWordCount || 0),
-						avgQualityScore: Math.round(enhancedStats.avgQualityScore || 0),
-						avgReadingTime: Math.round(enhancedStats.avgReadingTime || 0),
-						totalMedia: enhancedStats.totalMedia || 0,
-						totalInternalLinks: enhancedStats.totalInternalLinks || 0,
-						totalExternalLinks: enhancedStats.totalExternalLinks || 0,
+						avgWordCount: Math.round(combinedStats.avgWordCount || 0),
+						avgQualityScore: Math.round(combinedStats.avgQualityScore || 0),
+						avgReadingTime: Math.round(combinedStats.avgReadingTime || 0),
+						totalMedia: combinedStats.totalMedia || 0,
+						totalInternalLinks: combinedStats.totalInternalLinks || 0,
+						totalExternalLinks: combinedStats.totalExternalLinks || 0,
 					},
 					languages: languageStats,
 					qualityDistribution: qualityStats,
 				},
 			};
+
+			statsCache = { data: result, timestamp: Date.now() };
+
+			return result;
 		} catch (err) {
-			const message = err instanceof Error ? err.message : "Unknown error";
+			const message = getErrorMessage(err);
 			logger.error(`Error getting stats: ${message}`);
 			return error(500, { error: "Failed to get statistics" });
 		}
@@ -142,7 +155,7 @@ export const apiRoutes = new Elysia({ prefix: "/api" })
 					content: page.content,
 				};
 			} catch (err) {
-				const message = err instanceof Error ? err.message : "Unknown error";
+				const message = getErrorMessage(err);
 				logger.error(`Error fetching page content for id ${id}: ${message}`);
 				return error(500, { error: "Failed to fetch content" });
 			}

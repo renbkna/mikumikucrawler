@@ -2,64 +2,33 @@
  * Request coalescing - prevents duplicate simultaneous crawls.
  * If multiple users request the same URL, they all wait for one crawl result.
  */
-
-interface PendingRequest {
-	url: string;
-	promise: Promise<unknown>;
-	resolvers: Array<(value: unknown) => void>;
-	rejecters: Array<(reason: unknown) => void>;
-}
-
 class RequestCoalescer {
-	private pending = new Map<string, PendingRequest>();
+	private pending = new Map<string, Promise<unknown>>();
 
 	/**
 	 * Coalesce a request. If the same URL is already being processed,
 	 * returns the existing promise. Otherwise, executes the factory.
+	 *
+	 * JavaScript's single-threaded event loop ensures Map operations are atomic,
+	 * preventing race conditions without needing a mutex.
 	 */
 	async coalesce<T>(url: string, factory: () => Promise<T>): Promise<T> {
-		// Check if there's already a pending request for this URL
+		// Check if already pending - this read is atomic
 		const existing = this.pending.get(url);
 		if (existing) {
-			// Return a promise that resolves when the existing request completes
-			return new Promise((resolve, reject) => {
-				existing.resolvers.push(resolve as (value: unknown) => void);
-				existing.rejecters.push(reject);
-			}) as Promise<T>;
+			return existing as Promise<T>;
 		}
 
-		// Create new request
-		const resolvers: Array<(value: unknown) => void> = [];
-		const rejecters: Array<(reason: unknown) => void> = [];
-
-		const promise = factory().finally(() => {
-			// Clean up when done
+		// Create the promise immediately and store it atomically
+		// This prevents the race condition where two concurrent calls
+		// could both pass the "existing" check before either sets the value
+		const newPromise = factory().finally(() => {
 			this.pending.delete(url);
 		});
 
-		const pending: PendingRequest = {
-			url,
-			promise,
-			resolvers,
-			rejecters,
-		};
-
-		this.pending.set(url, pending);
-
-		// Execute factory and notify all waiters
-		promise
-			.then((result) => {
-				for (const resolve of resolvers) {
-					resolve(result);
-				}
-			})
-			.catch((error) => {
-				for (const reject of rejecters) {
-					reject(error);
-				}
-			});
-
-		return promise;
+		// Set it in the map - this write is atomic
+		this.pending.set(url, newPromise);
+		return newPromise;
 	}
 
 	/**

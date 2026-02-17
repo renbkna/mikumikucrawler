@@ -29,18 +29,48 @@ export const FETCH_HEADERS = {
 
 /** Memory and cache configuration */
 export const MEMORY_CONSTANTS = {
-	/** Memory threshold in MB for Puppeteer constraints */
-	HEAP_THRESHOLD_MB: 400,
 	/** Maximum entries in robots.txt cache */
 	ROBOTS_CACHE_MAX_SIZE: 100,
-	/** TTL for robots.txt cache entries in ms (1 hour) */
-	ROBOTS_CACHE_TTL_MS: 60 * 60 * 1000,
+	/** TTL for robots.txt cache entries in ms (30 minutes) */
+	ROBOTS_CACHE_TTL_MS: 30 * 60 * 1000,
+} as const;
+
+/** Request and fetch configuration */
+export const REQUEST_CONSTANTS = {
+	/** Timeout for robots.txt fetch in ms (5 seconds) */
+	ROBOTS_FETCH_TIMEOUT_MS: 5000,
+	/** Maximum URL length for validation (2000 characters) */
+	MAX_URL_LENGTH: 2000,
+} as const;
+
+/** Export configuration */
+export const EXPORT_CONSTANTS = {
+	/** Number of rows per chunk for data export */
+	CHUNK_SIZE: 500,
 } as const;
 
 /** Batch processing configuration */
 export const BATCH_CONSTANTS = {
 	/** Concurrency limit for link batch processing */
 	LINK_BATCH_CONCURRENCY: 10,
+} as const;
+
+/** PDF processing limits to prevent resource exhaustion */
+export const PDF_CONSTANTS = {
+	/** Maximum number of pages to process per PDF (prevents memory exhaustion) */
+	MAX_PAGES: 1000,
+	/** Maximum file size in MB */
+	MAX_FILE_SIZE_MB: 50,
+	/** Timeout for PDF processing in ms (30 seconds) */
+	PROCESSING_TIMEOUT_MS: 30000,
+} as const;
+
+/** WebSocket rate limiting configuration */
+export const WEBSOCKET_RATE_LIMIT = {
+	/** Maximum messages per minute per socket */
+	MAX_MESSAGES_PER_MINUTE: 100,
+	/** Window size in ms (1 minute) */
+	WINDOW_MS: 60000,
 } as const;
 
 export const DYNAMIC_RENDERER_CONSTANTS = {
