@@ -272,6 +272,10 @@ const STOP_WORDS: Record<string, Set<string>> = {
 
 const DEFAULT_STOP_WORDS = STOP_WORDS.en;
 
+/** Pre-compiled regex for stripping non-alphanumeric characters from words.
+ *  Extracted to module level so it is created once, not on every word in the hot loop. */
+const WORD_CLEANUP_REGEX = /[^a-z0-9]/g;
+
 /** Analyzes text to determine word count, language, sentiment, and readability. */
 export async function analyzeContent(text: string): Promise<AnalysisResult> {
 	const cleanText = (text || "").toString().trim();
@@ -322,7 +326,9 @@ export async function analyzeContent(text: string): Promise<AnalysisResult> {
 	const stopWords = STOP_WORDS[language] || DEFAULT_STOP_WORDS;
 	const wordFreq: Record<string, number> = {};
 	for (const word of words) {
-		const lower = word.toLowerCase().replaceAll(/[^a-z0-9]/g, "");
+		// Use the module-level WORD_CLEANUP_REGEX (created once) instead of an
+		// inline regex literal (which some engines re-create on every iteration).
+		const lower = word.toLowerCase().replaceAll(WORD_CLEANUP_REGEX, "");
 		if (lower.length > 2 && !stopWords.has(lower)) {
 			wordFreq[lower] = (wordFreq[lower] || 0) + 1;
 		}
