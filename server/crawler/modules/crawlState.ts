@@ -3,6 +3,7 @@ import type {
 	QueueStats,
 	SanitizedCrawlOptions,
 } from "../../types.js";
+import { ADAPTIVE_THROTTLE } from "../../constants.js";
 import { LRUCache } from "../../utils/lruCache.js";
 
 /** Tracks the ongoing progress, statistics, and domain state of a crawl session. */
@@ -14,6 +15,8 @@ export class CrawlState {
 	// Use LRU cache instead of unbounded Set to prevent memory exhaustion
 	private readonly visited: LRUCache<string, boolean>;
 	private readonly domainDelays: Map<string, number>;
+	/** Per-domain page count for enforcing maxPagesPerDomain budget. */
+	private readonly domainPageCounts: Map<string, number>;
 	private consecutiveFailures: number;
 	// Configurable threshold with explanation
 	private readonly CIRCUIT_BREAKER_THRESHOLD: number;
@@ -28,6 +31,7 @@ export class CrawlState {
 		// memory issues (each URL ~100-200 bytes = ~10MB max)
 		this.visited = new LRUCache(50000);
 		this.domainDelays = new Map();
+		this.domainPageCounts = new Map();
 		this.consecutiveFailures = 0;
 		// Threshold based on empirical data: 20 consecutive failures typically
 		// indicates a systematic issue (network, target blocking, etc.)
@@ -44,10 +48,75 @@ export class CrawlState {
 	}
 
 	/**
-	 * Checks if the session is still active and hasn't hit the page limit.
+	 * Checks if the session is still active and hasn't hit the global page limit.
 	 */
 	canProcessMore(): boolean {
 		return this.isActive && this.stats.pagesScanned < this.options.maxPages;
+	}
+
+	/**
+	 * Returns true when the per-domain crawl budget has been reached for the given
+	 * domain. Always returns false when maxPagesPerDomain is 0 (unlimited).
+	 */
+	isDomainBudgetExceeded(domain: string): boolean {
+		const budget = this.options.maxPagesPerDomain ?? 0;
+		if (budget <= 0) return false;
+		return (this.domainPageCounts.get(domain) ?? 0) >= budget;
+	}
+
+	/**
+	 * Increments the per-domain page counter. Call after a successful page save.
+	 */
+	recordDomainPage(domain: string): void {
+		this.domainPageCounts.set(
+			domain,
+			(this.domainPageCounts.get(domain) ?? 0) + 1,
+		);
+	}
+
+	/**
+	 * Adjusts the per-domain crawl delay based on observed response time and
+	 * HTTP status code (adaptive throttling).
+	 *
+	 * Rules:
+	 * - 429/503 → multiply current delay by 3, respect Retry-After if larger.
+	 * - responseMs > SLOW_RESPONSE_MS → multiply by SLOW_FACTOR.
+	 * - responseMs < FAST_RESPONSE_MS → multiply by FAST_FACTOR (min = configured delay).
+	 */
+	adaptDomainDelay(
+		domain: string,
+		responseMs: number,
+		statusCode: number,
+		retryAfterMs?: number,
+	): void {
+		const current = this.getDomainDelay(domain);
+
+		if (statusCode === 429 || statusCode === 503) {
+			const backoff = Math.max(current * 3, retryAfterMs ?? 0);
+			this.domainDelays.set(
+				domain,
+				Math.min(backoff, ADAPTIVE_THROTTLE.MAX_DELAY_MS),
+			);
+			return;
+		}
+
+		if (responseMs > ADAPTIVE_THROTTLE.SLOW_RESPONSE_MS) {
+			const slower = Math.min(
+				current * ADAPTIVE_THROTTLE.SLOW_FACTOR,
+				ADAPTIVE_THROTTLE.MAX_DELAY_MS,
+			);
+			this.domainDelays.set(domain, slower);
+			return;
+		}
+
+		if (responseMs < ADAPTIVE_THROTTLE.FAST_RESPONSE_MS) {
+			const floor = this.options.crawlDelay;
+			const faster = Math.max(current * ADAPTIVE_THROTTLE.FAST_FACTOR, floor);
+			// Only update if we actually changed; avoids repeated Map writes at the floor
+			if (faster < current) {
+				this.domainDelays.set(domain, faster);
+			}
+		}
 	}
 
 	stop(reason?: string): void {
@@ -174,10 +243,15 @@ export class CrawlState {
 	/**
 	 * Gets memory usage statistics for monitoring.
 	 */
-	getMemoryStats(): { visitedCacheSize: number; domainDelaysSize: number } {
+	getMemoryStats(): {
+		visitedCacheSize: number;
+		domainDelaysSize: number;
+		domainPageCountsSize: number;
+	} {
 		return {
 			visitedCacheSize: this.visited.size,
 			domainDelaysSize: this.domainDelays.size,
+			domainPageCountsSize: this.domainPageCounts.size,
 		};
 	}
 }

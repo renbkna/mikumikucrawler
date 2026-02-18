@@ -29,6 +29,7 @@ export interface SocketCrawledPage extends CrawledPage {
 export interface ClientToServerEvents {
 	startAttack: (options: CrawlOptions) => void;
 	stopAttack: () => void;
+	resumeSession: (data: { sessionId: string }) => void;
 	getPageDetails: (url: string) => void;
 	exportData: (format: string) => void;
 }

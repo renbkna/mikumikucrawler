@@ -11,6 +11,8 @@ export interface ExtractedLink {
 	isInternal?: boolean;
 	type?: string;
 	domain?: string;
+	/** True when the anchor element carries rel="nofollow" or rel="ugc". */
+	nofollow?: boolean;
 }
 
 export interface MediaInfo {
@@ -112,10 +114,12 @@ export interface QueueStats {
 
 export interface CrawlOptions {
 	target: string;
-	crawlMethod: "links" | "content" | "media" | "full";
+	crawlMethod: "links" | "media" | "full";
 	crawlDepth: number;
 	crawlDelay: number;
 	maxPages: number;
+	/** Maximum pages to crawl per domain. 0 means unlimited. */
+	maxPagesPerDomain: number;
 	maxConcurrentRequests: number;
 	retryLimit: number;
 	dynamic: boolean;

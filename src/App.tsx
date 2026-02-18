@@ -1,4 +1,4 @@
-import { Heart, Music } from "lucide-react";
+import { Heart, History, Music } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActionButtons,
@@ -10,11 +10,13 @@ import {
 	LogsSection,
 	NoteIcon,
 	ProgressBar,
+	ResumeSessionsPanel,
 	SparkleIcon,
 	StatsGrid,
 	StatsVisualizer,
 	ToastNotification,
 } from "./components";
+import type { SessionSummary } from "./components";
 import { MikuBanner } from "./components/MikuBanner";
 import { TheatreOverlay } from "./components/TheatreOverlay";
 import { PROGRESS_CONFIG, TOAST_DEFAULTS, UI_LIMITS } from "./constants";
@@ -29,8 +31,12 @@ function App() {
 	>("idle");
 	const [openedConfig, setOpenedConfig] = useState(false);
 	const [openExportDialog, setOpenExportDialog] = useState(false);
+	const [openResumePanel, setOpenResumePanel] = useState(false);
 	const [showDetails, setShowDetails] = useState(false);
 	const [audioVol, setAudioVol] = useState(100);
+	const [interruptedSessions, setInterruptedSessions] = useState<
+		SessionSummary[]
+	>([]);
 
 	const { toasts, addToast, dismissToast } = useToast();
 
@@ -61,6 +67,24 @@ function App() {
 	const logContainerRef = useRef<HTMLDivElement>(null);
 	const maxPagesRef = useRef(crawlOptions.maxPages);
 	const fallbackToastShownRef = useRef(false);
+
+	// ── Interrupted-session discovery ───────────────────────────────────────
+	// Fetch on mount so we can show the resume banner without user action.
+	// We also re-fetch after a crawl ends so newly-interrupted sessions appear.
+	const fetchInterruptedSessions = useCallback(async () => {
+		try {
+			const res = await fetch("/api/sessions");
+			if (!res.ok) return;
+			const data = (await res.json()) as { sessions: SessionSummary[] };
+			setInterruptedSessions(data.sessions);
+		} catch {
+			// Non-critical — the banner simply won't show if this fails
+		}
+	}, []);
+
+	useEffect(() => {
+		fetchInterruptedSessions();
+	}, [fetchInterruptedSessions]);
 
 	useEffect(() => {
 		maxPagesRef.current = crawlOptions.maxPages;
@@ -186,8 +210,10 @@ function App() {
 				`Crawl completed! Scanned ${finalStats.pagesScanned} pages`,
 				TOAST_DEFAULTS.LONG_TIMEOUT,
 			);
+			// Refresh interrupted sessions — a completed crawl removes it from the list
+			fetchInterruptedSessions();
 		},
-		[addLog, addToast, setStats, setProgress],
+		[addLog, addToast, setStats, setProgress, fetchInterruptedSessions],
 	);
 
 	const socketHandlers = useMemo(
@@ -212,6 +238,50 @@ function App() {
 	);
 
 	const { socket, connectionState, emit } = useSocket(socketHandlers);
+
+	const handleResumeSession = useCallback(
+		(sessionId: string, target: string) => {
+			if (!socket) {
+				addToast(
+					"error",
+					"Socket not connected! Please wait or refresh the page.",
+				);
+				return;
+			}
+
+			// Reset UI to a clean slate — the server will replay progress via events
+			resetStats();
+			resetPages();
+			setFilterText("");
+			setProgress(0);
+			fallbackToastShownRef.current = false;
+
+			// Display the resumed session's target in the URL field
+			handleTargetChange(target);
+
+			addLog(`[Resume] Continuing crawl of ${target}…`);
+			setIsAttacking(true);
+			// Skip the theatre animation for resume — go straight to live view
+			setTheatreStatus("live");
+
+			emit("resumeSession", { sessionId });
+			addToast("info", "Resuming interrupted crawl…");
+
+			// Optimistically remove from the local sessions list
+			setInterruptedSessions((prev) => prev.filter((s) => s.id !== sessionId));
+		},
+		[
+			socket,
+			addToast,
+			resetStats,
+			resetPages,
+			setFilterText,
+			setProgress,
+			handleTargetChange,
+			addLog,
+			emit,
+		],
+	);
 
 	const normalizeAndValidateUrl = useCallback(
 		(url: string): { url: string } | { error: string } => {
@@ -322,7 +392,7 @@ function App() {
 
 	const isUIHidden =
 		theatreStatus === "blackout" || theatreStatus === "counting";
-	const isModalOpen = openedConfig || openExportDialog;
+	const isModalOpen = openedConfig || openExportDialog || openResumePanel;
 
 	return (
 		<div className="relative w-screen h-screen overflow-hidden text-miku-text font-sans">
@@ -404,6 +474,24 @@ function App() {
 							connectionState={connectionState}
 						/>
 					</section>
+
+					{/* ── Interrupted sessions banner ──────────────────────────────── */}
+					{interruptedSessions.length > 0 && !isAttacking && (
+						<div className="flex items-center justify-between px-5 py-3 rounded-2xl border-2 border-amber-200 bg-amber-50 text-amber-800 shadow-sm">
+							<div className="flex items-center gap-2 text-sm font-bold">
+								<History className="w-4 h-4 shrink-0" />
+								{interruptedSessions.length} interrupted crawl
+								{interruptedSessions.length !== 1 ? 's' : ''} found
+							</div>
+							<button
+								type="button"
+								onClick={() => setOpenResumePanel(true)}
+								className="px-4 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition-colors shadow-sm"
+							>
+								View &amp; Resume
+							</button>
+						</div>
+					)}
 
 					<section
 						aria-label="Statistics"
@@ -541,6 +629,12 @@ function App() {
 				isOpen={openExportDialog}
 				onClose={() => setOpenExportDialog(false)}
 				onExport={handleExport}
+			/>
+
+			<ResumeSessionsPanel
+				isOpen={openResumePanel}
+				onClose={() => setOpenResumePanel(false)}
+				onResume={handleResumeSession}
 			/>
 		</div>
 	);

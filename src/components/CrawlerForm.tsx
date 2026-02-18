@@ -251,9 +251,16 @@ export const CrawlerForm = memo(function CrawlerForm({
 				</div>
 				<div className="cute-badge">
 					<Zap className="w-4 h-4 text-amber-400" />
-					Delay:{" "}
-					<span className="text-amber-700 font-bold">
-						{crawlOptions.crawlDelay}ms
+					Method:{" "}
+					<span className="text-amber-700 font-bold capitalize">
+						{crawlOptions.crawlMethod}
+					</span>
+				</div>
+				<div className={`cute-badge ${crawlOptions.dynamic ? "" : "opacity-50"}`}>
+					<Sparkles className={`w-4 h-4 ${crawlOptions.dynamic ? "text-miku-teal" : "text-miku-text/40"}`} />
+					JS:{" "}
+					<span className={`font-bold ${crawlOptions.dynamic ? "text-teal-700" : "text-miku-text/40"}`}>
+						{crawlOptions.dynamic ? "on" : "off"}
 					</span>
 				</div>
 			</div>
