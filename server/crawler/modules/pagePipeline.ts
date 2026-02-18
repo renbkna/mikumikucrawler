@@ -494,6 +494,10 @@ export function createPagePipeline({
 			contentLength,
 			processedContent,
 		);
+		// Also write to server log so the terminal shows crawl progress.
+		// Without this, "Fetching: ..." is the last visible line for every successful
+		// page, which looks identical to a hang.
+		logger.info(logMessage);
 		emitStatsUpdate(logMessage, processedContent, item);
 
 		emitPageToClient({
