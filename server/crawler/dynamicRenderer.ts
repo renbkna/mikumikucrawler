@@ -300,6 +300,11 @@ export class DynamicRenderer {
 				? DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.COMPLEX_NAVIGATION
 				: DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.STANDARD_NAVIGATION;
 
+			// Set cookies BEFORE navigation so consent bypasses work on first page load.
+			// Previously cookies were set after goto(), meaning YouTube always saw the
+			// consent wall before the CONSENT=YES+ cookie could take effect.
+			await this.setCookiesForPage(page, item.url);
+
 			const response = await page.goto(item.url, {
 				waitUntil,
 				timeout: navigationTimeout,
@@ -313,8 +318,6 @@ export class DynamicRenderer {
 				10,
 			);
 			const lastModified = headers["last-modified"];
-
-			await this.setCookiesForPage(page, item.url);
 
 			// Start tracking navigation after initial page load
 			page.on("framenavigated", navigationHandler);
@@ -412,51 +415,63 @@ export class DynamicRenderer {
 	/**
 	 * Attempts to detect and click "Accept" buttons on consent walls (Google/YouTube/GDPR).
 	 * This allows the crawler to access the actual content behind the "Before you continue" screens.
+	 *
+	 * NOTE: page.evaluate() has no built-in timeout. On JS-heavy pages (YouTube SPA), Chrome's V8
+	 * may be busy executing framework init code, causing CDP commands to hang indefinitely.
+	 * All evaluate() calls are wrapped in Promise.race() with a 5 s hard cap.
+	 * textContent is used instead of innerText to avoid expensive layout reflow.
 	 */
 	async handleConsentModals(page: Page, url: string): Promise<void> {
+		const EVAL_TIMEOUT_MS = 5000;
+		/** Returns a promise that resolves to `fallback` after `ms` milliseconds. */
+		const withTimeout = <T>(p: Promise<T>, fallback: T): Promise<T> =>
+			Promise.race([
+				p,
+				new Promise<T>((resolve) => setTimeout(() => resolve(fallback), EVAL_TIMEOUT_MS)),
+			]);
+
 		try {
-			// Check if we are potentially stuck on a consent screen
-			const isConsentScreen = await page.evaluate(() => {
-				const text = document.body.innerText.toLowerCase();
-				return (
-					text.includes("before you continue") ||
-					text.includes("agree to the use of cookies") ||
-					text.includes("accept all cookies")
-				);
-			});
+			// Use textContent (no layout reflow) instead of innerText for speed.
+			// Wrapped with a 5 s timeout so a busy V8 context can't block the crawler.
+			const isConsentScreen = await withTimeout(
+				page.evaluate(() => {
+					const text = (document.body?.textContent ?? "").toLowerCase();
+					return (
+						text.includes("before you continue") ||
+						text.includes("agree to the use of cookies") ||
+						text.includes("accept all cookies")
+					);
+				}),
+				false,
+			);
 
 			if (isConsentScreen) {
 				this.logger.info(
 					`Potential consent wall detected on ${url}. Attempting to bypass...`,
 				);
 
-				const clicked = await page.evaluate(() => {
-					// Strategy: Find buttons with specific keywords and click the most likely "Accept" candidate
-					const keywords = [
-						"accept all",
-						"i agree",
-						"accept",
-						"agree",
-						"allow",
-					];
-					const buttons = Array.from(
-						document.querySelectorAll("button, input[type='submit']"),
-					) as HTMLElement[];
+				const clicked = await withTimeout(
+					page.evaluate(() => {
+						const keywords = ["accept all", "i agree", "accept", "agree", "allow"];
+						const buttons = Array.from(
+							document.querySelectorAll("button, input[type='submit']"),
+						) as HTMLElement[];
 
-					for (const keyword of keywords) {
-						const match = buttons.find((btn) => {
-							const text = btn.innerText?.toLowerCase() || "";
-							const label = btn.getAttribute("aria-label")?.toLowerCase() || "";
-							return text.includes(keyword) || label.includes(keyword);
-						});
-
-						if (match) {
-							match.click();
-							return true;
+						for (const keyword of keywords) {
+							const match = buttons.find((btn) => {
+								const text = (btn.textContent ?? "").toLowerCase();
+								const label = btn.getAttribute("aria-label")?.toLowerCase() ?? "";
+								return text.includes(keyword) || label.includes(keyword);
+							});
+							if (match) {
+								match.click();
+								return true;
+							}
 						}
-					}
-					return false;
-				});
+						return false;
+					}),
+					false,
+				);
 
 				if (clicked) {
 					// Wait for the navigation or re-render that follows the click
