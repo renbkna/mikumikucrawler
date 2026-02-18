@@ -174,6 +174,13 @@ export class CrawlQueue {
 				this.queueHead = 0;
 			}
 
+			// Snapshot available items before entering the inner loop.
+			// Used to detect when every item in the current window has been
+			// deferred (domain cooling) so we can break and let the outer
+			// await sleep() run instead of spinning forever.
+			const itemsAvailableNow = this.queue.length - this.queueHead;
+			let deferredThisPass = 0;
+
 			while (
 				this.activeCount < this.options.maxConcurrentRequests &&
 				this.queueHead < this.queue.length &&
@@ -203,10 +210,19 @@ export class CrawlQueue {
 						this.queue.push(item);
 						this.queuedUrls.add(item.url);
 
-						if (this.queue.length === 1) break; // Avoid busy loop if only 1 item
+						deferredThisPass++;
+						// Break as soon as every item in the current window has been
+						// tried and pushed back due to domain cooldown.  Without this,
+						// both queueHead and queue.length grow by 1 on every iteration
+						// keeping the gap constant and creating an infinite busy-loop
+						// that starves the outer `await sleep()` call.
+						if (deferredThisPass >= itemsAvailableNow || this.queue.length === 1) break;
 						continue;
 					}
 
+					// Successfully dispatching — reset the deferred counter so a mix
+					// of ready and cooling items from different domains works correctly.
+					deferredThisPass = 0;
 					domainProcessing.set(domain, now + domainDelay);
 
 					// Use Set for atomic tracking (avoids race conditions with counter)
