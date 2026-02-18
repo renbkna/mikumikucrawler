@@ -2,7 +2,7 @@ import { URL } from "node:url";
 import type { CheerioAPI } from "cheerio";
 import type { Element } from "domhandler";
 import type { ExtractedLink, MediaInfo } from "../types.js";
-import { getErrorMessage } from "../utils/helpers.js";
+import { getErrorMessage, normalizeUrl } from "../utils/helpers.js";
 
 /** Pre-compiled regex for downloadable file extensions */
 const DOWNLOAD_EXTENSIONS = /\.(pdf|doc|docx|xls|xlsx|zip|rar)$/i;
@@ -243,27 +243,52 @@ export function processLinks(
 	}
 
 	const links: ExtractedLink[] = [];
-	const baseHost = new URL(baseUrl).hostname;
+
+	// Honour <base href="..."> — if the document declares a base URL, all
+	// relative links must be resolved against it, not against the page URL.
+	const baseTagHref = cheerioInstance("base[href]").first().attr("href");
+	let resolveBase = baseUrl;
+	if (baseTagHref) {
+		try {
+			resolveBase = new URL(baseTagHref, baseUrl).href;
+		} catch {
+			// Malformed <base href> — fall back to page URL
+		}
+	}
+
+	const baseHost = new URL(resolveBase).hostname;
 
 	cheerioInstance("a[href]").each((_: number, element: Element) => {
 		const href = cheerioInstance(element).attr("href");
 		const text = cheerioInstance(element).text().trim();
 		const title = cheerioInstance(element).attr("title") || "";
+		const rel = (cheerioInstance(element).attr("rel") || "").toLowerCase();
 
 		if (!href) return;
 
+		// Per-link nofollow: rel="nofollow" and rel="ugc" both signal that the
+		// site owner does not vouch for the linked page.
+		const nofollow = /\bnofollow\b|\bugc\b/.test(rel);
+
 		try {
-			const url = new URL(href, baseUrl);
+			const url = new URL(href, resolveBase);
+			// Normalize the resolved URL: strip fragments, remove trailing slashes,
+			// and enforce default ports so both code paths (processLinks here and
+			// linkExtractor.ts) produce identical canonical URLs.
+			const normalized = normalizeUrl(url.href);
+			if ("error" in normalized || !normalized.url) return;
+
 			const isInternal = url.hostname === baseHost;
 			const linkType = classifyLink(url, text);
 
 			links.push({
-				url: url.href,
+				url: normalized.url,
 				text,
 				title,
 				isInternal,
 				type: linkType,
 				domain: url.hostname,
+				nofollow,
 			});
 		} catch (err) {
 			// biome-ignore lint/suspicious/noConsole: Debug logging for malformed URLs

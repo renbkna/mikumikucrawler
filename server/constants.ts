@@ -155,3 +155,51 @@ export const SITE_COOKIES: Record<
 	],
 	"reddit.com": [{ name: "over18", value: "1" }],
 };
+
+/**
+ * Soft 404 detection thresholds.
+ * Pages with HTTP 200 but "not found" content are flagged and skipped.
+ */
+export const SOFT_404_CONSTANTS = {
+	/** Content-length in bytes below which a page is unconditionally flagged as soft 404. */
+	TINY_CONTENT_BYTES: 500,
+	/** Content-length below which keyword matching is also checked. */
+	SHORT_CONTENT_BYTES: 3000,
+	/** Keywords whose presence in title or short content indicates a soft 404. */
+	KEYWORDS: [
+		"404",
+		"not found",
+		"page not found",
+		"does not exist",
+		"page missing",
+		"cannot be found",
+		"no longer exists",
+	] as readonly string[],
+} as const;
+
+/**
+ * Adaptive throttle thresholds.
+ * The crawler adjusts per-domain delays based on observed response times.
+ */
+export const ADAPTIVE_THROTTLE = {
+	/** Response time in ms above which the domain delay is increased. */
+	SLOW_RESPONSE_MS: 3000,
+	/** Response time in ms below which the domain delay may be decreased. */
+	FAST_RESPONSE_MS: 500,
+	/** Multiplier applied to delay when a slow response is observed (delay × factor). */
+	SLOW_FACTOR: 1.5,
+	/** Multiplier applied to delay when a fast response is observed (delay × factor). */
+	FAST_FACTOR: 0.9,
+	/** Absolute maximum delay the adaptive system can set (ms). */
+	MAX_DELAY_MS: 30_000,
+} as const;
+
+/** Sitemap discovery and parsing configuration */
+export const SITEMAP_CONSTANTS = {
+	/** Maximum total URLs to collect from all sitemaps (prevents memory exhaustion) */
+	MAX_ENTRIES: 5000,
+	/** Fetch timeout for sitemap requests in ms */
+	FETCH_TIMEOUT_MS: 10000,
+	/** Maximum sitemap index recursion depth (sitemap → sitemap index → ...) */
+	MAX_RECURSION_DEPTH: 3,
+} as const;

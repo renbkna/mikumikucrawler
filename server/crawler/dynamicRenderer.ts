@@ -286,6 +286,20 @@ export class DynamicRenderer {
 				DNT: "1",
 			});
 
+			// Block non-essential resources to significantly reduce memory usage and
+			// page load time. We keep document, script, xhr, and fetch so SPAs still
+			// render correctly. Images, stylesheets, fonts, and media are irrelevant
+			// to content extraction and typically account for 60–80% of page weight.
+			await page.setRequestInterception(true);
+			page.on("request", (req) => {
+				const blocked = ["image", "stylesheet", "font", "media"];
+				if (blocked.includes(req.resourceType())) {
+					req.abort();
+				} else {
+					req.continue();
+				}
+			});
+
 			page.on("dialog", (dialog) => dialog.dismiss());
 
 			const isComplex = DYNAMIC_RENDERER_CONSTANTS.COMPLEX_JS_SITES.some(
@@ -318,6 +332,9 @@ export class DynamicRenderer {
 				10,
 			);
 			const lastModified = headers["last-modified"];
+			// Puppeteer exposes response headers — capture X-Robots-Tag so the
+			// pipeline can respect server-level robots directives on dynamic pages.
+			const xRobotsTag = headers["x-robots-tag"] ?? null;
 
 			// Start tracking navigation after initial page load
 			page.on("framenavigated", navigationHandler);
@@ -380,6 +397,7 @@ export class DynamicRenderer {
 				title,
 				description: description || "",
 				lastModified,
+				xRobotsTag,
 			};
 		} catch (err) {
 			page.off("framenavigated", navigationHandler);

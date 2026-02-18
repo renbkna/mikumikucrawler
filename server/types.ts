@@ -27,6 +27,8 @@ export interface RawCrawlOptions {
 	target?: string;
 	crawlDepth?: number;
 	maxPages?: number;
+	/** Per-domain page cap. 0 = unlimited. */
+	maxPagesPerDomain?: number;
 	crawlDelay?: number;
 	crawlMethod?: string;
 	maxConcurrentRequests?: number;
@@ -50,6 +52,8 @@ export interface DynamicRenderResult {
 	title: string;
 	description: string;
 	lastModified?: string;
+	/** Value of the X-Robots-Tag HTTP response header, if present. */
+	xRobotsTag?: string | null;
 }
 
 export interface FetchResult {
@@ -60,7 +64,16 @@ export interface FetchResult {
 	title: string;
 	description: string;
 	lastModified: string | null;
+	etag: string | null;
 	isDynamic: boolean;
+	/** Value of the X-Robots-Tag HTTP response header, if present. */
+	xRobotsTag: string | null;
+	/** True when server returned 304 Not Modified — caller should skip re-processing. */
+	unchanged?: true;
+	/** True when server returned 429/503 with a Retry-After directive. */
+	rateLimited?: true;
+	/** Milliseconds to wait before retrying, parsed from the Retry-After header. */
+	retryAfterMs?: number;
 }
 
 /**
@@ -116,4 +129,12 @@ export interface LoggerLike {
 	warn(message: string): void;
 	info(message: string): void;
 	error(message: string): void;
+}
+
+/** A single URL entry discovered from a sitemap.xml file. */
+export interface SitemapEntry {
+	url: string;
+	lastmod?: string;
+	priority?: number;
+	changefreq?: string;
 }
