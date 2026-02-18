@@ -40,14 +40,6 @@ function safeExtract<T>(
 }
 
 /**
- * Lazy-loaded PDF.js module to avoid startup overhead.
- */
-async function getPDFJS() {
-	const pdfjs = await import("pdfjs-dist");
-	return pdfjs;
-}
-
-/**
  * Orchestrates the extraction and analysis pipeline for raw page content.
  *
  * This class coordinates multiple utility modules to extract structured data,
@@ -124,8 +116,9 @@ export class ContentProcessor {
 		// Analyze content (word count, language, keywords, sentiment)
 		result.analysis = await analyzeContent(mainContent);
 
-		// Optimization: Parallelize independent extractions
-		// These don't depend on each other, so run them concurrently
+		// Run all independent synchronous extractions.
+		// These don't depend on each other; if any become async in future,
+		// wrap them in Promise.all to regain true concurrency.
 		const extractionResults = {
 			structuredData: safeExtract(
 				() => extractStructuredData($),
@@ -189,125 +182,94 @@ export class ContentProcessor {
 		};
 	}
 
-	/** Processes PDF content and populates the result object. */
+	/** Processes PDF content and populates the result object using pdf-parse. */
 	private async processPdf(
 		content: string | Buffer,
 		result: ProcessedContent,
 	): Promise<void> {
 		try {
+			const pdfBuffer =
+				typeof content === "string" ? Buffer.from(content) : content;
+
 			// Check file size before processing
-			const contentSizeMB =
-				(typeof content === "string"
-					? Buffer.byteLength(content)
-					: content.length) /
-				(1024 * 1024);
+			const contentSizeMB = pdfBuffer.length / (1024 * 1024);
 			if (contentSizeMB > PDF_CONSTANTS.MAX_FILE_SIZE_MB) {
 				throw new Error(
 					`PDF file too large (${contentSizeMB.toFixed(1)}MB). Maximum allowed: ${PDF_CONSTANTS.MAX_FILE_SIZE_MB}MB`,
 				);
 			}
 
-			// Convert content to Uint8Array for PDF.js
-			const pdfBuffer =
-				typeof content === "string" ? Buffer.from(content) : content;
-			const data = new Uint8Array(pdfBuffer);
+			// Lazy-load pdf-parse to avoid startup overhead.
+			// pdf-parse v2 ships both CJS and ESM builds; the callable may sit on
+			// `.default` (CJS interop) or be the module export itself depending on
+			// the runtime. Cast to any and normalise to a callable.
+			// biome-ignore lint/suspicious/noExplicitAny: pdf-parse ESM/CJS interop
+			const pdfParseModule = (await import("pdf-parse")) as any;
+			const pdfParse: (
+				buf: Buffer,
+				opts?: { max?: number },
+			) => Promise<{ text: string; numpages: number; info: unknown }> =
+				typeof pdfParseModule === "function"
+					? pdfParseModule
+					: (pdfParseModule.default ?? pdfParseModule);
 
-			// Load PDF document with timeout
-			const pdfjs = await getPDFJS();
-			const loadPromise = pdfjs.getDocument({ data }).promise;
+			// Race against a hard timeout to prevent runaway processing
+			const parsePromise = pdfParse(pdfBuffer, {
+				// Limit pages parsed to prevent memory exhaustion
+				max: PDF_CONSTANTS.MAX_PAGES,
+			});
 			const timeoutPromise = Bun.sleep(
 				PDF_CONSTANTS.PROCESSING_TIMEOUT_MS,
 			).then(() => {
-				throw new Error("PDF loading timeout");
+				throw new Error("PDF processing timeout");
 			});
-			const pdfDocument = await Promise.race([loadPromise, timeoutPromise]);
+			const pdfData = await Promise.race([parsePromise, timeoutPromise]);
 
-			// Check page count limit
-			if (pdfDocument.numPages > PDF_CONSTANTS.MAX_PAGES) {
+			if (pdfData.numpages > PDF_CONSTANTS.MAX_PAGES) {
 				throw new Error(
-					`PDF has too many pages (${pdfDocument.numPages}). Maximum allowed: ${PDF_CONSTANTS.MAX_PAGES}`,
+					`PDF has too many pages (${pdfData.numpages}). Maximum allowed: ${PDF_CONSTANTS.MAX_PAGES}`,
 				);
 			}
 
-			// Extract text from all pages
-			const textParts: string[] = [];
-			for (let pageNum = 1; pageNum <= pdfDocument.numPages; pageNum++) {
-				try {
-					const page = await pdfDocument.getPage(pageNum);
-					const textContent = await page.getTextContent();
-					const pageText = (textContent.items as Array<{ str?: string }>)
-						.filter(
-							(item): item is { str: string } => typeof item.str === "string",
-						)
-						.map((item) => item.str)
-						.join(" ");
-					textParts.push(pageText);
-					await page.cleanup();
-				} catch {
-					this.logger.warn(`Failed to extract text from PDF page ${pageNum}`);
-				}
-			}
+			const mainContent = pdfData.text ?? "";
 
-			const mainContent = textParts.join("\n\n");
+			// pdf-parse surfaces metadata via pdfData.info
+			const info = (pdfData.info ?? {}) as Record<string, string | undefined>;
+			const metadata = {
+				title: info.Title,
+				author: info.Author,
+				subject: info.Subject,
+				creationDate: info.CreationDate,
+				modDate: info.ModDate,
+			};
 
-			// Extract metadata
-			let metadata: {
-				title?: string;
-				author?: string;
-				subject?: string;
-				creationDate?: string;
-				modDate?: string;
-			} = {};
-
-			try {
-				const metadataResult = await pdfDocument.getMetadata();
-				if (metadataResult?.info && typeof metadataResult.info === "object") {
-					const info = metadataResult.info as Record<
-						string,
-						string | undefined
-					>;
-					metadata = {
-						title: info.Title,
-						author: info.Author,
-						subject: info.Subject,
-						creationDate: info.CreationDate,
-						modDate: info.ModDate,
-					};
-				}
-			} catch {
-				this.logger.debug("Could not extract PDF metadata");
-			}
-
-			// Analyze the extracted text
 			result.analysis = await analyzeContent(mainContent);
 
 			result.extractedData = { mainContent };
 			result.metadata = {
-				title: metadata.title || "",
-				author: metadata.author || "",
-				description: metadata.subject || "",
-				publishDate: metadata.creationDate || "",
-				modifiedDate: metadata.modDate || "",
+				title: metadata.title ?? "",
+				author: metadata.author ?? "",
+				description: metadata.subject ?? "",
+				publishDate: metadata.creationDate ?? "",
+				modifiedDate: metadata.modDate ?? "",
 			};
 
-			// PDFs don't have traditional "quality" metrics like HTML
-			// but we can assess based on content presence
-			const wordCount = result.analysis.wordCount || 0;
+			// PDFs don't have traditional HTML quality signals;
+			// use word count as a proxy for content richness.
+			const wordCount = result.analysis.wordCount ?? 0;
 			result.analysis.quality = {
 				score: wordCount > 100 ? 70 : wordCount > 50 ? 50 : 30,
 				factors: {
 					hasTitle: !!metadata.title,
 					hasAuthor: !!metadata.author,
 					contentLength: wordCount,
-					pageCount: pdfDocument.numPages,
+					pageCount: pdfData.numpages,
 				},
 				issues:
 					wordCount < 50
 						? ["PDF content appears to be minimal or image-based"]
 						: [],
 			};
-
-			await pdfDocument.destroy();
 		} catch (err) {
 			this.logger.error(`PDF processing failed: ${getErrorMessage(err)}`);
 			result.errors.push({

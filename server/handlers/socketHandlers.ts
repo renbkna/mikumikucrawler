@@ -203,12 +203,11 @@ export function createWebSocketHandlers(
 		ws: {
 			id: string;
 			send(data: string | object): number;
-			data: { id: string };
 		},
 		message: WebSocketMessage,
 	) => {
 		const socketWrapper: CrawlerSocket = {
-			id: ws.data.id || ws.id,
+			id: ws.id,
 			emit: (event, ...args) => {
 				ws.send({ type: event, data: args[0] });
 			},
@@ -460,8 +459,9 @@ export function createWebSocketHandlers(
 						}
 
 						if (sanitizedFormat === "json") {
-							const prefix: string =
-								!isFirstChunk || chunk.length > 0 ? "," : "";
+							// rowCount was already incremented above, so row 1 → no comma,
+							// all subsequent rows → leading comma (streaming JSON array).
+							const prefix = rowCount > 1 ? "," : "";
 							chunk.push(prefix + JSON.stringify(rowObj, null, 2));
 						} else {
 							const csvRow = Object.keys(rowObj)
@@ -515,8 +515,8 @@ export function createWebSocketHandlers(
 		}
 	};
 
-	const handleClose = async (ws: { id: string; data: { id: string } }) => {
-		const id = ws.data.id || ws.id;
+	const handleClose = async (ws: { id: string }) => {
+		const id = ws.id;
 
 		// Clean up rate limiter data immediately on disconnect
 		rateLimiter.removeSocket(id);

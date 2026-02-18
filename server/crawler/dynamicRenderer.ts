@@ -68,9 +68,12 @@ export class DynamicRenderer {
 			process.exit(1);
 		};
 
+		// NOTE: SIGINT and SIGTERM are intentionally NOT registered here.
+		// server.ts owns graceful shutdown for those signals and already calls
+		// session.stop() → dynamicRenderer.close() for every active session.
+		// Registering them here too would cause double-close races and
+		// non-deterministic teardown ordering.
 		process.on("exit", exitHandler);
-		process.on("SIGINT", cleanupAll);
-		process.on("SIGTERM", cleanupAll);
 		process.on("uncaughtException", uncaughtHandler);
 
 		DynamicRenderer.handlersRegistered = true;

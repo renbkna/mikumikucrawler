@@ -212,18 +212,24 @@ export class CrawlQueue {
 					// Use Set for atomic tracking (avoids race conditions with counter)
 					this.activeItems.add(item.url);
 
-					// Create task reference first to avoid race condition
-					// where finally() runs before task is added to processingPromises
-					let task: Promise<void>;
-					task = Promise.resolve(this.processItem(item))
-						.catch((error: Error) => {
-							this.logger.error(`Error in queue processing: ${error.message}`);
-							this.state.recordFailure();
-						})
-						.finally(() => {
-							this.activeItems.delete(item.url);
-							processingPromises.delete(task);
-						});
+					// Wrap in a helper so `task` can be declared as `const`.  The
+					// `finally` callback captures the resolved reference via the
+					// closure returned by the IIFE, which is always assigned before
+					// the microtask queue drains.
+					const task = (() => {
+						const p: Promise<void> = Promise.resolve(this.processItem(item))
+							.catch((error: Error) => {
+								this.logger.error(
+									`Error in queue processing: ${error.message}`,
+								);
+								this.state.recordFailure();
+							})
+							.finally(() => {
+								this.activeItems.delete(item.url);
+								processingPromises.delete(p);
+							});
+						return p;
+					})();
 
 					processingPromises.add(task);
 				} catch (err) {

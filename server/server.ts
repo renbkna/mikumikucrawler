@@ -102,13 +102,17 @@ const app = new Elysia()
 	.use(createApiRoutes(db, logger, activeCrawls))
 	.ws("/ws", {
 		body: WebSocketMessageSchema,
-		// biome-ignore lint/suspicious/noExplicitAny: Elysia WS types mismatch
-		open(ws: any) {
+		open(ws) {
+			// ws.id is Elysia's stable socket identifier (NOT ws.data.id)
 			logger.info(`Client connected: ${ws.id}`);
 		},
-		// biome-ignore lint/suspicious/noExplicitAny: Elysia WS types mismatch
+		// The handlers use structural types ({ id, send }) that are a supertype
+		// of Elysia's full WS context, which is valid at runtime. The casts are
+		// required because TypeScript's strict function parameter checking cannot
+		// verify the structural compatibility with Elysia's deeply-generic WS type.
+		// biome-ignore lint/suspicious/noExplicitAny: Elysia WS structural type compat
 		message: handleMessage as any,
-		// biome-ignore lint/suspicious/noExplicitAny: Elysia WS types mismatch
+		// biome-ignore lint/suspicious/noExplicitAny: Elysia WS structural type compat
 		close: handleClose as any,
 	})
 	.get(
@@ -133,16 +137,21 @@ const app = new Elysia()
 		},
 	)
 	.onError(({ code, error, set }) => {
-		if (code === "NOT_FOUND") {
-			set.status = 404;
-			return { error: "Not Found" };
+		if (code === "VALIDATION") {
+			set.status = 422;
+			return { error: getErrorMessage(error) };
 		}
-		logger.error(`Global Error: ${error}`);
+		if (code === "PARSE") {
+			set.status = 400;
+			return { error: "Invalid request body" };
+		}
+		set.status = 500;
+		logger.error(`Global Error [${code}]: ${error}`);
 		return { error: getErrorMessage(error) };
 	})
 	.get(
 		"*",
-		async ({ path: reqPath, request }) => {
+		async ({ path: reqPath, request }: { path: string; request: Request }) => {
 			const filePath = path.join(distPath, reqPath);
 			const file = Bun.file(filePath);
 			if (await file.exists()) {
@@ -213,7 +222,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
 		logger.warn(`Failed to close database cleanly: ${getErrorMessage(error)}`);
 	}
 
-	instance.stop();
+	await instance.stop();
 	logger.info("Server closed");
 	logger.close();
 	process.exit(0);

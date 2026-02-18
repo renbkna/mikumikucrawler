@@ -158,7 +158,7 @@ export function createPagePipeline({
 			segments.push(`${processedContent.media.length} media`);
 		}
 
-		return segments.filter(Boolean).join(" | ");
+		return segments.join(" | ");
 	};
 
 	/**
@@ -218,80 +218,88 @@ export function createPagePipeline({
 	 * no async-safe way to impose a wall-clock timeout on them from JavaScript.
 	 * If the DB is unusually slow, SQLite's own busy_timeout (set at
 	 * database initialisation) provides the low-level guard.
+	 *
+	 * Performance optimisation: db.transaction() is called once here (not inside
+	 * saveCrawlResult) so the returned transaction function is created a single
+	 * time and reused for every page save, rather than being re-wrapped on each call.
 	 */
-	const saveCrawlResult = (params: SaveResultParams): number | null => {
-		const {
-			item,
-			domain,
-			sanitizedContent,
-			contentType,
-			statusCode,
-			contentLength,
-			title,
-			description,
-			isDynamic,
-			lastModified,
-			processedContent,
-			links,
-		} = params;
-		const enhancedData = {
-			mainContent: processedContent.extractedData?.mainContent ?? "",
-			wordCount: processedContent.analysis?.wordCount ?? 0,
-			readingTime: processedContent.analysis?.readingTime ?? 0,
-			language: processedContent.analysis?.language ?? "unknown",
-			keywords: JSON.stringify(processedContent.analysis?.keywords ?? []),
-			qualityScore: processedContent.analysis?.quality?.score ?? 0,
-			structuredData: JSON.stringify(processedContent.extractedData ?? {}),
-			mediaCount: processedContent.media?.length ?? 0,
-			internalLinksCount:
-				processedContent.links?.filter((link: ExtractedLink) => link.isInternal)
-					?.length ?? 0,
-			externalLinksCount:
-				processedContent.links?.filter(
-					(link: ExtractedLink) => !link.isInternal,
-				)?.length ?? 0,
-		};
+	const _saveTransaction = db.transaction(
+		(params: SaveResultParams): number | null => {
+			const {
+				item,
+				domain,
+				sanitizedContent,
+				contentType,
+				statusCode,
+				contentLength,
+				title,
+				description,
+				isDynamic,
+				lastModified,
+				processedContent,
+				links,
+			} = params;
 
-		try {
-			const transaction = db.transaction(() => {
-				const row = insertPageQuery.get(
-					item.url,
-					domain,
-					contentType,
-					statusCode,
-					contentLength,
-					title,
-					description,
-					options.contentOnly ? null : sanitizedContent,
-					isDynamic ? 1 : 0,
-					lastModified,
-					enhancedData.mainContent,
-					enhancedData.wordCount,
-					enhancedData.readingTime,
-					enhancedData.language,
-					enhancedData.keywords,
-					enhancedData.qualityScore,
-					enhancedData.structuredData,
-					enhancedData.mediaCount,
-					enhancedData.internalLinksCount,
-					enhancedData.externalLinksCount,
-				) as { id: number } | undefined;
+			const enhancedData = {
+				mainContent: processedContent.extractedData?.mainContent ?? "",
+				wordCount: processedContent.analysis?.wordCount ?? 0,
+				readingTime: processedContent.analysis?.readingTime ?? 0,
+				language: processedContent.analysis?.language ?? "unknown",
+				keywords: JSON.stringify(processedContent.analysis?.keywords ?? []),
+				qualityScore: processedContent.analysis?.quality?.score ?? 0,
+				structuredData: JSON.stringify(processedContent.extractedData ?? {}),
+				mediaCount: processedContent.media?.length ?? 0,
+				internalLinksCount:
+					processedContent.links?.filter(
+						(link: ExtractedLink) => link.isInternal,
+					)?.length ?? 0,
+				externalLinksCount:
+					processedContent.links?.filter(
+						(link: ExtractedLink) => !link.isInternal,
+					)?.length ?? 0,
+			};
 
-				const pageId = row?.id ?? null;
+			const row = insertPageQuery.get(
+				item.url,
+				domain,
+				contentType,
+				statusCode,
+				contentLength,
+				title,
+				description,
+				options.contentOnly ? null : sanitizedContent,
+				isDynamic ? 1 : 0,
+				lastModified,
+				enhancedData.mainContent,
+				enhancedData.wordCount,
+				enhancedData.readingTime,
+				enhancedData.language,
+				enhancedData.keywords,
+				enhancedData.qualityScore,
+				enhancedData.structuredData,
+				enhancedData.mediaCount,
+				enhancedData.internalLinksCount,
+				enhancedData.externalLinksCount,
+			) as { id: number } | undefined;
 
-				if (pageId && links.length > 0) {
-					for (const link of links) {
-						insertLinkQuery.run(pageId, link.url, link.text ?? "");
-					}
+			const pageId = row?.id ?? null;
+
+			if (pageId && links.length > 0) {
+				for (const link of links) {
+					insertLinkQuery.run(pageId, link.url, link.text ?? "");
 				}
+			}
 
-				return pageId;
-			});
+			return pageId;
+		},
+	);
 
-			return transaction();
+	const saveCrawlResult = (params: SaveResultParams): number | null => {
+		try {
+			return _saveTransaction(params);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			logger.error(`Transaction failed for ${item.url}: ${message}`);
+			logger.error(`Transaction failed for ${params.item.url}: ${message}`);
 			return null;
 		}
 	};
@@ -396,7 +404,8 @@ export function createPagePipeline({
 		state.markVisited(item.url);
 		state.recordSuccess(contentLength);
 
-		const domain = new URL(item.url).hostname;
+		// domain is pre-parsed at enqueue time — no need to re-parse the URL here.
+		const domain = item.domain;
 
 		const sanitizedContent = contentType.includes("text/html")
 			? sanitizeHtml(content, {
@@ -430,7 +439,7 @@ export function createPagePipeline({
 		// Prepare links for persistence/queueing
 		let links: ExtractedLink[] = [];
 		if (contentType.includes("text/html") && processedContent.links?.length) {
-			const baseHost = new URL(item.url).hostname;
+			// `domain` is already set above from item.domain — reuse it directly.
 			links = processedContent.links
 				.filter((link) => {
 					// Skip non-HTTP protocols
@@ -449,7 +458,7 @@ export function createPagePipeline({
 				.map((link) => ({
 					url: link.url,
 					text: link.text ?? "",
-					isInternal: link.isInternal ?? link.domain === baseHost,
+					isInternal: link.isInternal ?? link.domain === domain,
 				}));
 
 			state.addLinks(processedContent.links.length);
@@ -571,6 +580,8 @@ async function processLinkBatch({
 	const CONCURRENCY = BATCH_CONSTANTS.LINK_BATCH_CONCURRENCY;
 
 	const processSingleLink = async (link: ExtractedLink): Promise<void> => {
+		// Bail out immediately if the session was stopped while batch is running
+		if (!state.isActive) return;
 		try {
 			const linkUrl = new URL(link.url);
 			const linkDomain = linkUrl.hostname;

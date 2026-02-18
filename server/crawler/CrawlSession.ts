@@ -7,7 +7,7 @@ import type {
 	SanitizedCrawlOptions,
 } from "../types.js";
 import { getErrorMessage, getRobotsRules } from "../utils/helpers.js";
-import { coalesceCrawl } from "../utils/requestCoalescer.js";
+import { RequestCoalescer } from "../utils/requestCoalescer.js";
 import { DynamicRenderer } from "./dynamicRenderer.js";
 import { CrawlQueue } from "./modules/crawlQueue.js";
 import { CrawlState } from "./modules/crawlState.js";
@@ -23,7 +23,21 @@ export class CrawlSession {
 	private readonly dynamicRenderer: DynamicRenderer;
 	private readonly targetDomain: string;
 	private readonly queue: CrawlQueue;
-	private readonly pipeline: (item: QueueItem) => Promise<void>;
+	/** Per-session coalescer — prevents duplicate in-flight fetches within this session only.
+	 *  Scoped to each CrawlSession so two users crawling the same URL never share results. */
+	private readonly coalescer: RequestCoalescer;
+	/**
+	 * Assigned after the queue is created (circular dep: pipeline needs queue,
+	 * queue's processItem closure captures pipeline lazily via `this`).
+	 * The `!` assertion is safe because start() can only be called after the
+	 * constructor completes.
+	 */
+	private pipeline!: (item: QueueItem) => Promise<void>;
+	/**
+	 * Memoises the in-progress shutdown promise so concurrent callers to stop()
+	 * all await the same teardown sequence instead of racing to close resources.
+	 */
+	private stopPromise: Promise<void> | null = null;
 
 	constructor(
 		socket: CrawlerSocket,
@@ -51,6 +65,7 @@ export class CrawlSession {
 
 		this.state = new CrawlState(this.options);
 		this.dynamicRenderer = new DynamicRenderer(this.options, this.logger);
+		this.coalescer = new RequestCoalescer();
 
 		this.targetDomain = "";
 		try {
@@ -86,9 +101,11 @@ export class CrawlSession {
 			targetDomain: this.targetDomain,
 		});
 
-		// Use request coalescing to prevent duplicate simultaneous crawls
+		// Use per-session request coalescing to prevent duplicate simultaneous
+		// fetches of the same URL within this session. Unlike a global coalescer,
+		// this does NOT share results across different user sessions.
 		this.queue.processItem = async (item: QueueItem) => {
-			await coalesceCrawl(item.url, () => this.pipeline(item));
+			await this.coalescer.coalesce(item.url, () => this.pipeline(item));
 		};
 	}
 
@@ -170,14 +187,30 @@ export class CrawlSession {
 
 	/**
 	 * Stops the crawler, clearing the queue and closing the renderer.
-	 * Idempotent.
+	 * Idempotent and race-safe: concurrent callers all await the same shutdown
+	 * promise so resources (e.g. dynamicRenderer) are never closed twice.
 	 */
-	async stop(): Promise<void> {
-		if (!this.state.isActive) {
-			return;
+	stop(): Promise<void> {
+		// Already shutting down or fully stopped — return the cached promise.
+		if (this.stopPromise) {
+			return this.stopPromise;
 		}
 
+		// Never started, or already stopped without a pending promise.
+		if (!this.state.isActive) {
+			return Promise.resolve();
+		}
+
+		// Flip the active flag synchronously so any concurrent caller that
+		// reaches here before the microtask queue drains will see isActive===false
+		// and hit the branch above on their next tick.
 		this.state.stop();
+		this.stopPromise = this._teardown();
+		return this.stopPromise;
+	}
+
+	/** Performs the actual async teardown.  Only ever called once via stop(). */
+	private async _teardown(): Promise<void> {
 		this.queue.clearRetries();
 		await this.queue.awaitIdle();
 		await this.dynamicRenderer.close();

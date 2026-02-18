@@ -26,11 +26,7 @@ describe("getRobotsRules", () => {
 			Promise.reject(new Error("network down")),
 		) as unknown as typeof fetch;
 
-		const robots = await getRobotsRules(
-			"fallback.example",
-			db,
-			logger,
-		);
+		const robots = await getRobotsRules("fallback.example", db, logger);
 
 		expect(robots).toBeTruthy();
 		expect(
@@ -46,12 +42,9 @@ describe("getRobotsRules", () => {
 			Promise.reject(new Error("network down")),
 		) as unknown as typeof fetch;
 
-		const robots = await getRobotsRules(
-			"strict.example",
-			db,
-			logger,
-			{ allowOnFailure: false },
-		);
+		const robots = await getRobotsRules("strict.example", db, logger, {
+			allowOnFailure: false,
+		});
 
 		expect(robots).toBeNull();
 	});

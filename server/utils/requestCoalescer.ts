@@ -1,8 +1,13 @@
 /**
- * Request coalescing - prevents duplicate simultaneous crawls.
- * If multiple users request the same URL, they all wait for one crawl result.
+ * Request coalescing - prevents duplicate simultaneous crawls of the same URL
+ * within a single session.
+ *
+ * Instantiate one RequestCoalescer per CrawlSession so that two different users
+ * crawling the same URL do NOT share (and potentially corrupt) each other's results.
+ * The global singleton below exists only for backwards-compatibility and should not
+ * be used for new code.
  */
-class RequestCoalescer {
+export class RequestCoalescer {
 	private pending = new Map<string, Promise<unknown>>();
 
 	/**

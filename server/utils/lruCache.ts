@@ -102,25 +102,23 @@ export class LRUCacheWithTTL<K, V> {
 		this.cache.set(key, { value, timestamp: Date.now() });
 	}
 
+	/**
+	 * Returns the number of entries in the cache (including any not-yet-evicted
+	 * expired entries). Expired entries are removed lazily on `get`/`has` calls,
+	 * so the count may be slightly over-reported — acceptable for monitoring purposes.
+	 * Avoiding a full O(n) scan here keeps `size` O(1) and safe to call frequently.
+	 */
 	get size(): number {
-		// Clean up expired entries before returning size
-		const now = Date.now();
-		for (const [key, entry] of this.cache) {
-			if (now - entry.timestamp > this.ttlMs) {
-				this.cache.delete(key);
-			}
-		}
 		return this.cache.size;
 	}
 
+	/**
+	 * Returns an iterator over the keys currently in the map.
+	 * May include keys for entries that have expired but not yet been evicted.
+	 * For accurate results, callers should use `get()` (which checks TTL) rather
+	 * than iterating keys and accessing values directly.
+	 */
 	keys(): IterableIterator<K> {
-		// Clean up expired entries before returning keys
-		const now = Date.now();
-		for (const [key, entry] of this.cache) {
-			if (now - entry.timestamp > this.ttlMs) {
-				this.cache.delete(key);
-			}
-		}
 		return this.cache.keys();
 	}
 
