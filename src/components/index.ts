@@ -1,5 +1,7 @@
 export { ActionButtons } from "./ActionButtons";
 export { ConfigurationView } from "./ConfigurationView";
+export { ResumeSessionsPanel } from "./ResumeSessionsPanel";
+export type { SessionSummary } from "./ResumeSessionsPanel";
 export { CrawledPagesSection } from "./CrawledPagesSection";
 export { CrawlerForm } from "./CrawlerForm";
 export { ExportDialog } from "./ExportDialog";

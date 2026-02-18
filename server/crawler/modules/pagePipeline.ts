@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import sanitizeHtml from "sanitize-html";
 import { config } from "../../config/env.js";
 import type { Logger } from "../../config/logging.js";
-import { BATCH_CONSTANTS, RETRY_CONSTANTS } from "../../constants.js";
+import { BATCH_CONSTANTS, RETRY_CONSTANTS, SOFT_404_CONSTANTS } from "../../constants.js";
 import { ContentProcessor } from "../../processors/ContentProcessor.js";
 import type {
 	CrawlerSocket,
@@ -12,11 +12,98 @@ import type {
 	QueueItem,
 	SanitizedCrawlOptions,
 } from "../../types.js";
-import { getErrorMessage, getRobotsRules } from "../../utils/helpers.js";
+import { getErrorMessage, getRobotsRules, normalizeUrl } from "../../utils/helpers.js";
+import { updateSessionStats } from "../../utils/sessionPersistence.js";
 import type { DynamicRenderer } from "../dynamicRenderer.js";
 import type { CrawlQueue } from "./crawlQueue.js";
 import type { CrawlState } from "./crawlState.js";
 import { fetchContent } from "./fetcher.js";
+
+// ─── Robots directive helpers ─────────────────────────────────────────────────
+
+interface RobotsDirectives {
+	noindex: boolean;
+	nofollow: boolean;
+}
+
+/**
+ * Parses a robots directive string (from meta tag or X-Robots-Tag header) into
+ * a structured set of flags.
+ *
+ * Handles comma-separated values and the shorthand `none` (= noindex + nofollow).
+ * Agent-specific X-Robots-Tag directives (e.g. "googlebot: noindex") are ignored —
+ * we only honour universal directives that apply to all bots.
+ */
+function parseRobotsDirectives(value: string | null | undefined): RobotsDirectives {
+	const result: RobotsDirectives = { noindex: false, nofollow: false };
+	if (!value) return result;
+
+	// Filter out agent-specific segments (contain a colon before the directive)
+	const universal = value
+		.split(",")
+		.map((s) => s.trim())
+		.filter((s) => !s.includes(":"))
+		.join(",")
+		.toLowerCase();
+
+	result.noindex = /\bnoindex\b|\bnone\b/.test(universal);
+	result.nofollow = /\bnofollow\b|\bnone\b/.test(universal);
+	return result;
+}
+
+/**
+ * Merges robots directives from the meta tag and the X-Robots-Tag HTTP header,
+ * applying a logical OR so either source can restrict crawl behaviour.
+ */
+function mergeRobotsDirectives(
+	metaRobots: string | null | undefined,
+	xRobotsTag: string | null | undefined,
+): RobotsDirectives {
+	const fromMeta = parseRobotsDirectives(metaRobots);
+	const fromHeader = parseRobotsDirectives(xRobotsTag);
+	return {
+		noindex: fromMeta.noindex || fromHeader.noindex,
+		nofollow: fromMeta.nofollow || fromHeader.nofollow,
+	};
+}
+
+// ─── Soft 404 detection ───────────────────────────────────────────────────────
+
+/**
+ * Heuristically detects pages that return HTTP 200 but represent an error page
+ * ("soft 404"). Checks three signals:
+ * 1. Tiny content — server returned almost nothing (< TINY_CONTENT_BYTES).
+ * 2. Error title — page title contains known not-found phrases.
+ * 3. Short + error keywords — body under SHORT_CONTENT_BYTES and contains keywords.
+ */
+function isSoft404(
+	title: string,
+	mainContent: string,
+	contentLength: number,
+): boolean {
+	// Signal 1 — unconditionally tiny response
+	if (contentLength > 0 && contentLength < SOFT_404_CONSTANTS.TINY_CONTENT_BYTES) {
+		return true;
+	}
+
+	const titleLower = title.toLowerCase();
+	const keywords = SOFT_404_CONSTANTS.KEYWORDS;
+
+	// Signal 2 — error phrase in title
+	if (keywords.some((kw) => titleLower.includes(kw))) {
+		return true;
+	}
+
+	// Signal 3 — short body containing error keywords
+	if (contentLength < SOFT_404_CONSTANTS.SHORT_CONTENT_BYTES) {
+		const snippet = mainContent.toLowerCase().slice(0, 1000);
+		if (keywords.some((kw) => snippet.includes(kw))) {
+			return true;
+		}
+	}
+
+	return false;
+}
 
 const MEDIA_CONTENT_REGEX = /image|video|audio|application\/(pdf|zip)/i;
 
@@ -29,6 +116,8 @@ interface PagePipelineParams {
 	dynamicRenderer: DynamicRenderer;
 	queue: CrawlQueue;
 	targetDomain: string;
+	/** Session ID for persisting stats snapshots (resume support). */
+	sessionId: string;
 }
 
 interface PageRecord {
@@ -54,6 +143,7 @@ export function createPagePipeline({
 	dynamicRenderer,
 	queue,
 	targetDomain,
+	sessionId,
 }: PagePipelineParams): (item: QueueItem) => Promise<void> {
 	const contentProcessor = new ContentProcessor(logger);
 	const STATS_THROTTLE_MS = 250;
@@ -63,10 +153,10 @@ export function createPagePipeline({
 	// for all page saves. bun:sqlite statements are synchronous and safe to cache.
 	const insertPageQuery = db.prepare(
 		`INSERT INTO pages
-		(url, domain, content_type, status_code, data_length, title, description, content, is_dynamic, last_modified,
+		(url, domain, content_type, status_code, data_length, title, description, content, is_dynamic, last_modified, etag,
 		 main_content, word_count, reading_time, language, keywords, quality_score, structured_data,
 		 media_count, internal_links_count, external_links_count)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(url) DO UPDATE SET
 		  domain = excluded.domain,
 		  content_type = excluded.content_type,
@@ -77,6 +167,7 @@ export function createPagePipeline({
 		  content = excluded.content,
 		  is_dynamic = excluded.is_dynamic,
 		  last_modified = excluded.last_modified,
+		  etag = excluded.etag,
 		  main_content = excluded.main_content,
 		  word_count = excluded.word_count,
 		  reading_time = excluded.reading_time,
@@ -176,8 +267,9 @@ export function createPagePipeline({
 		}
 		lastStatsEmitTime = now;
 
+		const currentStats = state.stats;
 		socket.emit("stats", {
-			...state.stats,
+			...currentStats,
 			log,
 			lastProcessed: {
 				url: item.url,
@@ -188,6 +280,9 @@ export function createPagePipeline({
 				linksCount: processedContent.links?.length ?? 0,
 			},
 		});
+
+		// Persist stats snapshot to DB so interrupted sessions show real progress
+		updateSessionStats(db, sessionId, currentStats);
 	};
 
 	/**
@@ -208,6 +303,7 @@ export function createPagePipeline({
 		description: string;
 		isDynamic: boolean;
 		lastModified: string | null;
+		etag: string | null;
 		processedContent: ProcessedContent;
 		links: ExtractedLink[];
 	}
@@ -236,6 +332,7 @@ export function createPagePipeline({
 				description,
 				isDynamic,
 				lastModified,
+				etag: pageEtag,
 				processedContent,
 				links,
 			} = params;
@@ -270,6 +367,7 @@ export function createPagePipeline({
 				options.contentOnly ? null : sanitizedContent,
 				isDynamic ? 1 : 0,
 				lastModified,
+				pageEtag,
 				enhancedData.mainContent,
 				enhancedData.wordCount,
 				enhancedData.readingTime,
@@ -321,7 +419,8 @@ export function createPagePipeline({
 		}
 
 		const filteredLinks = links.filter(
-			(link: ExtractedLink) => !state.hasVisited(link.url),
+			(link: ExtractedLink) =>
+				!state.hasVisited(link.url) && !link.nofollow,
 		);
 		if (!filteredLinks.length) {
 			return;
@@ -366,11 +465,20 @@ export function createPagePipeline({
 			return;
 		}
 
+		// ── Per-domain budget check ────────────────────────────────────────────
+		if (state.isDomainBudgetExceeded(item.domain)) {
+			logger.debug(`[Budget] Domain budget exceeded for ${item.domain}, skipping ${item.url}`);
+			state.markVisited(item.url);
+			state.recordSkip();
+			return;
+		}
+
 		logger.info(`Fetching: ${item.url}`);
 
+		const fetchStart = Date.now();
 		let fetchResult: Awaited<ReturnType<typeof fetchContent>> | undefined;
 		try {
-			fetchResult = await fetchContent({ item, dynamicRenderer, logger });
+			fetchResult = await fetchContent({ item, dynamicRenderer, logger, db });
 		} catch (error) {
 			state.recordFailure();
 			const message = error instanceof Error ? error.message : String(error);
@@ -394,6 +502,60 @@ export function createPagePipeline({
 			return;
 		}
 
+		const fetchMs = Date.now() - fetchStart;
+
+		// ── 304 Not Modified ──────────────────────────────────────────────────
+		if (fetchResult.unchanged) {
+			state.markVisited(item.url);
+			state.recordSuccess(0);
+			// Touch crawled_at so we know this page was still alive during this crawl
+			db.query("UPDATE pages SET crawled_at = CURRENT_TIMESTAMP WHERE url = ?").run(item.url);
+			const unchangedLog = `[Crawler] Unchanged: ${item.url} (304)`;
+			logger.info(unchangedLog);
+			socket.emit("stats", { ...state.stats, log: unchangedLog });
+
+			// Seed queue from cached links so depth traversal continues unchanged
+			if (item.depth < options.crawlDepth) {
+				const cachedLinks = db
+					.query(
+						"SELECT target_url FROM links l JOIN pages p ON l.source_id = p.id WHERE p.url = ?",
+					)
+					.all(item.url) as { target_url: string }[];
+
+				for (const { target_url } of cachedLinks) {
+					if (!state.hasVisited(target_url)) {
+						queue.enqueue({
+							url: target_url,
+							depth: item.depth + 1,
+							retries: 0,
+							parentUrl: item.url,
+						});
+					}
+				}
+			}
+			return;
+		}
+
+		// ── 429 / 503 Rate-limited ────────────────────────────────────────────
+		if (fetchResult.rateLimited) {
+			// Apply adaptive backoff at the domain level before scheduling retry
+			state.adaptDomainDelay(
+				item.domain,
+				fetchMs,
+				fetchResult.statusCode,
+				fetchResult.retryAfterMs,
+			);
+			const retryDelay = fetchResult.retryAfterMs ?? RETRY_CONSTANTS.MAX_DELAY;
+			const rateLimitLog = `[Crawler] Rate-limited: ${item.url} — retrying in ${Math.round(retryDelay / 1000)}s`;
+			logger.warn(rateLimitLog);
+			socket.emit("stats", { ...state.stats, log: rateLimitLog });
+
+			if (item.retries < options.retryLimit && state.isActive) {
+				queue.scheduleRetry({ ...item, retries: item.retries + 1 }, retryDelay);
+			}
+			return;
+		}
+
 		const {
 			content,
 			statusCode,
@@ -402,8 +564,13 @@ export function createPagePipeline({
 			title,
 			description,
 			lastModified,
+			etag,
+			xRobotsTag,
 			isDynamic,
 		} = fetchResult;
+
+		// ── Adaptive throttle (response-time feedback) ────────────────────────
+		state.adaptDomainDelay(item.domain, fetchMs, statusCode);
 
 		state.markVisited(item.url);
 		state.recordSuccess(contentLength);
@@ -463,6 +630,7 @@ export function createPagePipeline({
 					url: link.url,
 					text: link.text ?? "",
 					isInternal: link.isInternal ?? link.domain === domain,
+					nofollow: link.nofollow,
 				}));
 
 			state.addLinks(processedContent.links.length);
@@ -474,6 +642,56 @@ export function createPagePipeline({
 			MEDIA_CONTENT_REGEX.test(contentType)
 		) {
 			state.addMedia(1);
+		}
+
+		// ── Robots directive enforcement ──────────────────────────────────────
+		// Merge meta robots tag and X-Robots-Tag HTTP header (logical OR).
+		const robotsDirectives = mergeRobotsDirectives(
+			processedContent.metadata?.robots,
+			xRobotsTag,
+		);
+
+		if (robotsDirectives.noindex) {
+			// Page explicitly says "don't index me" — skip the DB write but still
+			// log it so the operator can see it happening.
+			const noindexLog = `[Robots] noindex: ${item.url} — skipping storage`;
+			logger.info(noindexLog);
+			socket.emit("stats", { ...state.stats, log: noindexLog });
+			state.recordSkip();
+			// Still enqueue links unless nofollow is also set
+			if (!robotsDirectives.nofollow) {
+				await enqueueLinksWithPolicies(links, item, domain);
+			}
+			return;
+		}
+
+		// ── Soft 404 detection ────────────────────────────────────────────────
+		if (contentType.includes("text/html")) {
+			const mainContent = processedContent.extractedData?.mainContent ?? "";
+			if (isSoft404(title, mainContent, contentLength)) {
+				const soft404Log = `[Crawler] Soft 404: ${item.url} — skipping storage`;
+				logger.info(soft404Log);
+				socket.emit("stats", { ...state.stats, log: soft404Log });
+				state.recordSkip();
+				return;
+			}
+		}
+
+		// ── Canonical link deduplication ──────────────────────────────────────
+		// If this page declares a canonical URL that differs from the URL we
+		// fetched, mark the canonical as visited too so we don't crawl the same
+		// content under both the variant URL and the canonical URL.
+		const rawCanonical = processedContent.metadata?.canonical;
+		if (rawCanonical && rawCanonical !== item.url) {
+			const normalised = normalizeUrl(rawCanonical);
+			if (!("error" in normalised) && normalised.url && normalised.url !== item.url) {
+				if (!state.hasVisited(normalised.url)) {
+					logger.debug(
+						`[Canonical] Marking alias: ${item.url} → ${normalised.url}`,
+					);
+					state.markVisited(normalised.url);
+				}
+			}
 		}
 
 		// ATOMIC SAVE: Page + Links
@@ -488,6 +706,7 @@ export function createPagePipeline({
 			description,
 			isDynamic,
 			lastModified,
+			etag,
 			processedContent,
 			links,
 		});
@@ -503,6 +722,9 @@ export function createPagePipeline({
 		// page, which looks identical to a hang.
 		logger.info(logMessage);
 		emitStatsUpdate(logMessage, processedContent, item);
+
+		// Increment per-domain counter after a successful save
+		state.recordDomainPage(domain);
 
 		emitPageToClient({
 			id: pageId,
@@ -550,7 +772,12 @@ export function createPagePipeline({
 			},
 		});
 
-		await enqueueLinksWithPolicies(links, item, domain);
+		// nofollow: store the page content but don't traverse its outbound links
+		if (!robotsDirectives.nofollow) {
+			await enqueueLinksWithPolicies(links, item, domain);
+		} else {
+			logger.debug(`[Robots] nofollow: ${item.url} — not enqueueing links`);
+		}
 	};
 }
 

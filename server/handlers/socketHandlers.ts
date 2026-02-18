@@ -18,7 +18,7 @@ import type {
 import { getErrorMessage } from "../utils/helpers.js";
 import { assertPublicHostname } from "../utils/validation.js";
 
-const ALLOWED_CRAWL_METHODS = new Set(["links", "content", "media", "full"]);
+const ALLOWED_CRAWL_METHODS = new Set(["links", "media", "full"]);
 const ALLOWED_EXPORT_FORMATS = new Set(["json", "csv"]);
 
 /** Rate limiter for WebSocket messages per socket */
@@ -113,13 +113,19 @@ export async function sanitizeOptions(
 
 	const crawlDepth = clampNumber(rawOptions.crawlDepth, {
 		min: 1,
-		max: 5,
+		max: 10,
 		fallback: 2,
 	});
 	const maxPages = clampNumber(rawOptions.maxPages, {
 		min: 1,
 		max: 200,
 		fallback: 50,
+	});
+	// 0 means unlimited; positive values cap pages per domain
+	const maxPagesPerDomain = clampNumber(rawOptions.maxPagesPerDomain, {
+		min: 0,
+		max: 200,
+		fallback: 0,
 	});
 	const crawlDelay = clampNumber(rawOptions.crawlDelay, {
 		min: 200,
@@ -149,6 +155,7 @@ export async function sanitizeOptions(
 		target: parsedUrl.toString(),
 		crawlDepth,
 		maxPages,
+		maxPagesPerDomain,
 		crawlDelay,
 		crawlMethod,
 		maxConcurrentRequests,
@@ -281,6 +288,32 @@ export function createWebSocketHandlers(
 					await session.stop();
 					activeCrawls.delete(socketWrapper.id);
 				}
+				break;
+			}
+
+			case "resumeSession": {
+				const resumeData = message.data as { sessionId?: unknown };
+				const sessionId = resumeData?.sessionId;
+				if (!sessionId || typeof sessionId !== "string") {
+					socketWrapper.emit("crawlError", {
+						message: "Invalid session ID for resume",
+					});
+					break;
+				}
+				const existing = activeCrawls.get(socketWrapper.id);
+				if (existing) {
+					await existing.stop();
+					activeCrawls.delete(socketWrapper.id);
+				}
+				const resumed = CrawlSession.resume(sessionId, socketWrapper, db, logger);
+				if (!resumed) {
+					socketWrapper.emit("crawlError", {
+						message: `Session ${sessionId} not found or not resumable`,
+					});
+					break;
+				}
+				activeCrawls.set(socketWrapper.id, resumed);
+				resumed.start();
 				break;
 			}
 
@@ -526,7 +559,9 @@ export function createWebSocketHandlers(
 
 		const session = activeCrawls.get(id);
 		if (session) {
-			await session.stop();
+			// interrupt() marks the session as 'interrupted' so it can be resumed later,
+			// rather than 'completed' which stop() would set.
+			session.interrupt();
 			activeCrawls.delete(id);
 		}
 		logger.info(`Client disconnected: ${id}`);

@@ -1,3 +1,4 @@
+import type { Database } from "bun:sqlite";
 import type { Logger } from "../../config/logging.js";
 import { CRAWL_QUEUE_CONSTANTS } from "../../constants.js";
 import type {
@@ -6,6 +7,10 @@ import type {
 	SanitizedCrawlOptions,
 } from "../../types.js";
 import { getErrorMessage } from "../../utils/helpers.js";
+import {
+	removeQueueItem,
+	saveQueueItemBatch,
+} from "../../utils/sessionPersistence.js";
 import type { CrawlState } from "./crawlState.js";
 
 /**
@@ -21,6 +26,10 @@ interface CrawlQueueOptions {
 	socket: CrawlerSocket;
 	processItem: (item: QueueItem) => Promise<void>;
 	onIdle?: () => Promise<void>;
+	/** Optional session ID for persisting queue state to DB for resume support */
+	sessionId?: string;
+	/** Database instance required when sessionId is provided */
+	db?: Database;
 }
 
 /** Manages the crawl queue with concurrency control and domain-specific delays. */
@@ -42,6 +51,13 @@ export class CrawlQueue {
 	/** Last time domain entries were cleaned up (for lazy cleanup every 5s) */
 	private lastDomainCleanup = 0;
 	private loopPromise: Promise<void> | null;
+	/** Optional session ID used to persist queue items to DB for resume support */
+	private readonly sessionId: string | undefined;
+	/** DB reference for queue persistence (only set when sessionId is provided) */
+	private readonly db: Database | undefined;
+	/** Buffer of items awaiting batch-persistence to avoid per-item DB writes */
+	private readonly persistBuffer: QueueItem[] = [];
+	private static readonly PERSIST_BATCH_SIZE = 50;
 
 	constructor({
 		options,
@@ -50,6 +66,8 @@ export class CrawlQueue {
 		socket,
 		processItem,
 		onIdle = async () => {},
+		sessionId,
+		db,
 	}: CrawlQueueOptions) {
 		this.options = options;
 		this.state = state;
@@ -57,6 +75,8 @@ export class CrawlQueue {
 		this.socket = socket;
 		this.processItem = processItem;
 		this.onIdle = onIdle;
+		this.sessionId = sessionId;
+		this.db = db;
 
 		this.queue = [];
 		this.activeItems = new Set();
@@ -86,8 +106,17 @@ export class CrawlQueue {
 		// Pre-parse domain at enqueue time to avoid expensive URL parsing in hot loop
 		const domain = new URL(item.url).hostname;
 
+		const queueItem: QueueItem = { ...item, domain };
 		this.queuedUrls.add(item.url);
-		this.queue.push({ ...item, domain });
+		this.queue.push(queueItem);
+
+		// Persist to DB in batches so interrupted crawls can be resumed
+		if (this.sessionId && this.db) {
+			this.persistBuffer.push(queueItem);
+			if (this.persistBuffer.length >= CrawlQueue.PERSIST_BATCH_SIZE) {
+				saveQueueItemBatch(this.db, this.sessionId, this.persistBuffer.splice(0));
+			}
+		}
 	}
 
 	/**
@@ -113,6 +142,21 @@ export class CrawlQueue {
 			clearTimeout(timer);
 		}
 		this.retryTimers.clear();
+	}
+
+	/**
+	 * Flushes any items buffered for DB persistence that have not yet reached
+	 * the PERSIST_BATCH_SIZE threshold.
+	 *
+	 * Must be called before marking a session as interrupted so that items
+	 * enqueued since the last batch flush are saved to the DB and will be
+	 * available when the session is resumed. Without this, up to
+	 * PERSIST_BATCH_SIZE - 1 pending URLs would be silently dropped on disconnect.
+	 */
+	flushPersistBuffer(): void {
+		if (this.sessionId && this.db && this.persistBuffer.length > 0) {
+			saveQueueItemBatch(this.db, this.sessionId, this.persistBuffer.splice(0));
+		}
 	}
 
 	/**
@@ -243,6 +287,11 @@ export class CrawlQueue {
 							.finally(() => {
 								this.activeItems.delete(item.url);
 								processingPromises.delete(p);
+								// Remove processed item from DB queue so it won't be
+								// re-enqueued if the session is resumed after an interruption.
+								if (this.sessionId && this.db) {
+									removeQueueItem(this.db, this.sessionId, item.url);
+								}
 							});
 						return p;
 					})();

@@ -1,4 +1,4 @@
-import { Coffee, Database } from "lucide-react";
+import { Coffee, Database, TriangleAlert } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useFocusTrap } from "../hooks";
 import type { CrawlOptions } from "../types";
@@ -37,6 +37,12 @@ export function ConfigurationView({
 	}, [isOpen]);
 
 	if (!isOpen) return null;
+
+	const crawlMethodDesc = {
+		links: "Follows internal HTML links only — fastest and most focused",
+		media: "Follows internal links and extracts images, videos, and audio files",
+		full: "Seeds from sitemap.xml, follows all links (cross-domain), and extracts media",
+	}[options.crawlMethod];
 
 	return (
 		<dialog
@@ -77,6 +83,7 @@ export function ConfigurationView({
 				</div>
 
 				<div className="space-y-6">
+					{/* ── Performance Settings ─────────────────────────────── */}
 					<div className="p-5 border-2 border-miku-teal/10 rounded-2xl bg-miku-teal/5">
 						<h3 className="flex items-center mb-4 text-lg font-bold text-miku-teal">
 							<Coffee className="w-5 h-5 mr-2" />
@@ -84,66 +91,229 @@ export function ConfigurationView({
 							<SparkleIcon className="text-miku-teal ml-2" size={14} />
 						</h3>
 
-						<div className="grid grid-cols-2 gap-4">
+						<div className="space-y-4">
+							{/* Crawl Method — full-width selector */}
 							<div>
 								<label
-									htmlFor="config-max-concurrent"
+									htmlFor="config-crawl-method"
 									className="block mb-2 text-sm font-bold text-miku-text/70"
 								>
-									Max Concurrent Requests
+									Crawl Method
+								</label>
+								<select
+									id="config-crawl-method"
+									value={options.crawlMethod}
+									onChange={(e) =>
+										onOptionsChange({
+											...options,
+											crawlMethod: e.target.value as CrawlOptions["crawlMethod"],
+										})
+									}
+									className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
+								>
+									<option value="links">Links — follow internal links only</option>
+									<option value="media">Media — links + extract media files</option>
+									<option value="full">Full — sitemap seed + all links + media</option>
+								</select>
+								<p className="mt-2 text-xs text-miku-text/50 font-medium">
+									{crawlMethodDesc}
+								</p>
+							</div>
+
+							{/* Crawl Depth — full-width with deep-crawl warning */}
+							<div>
+								<label
+									htmlFor="config-crawl-depth"
+									className="block mb-2 text-sm font-bold text-miku-text/70"
+								>
+									Crawl Depth
 								</label>
 								<input
-									id="config-max-concurrent"
+									id="config-crawl-depth"
 									type="number"
-									value={options.maxConcurrentRequests}
+									value={options.crawlDepth}
 									onChange={(e) => {
 										const value = Math.min(
 											10,
 											Math.max(1, Number(e.target.value) || 1),
 										);
-										onOptionsChange({
-											...options,
-											maxConcurrentRequests: value,
-										});
+										onOptionsChange({ ...options, crawlDepth: value });
 									}}
 									className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
 									min="1"
 									max="10"
 								/>
 								<p className="mt-2 text-xs text-miku-text/50 font-medium">
-									Higher values crawl faster but may overload servers
+									How many link-hops deep to crawl from the start URL (1–10)
+								</p>
+								{options.crawlDepth > 5 && (
+									<p className="mt-1.5 flex items-center gap-1.5 text-xs font-bold text-amber-600">
+										<TriangleAlert className="w-3.5 h-3.5 shrink-0" />
+										Deep crawls may take a while ✨
+									</p>
+								)}
+							</div>
+
+							{/* Max Pages + Per-Domain cap side-by-side */}
+							<div className="grid grid-cols-2 gap-4">
+								<div>
+									<label
+										htmlFor="config-max-pages"
+										className="block mb-2 text-sm font-bold text-miku-text/70"
+									>
+										Max Pages (global)
+									</label>
+									<input
+										id="config-max-pages"
+										type="number"
+										value={options.maxPages}
+										onChange={(e) => {
+											const value = Math.min(
+												200,
+												Math.max(1, Number(e.target.value) || 1),
+											);
+											onOptionsChange({ ...options, maxPages: value });
+										}}
+										className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
+										min="1"
+										max="200"
+									/>
+									<p className="mt-2 text-xs text-miku-text/50 font-medium">
+										Total pages to crawl across all domains
+									</p>
+								</div>
+
+								<div>
+									<label
+										htmlFor="config-max-pages-domain"
+										className="block mb-2 text-sm font-bold text-miku-text/70"
+									>
+										Per-Domain Limit
+									</label>
+									<input
+										id="config-max-pages-domain"
+										type="number"
+										value={options.maxPagesPerDomain}
+										onChange={(e) => {
+											const value = Math.min(
+												200,
+												Math.max(0, Number(e.target.value) || 0),
+											);
+											onOptionsChange({
+												...options,
+												maxPagesPerDomain: value,
+											});
+										}}
+										className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
+										min="0"
+										max="200"
+									/>
+									<p className="mt-2 text-xs text-miku-text/50 font-medium">
+										Pages per domain (0 = unlimited)
+									</p>
+								</div>
+							</div>
+
+							{/* Crawl Delay — full-width slider */}
+							<div>
+								<label
+									htmlFor="config-crawl-delay"
+									className="block mb-2 text-sm font-bold text-miku-text/70"
+								>
+									Crawl Delay
+									<span className="ml-2 text-miku-teal font-black">
+										{options.crawlDelay >= 1000
+											? `${options.crawlDelay / 1000}s`
+											: `${options.crawlDelay}ms`}
+									</span>
+								</label>
+								<input
+									id="config-crawl-delay"
+									type="range"
+									value={options.crawlDelay}
+									min="250"
+									max="10000"
+									step="250"
+									onChange={(e) =>
+										onOptionsChange({
+											...options,
+											crawlDelay: Number(e.target.value),
+										})
+									}
+									className="w-full h-2 bg-miku-pink/20 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-gradient-to-r [&::-webkit-slider-thumb]:from-miku-teal [&::-webkit-slider-thumb]:to-teal-400 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-md"
+								/>
+								<div className="flex justify-between mt-1 text-xs text-miku-text/40 font-medium">
+									<span>250ms (fast)</span>
+									<span>10s (polite)</span>
+								</div>
+								<p className="mt-1 text-xs text-miku-text/50 font-medium">
+									Minimum wait between requests to the same domain
 								</p>
 							</div>
 
-							<div>
-								<label
-									htmlFor="config-retry-limit"
-									className="block mb-2 text-sm font-bold text-miku-text/70"
-								>
-									Retry Limit
-								</label>
-								<input
-									id="config-retry-limit"
-									type="number"
-									value={options.retryLimit}
-									onChange={(e) => {
-										const value = Math.min(
-											5,
-											Math.max(0, Number(e.target.value) || 0),
-										);
-										onOptionsChange({ ...options, retryLimit: value });
-									}}
-									className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
-									min="0"
-									max="5"
-								/>
-								<p className="mt-2 text-xs text-miku-text/50 font-medium">
-									How many times to retry failed requests
-								</p>
+							{/* Concurrency + Retry side-by-side */}
+							<div className="grid grid-cols-2 gap-4">
+								<div>
+									<label
+										htmlFor="config-max-concurrent"
+										className="block mb-2 text-sm font-bold text-miku-text/70"
+									>
+										Max Concurrent Requests
+									</label>
+									<input
+										id="config-max-concurrent"
+										type="number"
+										value={options.maxConcurrentRequests}
+										onChange={(e) => {
+											const value = Math.min(
+												10,
+												Math.max(1, Number(e.target.value) || 1),
+											);
+											onOptionsChange({
+												...options,
+												maxConcurrentRequests: value,
+											});
+										}}
+										className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
+										min="1"
+										max="10"
+									/>
+									<p className="mt-2 text-xs text-miku-text/50 font-medium">
+										Higher values crawl faster but may overload servers
+									</p>
+								</div>
+
+								<div>
+									<label
+										htmlFor="config-retry-limit"
+										className="block mb-2 text-sm font-bold text-miku-text/70"
+									>
+										Retry Limit
+									</label>
+									<input
+										id="config-retry-limit"
+										type="number"
+										value={options.retryLimit}
+										onChange={(e) => {
+											const value = Math.min(
+												5,
+												Math.max(0, Number(e.target.value) || 0),
+											);
+											onOptionsChange({ ...options, retryLimit: value });
+										}}
+										className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
+										min="0"
+										max="5"
+									/>
+									<p className="mt-2 text-xs text-miku-text/50 font-medium">
+										How many times to retry failed requests
+									</p>
+								</div>
 							</div>
 						</div>
 					</div>
 
+					{/* ── Content & Behavior ────────────────────────────────── */}
 					<div className="p-5 border-2 border-miku-pink/10 rounded-2xl bg-miku-pink/5">
 						<h3 className="flex items-center mb-4 text-lg font-bold text-miku-pink">
 							<Database className="w-5 h-5 mr-2" />

@@ -28,7 +28,56 @@ interface NormalizeResult {
 }
 
 /**
- * Normalizes a URL by enforcing protocol, removing hash fragments, and stripping trailing slashes.
+ * Query parameters that carry no semantic page identity — they are purely for
+ * tracking, analytics, or session state and should be stripped before storing
+ * or comparing URLs so that the same page reached via different campaigns is
+ * not crawled multiple times.
+ *
+ * Sources: UTM (Google Analytics), fbclid (Facebook), gclid/msclkid (Google/
+ * Microsoft Ads), ttclid (TikTok), twclid (Twitter/X), _ga/_gid (GA cookies),
+ * and common server-side session ID parameter names.
+ */
+const STRIP_PARAMS = new Set([
+	// UTM campaign parameters
+	"utm_source",
+	"utm_medium",
+	"utm_campaign",
+	"utm_term",
+	"utm_content",
+	"utm_id",
+	// Ad-network click IDs
+	"fbclid",
+	"gclid",
+	"gbraid",
+	"wbraid",
+	"msclkid",
+	"ttclid",
+	"twclid",
+	"li_fat_id",
+	// Google Analytics client/session IDs (sometimes leaked into URLs)
+	"_ga",
+	"_gid",
+	// Common server-side session ID names
+	"sessionid",
+	"phpsessid",
+	"jsessionid",
+	"aspsessionid",
+	"sid",
+]);
+
+/**
+ * Normalizes a URL to a canonical form so that semantically identical URLs
+ * produce an identical string, preventing duplicate crawls.
+ *
+ * Transformations applied (in order):
+ * 1. Enforce protocol prefix (defaults to http://).
+ * 2. Reject non-HTTP/HTTPS protocols.
+ * 3. Lowercase the hostname (domain names are case-insensitive per RFC 3986).
+ * 4. Strip default ports (80 for http, 443 for https).
+ * 5. Remove the fragment/hash (server never sees it; irrelevant for crawling).
+ * 6. Strip known tracking / session parameters (utm_*, fbclid, sessionid, …).
+ * 7. Sort remaining query parameters alphabetically so `?b=2&a=1` ≡ `?a=1&b=2`.
+ * 8. Strip trailing slash from non-root paths.
  */
 export function normalizeUrl(url: string): NormalizeResult {
 	if (!url || typeof url !== "string") {
@@ -48,10 +97,34 @@ export function normalizeUrl(url: string): NormalizeResult {
 			return { error: "Only HTTP and HTTPS URLs are supported" };
 		}
 
+		// 3. Case-normalise hostname only — paths are case-sensitive on most servers
+		parsed.hostname = parsed.hostname.toLowerCase();
+
+		// 4. Strip default ports so http://example.com:80/ ≡ http://example.com/
+		if (
+			(parsed.protocol === "http:" && parsed.port === "80") ||
+			(parsed.protocol === "https:" && parsed.port === "443")
+		) {
+			parsed.port = "";
+		}
+
+		// 5. Remove fragment — the server never receives it
 		parsed.hash = "";
 
-		let result = parsed.toString();
+		// 6 + 7. Strip tracking/session params, then sort the remainder.
+		if (parsed.search) {
+			const params = new URLSearchParams(parsed.search);
+			for (const key of [...params.keys()]) {
+				if (STRIP_PARAMS.has(key.toLowerCase())) {
+					params.delete(key);
+				}
+			}
+			const sorted = new URLSearchParams([...params.entries()].sort());
+			parsed.search = sorted.toString() ? `?${sorted.toString()}` : "";
+		}
 
+		// 8. Strip trailing slash from non-root paths
+		let result = parsed.toString();
 		if (result.endsWith("/") && parsed.pathname !== "/") {
 			result = result.slice(0, -1);
 		}

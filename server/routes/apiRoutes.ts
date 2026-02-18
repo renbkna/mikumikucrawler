@@ -3,6 +3,34 @@ import type { CrawlSession } from "../crawler/CrawlSession.js";
 import type { DatabaseLike, LoggerLike } from "../types.js";
 import { getErrorMessage } from "../utils/helpers.js";
 
+// ─── Session types (mirrored from sessionPersistence without bun:sqlite dep) ──
+
+interface InterruptedSessionRow {
+	id: string;
+	target: string;
+	status: string;
+	stats: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+const SessionSummarySchema = t.Object({
+	id: t.String(),
+	target: t.String(),
+	status: t.String(),
+	pagesScanned: t.Number(),
+	createdAt: t.String(),
+	updatedAt: t.String(),
+});
+
+const SessionsListResponseSchema = t.Object({
+	sessions: t.Array(SessionSummarySchema),
+});
+
+const DeleteResponseSchema = t.Object({
+	status: t.String(),
+});
+
 // Performance optimisation: Cache stats for 30 seconds to reduce database load,
 // but bust the cache immediately whenever the number of active crawls changes.
 // This keeps the dashboard responsive during active crawls while still shielding
@@ -219,6 +247,167 @@ export function createApiRoutes(
 				response: {
 					200: StatsResponseSchema,
 					500: ErrorResponseSchema,
+				},
+			},
+		)
+		.get(
+			"/sessions",
+			({ set }) => {
+				try {
+					const rows = db
+						.query(
+							`SELECT id, target, status, stats, created_at, updated_at
+							 FROM crawl_sessions
+							 WHERE status = 'interrupted'
+							 ORDER BY updated_at DESC`,
+						)
+						.all() as InterruptedSessionRow[];
+
+					const sessions = rows.map((row) => {
+						let pagesScanned = 0;
+						if (row.stats) {
+							try {
+								const parsed = JSON.parse(row.stats) as {
+									pagesScanned?: number;
+								};
+								pagesScanned = parsed.pagesScanned ?? 0;
+							} catch {
+								// Malformed stats snapshot — skip count, don't fail the request
+							}
+						}
+						return {
+							id: row.id,
+							target: row.target,
+							status: row.status,
+							pagesScanned,
+							createdAt: row.created_at,
+							updatedAt: row.updated_at,
+						};
+					});
+
+					return { sessions };
+				} catch (err) {
+					const message = getErrorMessage(err);
+					logger.error(`Error listing sessions: ${message}`);
+					set.status = 500;
+					return { error: "Failed to list sessions" };
+				}
+			},
+			{
+				detail: {
+					tags: ["Sessions"],
+					summary: "List interrupted crawl sessions",
+					description:
+						"Returns all sessions that were interrupted mid-crawl and can be resumed.",
+				},
+				response: {
+					200: SessionsListResponseSchema,
+					500: ErrorResponseSchema,
+				},
+			},
+		)
+		.delete(
+			"/sessions/:id",
+			({ params: { id }, set }) => {
+				try {
+					// The FK ON DELETE CASCADE in queue_items handles child cleanup
+					db.query("DELETE FROM crawl_sessions WHERE id = ?").run(id);
+					return { status: "ok" };
+				} catch (err) {
+					const message = getErrorMessage(err);
+					logger.error(`Error deleting session ${id}: ${message}`);
+					set.status = 500;
+					return { error: "Failed to delete session" };
+				}
+			},
+			{
+				params: t.Object({
+					id: t.String(),
+				}),
+				detail: {
+					tags: ["Sessions"],
+					summary: "Delete an interrupted session",
+					description:
+						"Permanently removes a session record and its associated pending queue items.",
+				},
+				response: {
+					200: DeleteResponseSchema,
+					500: ErrorResponseSchema,
+				},
+			},
+		)
+		.get(
+			"/search",
+			({ query, set }) => {
+				const q = typeof query.q === "string" ? query.q.trim() : "";
+				if (!q) {
+					set.status = 400;
+					return { error: "Query parameter 'q' is required" };
+				}
+
+				const rawLimit = Number(query.limit ?? 20);
+				const limit = Number.isFinite(rawLimit)
+					? Math.min(Math.max(rawLimit, 1), 100)
+					: 20;
+
+				try {
+					// Escape as a quoted phrase so FTS5 special syntax characters
+					// (AND, OR, NOT, NEAR, etc.) in user input are treated as literals.
+					// Append * for prefix matching so partial words still return results
+					// (e.g. "crawl" matches "crawling", "crawler", etc.)
+					const escaped = q.replace(/"/g, '""');
+					const ftsQuery = `"${escaped}"*`;
+
+					const rows = db
+						.query(
+							`SELECT
+								p.id,
+								p.url,
+								p.title,
+								p.description,
+								p.domain,
+								p.crawled_at,
+								p.word_count,
+								p.quality_score,
+								highlight(pages_fts, 1, '<mark>', '</mark>') AS title_hl,
+								snippet(pages_fts, 3, '<mark>', '</mark>', '…', 32) AS snippet
+							FROM pages_fts
+							JOIN pages p ON p.id = pages_fts.rowid
+							WHERE pages_fts MATCH ?
+							ORDER BY rank
+							LIMIT ?`,
+						)
+						.all(ftsQuery, limit) as {
+						id: number;
+						url: string;
+						title: string;
+						description: string;
+						domain: string;
+						crawled_at: string;
+						word_count: number | null;
+						quality_score: number | null;
+						title_hl: string;
+						snippet: string;
+					}[];
+
+					return { query: q, count: rows.length, results: rows };
+				} catch (err) {
+					const message = getErrorMessage(err);
+					logger.error(`FTS search error for "${q}": ${message}`);
+					set.status = 500;
+					return { error: "Search failed" };
+				}
+			},
+			{
+				query: t.Object({
+					q: t.Optional(t.String()),
+					limit: t.Optional(t.String()),
+				}),
+				detail: {
+					tags: ["Search"],
+					summary: "Full-text search over crawled pages",
+					description:
+						"Uses SQLite FTS5 with Porter stemming. Supports prefix matching (partial words) and returns highlighted snippets. Results are ranked by FTS relevance.",
 				},
 			},
 		)
