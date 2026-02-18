@@ -54,7 +54,11 @@ export const compression = () => {
 
 			set.headers["content-encoding"] = encoding;
 			set.headers["content-length"] = compressed.byteLength.toString();
-			set.headers.vary = "accept-encoding";
+			// Append rather than overwrite so existing Vary values (e.g. "Cookie") are preserved
+			const existingVary = response.headers.get("vary");
+			set.headers.vary = existingVary
+				? `${existingVary}, accept-encoding`
+				: "accept-encoding";
 
 			return new Response(compressed.buffer as ArrayBuffer, {
 				status: response.status,

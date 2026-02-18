@@ -3,6 +3,8 @@ export const CRAWL_QUEUE_CONSTANTS = {
 	DOMAIN_ENTRY_EXPIRY_MS: 60000,
 	DEFAULT_SLEEP_MS: 100,
 	MIN_SLEEP_MS: 50,
+	/** Number of consumed head slots before the queue array is compacted */
+	QUEUE_COMPACTION_THRESHOLD: 1000,
 } as const;
 
 export const TIMEOUT_CONSTANTS = {

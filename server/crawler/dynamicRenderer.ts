@@ -1,4 +1,6 @@
-import puppeteer, { type Browser, type Page } from "puppeteer";
+// NOTE: puppeteer is imported dynamically inside launchBrowser() so that merely
+// importing this module (e.g. in tests) does NOT spin up Chromium.
+import type { Browser, Page } from "puppeteer";
 import { config } from "../config/env.js";
 import type { Logger } from "../config/logging.js";
 import {
@@ -152,6 +154,9 @@ export class DynamicRenderer {
 
 		this.logger.info("Launching Puppeteer (Chromium)...");
 
+		// Dynamic import keeps Chromium out of the module graph at test/import time.
+		// Puppeteer is only loaded when a crawl session actually needs the browser.
+		const { default: puppeteer } = await import("puppeteer");
 		const executablePath = config.puppeteer.executablePath;
 
 		this.browser = await puppeteer.launch({

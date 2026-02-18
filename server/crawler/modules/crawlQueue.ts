@@ -1,4 +1,3 @@
-import { URL } from "node:url";
 import type { Logger } from "../../config/logging.js";
 import { CRAWL_QUEUE_CONSTANTS } from "../../constants.js";
 import type {
@@ -170,7 +169,7 @@ export class CrawlQueue {
 
 			// Periodically compact queue to prevent unbounded growth from processed items
 			// This maintains O(1) dequeue while preventing memory leak from processed head
-			if (this.queueHead > 1000) {
+			if (this.queueHead > CRAWL_QUEUE_CONSTANTS.QUEUE_COMPACTION_THRESHOLD) {
 				this.queue.splice(0, this.queueHead);
 				this.queueHead = 0;
 			}
