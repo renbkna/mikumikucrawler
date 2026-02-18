@@ -228,16 +228,17 @@ export function createApiRoutes(
 				try {
 					const page = db
 						.query("SELECT content FROM pages WHERE id = ?")
-						.get(id) as { content: string } | undefined;
+						.get(id) as { content: string | null } | undefined;
 
 					if (!page) {
 						set.status = 404;
 						return { error: "Page not found" };
 					}
 
+					// content may be null when crawled in contentOnly (metadata-only) mode
 					return {
 						status: "ok",
-						content: page.content,
+						content: page.content ?? "",
 					};
 				} catch (err) {
 					const message = getErrorMessage(err);
