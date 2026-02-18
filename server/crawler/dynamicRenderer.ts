@@ -291,7 +291,11 @@ export class DynamicRenderer {
 			const isComplex = DYNAMIC_RENDERER_CONSTANTS.COMPLEX_JS_SITES.some(
 				(site) => item.url.includes(site),
 			);
-			const waitUntil = isComplex ? "networkidle0" : "domcontentloaded";
+			// Use "domcontentloaded" for all sites — "networkidle0" hangs indefinitely
+			// on JS-heavy sites (YouTube, etc.) that never stop firing background requests,
+			// burning the full 60 s timeout on every URL. waitForComplexContent() handles
+			// waiting for JS-rendered elements via waitForSelector instead.
+			const waitUntil = "domcontentloaded";
 			const navigationTimeout = isComplex
 				? DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.COMPLEX_NAVIGATION
 				: DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.STANDARD_NAVIGATION;
