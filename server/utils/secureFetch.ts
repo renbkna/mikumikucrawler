@@ -1,6 +1,5 @@
 import { lookup } from "node:dns/promises";
 import net from "node:net";
-import { URL } from "node:url";
 import { isInvalidIpAddress } from "./ipValidation.js";
 import { LRUCacheWithTTL } from "./lruCache.js";
 

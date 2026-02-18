@@ -1,4 +1,3 @@
-import { URL } from "node:url";
 import type { CheerioAPI } from "cheerio";
 import type { SanitizedCrawlOptions } from "../../types.js";
 import { normalizeUrl } from "../../utils/helpers.js";

@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { cors } from "@elysiajs/cors";
 import { staticPlugin } from "@elysiajs/static";
 import { swagger } from "@elysiajs/swagger";
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import { rateLimit } from "elysia-rate-limit";
 import { setupDatabase } from "./config/database.js";
 import { config } from "./config/env.js";
@@ -23,7 +23,7 @@ import {
 	WebSocketMessageSchema,
 } from "./handlers/socketHandlers.js";
 import { compression } from "./middleware/compression.js";
-import { apiRoutes } from "./routes/apiRoutes.js";
+import { createApiRoutes } from "./routes/apiRoutes.js";
 import { getErrorMessage } from "./utils/helpers.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -42,19 +42,16 @@ if (config.isRender)
 const FRONTEND_URL = config.frontendUrl;
 const PORT = config.port;
 
-// Pass the database as a Promise to handlers that might need async access (e.g., inside closures)
-const { handleMessage, handleClose } = createWebSocketHandlers(
+// db is a synchronous bun:sqlite Database — no Promise wrapping needed
+const { handleMessage, handleClose, dispose } = createWebSocketHandlers(
 	activeCrawls,
-	Promise.resolve(db),
+	db,
 	logger,
 );
 
 const distPath = path.join(__dirname, "..", "dist");
 
 const app = new Elysia()
-	.decorate("db", db)
-	.decorate("logger", logger)
-	.decorate("activeCrawls", activeCrawls)
 	.use(
 		cors({
 			origin: (request) => {
@@ -91,6 +88,7 @@ const app = new Elysia()
 				tags: [
 					{ name: "Stats", description: "System and crawler statistics" },
 					{ name: "Content", description: "Crawled page content access" },
+					{ name: "System", description: "Server health and diagnostics" },
 				],
 			},
 		}),
@@ -101,7 +99,7 @@ const app = new Elysia()
 			prefix: "/assets",
 		}),
 	)
-	.use(apiRoutes)
+	.use(createApiRoutes(db, logger, activeCrawls))
 	.ws("/ws", {
 		body: WebSocketMessageSchema,
 		// biome-ignore lint/suspicious/noExplicitAny: Elysia WS types mismatch
@@ -113,23 +111,38 @@ const app = new Elysia()
 		// biome-ignore lint/suspicious/noExplicitAny: Elysia WS types mismatch
 		close: handleClose as any,
 	})
-	.get("/health", () => ({
-		status: "ok",
-		activeCrawls: activeCrawls.size,
-		uptime: process.uptime(),
-	}))
+	.get(
+		"/health",
+		() => ({
+			status: "ok",
+			activeCrawls: activeCrawls.size,
+			uptime: process.uptime(),
+		}),
+		{
+			detail: {
+				tags: ["System"],
+				summary: "Health check",
+				description:
+					"Returns server status, number of active crawls, and process uptime.",
+			},
+			response: t.Object({
+				status: t.String(),
+				activeCrawls: t.Number(),
+				uptime: t.Number(),
+			}),
+		},
+	)
 	.onError(({ code, error, set }) => {
 		if (code === "NOT_FOUND") {
 			set.status = 404;
 			return { error: "Not Found" };
 		}
 		logger.error(`Global Error: ${error}`);
-		const errorMessage = (error as Error)?.message || "Internal Server Error";
-		return { error: errorMessage };
+		return { error: getErrorMessage(error) };
 	})
 	.get(
 		"*",
-		async ({ path: reqPath, headers }: { path: string; headers: Headers }) => {
+		async ({ path: reqPath, request }) => {
 			const filePath = path.join(distPath, reqPath);
 			const file = Bun.file(filePath);
 			if (await file.exists()) {
@@ -141,7 +154,7 @@ const app = new Elysia()
 				if (isAsset) {
 					// Use file metadata for cheap ETag (avoids reading full file into memory)
 					const etag = `${file.size}-${file.lastModified}`;
-					const ifNoneMatch = headers.get("if-none-match");
+					const ifNoneMatch = request.headers.get("if-none-match");
 					if (ifNoneMatch === etag) {
 						return new Response(null, { status: 304 });
 					}
@@ -181,6 +194,9 @@ const instance = app.listen(PORT, (server) => {
  */
 async function gracefulShutdown(signal: string): Promise<void> {
 	logger.info(`${signal} received, shutting down gracefully`);
+
+	// Stop the rate-limiter cleanup interval
+	dispose();
 
 	for (const session of activeCrawls.values()) {
 		try {
