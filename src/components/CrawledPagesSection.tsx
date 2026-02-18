@@ -83,7 +83,7 @@ const CrawledPageCard = memo(function CrawledPageCard({
 		try {
 			const { data, error } = await api.api
 				.pages({ id: page.id })
-				.content.get();
+				.content.get({ fetch: { signal: AbortSignal.timeout(15_000) } });
 
 			if (error) {
 				throw new Error(
@@ -92,8 +92,9 @@ const CrawledPageCard = memo(function CrawledPageCard({
 			}
 
 			const response = data as { status: string; content?: string } | null;
-			if (response?.status === "ok" && response.content) {
-				setFetchedContent(response.content);
+			if (response?.status === "ok") {
+				// content is "" when page was crawled in metadata-only mode
+				setFetchedContent(response.content || "(no content stored — metadata-only mode)");
 			} else {
 				throw new Error("Invalid response format");
 			}
