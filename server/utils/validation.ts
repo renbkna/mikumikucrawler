@@ -1,55 +1,30 @@
-import dns from "node:dns";
-import net from "node:net";
-import { isInvalidIpAddress } from "./ipValidation.js";
+import { resolveUrlSecurely } from "./secureFetch.js";
 
 /**
  * Validates that a hostname resolves only to public IPs.
  * Prevents SSRF by ensuring no internal addresses are exposed.
+ *
+ * Delegates to resolveUrlSecurely so the DNS result is stored in the shared
+ * LRU cache — avoiding a redundant uncached lookup before secureFetch does
+ * its own resolution on the same hostname moments later.
  */
 export async function assertPublicHostname(hostname: string): Promise<void> {
 	if (!hostname) {
 		throw new Error("Target host is not allowed");
 	}
 
-	const normalizedHost =
-		hostname.startsWith("[") && hostname.endsWith("]")
-			? hostname.slice(1, -1)
-			: hostname;
+	// Construct a minimal URL so resolveUrlSecurely can parse the hostname
+	// correctly (handles IPv6 bracket notation, localhost, etc.)
+	// IPv6 addresses must be wrapped in brackets for URL construction.
+	const needsBrackets =
+		hostname.includes(":") &&
+		!hostname.startsWith("[") &&
+		!hostname.endsWith("]");
+	const urlToCheck = needsBrackets
+		? `http://[${hostname}]`
+		: `http://${hostname}`;
 
-	const lower = normalizedHost.toLowerCase();
-	if (lower === "localhost") {
-		throw new Error("Target host is not allowed");
-	}
-
-	// Direct IP validation
-	const ipType = net.isIP(normalizedHost);
-	if (ipType) {
-		if (isInvalidIpAddress(normalizedHost)) {
-			throw new Error("Target host is not allowed");
-		}
-		return;
-	}
-
-	// Fresh DNS resolution
-	let records: dns.LookupAddress[];
-	try {
-		records = await dns.promises.lookup(normalizedHost, {
-			all: true,
-			verbatim: false,
-		});
-	} catch {
-		throw new Error("Unable to resolve target hostname");
-	}
-
-	if (!records?.length) {
-		throw new Error("Unable to resolve target hostname");
-	}
-
-	const hasInvalidRecord = records.some(({ address }) =>
-		isInvalidIpAddress(address),
-	);
-
-	if (hasInvalidRecord) {
-		throw new Error("Target host is not allowed");
-	}
+	// resolveUrlSecurely validates against private/reserved ranges and caches
+	// the DNS result. Any SSRF-unsafe hostname throws here.
+	await resolveUrlSecurely(urlToCheck);
 }
