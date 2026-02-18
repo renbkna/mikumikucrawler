@@ -53,15 +53,3 @@ export async function assertPublicHostname(hostname: string): Promise<void> {
 		throw new Error("Target host is not allowed");
 	}
 }
-
-/**
- * Validates raw crawl options.
- * This is a placeholder for more complex validation logic.
- */
-export function validateCrawlOptions(options: unknown): boolean {
-	if (!options || typeof options !== "object") {
-		return false;
-	}
-	// Add more validation logic as needed
-	return true;
-}

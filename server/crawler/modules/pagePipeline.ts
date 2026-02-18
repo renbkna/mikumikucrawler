@@ -1,5 +1,4 @@
 import type { Database } from "bun:sqlite";
-import { URL } from "node:url";
 import sanitizeHtml from "sanitize-html";
 import { config } from "../../config/env.js";
 import type { Logger } from "../../config/logging.js";
@@ -20,14 +19,13 @@ import type { CrawlState } from "./crawlState.js";
 import { fetchContent } from "./fetcher.js";
 
 const MEDIA_CONTENT_REGEX = /image|video|audio|application\/(pdf|zip)/i;
-const DB_OPERATION_TIMEOUT_MS = 30000; // 30 seconds max for DB operations
 
 interface PagePipelineParams {
 	options: SanitizedCrawlOptions;
 	state: CrawlState;
 	logger: Logger;
 	socket: CrawlerSocket;
-	dbPromise: Promise<Database>;
+	db: Database;
 	dynamicRenderer: DynamicRenderer;
 	queue: CrawlQueue;
 	targetDomain: string;
@@ -44,28 +42,6 @@ interface PageRecord {
 }
 
 /**
- * Wraps database operations with timeout protection to prevent hanging on slow queries.
- */
-async function withTimeout<T>(
-	operation: () => T,
-	timeoutMs: number,
-	operationName: string,
-	logger: Logger,
-): Promise<T> {
-	return Promise.race([
-		Promise.resolve(operation()),
-		Bun.sleep(timeoutMs).then(() => {
-			throw new Error(
-				`Database operation '${operationName}' timed out after ${timeoutMs}ms`,
-			);
-		}),
-	]).catch((error) => {
-		logger.error(`Database timeout: ${error.message}`);
-		throw error;
-	});
-}
-
-/**
  * Orchestrates the fetching, processing, and persistence of crawled pages.
  * Returns an async function that processes a single QueueItem.
  */
@@ -74,7 +50,7 @@ export function createPagePipeline({
 	state,
 	logger,
 	socket,
-	dbPromise,
+	db,
 	dynamicRenderer,
 	queue,
 	targetDomain,
@@ -83,11 +59,40 @@ export function createPagePipeline({
 	const STATS_THROTTLE_MS = 250;
 	let lastStatsEmitTime = 0;
 
-	// Performance optimization: Prepared statements cached at pipeline level
-	// These are initialized once the database is available and reused for all page saves
-	let dbInstance: Database | null = null;
-	let insertPageQuery: ReturnType<Database["prepare"]> | null = null;
-	let insertLinkQuery: ReturnType<Database["prepare"]> | null = null;
+	// Performance optimisation: prepared statements are initialised once and reused
+	// for all page saves. bun:sqlite statements are synchronous and safe to cache.
+	const insertPageQuery = db.prepare(
+		`INSERT INTO pages
+		(url, domain, content_type, status_code, data_length, title, description, content, is_dynamic, last_modified,
+		 main_content, word_count, reading_time, language, keywords, quality_score, structured_data,
+		 media_count, internal_links_count, external_links_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(url) DO UPDATE SET
+		  domain = excluded.domain,
+		  content_type = excluded.content_type,
+		  status_code = excluded.status_code,
+		  data_length = excluded.data_length,
+		  title = excluded.title,
+		  description = excluded.description,
+		  content = excluded.content,
+		  is_dynamic = excluded.is_dynamic,
+		  last_modified = excluded.last_modified,
+		  main_content = excluded.main_content,
+		  word_count = excluded.word_count,
+		  reading_time = excluded.reading_time,
+		  language = excluded.language,
+		  keywords = excluded.keywords,
+		  quality_score = excluded.quality_score,
+		  structured_data = excluded.structured_data,
+		  media_count = excluded.media_count,
+		  internal_links_count = excluded.internal_links_count,
+		  external_links_count = excluded.external_links_count,
+		  crawled_at = CURRENT_TIMESTAMP
+		RETURNING id`,
+	);
+	const insertLinkQuery = db.prepare(
+		"INSERT OR IGNORE INTO links (source_id, target_url, text) VALUES (?, ?, ?)",
+	);
 
 	/**
 	 * Creates a processed content object for error cases.
@@ -193,7 +198,6 @@ export function createPagePipeline({
 	};
 
 	interface SaveResultParams {
-		db: Database;
 		item: QueueItem;
 		domain: string;
 		sanitizedContent: string;
@@ -209,15 +213,14 @@ export function createPagePipeline({
 	}
 
 	/**
-	 * Atomically persists the page record and its discovered links.
-	 * Uses a transaction to ensure data integrity: either both page and links are saved, or neither.
-	 * Timeout protection prevents hanging on slow DB operations.
+	 * Atomically persists the page record and its discovered links using a
+	 * SQLite transaction.  bun:sqlite transactions are synchronous; there is
+	 * no async-safe way to impose a wall-clock timeout on them from JavaScript.
+	 * If the DB is unusually slow, SQLite's own busy_timeout (set at
+	 * database initialisation) provides the low-level guard.
 	 */
-	const saveCrawlResult = async (
-		params: SaveResultParams,
-	): Promise<number | null> => {
+	const saveCrawlResult = (params: SaveResultParams): number | null => {
 		const {
-			db,
 			item,
 			domain,
 			sanitizedContent,
@@ -249,99 +252,43 @@ export function createPagePipeline({
 				)?.length ?? 0,
 		};
 
-		// Performance optimization: Initialize prepared statements once at factory level
-		// This avoids re-parsing SQL for every page save operation
-		if (!insertPageQuery || !insertLinkQuery || dbInstance !== db) {
-			dbInstance = db;
-			insertPageQuery = db.prepare(
-				`INSERT INTO pages
-				(url, domain, content_type, status_code, data_length, title, description, content, is_dynamic, last_modified,
-				 main_content, word_count, reading_time, language, keywords, quality_score, structured_data,
-				 media_count, internal_links_count, external_links_count)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-				ON CONFLICT(url) DO UPDATE SET
-				  domain = excluded.domain,
-				  content_type = excluded.content_type,
-				  status_code = excluded.status_code,
-				  data_length = excluded.data_length,
-				  title = excluded.title,
-				  description = excluded.description,
-				  content = excluded.content,
-				  is_dynamic = excluded.is_dynamic,
-				  last_modified = excluded.last_modified,
-				  main_content = excluded.main_content,
-				  word_count = excluded.word_count,
-				  reading_time = excluded.reading_time,
-				  language = excluded.language,
-				  keywords = excluded.keywords,
-				  quality_score = excluded.quality_score,
-				  structured_data = excluded.structured_data,
-				  media_count = excluded.media_count,
-				  internal_links_count = excluded.internal_links_count,
-				  external_links_count = excluded.external_links_count,
-				  crawled_at = CURRENT_TIMESTAMP
-				RETURNING id`,
-			);
-			insertLinkQuery = db.prepare(
-				"INSERT OR IGNORE INTO links (source_id, target_url, text) VALUES (?, ?, ?)",
-			);
-		}
-
-		// Type guard: Ensure statements are initialized
-		if (!insertPageQuery || !insertLinkQuery) {
-			throw new Error("Database statements not initialized");
-		}
-
-		// Store references for use in callbacks (TypeScript needs this for narrowing)
-		const pageStmt = insertPageQuery;
-		const linkStmt = insertLinkQuery;
-
-		// Wrap transaction in timeout
 		try {
-			return await withTimeout(
-				() => {
-					// Transaction wrapper
-					const transaction = db.transaction(() => {
-						const row = pageStmt.get(
-							item.url,
-							domain,
-							contentType,
-							statusCode,
-							contentLength,
-							title,
-							description,
-							options.contentOnly ? null : sanitizedContent,
-							isDynamic ? 1 : 0,
-							lastModified,
-							enhancedData.mainContent,
-							enhancedData.wordCount,
-							enhancedData.readingTime,
-							enhancedData.language,
-							enhancedData.keywords,
-							enhancedData.qualityScore,
-							enhancedData.structuredData,
-							enhancedData.mediaCount,
-							enhancedData.internalLinksCount,
-							enhancedData.externalLinksCount,
-						) as { id: number } | undefined;
+			const transaction = db.transaction(() => {
+				const row = insertPageQuery.get(
+					item.url,
+					domain,
+					contentType,
+					statusCode,
+					contentLength,
+					title,
+					description,
+					options.contentOnly ? null : sanitizedContent,
+					isDynamic ? 1 : 0,
+					lastModified,
+					enhancedData.mainContent,
+					enhancedData.wordCount,
+					enhancedData.readingTime,
+					enhancedData.language,
+					enhancedData.keywords,
+					enhancedData.qualityScore,
+					enhancedData.structuredData,
+					enhancedData.mediaCount,
+					enhancedData.internalLinksCount,
+					enhancedData.externalLinksCount,
+				) as { id: number } | undefined;
 
-						const pageId = row?.id ?? null;
+				const pageId = row?.id ?? null;
 
-						if (pageId && links.length > 0) {
-							for (const link of links) {
-								linkStmt.run(pageId, link.url, link.text ?? "");
-							}
-						}
+				if (pageId && links.length > 0) {
+					for (const link of links) {
+						insertLinkQuery.run(pageId, link.url, link.text ?? "");
+					}
+				}
 
-						return pageId;
-					});
+				return pageId;
+			});
 
-					return transaction();
-				},
-				DB_OPERATION_TIMEOUT_MS,
-				"saveCrawlResult",
-				logger,
-			);
+			return transaction();
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			logger.error(`Transaction failed for ${item.url}: ${message}`);
@@ -387,7 +334,7 @@ export function createPagePipeline({
 			targetDomain,
 			options,
 			state,
-			dbPromise,
+			db,
 			logger,
 			queue,
 		});
@@ -449,8 +396,7 @@ export function createPagePipeline({
 		state.markVisited(item.url);
 		state.recordSuccess(contentLength);
 
-		const url = new URL(item.url);
-		const domain = url.hostname;
+		const domain = new URL(item.url).hostname;
 
 		const sanitizedContent = contentType.includes("text/html")
 			? sanitizeHtml(content, {
@@ -517,11 +463,8 @@ export function createPagePipeline({
 			state.addMedia(1);
 		}
 
-		const db = await dbPromise;
-
-		// ATOMIC SAVE: Page + Links (with timeout protection)
-		const pageId = await saveCrawlResult({
-			db,
+		// ATOMIC SAVE: Page + Links
+		const pageId = saveCrawlResult({
 			item,
 			domain,
 			sanitizedContent,
@@ -601,7 +544,7 @@ interface ProcessLinkBatchOptions {
 	targetDomain: string;
 	options: SanitizedCrawlOptions;
 	state: CrawlState;
-	dbPromise: Promise<Database>;
+	db: Database;
 	logger: Logger;
 	queue: CrawlQueue;
 }
@@ -621,7 +564,7 @@ async function processLinkBatch({
 	targetDomain,
 	options,
 	state,
-	dbPromise,
+	db,
 	logger,
 	queue,
 }: ProcessLinkBatchOptions): Promise<void> {
@@ -633,7 +576,7 @@ async function processLinkBatch({
 			const linkDomain = linkUrl.hostname;
 
 			if (linkDomain !== domain && linkDomain !== targetDomain) {
-				const robots = await getRobotsRules(linkDomain, dbPromise, logger);
+				const robots = await getRobotsRules(linkDomain, db, logger);
 				if (robots && !robots.isAllowed(link.url, config.userAgent)) {
 					logger.debug(`Skipping ${link.url} - disallowed by robots.txt`);
 					state.recordSkip();

@@ -28,7 +28,7 @@ describe("getRobotsRules", () => {
 
 		const robots = await getRobotsRules(
 			"fallback.example",
-			Promise.resolve(db),
+			db,
 			logger,
 		);
 
@@ -48,7 +48,7 @@ describe("getRobotsRules", () => {
 
 		const robots = await getRobotsRules(
 			"strict.example",
-			Promise.resolve(db),
+			db,
 			logger,
 			{ allowOnFailure: false },
 		);

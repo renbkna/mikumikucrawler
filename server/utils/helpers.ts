@@ -196,12 +196,12 @@ interface RobotsOptions {
  * Strategy:
  * 1. Check in-memory cache.
  * 2. Check database.
- * 3. Fetch from network (trying HTTPS then HTTP).
+ * 3. Fetch from network (HTTPS first, fall back to HTTP).
  * 4. On failure, optionally allow all (default).
  */
 export async function getRobotsRules(
 	domain: string,
-	dbPromise: Promise<DatabaseLike>,
+	db: DatabaseLike,
 	logger: LoggerLike,
 	{ allowOnFailure = true }: RobotsOptions = {},
 ): Promise<RobotsResult | null> {
@@ -210,7 +210,6 @@ export async function getRobotsRules(
 	}
 
 	try {
-		const db = await dbPromise;
 		const domainSettings = db
 			.query("SELECT robots_txt FROM domain_settings WHERE domain = ?")
 			.get(domain) as { robots_txt?: string } | undefined;
@@ -221,43 +220,35 @@ export async function getRobotsRules(
 			return robots;
 		}
 
-		// Try both protocols in parallel for faster resolution
-		const protocols = ["https", "http"] as const;
-		const fetchPromises = protocols.map(async (protocol) => {
-			const response = await secureFetch({
-				url: `${protocol}://${domain}/robots.txt`,
-				signal: AbortSignal.timeout(REQUEST_CONSTANTS.ROBOTS_FETCH_TIMEOUT_MS),
-				headers: {
-					"User-Agent": config.userAgent,
-				},
-				redirect: "follow",
-			});
-
-			if (!response.ok) {
-				throw new Error(`HTTP error! status: ${response.status}`);
-			}
-
-			return await response.text();
-		});
-
-		// Race to get the first successful response
+		// Try HTTPS first, fall back to HTTP to avoid wasteful parallel requests.
+		// Most sites serve robots.txt over HTTPS; firing both simultaneously doubles
+		// network usage for no practical benefit.
 		let robotsTxt: string | null = null;
-		let lastError: Error | null = null;
 
-		try {
-			robotsTxt = await Promise.any(fetchPromises);
-		} catch (aggregateError) {
-			// All promises rejected
-			lastError =
-				aggregateError instanceof Error
-					? aggregateError
-					: new Error(String(aggregateError));
+		for (const protocol of ["https", "http"] as const) {
+			try {
+				const response = await secureFetch({
+					url: `${protocol}://${domain}/robots.txt`,
+					signal: AbortSignal.timeout(
+						REQUEST_CONSTANTS.ROBOTS_FETCH_TIMEOUT_MS,
+					),
+					headers: {
+						"User-Agent": config.userAgent,
+					},
+					redirect: "follow",
+				});
+
+				if (response.ok) {
+					robotsTxt = await response.text();
+					break; // Got a good response — no need to try HTTP
+				}
+			} catch {
+				// Protocol failed — continue to next
+			}
 		}
 
 		if (!robotsTxt) {
-			logger.warn(
-				`Failed to download robots.txt for ${domain}: ${lastError?.message || "unknown error"}`,
-			);
+			logger.warn(`Failed to download robots.txt for ${domain}`);
 			if (!allowOnFailure) {
 				return null;
 			}

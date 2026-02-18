@@ -1,5 +1,4 @@
 import type { Database } from "bun:sqlite";
-import { URL } from "node:url";
 import { config } from "../config/env.js";
 import type { Logger } from "../config/logging.js";
 import type {
@@ -17,7 +16,7 @@ import { createPagePipeline } from "./modules/pagePipeline.js";
 /** Manages the lifecycle of a single crawl operation. */
 export class CrawlSession {
 	private readonly socket: CrawlerSocket;
-	private readonly dbPromise: Promise<Database>;
+	private readonly db: Database;
 	private readonly logger: Logger;
 	private readonly options: SanitizedCrawlOptions;
 	private readonly state: CrawlState;
@@ -29,11 +28,11 @@ export class CrawlSession {
 	constructor(
 		socket: CrawlerSocket,
 		options: SanitizedCrawlOptions,
-		dbPromise: Promise<Database>,
+		db: Database,
 		logger: Logger,
 	) {
 		this.socket = socket;
-		this.dbPromise = dbPromise;
+		this.db = db;
 		this.logger = logger;
 
 		this.options = {
@@ -81,7 +80,7 @@ export class CrawlSession {
 			state: this.state,
 			logger: this.logger,
 			socket: this.socket,
-			dbPromise: this.dbPromise,
+			db: this.db,
 			dynamicRenderer: this.dynamicRenderer,
 			queue: this.queue,
 			targetDomain: this.targetDomain,
@@ -113,7 +112,7 @@ export class CrawlSession {
 				try {
 					const robots = await getRobotsRules(
 						this.targetDomain,
-						this.dbPromise,
+						this.db,
 						this.logger,
 					);
 
@@ -129,10 +128,11 @@ export class CrawlSession {
 							`Robots.txt disallows crawling ${this.options.target}`,
 						);
 
-						const db = await this.dbPromise;
-						db.query(
-							"INSERT OR REPLACE INTO domain_settings (domain, allowed) VALUES (?, 0)",
-						).run(this.targetDomain);
+						this.db
+							.query(
+								"INSERT OR REPLACE INTO domain_settings (domain, allowed) VALUES (?, 0)",
+							)
+							.run(this.targetDomain);
 
 						await this.stop();
 						return;

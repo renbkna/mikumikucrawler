@@ -183,15 +183,21 @@ interface ExportOperation {
 /** Creates the WebSocket message handler logic for crawler interactions. */
 export function createWebSocketHandlers(
 	activeCrawls: Map<string, CrawlSession>,
-	dbPromise: Promise<Database>,
+	db: Database,
 	logger: Logger,
 ) {
 	// Track active exports per socket to prevent race conditions
 	const activeExports = new Map<string, ExportOperation>();
 	const rateLimiter = new WebSocketRateLimiter();
 
-	// Periodic cleanup of rate limiter data (runs every minute)
-	setInterval(() => rateLimiter.cleanup(), 60000);
+	// Periodic cleanup of rate limiter data.
+	// Store the handle so it can be cleared on shutdown via dispose().
+	const cleanupInterval = setInterval(() => rateLimiter.cleanup(), 60_000);
+
+	/** Call this on server shutdown to release the cleanup interval. */
+	const dispose = (): void => {
+		clearInterval(cleanupInterval);
+	};
 
 	const handleMessage = async (
 		ws: {
@@ -242,14 +248,15 @@ export function createWebSocketHandlers(
 				try {
 					validatedOptions = await sanitizeOptions(options);
 				} catch (validationError) {
-					const message =
+					// Use a distinct name to avoid shadowing the outer `message` parameter
+					const errMsg =
 						validationError instanceof Error
 							? validationError.message
 							: "Invalid options";
 					logger.warn(
-						`Invalid crawl options from ${socketWrapper.id}: ${message}`,
+						`Invalid crawl options from ${socketWrapper.id}: ${errMsg}`,
 					);
-					socketWrapper.emit("crawlError", { message });
+					socketWrapper.emit("crawlError", { message: errMsg });
 					return;
 				}
 
@@ -260,7 +267,7 @@ export function createWebSocketHandlers(
 				const crawlSession = new CrawlSession(
 					socketWrapper,
 					validatedOptions,
-					dbPromise,
+					db,
 					logger,
 				);
 				activeCrawls.set(socketWrapper.id, crawlSession);
@@ -295,7 +302,6 @@ export function createWebSocketHandlers(
 					return;
 				}
 				try {
-					const db = await dbPromise;
 					const pageRecord = db
 						.query(`
 							SELECT id, url, content, title, description, content_type, domain
@@ -344,8 +350,8 @@ export function createWebSocketHandlers(
 						socketWrapper.emit("pageDetails", null);
 					}
 				} catch (err) {
-					const message = getErrorMessage(err);
-					logger.error(`Error getting page details: ${message}`);
+					const errMsg = getErrorMessage(err);
+					logger.error(`Error getting page details: ${errMsg}`);
 					socketWrapper.emit("crawlError", {
 						message: "Failed to get page details",
 					});
@@ -395,7 +401,6 @@ export function createWebSocketHandlers(
 				activeExports.set(socketWrapper.id, exportOp);
 
 				try {
-					const db = await dbPromise;
 					const rows = db
 						.query(
 							`SELECT id, url, domain, crawled_at, status_code,
@@ -473,7 +478,8 @@ export function createWebSocketHandlers(
 							socketWrapper.emit("exportChunk", { data, requestId });
 							chunk = [];
 							isFirstChunk = false;
-							await new Promise((resolve) => setImmediate(resolve));
+							// Yield to the event loop between chunks to avoid blocking WS I/O
+							await Bun.sleep(0);
 						}
 					}
 
@@ -495,8 +501,8 @@ export function createWebSocketHandlers(
 						`Export completed for socket ${socketWrapper.id}: ${rowCount} rows in ${Date.now() - exportOp.startTime}ms`,
 					);
 				} catch (err) {
-					const message = getErrorMessage(err);
-					logger.error(`Error exporting data: ${message}`);
+					const errMsg = getErrorMessage(err);
+					logger.error(`Error exporting data: ${errMsg}`);
 					socketWrapper.emit("crawlError", {
 						message: "Failed to export data",
 						requestId,
@@ -526,5 +532,5 @@ export function createWebSocketHandlers(
 		logger.info(`Client disconnected: ${id}`);
 	};
 
-	return { handleMessage, handleClose };
+	return { handleMessage, handleClose, dispose };
 }
