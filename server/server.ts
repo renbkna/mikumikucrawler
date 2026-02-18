@@ -163,7 +163,7 @@ const app = new Elysia()
 				if (isAsset) {
 					// Use file metadata for cheap ETag (avoids reading full file into memory)
 					const etag = `${file.size}-${file.lastModified}`;
-					const ifNoneMatch = request.headers.get("if-none-match");
+					const ifNoneMatch = request.headers?.get?.("if-none-match") ?? null;
 					if (ifNoneMatch === etag) {
 						return new Response(null, { status: 304 });
 					}
