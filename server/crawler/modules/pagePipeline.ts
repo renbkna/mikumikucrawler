@@ -312,7 +312,11 @@ export function createPagePipeline({
 		item: QueueItem,
 		domain: string,
 	): Promise<void> => {
-		if (!links.length || item.depth >= options.crawlDepth - 1) {
+		// item.depth is 0-based; only stop enqueueing once we've reached the
+		// configured depth limit.  The previous `crawlDepth - 1` guard was
+		// off-by-one: with crawlDepth=1 (the minimum) it evaluated 0>=0=true
+		// and never enqueued any links at all, even from the root page.
+		if (!links.length || item.depth >= options.crawlDepth) {
 			return;
 		}
 
