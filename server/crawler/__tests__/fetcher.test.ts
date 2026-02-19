@@ -1,3 +1,4 @@
+import type { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { Logger } from "../../config/logging.js";
 import type { DynamicRenderer } from "../dynamicRenderer.js";
@@ -16,6 +17,15 @@ const createMockRenderer = (enabled = false, result = null): DynamicRenderer =>
 		isEnabled: mock(() => enabled),
 		render: mock(async () => result),
 	}) as unknown as DynamicRenderer;
+
+const createMockDb = (): Database =>
+	({
+		query: mock(() => ({
+			get: mock(() => null),
+			all: mock(() => []),
+			run: mock(() => {}),
+		})),
+	}) as unknown as Database;
 
 describe("fetchContent", () => {
 	const originalFetch = global.fetch;
@@ -45,11 +55,13 @@ describe("fetchContent", () => {
 		};
 		const logger = createMockLogger();
 		const renderer = createMockRenderer(false);
+		const db = createMockDb();
 
 		const result = await fetchContent({
 			item,
 			logger,
 			dynamicRenderer: renderer,
+			db,
 		});
 
 		expect(result.content).toBe("<html><title>Test</title></html>");
@@ -72,11 +84,12 @@ describe("fetchContent", () => {
 		};
 		const logger = createMockLogger();
 		const renderer = createMockRenderer(false);
+		const db = createMockDb();
 
 		// Should throw
 		let error: Error | undefined;
 		try {
-			await fetchContent({ item, logger, dynamicRenderer: renderer });
+			await fetchContent({ item, logger, dynamicRenderer: renderer, db });
 		} catch (e) {
 			error = e instanceof Error ? e : new Error(String(e));
 		}

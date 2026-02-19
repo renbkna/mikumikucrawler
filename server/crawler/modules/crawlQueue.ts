@@ -114,7 +114,11 @@ export class CrawlQueue {
 		if (this.sessionId && this.db) {
 			this.persistBuffer.push(queueItem);
 			if (this.persistBuffer.length >= CrawlQueue.PERSIST_BATCH_SIZE) {
-				saveQueueItemBatch(this.db, this.sessionId, this.persistBuffer.splice(0));
+				saveQueueItemBatch(
+					this.db,
+					this.sessionId,
+					this.persistBuffer.splice(0),
+				);
 			}
 		}
 	}
@@ -174,30 +178,39 @@ export class CrawlQueue {
 	 * 1. Respects per-domain delays (Robots.txt or config).
 	 * 2. Manages concurrency limits.
 	 * 3. Handles queue draining and idle states.
+	 * 4. Watchdog detects stuck states and logs warnings.
 	 *
 	 * Uses a non-blocking delay system where we calculate the next allowed time
 	 * for a domain and sleep effectively.
 	 */
 	private async loop(): Promise<void> {
 		const domainProcessing = new Map<string, number>();
-		// Track all active promises so we can await them on shutdown
 		const processingPromises = new Set<Promise<void>>();
+
+		// Watchdog state for stuck detection
+		let lastProgressTime = Date.now();
+		let lastScannedCount = 0;
+		let lastProgressLog = 0;
+		let stuckWarningCount = 0;
+		const progressLogInterval =
+			CRAWL_QUEUE_CONSTANTS.STUCK_DETECTION_INTERVAL_MS;
+		const stuckThreshold = CRAWL_QUEUE_CONSTANTS.STUCK_WARNING_THRESHOLD_MS;
+		const stuckForceClear =
+			CRAWL_QUEUE_CONSTANTS.STUCK_FORCE_CLEAR_THRESHOLD_MS;
+		const itemTimeout = CRAWL_QUEUE_CONSTANTS.ITEM_PROCESSING_TIMEOUT_MS;
 
 		while (
 			(this.queueHead < this.queue.length || this.activeCount > 0) &&
-			(this.state.isActive || this.activeCount > 0) // Keep looping if we have active items to drain
+			(this.state.isActive || this.activeCount > 0)
 		) {
-			// If stopped, just wait for active items to finish
 			if (!this.state.isActive && this.queueHead < this.queue.length) {
-				this.queue.length = 0; // Clear pending queue
+				this.queue.length = 0;
 				this.queueHead = 0;
 				this.queuedUrls.clear();
 			}
 
 			let deferredDelay: number | null = null;
 
-			// Lazy cleanup: Only scan domain entries every 5 seconds instead of every tick
-			// This reduces O(domains) work to O(1) per iteration with periodic cleanup
 			const now = Date.now();
 			if (now - this.lastDomainCleanup > 5000) {
 				this.lastDomainCleanup = now;
@@ -211,17 +224,11 @@ export class CrawlQueue {
 				}
 			}
 
-			// Periodically compact queue to prevent unbounded growth from processed items
-			// This maintains O(1) dequeue while preventing memory leak from processed head
 			if (this.queueHead > CRAWL_QUEUE_CONSTANTS.QUEUE_COMPACTION_THRESHOLD) {
 				this.queue.splice(0, this.queueHead);
 				this.queueHead = 0;
 			}
 
-			// Snapshot available items before entering the inner loop.
-			// Used to detect when every item in the current window has been
-			// deferred (domain cooling) so we can break and let the outer
-			// await sleep() run instead of spinning forever.
 			const itemsAvailableNow = this.queue.length - this.queueHead;
 			let deferredThisPass = 0;
 
@@ -230,19 +237,16 @@ export class CrawlQueue {
 				this.queueHead < this.queue.length &&
 				this.state.isActive
 			) {
-				// O(1) dequeue using head pointer instead of O(n) Array.shift()
 				const item = this.queue[this.queueHead++];
 				if (!item) break;
 				this.queuedUrls.delete(item.url);
 
 				try {
-					// Domain is now pre-parsed at enqueue time - no expensive URL parsing here
 					const domain = item.domain;
 
 					const nextAllowed = domainProcessing.get(domain) || 0;
 					const domainDelay = this.state.getDomainDelay(domain);
 
-					// If this domain is still cooling down, push back to queue and calculate wait
 					if (now < nextAllowed) {
 						const waitTime = nextAllowed - now;
 						deferredDelay =
@@ -250,45 +254,47 @@ export class CrawlQueue {
 								? waitTime
 								: Math.min(deferredDelay, waitTime);
 
-						// Re-queue safely
 						this.queue.push(item);
 						this.queuedUrls.add(item.url);
 
 						deferredThisPass++;
-						// Break as soon as every item in the current window has been
-						// tried and pushed back due to domain cooldown.  Without this,
-						// both queueHead and queue.length grow by 1 on every iteration
-						// keeping the gap constant and creating an infinite busy-loop
-						// that starves the outer `await sleep()` call.
-						if (deferredThisPass >= itemsAvailableNow || this.queue.length === 1) break;
+						if (
+							deferredThisPass >= itemsAvailableNow ||
+							this.queue.length === 1
+						)
+							break;
 						continue;
 					}
 
-					// Successfully dispatching — reset the deferred counter so a mix
-					// of ready and cooling items from different domains works correctly.
 					deferredThisPass = 0;
 					domainProcessing.set(domain, now + domainDelay);
 
-					// Use Set for atomic tracking (avoids race conditions with counter)
 					this.activeItems.add(item.url);
 
-					// Wrap in a helper so `task` can be declared as `const`.  The
-					// `finally` callback captures the resolved reference via the
-					// closure returned by the IIFE, which is always assigned before
-					// the microtask queue drains.
+					// Wrap with timeout to prevent hanging on stuck items
 					const task = (() => {
-						const p: Promise<void> = Promise.resolve(this.processItem(item))
+						const timeoutPromise = new Promise<void>((_, reject) =>
+							setTimeout(
+								() =>
+									reject(
+										new Error(`Item processing timeout after ${itemTimeout}ms`),
+									),
+								itemTimeout,
+							),
+						);
+
+						const workPromise = Promise.resolve(this.processItem(item));
+
+						const p: Promise<void> = Promise.race([workPromise, timeoutPromise])
 							.catch((error: Error) => {
 								this.logger.error(
-									`Error in queue processing: ${error.message}`,
+									`Error processing ${item.url}: ${error.message}`,
 								);
 								this.state.recordFailure();
 							})
 							.finally(() => {
 								this.activeItems.delete(item.url);
 								processingPromises.delete(p);
-								// Remove processed item from DB queue so it won't be
-								// re-enqueued if the session is resumed after an interruption.
 								if (this.sessionId && this.db) {
 									removeQueueItem(this.db, this.sessionId, item.url);
 								}
@@ -305,6 +311,50 @@ export class CrawlQueue {
 				}
 			}
 
+			// Progress tracking for watchdog - track completions, not just active count
+			const currentScanned = this.state.stats.pagesScanned;
+			if (currentScanned !== lastScannedCount) {
+				lastProgressTime = now;
+				lastScannedCount = currentScanned;
+				stuckWarningCount = 0; // Reset on actual progress
+			}
+
+			// Periodic progress logging
+			if (now - lastProgressLog > progressLogInterval) {
+				lastProgressLog = now;
+				this.logger.info(
+					`[Progress] Queue: ${this.queue.length - this.queueHead} | Active: ${this.activeCount} | Scanned: ${this.state.stats.pagesScanned} | Links: ${this.state.stats.linksFound}`,
+				);
+			}
+
+			// Watchdog: warn if stuck (no completions for a while)
+			const timeSinceProgress = now - lastProgressTime;
+			if (timeSinceProgress > stuckThreshold && this.activeCount > 0) {
+				stuckWarningCount++;
+				const activeUrls = [...this.activeItems].slice(0, 5).join(", ");
+				this.logger.warn(
+					`[Watchdog] No completions for ${Math.round(timeSinceProgress / 1000)}s (warning #${stuckWarningCount}) with ${this.activeCount} active items. ` +
+						`Stuck items may include: ${activeUrls}...`,
+				);
+
+				// Force-clear stuck items after extended period
+				if (timeSinceProgress > stuckForceClear) {
+					this.logger.error(
+						`[Watchdog] Force-clearing ${this.activeCount} stuck items after ${Math.round(stuckForceClear / 1000)}s`,
+					);
+					// Clear all active items - they will be treated as failures
+					const stuckUrls = [...this.activeItems];
+					this.activeItems.clear();
+					// Record failures for each stuck item
+					for (const _ of stuckUrls) {
+						this.state.recordFailure();
+					}
+					// Reset progress tracking
+					lastProgressTime = now;
+					stuckWarningCount = 0;
+				}
+			}
+
 			if (
 				(this.activeCount > 0 || this.queueHead < this.queue.length) &&
 				this.state.isActive
@@ -316,14 +366,11 @@ export class CrawlQueue {
 				this.socket.emit("queueStats", snapshot);
 			}
 
-			// If we are shutting down, just wait for the next task to finish
 			if (!this.state.isActive && this.activeCount > 0) {
 				await Promise.race(processingPromises);
 				continue;
 			}
 
-			// Dynamic sleep: Wait only as long as needed for the next domain slot,
-			// or default sleep if nothing specific is blocking.
 			const sleepDuration =
 				deferredDelay === null
 					? CRAWL_QUEUE_CONSTANTS.DEFAULT_SLEEP_MS
@@ -335,7 +382,6 @@ export class CrawlQueue {
 			await sleep(sleepDuration);
 		}
 
-		// Ensure everything is truly done
 		if (processingPromises.size > 0) {
 			await Promise.all(processingPromises);
 		}

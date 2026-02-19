@@ -67,7 +67,11 @@ export function updateSessionStatus(
 export function loadSession(
 	db: Database,
 	sessionId: string,
-): { options: SanitizedCrawlOptions; stats: CrawlStats | null; status: SessionStatus } | null {
+): {
+	options: SanitizedCrawlOptions;
+	stats: CrawlStats | null;
+	status: SessionStatus;
+} | null {
 	try {
 		const row = db
 			.query(
@@ -85,7 +89,9 @@ export function loadSession(
 		return { options, stats, status };
 	} catch (err) {
 		// biome-ignore lint/suspicious/noConsole: Error logging for session load failure
-		console.error(`Failed to load session ${sessionId}: ${getErrorMessage(err)}`);
+		console.error(
+			`Failed to load session ${sessionId}: ${getErrorMessage(err)}`,
+		);
 		return null;
 	}
 }
@@ -136,9 +142,10 @@ export function removeQueueItem(
 	url: string,
 ): void {
 	try {
-		db.query(
-			`DELETE FROM queue_items WHERE session_id = ? AND url = ?`,
-		).run(sessionId, url);
+		db.query(`DELETE FROM queue_items WHERE session_id = ? AND url = ?`).run(
+			sessionId,
+			url,
+		);
 	} catch {
 		// Non-fatal
 	}

@@ -1,12 +1,11 @@
-import { createWriteStream, existsSync, mkdirSync } from "node:fs";
+import { createWriteStream } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import pino, { type Logger } from "pino";
 import { config } from "./env.js";
 import { createPrettyPrinter } from "./prettyPrinter.js";
 
-const ensureDirectoryExists = (dir: string): void => {
-	if (!existsSync(dir)) {
-		mkdirSync(dir, { recursive: true });
-	}
+const ensureDirectoryExists = async (dir: string): Promise<void> => {
+	await mkdir(dir, { recursive: true });
 };
 
 /** Re-export Logger type for consumers */
@@ -25,7 +24,7 @@ export interface AppLogger extends Logger {
  * Pino is ~5x faster than Winston with lower memory footprint.
  */
 export const setupLogging = async (): Promise<AppLogger> => {
-	ensureDirectoryExists("./logs");
+	await ensureDirectoryExists("./logs");
 
 	const level = config.logLevel;
 
