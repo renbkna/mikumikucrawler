@@ -27,28 +27,17 @@ import type { CrawlQueue } from "./crawlQueue.js";
 import type { CrawlState } from "./crawlState.js";
 import { fetchContent } from "./fetcher.js";
 
-// ─── Robots directive helpers ─────────────────────────────────────────────────
-
 interface RobotsDirectives {
 	noindex: boolean;
 	nofollow: boolean;
 }
 
-/**
- * Parses a robots directive string (from meta tag or X-Robots-Tag header) into
- * a structured set of flags.
- *
- * Handles comma-separated values and the shorthand `none` (= noindex + nofollow).
- * Agent-specific X-Robots-Tag directives (e.g. "googlebot: noindex") are ignored —
- * we only honour universal directives that apply to all bots.
- */
 function parseRobotsDirectives(
 	value: string | null | undefined,
 ): RobotsDirectives {
 	const result: RobotsDirectives = { noindex: false, nofollow: false };
 	if (!value) return result;
 
-	// Filter out agent-specific segments (contain a colon before the directive)
 	const universal = value
 		.split(",")
 		.map((s) => s.trim())
@@ -61,10 +50,6 @@ function parseRobotsDirectives(
 	return result;
 }
 
-/**
- * Merges robots directives from the meta tag and the X-Robots-Tag HTTP header,
- * applying a logical OR so either source can restrict crawl behaviour.
- */
 function mergeRobotsDirectives(
 	metaRobots: string | null | undefined,
 	xRobotsTag: string | null | undefined,
@@ -77,21 +62,11 @@ function mergeRobotsDirectives(
 	};
 }
 
-// ─── Soft 404 detection ───────────────────────────────────────────────────────
-
-/**
- * Heuristically detects pages that return HTTP 200 but represent an error page
- * ("soft 404"). Checks three signals:
- * 1. Tiny content — server returned almost nothing (< TINY_CONTENT_BYTES).
- * 2. Error title — page title contains known not-found phrases.
- * 3. Short + error keywords — body under SHORT_CONTENT_BYTES and contains keywords.
- */
 function isSoft404(
 	title: string,
 	mainContent: string,
 	contentLength: number,
 ): boolean {
-	// Signal 1 — unconditionally tiny response
 	if (
 		contentLength > 0 &&
 		contentLength < SOFT_404_CONSTANTS.TINY_CONTENT_BYTES
@@ -102,12 +77,10 @@ function isSoft404(
 	const titleLower = title.toLowerCase();
 	const keywords = SOFT_404_CONSTANTS.KEYWORDS;
 
-	// Signal 2 — error phrase in title
 	if (keywords.some((kw) => titleLower.includes(kw))) {
 		return true;
 	}
 
-	// Signal 3 — short body containing error keywords
 	if (contentLength < SOFT_404_CONSTANTS.SHORT_CONTENT_BYTES) {
 		const snippet = mainContent.toLowerCase().slice(0, 1000);
 		if (keywords.some((kw) => snippet.includes(kw))) {
@@ -129,7 +102,6 @@ interface PagePipelineParams {
 	dynamicRenderer: DynamicRenderer;
 	queue: CrawlQueue;
 	targetDomain: string;
-	/** Session ID for persisting stats snapshots (resume support). */
 	sessionId: string;
 }
 
@@ -143,10 +115,6 @@ interface PageRecord {
 	processedData: ProcessedPageData;
 }
 
-/**
- * Orchestrates the fetching, processing, and persistence of crawled pages.
- * Returns an async function that processes a single QueueItem.
- */
 export function createPagePipeline({
 	options,
 	state,
@@ -162,8 +130,6 @@ export function createPagePipeline({
 	const STATS_THROTTLE_MS = 250;
 	let lastStatsEmitTime = 0;
 
-	// Performance optimisation: prepared statements are initialised once and reused
-	// for all page saves. bun:sqlite statements are synchronous and safe to cache.
 	const insertPageQuery = db.prepare(
 		`INSERT INTO pages
 		(url, domain, content_type, status_code, data_length, title, description, content, is_dynamic, last_modified, etag,
@@ -198,9 +164,6 @@ export function createPagePipeline({
 		"INSERT OR IGNORE INTO links (source_id, target_url, text) VALUES (?, ?, ?)",
 	);
 
-	/**
-	 * Creates a processed content object for error cases.
-	 */
 	const buildFallbackProcessedContent = (
 		error: Error | null,
 	): ProcessedContent => ({
@@ -220,9 +183,6 @@ export function createPagePipeline({
 		errors: error ? [{ type: "processor_error", message: error.message }] : [],
 	});
 
-	/**
-	 * Constructs a descriptive log message for the crawl result.
-	 */
 	const buildEnhancedLog = (
 		item: QueueItem,
 		statusCode: number,
@@ -265,10 +225,6 @@ export function createPagePipeline({
 		return segments.join(" | ");
 	};
 
-	/**
-	 * Emits a real-time stats update to the connected client.
-	 * Throttled to prevent flooding the socket/client during high-speed crawls.
-	 */
 	const emitStatsUpdate = (
 		log: string,
 		processedContent: ProcessedContent,
@@ -294,13 +250,9 @@ export function createPagePipeline({
 			},
 		});
 
-		// Persist stats snapshot to DB so interrupted sessions show real progress
 		updateSessionStats(db, sessionId, currentStats);
 	};
 
-	/**
-	 * Emits a fully processed page to the client.
-	 */
 	const emitPageToClient = (page: PageRecord): void => {
 		socket.emit("pageContent", page);
 	};
@@ -321,17 +273,6 @@ export function createPagePipeline({
 		links: ExtractedLink[];
 	}
 
-	/**
-	 * Atomically persists the page record and its discovered links using a
-	 * SQLite transaction.  bun:sqlite transactions are synchronous; there is
-	 * no async-safe way to impose a wall-clock timeout on them from JavaScript.
-	 * If the DB is unusually slow, SQLite's own busy_timeout (set at
-	 * database initialisation) provides the low-level guard.
-	 *
-	 * Performance optimisation: db.transaction() is called once here (not inside
-	 * saveCrawlResult) so the returned transaction function is created a single
-	 * time and reused for every page save, rather than being re-wrapped on each call.
-	 */
 	const _saveTransaction = db.transaction(
 		(params: SaveResultParams): number | null => {
 			const {
@@ -415,18 +356,11 @@ export function createPagePipeline({
 		}
 	};
 
-	/**
-	 * Enqueues newly discovered links if they satisfy crawl depth and robots.txt policies.
-	 */
 	const enqueueLinksWithPolicies = async (
 		links: ExtractedLink[],
 		item: QueueItem,
 		domain: string,
 	): Promise<void> => {
-		// item.depth is 0-based; only stop enqueueing once we've reached the
-		// configured depth limit.  The previous `crawlDepth - 1` guard was
-		// off-by-one: with crawlDepth=1 (the minimum) it evaluated 0>=0=true
-		// and never enqueued any links at all, even from the root page.
 		if (!links.length || item.depth >= options.crawlDepth) {
 			return;
 		}
@@ -477,7 +411,6 @@ export function createPagePipeline({
 			return;
 		}
 
-		// ── Per-domain budget check ────────────────────────────────────────────
 		if (state.isDomainBudgetExceeded(item.domain)) {
 			logger.debug(
 				`[Budget] Domain budget exceeded for ${item.domain}, skipping ${item.url}`,
@@ -518,11 +451,9 @@ export function createPagePipeline({
 
 		const fetchMs = Date.now() - fetchStart;
 
-		// ── 304 Not Modified ──────────────────────────────────────────────────
 		if (fetchResult.unchanged) {
 			state.markVisited(item.url);
 			state.recordSuccess(0);
-			// Touch crawled_at so we know this page was still alive during this crawl
 			db.query(
 				"UPDATE pages SET crawled_at = CURRENT_TIMESTAMP WHERE url = ?",
 			).run(item.url);
@@ -530,7 +461,6 @@ export function createPagePipeline({
 			logger.info(unchangedLog);
 			socket.emit("stats", { ...state.stats, log: unchangedLog });
 
-			// Seed queue from cached links so depth traversal continues unchanged
 			if (item.depth < options.crawlDepth) {
 				const cachedLinks = db
 					.query(
@@ -552,9 +482,7 @@ export function createPagePipeline({
 			return;
 		}
 
-		// ── 429 / 503 Rate-limited ────────────────────────────────────────────
 		if (fetchResult.rateLimited) {
-			// Apply adaptive backoff at the domain level before scheduling retry
 			state.adaptDomainDelay(
 				item.domain,
 				fetchMs,
@@ -585,13 +513,11 @@ export function createPagePipeline({
 			isDynamic,
 		} = fetchResult;
 
-		// ── Adaptive throttle (response-time feedback) ────────────────────────
 		state.adaptDomainDelay(item.domain, fetchMs, statusCode);
 
 		state.markVisited(item.url);
 		state.recordSuccess(contentLength);
 
-		// domain is pre-parsed at enqueue time — no need to re-parse the URL here.
 		const domain = item.domain;
 
 		const sanitizedContent = contentType.includes("text/html")
@@ -599,7 +525,6 @@ export function createPagePipeline({
 					allowedTags: sanitizeHtml.defaults.allowedTags.concat(["img"]),
 					allowedAttributes: {
 						...sanitizeHtml.defaults.allowedAttributes,
-						// Only allow class/id on safe container elements, not style (XSS risk)
 						div: ["class", "id"],
 						span: ["class", "id"],
 						p: ["class", "id"],
@@ -623,17 +548,12 @@ export function createPagePipeline({
 			);
 		}
 
-		// Prepare links for persistence/queueing
 		let links: ExtractedLink[] = [];
 		if (contentType.includes("text/html") && processedContent.links?.length) {
-			// `domain` is already set above from item.domain — reuse it directly.
 			links = processedContent.links
 				.filter((link) => {
-					// Skip non-HTTP protocols
 					if (!link.url?.startsWith("http")) return false;
-					// Skip external links unless full crawl mode
 					if (options.crawlMethod !== "full" && !link.isInternal) return false;
-					// Skip file extensions that aren't HTML
 					if (
 						/\.(css|js|json|xml|txt|md|csv|svg|ico|git|gitignore)$/i.test(
 							link.url,
@@ -660,28 +580,22 @@ export function createPagePipeline({
 			state.addMedia(1);
 		}
 
-		// ── Robots directive enforcement ──────────────────────────────────────
-		// Merge meta robots tag and X-Robots-Tag HTTP header (logical OR).
 		const robotsDirectives = mergeRobotsDirectives(
 			processedContent.metadata?.robots,
 			xRobotsTag,
 		);
 
 		if (robotsDirectives.noindex) {
-			// Page explicitly says "don't index me" — skip the DB write but still
-			// log it so the operator can see it happening.
 			const noindexLog = `[Robots] noindex: ${item.url} — skipping storage`;
 			logger.info(noindexLog);
 			socket.emit("stats", { ...state.stats, log: noindexLog });
 			state.recordSkip();
-			// Still enqueue links unless nofollow is also set
 			if (!robotsDirectives.nofollow) {
 				await enqueueLinksWithPolicies(links, item, domain);
 			}
 			return;
 		}
 
-		// ── Soft 404 detection ────────────────────────────────────────────────
 		if (contentType.includes("text/html")) {
 			const mainContent = processedContent.extractedData?.mainContent ?? "";
 			if (isSoft404(title, mainContent, contentLength)) {
@@ -693,10 +607,6 @@ export function createPagePipeline({
 			}
 		}
 
-		// ── Canonical link deduplication ──────────────────────────────────────
-		// If this page declares a canonical URL that differs from the URL we
-		// fetched, mark the canonical as visited too so we don't crawl the same
-		// content under both the variant URL and the canonical URL.
 		const rawCanonical = processedContent.metadata?.canonical;
 		if (rawCanonical && rawCanonical !== item.url) {
 			const normalised = normalizeUrl(rawCanonical);
@@ -714,7 +624,6 @@ export function createPagePipeline({
 			}
 		}
 
-		// ATOMIC SAVE: Page + Links
 		const pageId = saveCrawlResult({
 			item,
 			domain,
@@ -737,13 +646,8 @@ export function createPagePipeline({
 			contentLength,
 			processedContent,
 		);
-		// Also write to server log so the terminal shows crawl progress.
-		// Without this, "Fetching: ..." is the last visible line for every successful
-		// page, which looks identical to a hang.
 		logger.info(logMessage);
 		emitStatsUpdate(logMessage, processedContent, item);
-
-		// Increment per-domain counter after a successful save
 		state.recordDomainPage(domain);
 
 		emitPageToClient({
@@ -792,7 +696,6 @@ export function createPagePipeline({
 			},
 		});
 
-		// nofollow: store the page content but don't traverse its outbound links
 		if (!robotsDirectives.nofollow) {
 			await enqueueLinksWithPolicies(links, item, domain);
 		} else {
@@ -813,14 +716,6 @@ interface ProcessLinkBatchOptions {
 	queue: CrawlQueue;
 }
 
-/**
- * Processes a batch of links concurrently while respecting robots.txt rules and domain delays.
- *
- * NOTE: We use a limited concurrency model (ProcessLinkBatchOptions.CONCURRENCY) here
- * rather than blasting all links at once to avoid:
- * 1. Overwhelming the robots.txt parser/cache.
- * 2. Spiking event loop lag with thousands of microtasks.
- */
 async function processLinkBatch({
 	links,
 	item,
@@ -835,7 +730,6 @@ async function processLinkBatch({
 	const CONCURRENCY = BATCH_CONSTANTS.LINK_BATCH_CONCURRENCY;
 
 	const processSingleLink = async (link: ExtractedLink): Promise<void> => {
-		// Bail out immediately if the session was stopped while batch is running
 		if (!state.isActive) return;
 		try {
 			const linkUrl = new URL(link.url);
@@ -865,8 +759,9 @@ async function processLinkBatch({
 				parentUrl: item.url,
 			});
 		} catch (err) {
-			const message = getErrorMessage(err);
-			logger.debug(`Error processing link ${link.url}: ${message}`);
+			logger.debug(
+				`Error processing link ${link.url}: ${getErrorMessage(err)}`,
+			);
 		}
 	};
 

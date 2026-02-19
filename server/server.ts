@@ -1,11 +1,3 @@
-/**
- * Miku Crawler API Entry Point
- *
- * Sets up the Elysia server, configures middleware (CORS, Rate Limit, Swagger),
- * initializes the database and logging, and handles graceful shutdown.
- *
- * NOTE: We use Bun's native ESM support.
- */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cors } from "@elysiajs/cors";
@@ -56,7 +48,6 @@ const app = new Elysia()
 		cors({
 			origin: (request) => {
 				const origin = request.headers.get("origin");
-				// Only allow Vite's default dev server port
 				if (origin === "http://localhost:5173") {
 					return true;
 				}
@@ -155,13 +146,11 @@ const app = new Elysia()
 			const filePath = path.join(distPath, reqPath);
 			const file = Bun.file(filePath);
 			if (await file.exists()) {
-				// Add cache headers for static assets
 				const isAsset =
 					/\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$/i.test(
 						reqPath,
 					);
 				if (isAsset) {
-					// Use file metadata for cheap ETag (avoids reading full file into memory)
 					const etag = `${file.size}-${file.lastModified}`;
 					const ifNoneMatch = request.headers?.get?.("if-none-match") ?? null;
 					if (ifNoneMatch === etag) {
@@ -197,10 +186,6 @@ const instance = app.listen(PORT, (server) => {
 	);
 });
 
-/**
- * Ensures clean teardown of database connections and active crawl sessions
- * on process termination (SIGTERM/SIGINT).
- */
 async function gracefulShutdown(signal: string): Promise<void> {
 	logger.info(`${signal} received, shutting down gracefully`);
 

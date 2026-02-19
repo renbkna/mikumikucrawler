@@ -13,10 +13,6 @@ import {
 } from "../../utils/sessionPersistence.js";
 import type { CrawlState } from "./crawlState.js";
 
-/**
- * Internal utility to pause execution for a given duration.
- * Uses Bun's native sleep for better performance.
- */
 const sleep = (ms: number): Promise<void> => Bun.sleep(ms);
 
 interface CrawlQueueOptions {
@@ -41,14 +37,10 @@ export class CrawlQueue {
 	public processItem: (item: QueueItem) => Promise<void>;
 	private readonly onIdle: () => Promise<void>;
 	private readonly queue: QueueItem[];
-	/** O(1) dequeue using head pointer instead of O(n) Array.shift() */
 	private queueHead = 0;
-	/** Tracks active items by URL for atomic add/remove (avoids race conditions) */
 	private readonly activeItems: Set<string>;
-	/** Tracks items currently in the queue to prevent duplicates */
 	private readonly queuedUrls: Set<string>;
 	private readonly retryTimers: Set<ReturnType<typeof setTimeout>>;
-	/** Last time domain entries were cleaned up (for lazy cleanup every 5s) */
 	private lastDomainCleanup = 0;
 	private loopPromise: Promise<void> | null;
 	/** Optional session ID used to persist queue items to DB for resume support */
@@ -85,15 +77,10 @@ export class CrawlQueue {
 		this.loopPromise = null;
 	}
 
-	/** Returns the current number of actively processing items */
 	get activeCount(): number {
 		return this.activeItems.size;
 	}
 
-	/**
-	 * Adds a new item to the queue if it hasn't been visited yet.
-	 * Pre-parses the domain to avoid repeated URL parsing in the hot loop.
-	 */
 	enqueue(item: Omit<QueueItem, "domain"> & { url: string }): void {
 		if (
 			this.state.hasVisited(item.url) ||
@@ -103,14 +90,12 @@ export class CrawlQueue {
 			return;
 		}
 
-		// Pre-parse domain at enqueue time to avoid expensive URL parsing in hot loop
 		const domain = new URL(item.url).hostname;
 
 		const queueItem: QueueItem = { ...item, domain };
 		this.queuedUrls.add(item.url);
 		this.queue.push(queueItem);
 
-		// Persist to DB in batches so interrupted crawls can be resumed
 		if (this.sessionId && this.db) {
 			this.persistBuffer.push(queueItem);
 			if (this.persistBuffer.length >= CrawlQueue.PERSIST_BATCH_SIZE) {
@@ -123,14 +108,10 @@ export class CrawlQueue {
 		}
 	}
 
-	/**
-	 * Schedules a retry for an item after a specified delay.
-	 */
 	scheduleRetry(item: QueueItem, delay: number): void {
 		const timer = setTimeout(() => {
 			this.retryTimers.delete(timer);
 			if (!this.state.isActive) return;
-			// Force re-queue even if it was previously tracked, as we need to retry
 			this.queuedUrls.delete(item.url);
 			this.enqueue(item);
 		}, delay);
@@ -138,9 +119,6 @@ export class CrawlQueue {
 		this.retryTimers.add(timer);
 	}
 
-	/**
-	 * Cancels all pending retry timers.
-	 */
 	clearRetries(): void {
 		for (const timer of this.retryTimers) {
 			clearTimeout(timer);
@@ -148,46 +126,21 @@ export class CrawlQueue {
 		this.retryTimers.clear();
 	}
 
-	/**
-	 * Flushes any items buffered for DB persistence that have not yet reached
-	 * the PERSIST_BATCH_SIZE threshold.
-	 *
-	 * Must be called before marking a session as interrupted so that items
-	 * enqueued since the last batch flush are saved to the DB and will be
-	 * available when the session is resumed. Without this, up to
-	 * PERSIST_BATCH_SIZE - 1 pending URLs would be silently dropped on disconnect.
-	 */
 	flushPersistBuffer(): void {
 		if (this.sessionId && this.db && this.persistBuffer.length > 0) {
 			saveQueueItemBatch(this.db, this.sessionId, this.persistBuffer.splice(0));
 		}
 	}
 
-	/**
-	 * Starts the processing loop and returns a promise that resolves when the queue is empty and idle.
-	 */
 	start(): Promise<void> {
 		this.loopPromise ??= this.loop();
 		return this.loopPromise;
 	}
 
-	/**
-	 * Main processing loop.
-	 *
-	 * Implements a "polite" crawling strategy:
-	 * 1. Respects per-domain delays (Robots.txt or config).
-	 * 2. Manages concurrency limits.
-	 * 3. Handles queue draining and idle states.
-	 * 4. Watchdog detects stuck states and logs warnings.
-	 *
-	 * Uses a non-blocking delay system where we calculate the next allowed time
-	 * for a domain and sleep effectively.
-	 */
 	private async loop(): Promise<void> {
 		const domainProcessing = new Map<string, number>();
 		const processingPromises = new Set<Promise<void>>();
 
-		// Watchdog state for stuck detection
 		let lastProgressTime = Date.now();
 		let lastScannedCount = 0;
 		let lastProgressLog = 0;
@@ -271,7 +224,6 @@ export class CrawlQueue {
 
 					this.activeItems.add(item.url);
 
-					// Wrap with timeout to prevent hanging on stuck items
 					const task = (() => {
 						const timeoutPromise = new Promise<void>((_, reject) =>
 							setTimeout(
@@ -311,7 +263,6 @@ export class CrawlQueue {
 				}
 			}
 
-			// Progress tracking for watchdog - track completions, not just active count
 			const currentScanned = this.state.stats.pagesScanned;
 			if (currentScanned !== lastScannedCount) {
 				lastProgressTime = now;
@@ -319,7 +270,6 @@ export class CrawlQueue {
 				stuckWarningCount = 0; // Reset on actual progress
 			}
 
-			// Periodic progress logging
 			if (now - lastProgressLog > progressLogInterval) {
 				lastProgressLog = now;
 				this.logger.info(
@@ -327,7 +277,6 @@ export class CrawlQueue {
 				);
 			}
 
-			// Watchdog: warn if stuck (no completions for a while)
 			const timeSinceProgress = now - lastProgressTime;
 			if (timeSinceProgress > stuckThreshold && this.activeCount > 0) {
 				stuckWarningCount++;
@@ -337,19 +286,15 @@ export class CrawlQueue {
 						`Stuck items may include: ${activeUrls}...`,
 				);
 
-				// Force-clear stuck items after extended period
 				if (timeSinceProgress > stuckForceClear) {
 					this.logger.error(
 						`[Watchdog] Force-clearing ${this.activeCount} stuck items after ${Math.round(stuckForceClear / 1000)}s`,
 					);
-					// Clear all active items - they will be treated as failures
 					const stuckUrls = [...this.activeItems];
 					this.activeItems.clear();
-					// Record failures for each stuck item
 					for (const _ of stuckUrls) {
 						this.state.recordFailure();
 					}
-					// Reset progress tracking
 					lastProgressTime = now;
 					stuckWarningCount = 0;
 				}
@@ -391,9 +336,6 @@ export class CrawlQueue {
 		}
 	}
 
-	/**
-	 * Returns a promise that resolves when the current queue processing is complete.
-	 */
 	async awaitIdle(): Promise<void> {
 		if (this.loopPromise) {
 			await this.loopPromise;

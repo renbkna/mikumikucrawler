@@ -33,17 +33,7 @@ export class CrawlSession {
 	/** Per-session coalescer — prevents duplicate in-flight fetches within this session only.
 	 *  Scoped to each CrawlSession so two users crawling the same URL never share results. */
 	private readonly coalescer: RequestCoalescer;
-	/**
-	 * Assigned after the queue is created (circular dep: pipeline needs queue,
-	 * queue's processItem closure captures pipeline lazily via `this`).
-	 * The `!` assertion is safe because start() can only be called after the
-	 * constructor completes.
-	 */
 	private pipeline!: (item: QueueItem) => Promise<void>;
-	/**
-	 * Memoises the in-progress shutdown promise so concurrent callers to stop()
-	 * all await the same teardown sequence instead of racing to close resources.
-	 */
 	private stopPromise: Promise<void> | null = null;
 	/** Unique ID for this session — used to persist queue state to DB for resume support. */
 	readonly sessionId: string;
@@ -128,14 +118,7 @@ export class CrawlSession {
 		};
 	}
 
-	/**
-	 * Initializes the crawl pipeline:
-	 * 1. Preps the dynamic renderer (Playwright) if enabled.
-	 * 2. Checks robots.txt compliance for the target domain.
-	 * 3. Seeds the queue with the initial URL.
-	 */
 	async start(): Promise<void> {
-		// Persist this session so it can be resumed if interrupted
 		saveSession(this.db, this.sessionId, this.socket.id, this.options);
 
 		try {
@@ -195,10 +178,6 @@ export class CrawlSession {
 			}
 
 			if (!this.isResumed) {
-				// Sitemap pre-seeding is only performed in "full" mode.
-				// In "links" and "media" modes the crawler discovers pages purely by
-				// following hyperlinks, keeping the crawl scoped to what is reachable
-				// from the seed URL without pre-loading potentially thousands of URLs.
 				if (this.options.crawlMethod === "full") {
 					const sitemapEntries = await fetchSitemap(
 						this.options.target,
@@ -214,12 +193,8 @@ export class CrawlSession {
 						}
 					}
 				}
-				// Seed the target URL itself (it may not be in the sitemap)
 				this.queue.enqueue({ url: this.options.target, depth: 0, retries: 0 });
 			} else {
-				// Resumed session: pre-seed visited set from pages already crawled so
-				// outbound links discovered from pending items don't trigger redundant
-				// re-fetches of URLs the prior session already processed.
 				const alreadyCrawled = this.db.query("SELECT url FROM pages").all() as {
 					url: string;
 				}[];
@@ -230,7 +205,6 @@ export class CrawlSession {
 					`[Resume] Pre-seeded ${alreadyCrawled.length} visited URLs from DB`,
 				);
 
-				// Seed from persisted pending queue items
 				const pendingItems = loadPendingQueueItems(this.db, this.sessionId);
 				this.logger.info(
 					`[Resume] Seeding ${pendingItems.length} pending URLs`,
@@ -255,31 +229,20 @@ export class CrawlSession {
 		}
 	}
 
-	/**
-	 * Stops the crawler, clearing the queue and closing the renderer.
-	 * Idempotent and race-safe: concurrent callers all await the same shutdown
-	 * promise so resources (e.g. dynamicRenderer) are never closed twice.
-	 */
 	stop(): Promise<void> {
-		// Already shutting down or fully stopped — return the cached promise.
 		if (this.stopPromise) {
 			return this.stopPromise;
 		}
 
-		// Never started, or already stopped without a pending promise.
 		if (!this.state.isActive) {
 			return Promise.resolve();
 		}
 
-		// Flip the active flag synchronously so any concurrent caller that
-		// reaches here before the microtask queue drains will see isActive===false
-		// and hit the branch above on their next tick.
 		this.state.stop();
 		this.stopPromise = this._teardown();
 		return this.stopPromise;
 	}
 
-	/** Performs the actual async teardown.  Only ever called once via stop(). */
 	private async _teardown(): Promise<void> {
 		this.queue.clearRetries();
 		await this.queue.awaitIdle();
@@ -294,37 +257,16 @@ export class CrawlSession {
 		this.socket.emit("attackEnd", finalStats);
 	}
 
-	/**
-	 * Marks this session as interrupted in the DB so it can be listed and resumed later.
-	 * Called by socketHandlers on disconnect instead of stop() when the crawl is still running.
-	 *
-	 * Sequence (all synchronous except the renderer close):
-	 * 1. Flip active flag so the queue loop stops dispatching new items.
-	 * 2. Cancel pending retry timers (no point retrying after disconnect).
-	 * 3. Flush the persist buffer so any sub-threshold queue items survive restart.
-	 * 4. Persist the 'interrupted' status before releasing resources.
-	 * 5. Fire-and-forget renderer close — don't block the disconnect handler.
-	 */
 	interrupt(): void {
 		if (this.state.isActive) {
 			this.state.stop();
 		}
 		this.queue.clearRetries();
-		// Flush items buffered below the 50-item batch threshold so they are
-		// persisted to DB and available when the session is resumed.
 		this.queue.flushPersistBuffer();
 		updateSessionStatus(this.db, this.sessionId, "interrupted");
-		// Close Puppeteer asynchronously — do not block the synchronous disconnect
-		// handler. The process-level exit handler in DynamicRenderer is the
-		// safety net if this promise is still pending when the process exits.
 		this.dynamicRenderer.close().catch(() => {});
 	}
 
-	/**
-	 * Resumes a previously interrupted crawl session from persisted state.
-	 * Loads options from DB, creates a new CrawlSession in resumed mode, and starts it.
-	 * Returns null if the session cannot be found or is not in 'interrupted' status.
-	 */
 	static resume(
 		sessionId: string,
 		socket: CrawlerSocket,
@@ -343,16 +285,14 @@ export class CrawlSession {
 			return null;
 		}
 
-		// Re-mark as running with the new socket ID
 		const session = new CrawlSession(
 			socket,
 			stored.options,
 			db,
 			logger,
 			sessionId,
-			/* isResumed */ true,
+			true,
 		);
-		// Update socket_id to the new connection and flip status back to 'running'
 		db.query(
 			"UPDATE crawl_sessions SET socket_id = ?, status = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
 		).run(socket.id, sessionId);

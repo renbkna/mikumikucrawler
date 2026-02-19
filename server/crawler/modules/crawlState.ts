@@ -6,23 +6,17 @@ import type {
 } from "../../types.js";
 import { LRUCache } from "../../utils/lruCache.js";
 
-/** Tracks the ongoing progress, statistics, and domain state of a crawl session. */
 export class CrawlState {
 	private readonly options: SanitizedCrawlOptions;
 	private readonly startTime: number;
 	public isActive: boolean;
 	public stopReason?: string;
-	// Use LRU cache instead of unbounded Set to prevent memory exhaustion
 	private readonly visited: LRUCache<string, boolean>;
 	private readonly domainDelays: Map<string, number>;
-	/** Per-domain page count for enforcing maxPagesPerDomain budget. */
 	private readonly domainPageCounts: Map<string, number>;
 	private consecutiveFailures: number;
-	/** Timestamp of last failure for circuit breaker cooldown. */
 	private lastFailureTime: number;
-	// Configurable threshold with explanation
 	private readonly CIRCUIT_BREAKER_THRESHOLD: number;
-	/** Cooldown period in ms before circuit breaker auto-resets (60 seconds). */
 	private readonly CIRCUIT_BREAKER_COOLDOWN_MS = 60000;
 	public stats: CrawlStats;
 
@@ -30,16 +24,11 @@ export class CrawlState {
 		this.options = options;
 		this.startTime = Date.now();
 		this.isActive = true;
-		// Limit visited cache to prevent memory exhaustion
-		// 50,000 URLs is a reasonable limit for most crawls while preventing
-		// memory issues (each URL ~100-200 bytes = ~10MB max)
 		this.visited = new LRUCache(50000);
 		this.domainDelays = new Map();
 		this.domainPageCounts = new Map();
 		this.consecutiveFailures = 0;
 		this.lastFailureTime = 0;
-		// Threshold based on empirical data: 20 consecutive failures typically
-		// indicates a systematic issue (network, target blocking, etc.)
 		this.CIRCUIT_BREAKER_THRESHOLD = 20;
 		this.stats = {
 			pagesScanned: 0,
@@ -52,26 +41,16 @@ export class CrawlState {
 		};
 	}
 
-	/**
-	 * Checks if the session is still active and hasn't hit the global page limit.
-	 */
 	canProcessMore(): boolean {
 		return this.isActive && this.stats.pagesScanned < this.options.maxPages;
 	}
 
-	/**
-	 * Returns true when the per-domain crawl budget has been reached for the given
-	 * domain. Always returns false when maxPagesPerDomain is 0 (unlimited).
-	 */
 	isDomainBudgetExceeded(domain: string): boolean {
 		const budget = this.options.maxPagesPerDomain ?? 0;
 		if (budget <= 0) return false;
 		return (this.domainPageCounts.get(domain) ?? 0) >= budget;
 	}
 
-	/**
-	 * Increments the per-domain page counter. Call after a successful page save.
-	 */
 	recordDomainPage(domain: string): void {
 		this.domainPageCounts.set(
 			domain,
@@ -79,15 +58,6 @@ export class CrawlState {
 		);
 	}
 
-	/**
-	 * Adjusts the per-domain crawl delay based on observed response time and
-	 * HTTP status code (adaptive throttling).
-	 *
-	 * Rules:
-	 * - 429/503 → multiply current delay by 3, respect Retry-After if larger.
-	 * - responseMs > SLOW_RESPONSE_MS → multiply by SLOW_FACTOR.
-	 * - responseMs < FAST_RESPONSE_MS → multiply by FAST_FACTOR (min = configured delay).
-	 */
 	adaptDomainDelay(
 		domain: string,
 		responseMs: number,
@@ -117,7 +87,6 @@ export class CrawlState {
 		if (responseMs < ADAPTIVE_THROTTLE.FAST_RESPONSE_MS) {
 			const floor = this.options.crawlDelay;
 			const faster = Math.max(current * ADAPTIVE_THROTTLE.FAST_FACTOR, floor);
-			// Only update if we actually changed; avoids repeated Map writes at the floor
 			if (faster < current) {
 				this.domainDelays.set(domain, faster);
 			}
@@ -147,14 +116,9 @@ export class CrawlState {
 		return this.domainDelays.get(domain) ?? this.options.crawlDelay;
 	}
 
-	/**
-	 * Records a successful page crawl and updates metrics.
-	 * @param contentLength - Raw size of the page content in bytes.
-	 */
 	recordSuccess(contentLength: number): void {
 		this.stats.pagesScanned += 1;
 		this.stats.successCount = (this.stats.successCount ?? 0) + 1;
-		// Reset circuit breaker on success
 		this.consecutiveFailures = 0;
 		this.lastFailureTime = 0;
 
@@ -163,26 +127,19 @@ export class CrawlState {
 		}
 	}
 
-	/**
-	 * Checks if circuit breaker should trip based on consecutive failures.
-	 * Implements a half-open state: after COOLDOWN_MS, allows retries.
-	 * @param previousFailureTime - The timestamp before this failure, for cooldown check.
-	 */
 	private shouldTripCircuitBreaker(previousFailureTime: number): boolean {
-		// If we haven't hit the threshold, no trip
 		if (this.consecutiveFailures < this.CIRCUIT_BREAKER_THRESHOLD) {
 			return false;
 		}
 
-		// If cooldown period has passed since the last failure, reset and allow retry (half-open state)
 		const now = Date.now();
 		if (
 			previousFailureTime > 0 &&
 			now - previousFailureTime > this.CIRCUIT_BREAKER_COOLDOWN_MS
 		) {
-			this.consecutiveFailures = 1; // Count this failure as the first in a new cycle
+			this.consecutiveFailures = 1;
 			this.lastFailureTime = now;
-			this.isActive = true; // Reopen the circuit for retry
+			this.isActive = true;
 			this.stopReason = undefined;
 			return false;
 		}
@@ -219,9 +176,6 @@ export class CrawlState {
 		}
 	}
 
-	/**
-	 * Generates a point-in-time snapshot of the crawler's performance metrics.
-	 */
 	snapshotQueueMetrics(queueLength: number, activeCount: number): QueueStats {
 		const elapsedSeconds = Math.max(
 			Math.floor((Date.now() - this.startTime) / 1000),
@@ -239,9 +193,6 @@ export class CrawlState {
 		};
 	}
 
-	/**
-	 * Computes the final statistics including totals, rates, and elapsed time.
-	 */
 	buildFinalStats(): CrawlStats & {
 		elapsedTime: { hours: number; minutes: number; seconds: number };
 		pagesPerSecond: string;
@@ -276,9 +227,6 @@ export class CrawlState {
 		};
 	}
 
-	/**
-	 * Gets memory usage statistics for monitoring.
-	 */
 	getMemoryStats(): {
 		visitedCacheSize: number;
 		domainDelaysSize: number;

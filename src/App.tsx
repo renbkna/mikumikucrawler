@@ -68,18 +68,13 @@ function App() {
 	const maxPagesRef = useRef(crawlOptions.maxPages);
 	const fallbackToastShownRef = useRef(false);
 
-	// ── Interrupted-session discovery ───────────────────────────────────────
-	// Fetch on mount so we can show the resume banner without user action.
-	// We also re-fetch after a crawl ends so newly-interrupted sessions appear.
 	const fetchInterruptedSessions = useCallback(async () => {
 		try {
 			const res = await fetch("/api/sessions");
 			if (!res.ok) return;
 			const data = (await res.json()) as { sessions: SessionSummary[] };
 			setInterruptedSessions(data.sessions);
-		} catch {
-			// Non-critical — the banner simply won't show if this fails
-		}
+		} catch {}
 	}, []);
 
 	useEffect(() => {
@@ -107,11 +102,10 @@ function App() {
 				fallbackToastShownRef.current = true;
 			}
 
-			if (logContainerRef.current) {
+			const container = logContainerRef.current;
+			if (container) {
 				setTimeout(() => {
-					if (logContainerRef.current) {
-						logContainerRef.current.scrollTop = 0;
-					}
+					container.scrollTop = 0;
 				}, 10);
 			}
 		},
@@ -210,7 +204,6 @@ function App() {
 				`Crawl completed! Scanned ${finalStats.pagesScanned} pages`,
 				TOAST_DEFAULTS.LONG_TIMEOUT,
 			);
-			// Refresh interrupted sessions — a completed crawl removes it from the list
 			fetchInterruptedSessions();
 		},
 		[addLog, addToast, setStats, setProgress, fetchInterruptedSessions],
@@ -249,25 +242,19 @@ function App() {
 				return;
 			}
 
-			// Reset UI to a clean slate — the server will replay progress via events
 			resetStats();
 			resetPages();
 			setFilterText("");
 			setProgress(0);
 			fallbackToastShownRef.current = false;
-
-			// Display the resumed session's target in the URL field
 			handleTargetChange(target);
 
 			addLog(`[Resume] Continuing crawl of ${target}…`);
 			setIsAttacking(true);
-			// Skip the theatre animation for resume — go straight to live view
 			setTheatreStatus("live");
 
 			emit("resumeSession", { sessionId });
 			addToast("info", "Resuming interrupted crawl…");
-
-			// Optimistically remove from the local sessions list
 			setInterruptedSessions((prev) => prev.filter((s) => s.id !== sessionId));
 		},
 		[
@@ -404,11 +391,7 @@ function App() {
 			/>
 
 			<div
-				className={`relative w-full h-full pt-4 px-4 pb-16 transition-all duration-1000 ${
-					isUIHidden
-						? "opacity-0 scale-95 blur-xl pointer-events-none"
-						: "opacity-100 scale-100 blur-0"
-				} ${isModalOpen ? "overflow-hidden" : "overflow-y-auto"}`}
+				className={`relative w-full h-full pt-4 px-4 pb-16 transition-all duration-1000 ${isUIHidden ? "opacity-0 scale-95 blur-xl pointer-events-none" : "opacity-100 scale-100 blur-0"} ${isModalOpen ? "overflow-hidden" : "overflow-y-auto"}`}
 			>
 				<div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
 					<div className="absolute top-10 left-10 w-32 h-32 bg-miku-teal/10 rounded-full blur-3xl animate-float" />
@@ -475,7 +458,6 @@ function App() {
 						/>
 					</section>
 
-					{/* ── Interrupted sessions banner ──────────────────────────────── */}
 					{interruptedSessions.length > 0 && !isAttacking && (
 						<div className="flex items-center justify-between px-5 py-3 rounded-2xl border-2 border-amber-200 bg-amber-50 text-amber-800 shadow-sm">
 							<div className="flex items-center gap-2 text-sm font-bold">
