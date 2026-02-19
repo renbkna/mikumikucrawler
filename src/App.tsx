@@ -19,7 +19,7 @@ import {
 } from "./components";
 import { MikuBanner } from "./components/MikuBanner";
 import { TheatreOverlay } from "./components/TheatreOverlay";
-import { PROGRESS_CONFIG, TOAST_DEFAULTS, UI_LIMITS } from "./constants";
+import { TOAST_DEFAULTS, UI_LIMITS } from "./constants";
 import { useSocket, useToast } from "./hooks";
 import { useCrawlState } from "./hooks/useCrawlState";
 import type { CrawledPage, QueueStats, Stats } from "./types";
@@ -67,6 +67,7 @@ function App() {
 	const logContainerRef = useRef<HTMLDivElement>(null);
 	const maxPagesRef = useRef(crawlOptions.maxPages);
 	const fallbackToastShownRef = useRef(false);
+	const queueStatsRef = useRef<QueueStats | null>(null);
 
 	const fetchInterruptedSessions = useCallback(async () => {
 		try {
@@ -132,14 +133,24 @@ function App() {
 			}
 
 			setProgress((prev) => {
-				const adjustedTarget = Math.max(
-					maxPagesRef.current * PROGRESS_CONFIG.TARGET_MULTIPLIER,
-					1,
-				);
-				const newProgress = Math.min(
-					((newStats.pagesScanned || 0) / adjustedTarget) * 100,
-					PROGRESS_CONFIG.MAX_PROGRESS_BEFORE_COMPLETE,
-				);
+				// Root cause fix: Calculate progress based on actual total work, not just maxPages
+				// When queue grows beyond maxPages (due to discovered links), this ensures
+				// progress is calculated correctly: scanned / (scanned + remaining + active)
+				const currentQueueStats = queueStatsRef.current;
+				const queueSize = currentQueueStats?.queueLength ?? 0;
+				const activeSize = currentQueueStats?.activeRequests ?? 0;
+				const scanned = newStats.pagesScanned || 0;
+
+				// Total work = scanned + pending in queue + currently being processed
+				const totalWork = scanned + queueSize + activeSize;
+
+				// If we haven't discovered much yet, use maxPages as minimum target
+				const minimumTarget = Math.max(maxPagesRef.current, 1);
+				const effectiveTotal = Math.max(totalWork, minimumTarget);
+
+				const newProgress =
+					totalWork > 0 ? Math.min((scanned / effectiveTotal) * 100, 100) : 0;
+
 				return Math.max(prev, newProgress);
 			});
 		},
@@ -148,6 +159,7 @@ function App() {
 
 	const handleQueueStats = useCallback(
 		(data: QueueStats) => {
+			queueStatsRef.current = data;
 			setQueueStats(data);
 		},
 		[setQueueStats],

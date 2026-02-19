@@ -34,8 +34,8 @@ export const TOAST_DEFAULTS = {
 } as const;
 
 export const PROGRESS_CONFIG = {
-	TARGET_MULTIPLIER: 0.8,
-	MAX_PROGRESS_BEFORE_COMPLETE: 99,
+	TARGET_MULTIPLIER: 1.0,
+	MAX_PROGRESS_BEFORE_COMPLETE: 100,
 } as const;
 
 export const RETRY_CONFIG = {
