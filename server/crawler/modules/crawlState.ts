@@ -1,9 +1,9 @@
+import { ADAPTIVE_THROTTLE } from "../../constants.js";
 import type {
 	CrawlStats,
 	QueueStats,
 	SanitizedCrawlOptions,
 } from "../../types.js";
-import { ADAPTIVE_THROTTLE } from "../../constants.js";
 import { LRUCache } from "../../utils/lruCache.js";
 
 /** Tracks the ongoing progress, statistics, and domain state of a crawl session. */
@@ -18,8 +18,12 @@ export class CrawlState {
 	/** Per-domain page count for enforcing maxPagesPerDomain budget. */
 	private readonly domainPageCounts: Map<string, number>;
 	private consecutiveFailures: number;
+	/** Timestamp of last failure for circuit breaker cooldown. */
+	private lastFailureTime: number;
 	// Configurable threshold with explanation
 	private readonly CIRCUIT_BREAKER_THRESHOLD: number;
+	/** Cooldown period in ms before circuit breaker auto-resets (60 seconds). */
+	private readonly CIRCUIT_BREAKER_COOLDOWN_MS = 60000;
 	public stats: CrawlStats;
 
 	constructor(options: SanitizedCrawlOptions) {
@@ -33,6 +37,7 @@ export class CrawlState {
 		this.domainDelays = new Map();
 		this.domainPageCounts = new Map();
 		this.consecutiveFailures = 0;
+		this.lastFailureTime = 0;
 		// Threshold based on empirical data: 20 consecutive failures typically
 		// indicates a systematic issue (network, target blocking, etc.)
 		this.CIRCUIT_BREAKER_THRESHOLD = 20;
@@ -149,18 +154,49 @@ export class CrawlState {
 	recordSuccess(contentLength: number): void {
 		this.stats.pagesScanned += 1;
 		this.stats.successCount = (this.stats.successCount ?? 0) + 1;
+		// Reset circuit breaker on success
 		this.consecutiveFailures = 0;
+		this.lastFailureTime = 0;
 
 		if (typeof contentLength === "number" && Number.isFinite(contentLength)) {
 			this.stats.totalData += Math.floor(contentLength / 1024);
 		}
 	}
 
+	/**
+	 * Checks if circuit breaker should trip based on consecutive failures.
+	 * Implements a half-open state: after COOLDOWN_MS, allows retries.
+	 * @param previousFailureTime - The timestamp before this failure, for cooldown check.
+	 */
+	private shouldTripCircuitBreaker(previousFailureTime: number): boolean {
+		// If we haven't hit the threshold, no trip
+		if (this.consecutiveFailures < this.CIRCUIT_BREAKER_THRESHOLD) {
+			return false;
+		}
+
+		// If cooldown period has passed since the last failure, reset and allow retry (half-open state)
+		const now = Date.now();
+		if (
+			previousFailureTime > 0 &&
+			now - previousFailureTime > this.CIRCUIT_BREAKER_COOLDOWN_MS
+		) {
+			this.consecutiveFailures = 1; // Count this failure as the first in a new cycle
+			this.lastFailureTime = now;
+			this.isActive = true; // Reopen the circuit for retry
+			this.stopReason = undefined;
+			return false;
+		}
+
+		return true;
+	}
+
 	recordFailure(): void {
 		this.stats.failureCount = (this.stats.failureCount ?? 0) + 1;
 		this.consecutiveFailures++;
+		const previousFailureTime = this.lastFailureTime;
+		this.lastFailureTime = Date.now();
 
-		if (this.consecutiveFailures >= this.CIRCUIT_BREAKER_THRESHOLD) {
+		if (this.shouldTripCircuitBreaker(previousFailureTime)) {
 			this.stop(
 				`Circuit breaker tripped: ${this.consecutiveFailures} consecutive failures`,
 			);

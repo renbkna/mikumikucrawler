@@ -77,7 +77,7 @@ describe("ContentProcessor", () => {
 			expect(result.extractedData.mainContent).toBeDefined();
 		});
 
-		test("handles PDF content processing", async () => {
+		test("handles PDF content processing with invalid data", async () => {
 			const logger = createMockLogger();
 			const processor = new ContentProcessor(logger);
 
@@ -91,6 +91,47 @@ describe("ContentProcessor", () => {
 			// Invalid PDF data should produce a processing error
 			expect(result.errors.length).toBe(1);
 			expect(result.errors[0].type).toBe("pdf_processing_error");
+		});
+
+		test("processes valid PDF content successfully", async () => {
+			const logger = createMockLogger();
+			const processor = new ContentProcessor(logger);
+
+			// Minimal valid PDF with "Hello World" text
+			// This tests the pdf-parse v2 API integration
+			const minimalPdf = Buffer.from(
+				`%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >> endobj
+4 0 obj << /Length 44 >> stream
+BT /F1 12 Tf 100 700 Td (Hello World) Tj ET
+endstream endobj
+xref
+0 5
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000214 00000 n 
+trailer << /Root 1 0 R /Size 5 >>
+startxref
+308
+%%EOF`,
+				"binary",
+			);
+
+			const result = await processor.processContent(
+				minimalPdf,
+				"https://example.com/test.pdf",
+				"application/pdf",
+			);
+
+			// Should process without errors
+			expect(result.url).toBe("https://example.com/test.pdf");
+			expect(result.contentType).toBe("application/pdf");
+			// PDF text extraction should work (or at least not crash)
+			expect(result.extractedData.mainContent).toBeDefined();
 		});
 
 		test("handles malformed HTML gracefully", async () => {

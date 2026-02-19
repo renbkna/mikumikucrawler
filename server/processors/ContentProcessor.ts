@@ -200,24 +200,19 @@ export class ContentProcessor {
 			}
 
 			// Lazy-load pdf-parse to avoid startup overhead.
-			// pdf-parse v2 ships both CJS and ESM builds; the callable may sit on
-			// `.default` (CJS interop) or be the module export itself depending on
-			// the runtime. Cast to any and normalise to a callable.
-			// biome-ignore lint/suspicious/noExplicitAny: pdf-parse ESM/CJS interop
-			const pdfParseModule = (await import("pdf-parse")) as any;
-			const pdfParse: (
-				buf: Buffer,
-				opts?: { max?: number },
-			) => Promise<{ text: string; numpages: number; info: unknown }> =
-				typeof pdfParseModule === "function"
-					? pdfParseModule
-					: (pdfParseModule.default ?? pdfParseModule);
+			// pdf-parse v2 changed its API:
+			// - Constructor: new PDFParse({ data: Uint8Array })
+			// - Result: { pages, text, total }
+			const { PDFParse } = await import("pdf-parse");
+
+			// Convert Buffer to Uint8Array for pdf-parse v2
+			const uint8Data = new Uint8Array(pdfBuffer);
+
+			// Create parser instance
+			const parser = new PDFParse({ data: uint8Data });
 
 			// Race against a hard timeout to prevent runaway processing
-			const parsePromise = pdfParse(pdfBuffer, {
-				// Limit pages parsed to prevent memory exhaustion
-				max: PDF_CONSTANTS.MAX_PAGES,
-			});
+			const parsePromise = parser.getText();
 			const timeoutPromise = Bun.sleep(
 				PDF_CONSTANTS.PROCESSING_TIMEOUT_MS,
 			).then(() => {
@@ -225,33 +220,34 @@ export class ContentProcessor {
 			});
 			const pdfData = await Promise.race([parsePromise, timeoutPromise]);
 
-			if (pdfData.numpages > PDF_CONSTANTS.MAX_PAGES) {
+			const numPages = pdfData.total ?? pdfData.pages?.length ?? 0;
+			if (numPages > PDF_CONSTANTS.MAX_PAGES) {
 				throw new Error(
-					`PDF has too many pages (${pdfData.numpages}). Maximum allowed: ${PDF_CONSTANTS.MAX_PAGES}`,
+					`PDF has too many pages (${numPages}). Maximum allowed: ${PDF_CONSTANTS.MAX_PAGES}`,
 				);
 			}
 
 			const mainContent = pdfData.text ?? "";
 
-			// pdf-parse surfaces metadata via pdfData.info
-			const info = (pdfData.info ?? {}) as Record<string, string | undefined>;
+			// pdf-parse v2 doesn't expose metadata the same way
+			// Use empty metadata for now
 			const metadata = {
-				title: info.Title,
-				author: info.Author,
-				subject: info.Subject,
-				creationDate: info.CreationDate,
-				modDate: info.ModDate,
+				title: "",
+				author: "",
+				description: "",
+				publishDate: "",
+				modifiedDate: "",
 			};
 
 			result.analysis = await analyzeContent(mainContent);
 
 			result.extractedData = { mainContent };
 			result.metadata = {
-				title: metadata.title ?? "",
-				author: metadata.author ?? "",
-				description: metadata.subject ?? "",
-				publishDate: metadata.creationDate ?? "",
-				modifiedDate: metadata.modDate ?? "",
+				title: metadata.title,
+				author: metadata.author,
+				description: metadata.description,
+				publishDate: metadata.publishDate,
+				modifiedDate: metadata.modifiedDate,
 			};
 
 			// PDFs don't have traditional HTML quality signals;
@@ -263,7 +259,7 @@ export class ContentProcessor {
 					hasTitle: !!metadata.title,
 					hasAuthor: !!metadata.author,
 					contentLength: wordCount,
-					pageCount: pdfData.numpages,
+					pageCount: numPages,
 				},
 				issues:
 					wordCount < 50

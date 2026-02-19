@@ -1,5 +1,6 @@
 import { Heart, History, Music } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { SessionSummary } from "./components";
 import {
 	ActionButtons,
 	ConfigurationView,
@@ -16,7 +17,6 @@ import {
 	StatsVisualizer,
 	ToastNotification,
 } from "./components";
-import type { SessionSummary } from "./components";
 import { MikuBanner } from "./components/MikuBanner";
 import { TheatreOverlay } from "./components/TheatreOverlay";
 import { PROGRESS_CONFIG, TOAST_DEFAULTS, UI_LIMITS } from "./constants";
@@ -481,7 +481,7 @@ function App() {
 							<div className="flex items-center gap-2 text-sm font-bold">
 								<History className="w-4 h-4 shrink-0" />
 								{interruptedSessions.length} interrupted crawl
-								{interruptedSessions.length !== 1 ? 's' : ''} found
+								{interruptedSessions.length !== 1 ? "s" : ""} found
 							</div>
 							<button
 								type="button"

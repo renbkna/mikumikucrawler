@@ -1,7 +1,5 @@
 export { ActionButtons } from "./ActionButtons";
 export { ConfigurationView } from "./ConfigurationView";
-export { ResumeSessionsPanel } from "./ResumeSessionsPanel";
-export type { SessionSummary } from "./ResumeSessionsPanel";
 export { CrawledPagesSection } from "./CrawledPagesSection";
 export { CrawlerForm } from "./CrawlerForm";
 export { ExportDialog } from "./ExportDialog";
@@ -9,6 +7,8 @@ export { Header } from "./Header";
 export * from "./KawaiiIcons";
 export { LogsSection } from "./LogsSection";
 export { ProgressBar } from "./ProgressBar";
+export type { SessionSummary } from "./ResumeSessionsPanel";
+export { ResumeSessionsPanel } from "./ResumeSessionsPanel";
 export { StatsGrid } from "./StatsGrid";
 export { StatsVisualizer } from "./StatsVisualizer";
 export { ToastNotification } from "./ToastNotification";

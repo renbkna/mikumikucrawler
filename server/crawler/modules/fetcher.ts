@@ -70,9 +70,7 @@ export async function fetchContent({
 
 		// Look up cached conditional GET headers from a previous crawl
 		const cached = db
-			.query(
-				"SELECT last_modified, etag FROM pages WHERE url = ? LIMIT 1",
-			)
+			.query("SELECT last_modified, etag FROM pages WHERE url = ? LIMIT 1")
 			.get(item.url) as CachedPageHeaders | undefined;
 
 		// Build conditional GET headers when we have something to compare against
@@ -115,9 +113,7 @@ export async function fetchContent({
 		// Parse Retry-After and return a sentinel so the pipeline can apply
 		// the correct domain-level backoff instead of a generic retry delay.
 		if (response.status === 429 || response.status === 503) {
-			const retryAfterMs = parseRetryAfter(
-				response.headers.get("retry-after"),
-			);
+			const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
 			logger.info(
 				`[Crawler] Rate-limited ${item.url} (${response.status}), retry after ${retryAfterMs}ms`,
 			);

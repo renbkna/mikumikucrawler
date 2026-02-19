@@ -56,7 +56,10 @@ function parseUrlset(xml: string): SitemapEntry[] {
 		entries.push({
 			url,
 			lastmod,
-			priority: priority !== undefined && Number.isFinite(priority) ? priority : undefined,
+			priority:
+				priority !== undefined && Number.isFinite(priority)
+					? priority
+					: undefined,
 			changefreq,
 		});
 	});
@@ -93,7 +96,9 @@ async function crawlSitemap(
 
 	if (isSitemapIndex) {
 		const childUrls = parseSitemapIndex(xml);
-		logger.debug(`[Sitemap] Index at ${url} references ${childUrls.length} sitemaps`);
+		logger.debug(
+			`[Sitemap] Index at ${url} references ${childUrls.length} sitemaps`,
+		);
 
 		for (const childUrl of childUrls) {
 			if (entries.length >= SITEMAP_CONSTANTS.MAX_ENTRIES) break;

@@ -126,6 +126,7 @@ export interface DatabaseLike {
 }
 
 export interface LoggerLike {
+	debug(message: string): void;
 	warn(message: string): void;
 	info(message: string): void;
 	error(message: string): void;

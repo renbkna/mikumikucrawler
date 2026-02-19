@@ -94,7 +94,9 @@ const CrawledPageCard = memo(function CrawledPageCard({
 			const response = data as { status: string; content?: string } | null;
 			if (response?.status === "ok") {
 				// content is "" when page was crawled in metadata-only mode
-				setFetchedContent(response.content || "(no content stored — metadata-only mode)");
+				setFetchedContent(
+					response.content || "(no content stored — metadata-only mode)",
+				);
 			} else {
 				throw new Error("Invalid response format");
 			}

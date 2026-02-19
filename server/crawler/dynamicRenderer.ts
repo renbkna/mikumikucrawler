@@ -25,18 +25,57 @@ interface InitializeResult {
 /**
  * Handles dynamic page rendering using Puppeteer to support SPA and JS-heavy sites.
  *
- * NOTE: This is resource-intensive. We use aggressive recycling and memory
- * checks to prevent the crawler from crashing the host system.
+ * Uses Ghostery's adblocker to block:
+ * - Ads (reduces page weight)
+ * - Cookie consent banners (EasyList Cookie List)
+ * - Tracking scripts
+ *
+ * This is more robust than manual consent handling and is maintained by the community.
  */
 export class DynamicRenderer {
 	private static readonly instances = new Set<DynamicRenderer>();
 	private static handlersRegistered = false;
+	private static blockerPromise: Promise<
+		InstanceType<
+			typeof import("@ghostery/adblocker-puppeteer").PuppeteerBlocker
+		>
+	> | null = null;
 
 	private readonly options: SanitizedCrawlOptions;
 	private readonly logger: Logger;
 	private browser: Browser | null;
+	private browserPid: number | null;
 	private pageCount: number;
 	private enabled: boolean;
+
+	/**
+	 * Lazily initializes the adblocker with EasyList filter lists.
+	 * Shared across all instances to avoid re-downloading filter lists.
+	 */
+	private static async getBlocker(): Promise<
+		InstanceType<
+			typeof import("@ghostery/adblocker-puppeteer").PuppeteerBlocker
+		>
+	> {
+		if (!DynamicRenderer.blockerPromise) {
+			DynamicRenderer.blockerPromise = (async () => {
+				const { PuppeteerBlocker } = await import(
+					"@ghostery/adblocker-puppeteer"
+				);
+				const fetch = (await import("cross-fetch")).default;
+
+				return PuppeteerBlocker.fromLists(fetch, [
+					// Main ad blocking list
+					"https://easylist.to/easylist/easylist.txt",
+					// Cookie consent and newsletter popup blocking
+					"https://easylist.to/easylist/easylist_cookie.txt",
+					// Annoyances (popups, overlays, newsletter prompts)
+					"https://easylist.to/easylist/easylist_annoyance.txt",
+				]);
+			})();
+		}
+		return DynamicRenderer.blockerPromise;
+	}
 
 	/**
 	 * Registers process-level cleanup handlers once for all instances.
@@ -83,6 +122,7 @@ export class DynamicRenderer {
 		this.options = options;
 		this.logger = logger;
 		this.browser = null;
+		this.browserPid = null;
 		this.pageCount = 0;
 		this.enabled = options.dynamic !== false;
 
@@ -176,6 +216,13 @@ export class DynamicRenderer {
 				"--disable-background-networking",
 			],
 		});
+
+		// Capture browser process PID for force-kill capability
+		const process = this.browser.process();
+		this.browserPid = process?.pid ?? null;
+		if (this.browserPid) {
+			this.logger.debug(`Browser PID: ${this.browserPid}`);
+		}
 
 		this.pageCount = 0;
 		this.enabled = true;
@@ -271,7 +318,12 @@ export class DynamicRenderer {
 		const page = await this.browser.newPage();
 		this.pageCount++;
 
-		// Track if navigation happens mid-extraction (SPA route changes)
+		// Set default timeout for all page operations - root cause fix for hanging
+		// This ensures any Puppeteer operation will timeout rather than hang indefinitely
+		const pageTimeout = DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.STANDARD_NAVIGATION;
+		page.setDefaultTimeout(pageTimeout);
+		page.setDefaultNavigationTimeout(pageTimeout);
+
 		let navigationOccurred = false;
 		const navigationHandler = () => {
 			navigationOccurred = true;
@@ -286,12 +338,34 @@ export class DynamicRenderer {
 				DNT: "1",
 			});
 
-			// Block non-essential resources to significantly reduce memory usage and
-			// page load time. We keep document, script, xhr, and fetch so SPAs still
-			// render correctly. Images, stylesheets, fonts, and media are irrelevant
-			// to content extraction and typically account for 60–80% of page weight.
+			// Set up request interception to block non-essential resources
+			// This significantly reduces bandwidth and speeds up page loads
 			await page.setRequestInterception(true);
+			const blocker = await DynamicRenderer.getBlocker();
+
 			page.on("request", (req) => {
+				// Check if already handled (cooperative intercept mode)
+				if (req.isInterceptResolutionHandled()) return;
+
+				// Check adblocker for ads, trackers, cookie banners
+				// Using type assertion to work with the blocker's match API
+				const result = blocker.match(
+					// biome-ignore lint/suspicious/noExplicitAny: Blocker API requires internal Request type
+					{ type: req.resourceType(), url: req.url() } as any,
+				);
+				if (result.match) {
+					// Log if blocking something that might be important (scripts, documents)
+					const resourceType = req.resourceType();
+					if (resourceType === "script" || resourceType === "document") {
+						this.logger.debug(
+							`[Adblocker] Blocking ${resourceType}: ${req.url().substring(0, 100)}`,
+						);
+					}
+					req.abort();
+					return;
+				}
+
+				// Block non-essential resources for bandwidth optimization
 				const blocked = ["image", "stylesheet", "font", "media"];
 				if (blocked.includes(req.resourceType())) {
 					req.abort();
@@ -305,18 +379,11 @@ export class DynamicRenderer {
 			const isComplex = DYNAMIC_RENDERER_CONSTANTS.COMPLEX_JS_SITES.some(
 				(site) => item.url.includes(site),
 			);
-			// Use "domcontentloaded" for all sites — "networkidle0" hangs indefinitely
-			// on JS-heavy sites (YouTube, etc.) that never stop firing background requests,
-			// burning the full 60 s timeout on every URL. waitForComplexContent() handles
-			// waiting for JS-rendered elements via waitForSelector instead.
 			const waitUntil = "domcontentloaded";
 			const navigationTimeout = isComplex
 				? DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.COMPLEX_NAVIGATION
 				: DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.STANDARD_NAVIGATION;
 
-			// Set cookies BEFORE navigation so consent bypasses work on first page load.
-			// Previously cookies were set after goto(), meaning YouTube always saw the
-			// consent wall before the CONSENT=YES+ cookie could take effect.
 			await this.setCookiesForPage(page, item.url);
 
 			const response = await page.goto(item.url, {
@@ -332,36 +399,43 @@ export class DynamicRenderer {
 				10,
 			);
 			const lastModified = headers["last-modified"];
-			// Puppeteer exposes response headers — capture X-Robots-Tag so the
-			// pipeline can respect server-level robots directives on dynamic pages.
 			const xRobotsTag = headers["x-robots-tag"] ?? null;
 
-			// Start tracking navigation after initial page load
-			page.on("framenavigated", navigationHandler);
+			// Handle consent modals BEFORE tracking navigation.
+			// Consent bypass may trigger a navigation which is expected and desired.
+			// We track this to avoid incorrectly aborting on consent-triggered navigations.
+			const consentNavigationExpected = await this.handleConsentModals(
+				page,
+				item.url,
+			);
 
-			// Attempt to bypass consent walls (Google/YouTube/GDPR)
-			await this.handleConsentModals(page, item.url);
+			// Now start tracking navigation for unexpected SPA route changes
+			page.on("framenavigated", navigationHandler);
 
 			if (isComplex) {
 				await this.waitForComplexContent(page, item.url);
 			}
 
-			// Abort if SPA navigated away during wait
+			// Only abort on unexpected navigation (not consent-triggered)
+			// Reset navigationOccurred after consent since any prior navigation was expected
+			if (consentNavigationExpected) {
+				navigationOccurred = false;
+			}
+
 			if (navigationOccurred) {
 				this.logger.debug(
-					`Navigation occurred during rendering of ${item.url}, falling back to static`,
+					`Unexpected navigation during rendering of ${item.url}, falling back to static`,
 				);
 				page.off("framenavigated", navigationHandler);
 				await this.closePageSafely(page);
 				return null;
 			}
 
-			// Use safe extraction to handle frame detachment gracefully
 			const extracted = await this.safeExtractContent(page);
 			if (!extracted || navigationOccurred) {
 				page.off("framenavigated", navigationHandler);
 				await this.closePageSafely(page);
-				return null; // Fall back to static crawling
+				return null;
 			}
 
 			const { content, title, description } = extracted;
@@ -405,7 +479,6 @@ export class DynamicRenderer {
 
 			const errorMessage = getErrorMessage(err);
 
-			// Handle recoverable browser/page errors by falling back to static crawling
 			if (
 				errorMessage.includes("Target closed") ||
 				errorMessage.includes("Session closed") ||
@@ -436,71 +509,140 @@ export class DynamicRenderer {
 	 *
 	 * NOTE: page.evaluate() has no built-in timeout. On JS-heavy pages (YouTube SPA), Chrome's V8
 	 * may be busy executing framework init code, causing CDP commands to hang indefinitely.
-	 * All evaluate() calls are wrapped in Promise.race() with a 5 s hard cap.
+	 * All evaluate() calls are wrapped in Promise.race() with a timeout.
 	 * textContent is used instead of innerText to avoid expensive layout reflow.
+	 *
+	 * @returns true if consent was clicked and navigation may occur, false otherwise
 	 */
-	async handleConsentModals(page: Page, url: string): Promise<void> {
-		const EVAL_TIMEOUT_MS = 5000;
-		/** Returns a promise that resolves to `fallback` after `ms` milliseconds. */
+	async handleConsentModals(page: Page, url: string): Promise<boolean> {
+		const EVAL_TIMEOUT_MS = DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.CONSENT_EVAL;
+		const NAV_TIMEOUT_MS =
+			DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.CONSENT_NAVIGATION;
+
 		const withTimeout = <T>(p: Promise<T>, fallback: T): Promise<T> =>
 			Promise.race([
 				p,
-				new Promise<T>((resolve) => setTimeout(() => resolve(fallback), EVAL_TIMEOUT_MS)),
+				new Promise<T>((resolve) =>
+					setTimeout(() => resolve(fallback), EVAL_TIMEOUT_MS),
+				),
 			]);
 
 		try {
-			// Use textContent (no layout reflow) instead of innerText for speed.
-			// Wrapped with a 5 s timeout so a busy V8 context can't block the crawler.
 			const isConsentScreen = await withTimeout(
 				page.evaluate(() => {
 					const text = (document.body?.textContent ?? "").toLowerCase();
 					return (
 						text.includes("before you continue") ||
 						text.includes("agree to the use of cookies") ||
-						text.includes("accept all cookies")
+						text.includes("accept all cookies") ||
+						text.includes("cookie preferences") ||
+						text.includes("we value your privacy")
 					);
 				}),
 				false,
 			);
 
-			if (isConsentScreen) {
-				this.logger.info(
-					`Potential consent wall detected on ${url}. Attempting to bypass...`,
-				);
-
-				const clicked = await withTimeout(
-					page.evaluate(() => {
-						const keywords = ["accept all", "i agree", "accept", "agree", "allow"];
-						const buttons = Array.from(
-							document.querySelectorAll("button, input[type='submit']"),
-						) as HTMLElement[];
-
-						for (const keyword of keywords) {
-							const match = buttons.find((btn) => {
-								const text = (btn.textContent ?? "").toLowerCase();
-								const label = btn.getAttribute("aria-label")?.toLowerCase() ?? "";
-								return text.includes(keyword) || label.includes(keyword);
-							});
-							if (match) {
-								match.click();
-								return true;
-							}
-						}
-						return false;
-					}),
-					false,
-				);
-
-				if (clicked) {
-					// Wait for the navigation or re-render that follows the click
-					await Bun.sleep(2000);
-				}
+			if (!isConsentScreen) {
+				return false;
 			}
+
+			this.logger.info(
+				`Consent wall detected on ${url}. Attempting to bypass...`,
+			);
+
+			const clicked = await withTimeout(
+				page.evaluate(() => {
+					// YouTube-specific consent button selectors
+					const youtubeSelectors = [
+						'button[aria-label*="Accept"]',
+						'button[aria-label*="agree"]',
+						"ytd-button-renderer#accept-button button",
+						"button.yt-spec-button-shape-next--call-to-action",
+						'#dialog button[aria-label*="Accept all"]',
+					];
+
+					// Try YouTube-specific selectors first
+					for (const selector of youtubeSelectors) {
+						const btn = document.querySelector(selector) as HTMLElement;
+						if (btn && !btn.hidden) {
+							btn.click();
+							return true;
+						}
+					}
+
+					// Generic keyword-based search
+					const keywords = [
+						"accept all",
+						"accept cookies",
+						"i agree",
+						"agree all",
+						"accept",
+						"agree",
+						"allow",
+						"allow all",
+						"got it",
+						"continue",
+						"agree to the use of cookies",
+					];
+					const buttons = Array.from(
+						document.querySelectorAll(
+							"button, input[type='submit'], a[role='button'], [role='button']",
+						),
+					) as HTMLElement[];
+
+					for (const keyword of keywords) {
+						const match = buttons.find((btn) => {
+							const text = (btn.textContent ?? "").toLowerCase();
+							const label = btn.getAttribute("aria-label")?.toLowerCase() ?? "";
+							const title = btn.getAttribute("title")?.toLowerCase() ?? "";
+							return (
+								text.includes(keyword) ||
+								label.includes(keyword) ||
+								title.includes(keyword)
+							);
+						});
+						if (match) {
+							match.click();
+							return true;
+						}
+					}
+					return false;
+				}),
+				false,
+			);
+
+			if (!clicked) {
+				this.logger.info(`No consent button found on ${url}`);
+				return false;
+			}
+
+			this.logger.info(
+				`Consent bypass clicked on ${url}, waiting for navigation...`,
+			);
+
+			try {
+				await Promise.race([
+					page.waitForNavigation({
+						waitUntil: "domcontentloaded",
+						timeout: NAV_TIMEOUT_MS,
+					}),
+					new Promise<void>((resolve) =>
+						setTimeout(() => resolve(undefined), NAV_TIMEOUT_MS),
+					),
+				]);
+			} catch {
+				this.logger.debug(
+					`Consent navigation wait completed/timed out for ${url}`,
+				);
+			}
+
+			await Bun.sleep(1000);
+			return true;
 		} catch (error) {
-			// Do not fail the crawl if bypass fails; just log it
-			this.logger.debug(
+			this.logger.info(
 				`Consent bypass attempt failed: ${getErrorMessage(error)}`,
 			);
+			return false;
 		}
 	}
 
@@ -536,24 +678,43 @@ export class DynamicRenderer {
 	/**
 	 * Sets necessary cookies (e.g., for age verification) to bypass interstitial pages.
 	 * Cookies are configured in SITE_COOKIES constant for easy maintenance.
+	 *
+	 * Uses tldts to correctly extract the root domain for any URL, handling
+	 * public suffixes like .co.uk, .com.au, .co.jp, etc.
 	 */
 	async setCookiesForPage(page: Page, url: string): Promise<void> {
 		try {
-			const urlDomain = new URL(url).hostname;
-
 			// Find matching cookies from configuration
 			const siteCookies = Object.entries(SITE_COOKIES).find(([pattern]) =>
 				url.includes(pattern),
 			)?.[1];
 
-			if (siteCookies && siteCookies.length > 0) {
-				const cookiesToSet = siteCookies.map((cookie) => ({
-					...cookie,
-					domain: urlDomain,
-					path: "/",
-				}));
-				await page.setCookie(...cookiesToSet);
+			if (!siteCookies || siteCookies.length === 0) {
+				return;
 			}
+
+			// Use tldts for robust domain parsing that handles all public suffixes
+			const { parse } = await import("tldts");
+			const parsed = parse(url);
+
+			if (!parsed.domain) {
+				this.logger.debug(`Could not parse domain from ${url}`);
+				return;
+			}
+
+			// Set cookies on the root domain (e.g., .youtube.com) so they work
+			// across all subdomains (www, m, music, etc.)
+			const cookieDomain = `.${parsed.domain}`;
+
+			const cookiesToSet = siteCookies.map((cookie) => ({
+				...cookie,
+				domain: cookieDomain,
+				path: "/",
+			}));
+			await page.setCookie(...cookiesToSet);
+			this.logger.debug(
+				`Set ${cookiesToSet.length} cookies for ${cookieDomain}`,
+			);
 		} catch (error_) {
 			this.logger.debug(`Cookie setting failed: ${getErrorMessage(error_)}`);
 		}
@@ -581,19 +742,42 @@ export class DynamicRenderer {
 
 	/**
 	 * Closes the browser and removes this instance from cleanup tracking.
+	 * If browser.close() hangs, falls back to force-killing the process.
 	 */
 	async close(): Promise<void> {
 		// Remove from instance tracking
 		DynamicRenderer.instances.delete(this);
 
 		if (!this.browser) return;
+
 		try {
-			await this.browser.close();
+			// Try graceful close with timeout
+			const closePromise = this.browser.close();
+			const timeoutPromise = Bun.sleep(5000).then(() => {
+				throw new Error("Browser close timeout");
+			});
+			await Promise.race([closePromise, timeoutPromise]);
 			this.logger.info("Puppeteer closed.");
 		} catch (err) {
-			this.logger.error(`Error closing browser: ${getErrorMessage(err)}`);
+			const message = getErrorMessage(err);
+			this.logger.warn(`Browser close failed: ${message}`);
+
+			// Force-kill browser process if we have the PID
+			if (this.browserPid) {
+				try {
+					process.kill(this.browserPid, "SIGKILL");
+					this.logger.info(
+						`Force-killed browser process (PID: ${this.browserPid})`,
+					);
+				} catch (killErr) {
+					this.logger.debug(
+						`Failed to kill browser process: ${getErrorMessage(killErr)}`,
+					);
+				}
+			}
 		} finally {
 			this.browser = null;
+			this.browserPid = null;
 			this.pageCount = 0;
 		}
 	}

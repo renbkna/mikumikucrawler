@@ -23,6 +23,7 @@ const createMockOptions = (
 	target: "https://example.com",
 	crawlDepth: 2,
 	maxPages: 100,
+	maxPagesPerDomain: 0,
 	crawlDelay: 100,
 	crawlMethod: "full",
 	maxConcurrentRequests: 5,

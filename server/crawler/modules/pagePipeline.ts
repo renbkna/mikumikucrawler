@@ -2,7 +2,11 @@ import type { Database } from "bun:sqlite";
 import sanitizeHtml from "sanitize-html";
 import { config } from "../../config/env.js";
 import type { Logger } from "../../config/logging.js";
-import { BATCH_CONSTANTS, RETRY_CONSTANTS, SOFT_404_CONSTANTS } from "../../constants.js";
+import {
+	BATCH_CONSTANTS,
+	RETRY_CONSTANTS,
+	SOFT_404_CONSTANTS,
+} from "../../constants.js";
 import { ContentProcessor } from "../../processors/ContentProcessor.js";
 import type {
 	CrawlerSocket,
@@ -12,7 +16,11 @@ import type {
 	QueueItem,
 	SanitizedCrawlOptions,
 } from "../../types.js";
-import { getErrorMessage, getRobotsRules, normalizeUrl } from "../../utils/helpers.js";
+import {
+	getErrorMessage,
+	getRobotsRules,
+	normalizeUrl,
+} from "../../utils/helpers.js";
 import { updateSessionStats } from "../../utils/sessionPersistence.js";
 import type { DynamicRenderer } from "../dynamicRenderer.js";
 import type { CrawlQueue } from "./crawlQueue.js";
@@ -34,7 +42,9 @@ interface RobotsDirectives {
  * Agent-specific X-Robots-Tag directives (e.g. "googlebot: noindex") are ignored —
  * we only honour universal directives that apply to all bots.
  */
-function parseRobotsDirectives(value: string | null | undefined): RobotsDirectives {
+function parseRobotsDirectives(
+	value: string | null | undefined,
+): RobotsDirectives {
 	const result: RobotsDirectives = { noindex: false, nofollow: false };
 	if (!value) return result;
 
@@ -82,7 +92,10 @@ function isSoft404(
 	contentLength: number,
 ): boolean {
 	// Signal 1 — unconditionally tiny response
-	if (contentLength > 0 && contentLength < SOFT_404_CONSTANTS.TINY_CONTENT_BYTES) {
+	if (
+		contentLength > 0 &&
+		contentLength < SOFT_404_CONSTANTS.TINY_CONTENT_BYTES
+	) {
 		return true;
 	}
 
@@ -419,8 +432,7 @@ export function createPagePipeline({
 		}
 
 		const filteredLinks = links.filter(
-			(link: ExtractedLink) =>
-				!state.hasVisited(link.url) && !link.nofollow,
+			(link: ExtractedLink) => !state.hasVisited(link.url) && !link.nofollow,
 		);
 		if (!filteredLinks.length) {
 			return;
@@ -467,7 +479,9 @@ export function createPagePipeline({
 
 		// ── Per-domain budget check ────────────────────────────────────────────
 		if (state.isDomainBudgetExceeded(item.domain)) {
-			logger.debug(`[Budget] Domain budget exceeded for ${item.domain}, skipping ${item.url}`);
+			logger.debug(
+				`[Budget] Domain budget exceeded for ${item.domain}, skipping ${item.url}`,
+			);
 			state.markVisited(item.url);
 			state.recordSkip();
 			return;
@@ -509,7 +523,9 @@ export function createPagePipeline({
 			state.markVisited(item.url);
 			state.recordSuccess(0);
 			// Touch crawled_at so we know this page was still alive during this crawl
-			db.query("UPDATE pages SET crawled_at = CURRENT_TIMESTAMP WHERE url = ?").run(item.url);
+			db.query(
+				"UPDATE pages SET crawled_at = CURRENT_TIMESTAMP WHERE url = ?",
+			).run(item.url);
 			const unchangedLog = `[Crawler] Unchanged: ${item.url} (304)`;
 			logger.info(unchangedLog);
 			socket.emit("stats", { ...state.stats, log: unchangedLog });
@@ -684,7 +700,11 @@ export function createPagePipeline({
 		const rawCanonical = processedContent.metadata?.canonical;
 		if (rawCanonical && rawCanonical !== item.url) {
 			const normalised = normalizeUrl(rawCanonical);
-			if (!("error" in normalised) && normalised.url && normalised.url !== item.url) {
+			if (
+				!("error" in normalised) &&
+				normalised.url &&
+				normalised.url !== item.url
+			) {
 				if (!state.hasVisited(normalised.url)) {
 					logger.debug(
 						`[Canonical] Marking alias: ${item.url} → ${normalised.url}`,

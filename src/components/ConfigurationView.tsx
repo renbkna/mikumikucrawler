@@ -40,7 +40,8 @@ export function ConfigurationView({
 
 	const crawlMethodDesc = {
 		links: "Follows internal HTML links only — fastest and most focused",
-		media: "Follows internal links and extracts images, videos, and audio files",
+		media:
+			"Follows internal links and extracts images, videos, and audio files",
 		full: "Seeds from sitemap.xml, follows all links (cross-domain), and extracts media",
 	}[options.crawlMethod];
 
@@ -106,14 +107,21 @@ export function ConfigurationView({
 									onChange={(e) =>
 										onOptionsChange({
 											...options,
-											crawlMethod: e.target.value as CrawlOptions["crawlMethod"],
+											crawlMethod: e.target
+												.value as CrawlOptions["crawlMethod"],
 										})
 									}
 									className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
 								>
-									<option value="links">Links — follow internal links only</option>
-									<option value="media">Media — links + extract media files</option>
-									<option value="full">Full — sitemap seed + all links + media</option>
+									<option value="links">
+										Links — follow internal links only
+									</option>
+									<option value="media">
+										Media — links + extract media files
+									</option>
+									<option value="full">
+										Full — sitemap seed + all links + media
+									</option>
 								</select>
 								<p className="mt-2 text-xs text-miku-text/50 font-medium">
 									{crawlMethodDesc}

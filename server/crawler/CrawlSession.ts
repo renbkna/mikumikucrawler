@@ -200,7 +200,10 @@ export class CrawlSession {
 				// following hyperlinks, keeping the crawl scoped to what is reachable
 				// from the seed URL without pre-loading potentially thousands of URLs.
 				if (this.options.crawlMethod === "full") {
-					const sitemapEntries = await fetchSitemap(this.options.target, this.logger);
+					const sitemapEntries = await fetchSitemap(
+						this.options.target,
+						this.logger,
+					);
 					if (sitemapEntries.length > 0) {
 						this.socket.emit("stats", {
 							...this.state.stats,
@@ -217,17 +220,21 @@ export class CrawlSession {
 				// Resumed session: pre-seed visited set from pages already crawled so
 				// outbound links discovered from pending items don't trigger redundant
 				// re-fetches of URLs the prior session already processed.
-				const alreadyCrawled = this.db
-					.query("SELECT url FROM pages")
-					.all() as { url: string }[];
+				const alreadyCrawled = this.db.query("SELECT url FROM pages").all() as {
+					url: string;
+				}[];
 				for (const row of alreadyCrawled) {
 					this.state.markVisited(row.url);
 				}
-				this.logger.info(`[Resume] Pre-seeded ${alreadyCrawled.length} visited URLs from DB`);
+				this.logger.info(
+					`[Resume] Pre-seeded ${alreadyCrawled.length} visited URLs from DB`,
+				);
 
 				// Seed from persisted pending queue items
 				const pendingItems = loadPendingQueueItems(this.db, this.sessionId);
-				this.logger.info(`[Resume] Seeding ${pendingItems.length} pending URLs`);
+				this.logger.info(
+					`[Resume] Seeding ${pendingItems.length} pending URLs`,
+				);
 				this.socket.emit("stats", {
 					...this.state.stats,
 					log: `[Resume] Continuing with ${pendingItems.length} pending URLs`,
@@ -330,7 +337,9 @@ export class CrawlSession {
 			return null;
 		}
 		if (stored.status !== "interrupted") {
-			logger.warn(`[Resume] Session ${sessionId} is not interrupted (status: ${stored.status})`);
+			logger.warn(
+				`[Resume] Session ${sessionId} is not interrupted (status: ${stored.status})`,
+			);
 			return null;
 		}
 

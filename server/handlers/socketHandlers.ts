@@ -21,9 +21,14 @@ import { assertPublicHostname } from "../utils/validation.js";
 const ALLOWED_CRAWL_METHODS = new Set(["links", "media", "full"]);
 const ALLOWED_EXPORT_FORMATS = new Set(["json", "csv"]);
 
+/** Maximum sockets to track before forcing aggressive cleanup */
+const RATE_LIMITER_MAX_SOCKETS = 1000;
+
 /** Rate limiter for WebSocket messages per socket */
 class WebSocketRateLimiter {
 	private messageCounts = new Map<string, number[]>();
+	/** Track size to avoid repeated Map.size calls in hot path */
+	private socketCount = 0;
 
 	canProceed(socketId: string): boolean {
 		const now = Date.now();
@@ -42,27 +47,49 @@ class WebSocketRateLimiter {
 
 		// Add current timestamp
 		timestamps.push(now);
+
+		// Track new sockets for size limiting
+		const isNew = !this.messageCounts.has(socketId);
 		this.messageCounts.set(socketId, timestamps);
+		if (isNew) {
+			this.socketCount++;
+		}
+
+		// Proactive cleanup when over limit to prevent memory exhaustion
+		if (this.socketCount > RATE_LIMITER_MAX_SOCKETS) {
+			this.cleanup();
+		}
+
 		return true;
 	}
 
 	cleanup(): void {
 		const now = Date.now();
 		const windowStart = now - WEBSOCKET_RATE_LIMIT.WINDOW_MS;
+		let removed = 0;
 
 		for (const [socketId, timestamps] of this.messageCounts) {
 			const filtered = timestamps.filter((ts) => ts > windowStart);
 			if (filtered.length === 0) {
 				this.messageCounts.delete(socketId);
+				removed++;
 			} else {
 				this.messageCounts.set(socketId, filtered);
 			}
 		}
+		this.socketCount = Math.max(0, this.socketCount - removed);
 	}
 
 	/** Immediately removes all data for a specific socket on disconnect */
 	removeSocket(socketId: string): void {
-		this.messageCounts.delete(socketId);
+		if (this.messageCounts.delete(socketId)) {
+			this.socketCount = Math.max(0, this.socketCount - 1);
+		}
+	}
+
+	/** Returns current number of tracked sockets for monitoring */
+	get size(): number {
+		return this.socketCount;
 	}
 }
 
@@ -305,7 +332,12 @@ export function createWebSocketHandlers(
 					await existing.stop();
 					activeCrawls.delete(socketWrapper.id);
 				}
-				const resumed = CrawlSession.resume(sessionId, socketWrapper, db, logger);
+				const resumed = CrawlSession.resume(
+					sessionId,
+					socketWrapper,
+					db,
+					logger,
+				);
 				if (!resumed) {
 					socketWrapper.emit("crawlError", {
 						message: `Session ${sessionId} not found or not resumable`,

@@ -4,6 +4,7 @@ import type { DatabaseLike, LoggerLike } from "../../types.js";
 import { getErrorMessage, getRobotsRules } from "../helpers.js";
 
 const createLogger = (): LoggerLike => ({
+	debug: mock(() => {}),
 	warn: mock(() => {}),
 	info: mock(() => {}),
 	error: mock(() => {}),
