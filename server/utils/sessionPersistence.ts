@@ -4,12 +4,6 @@ import { getErrorMessage } from "./helpers.js";
 
 export type SessionStatus = "running" | "completed" | "interrupted";
 
-// ─── Session CRUD ──────────────────────────────────────────────────────────────
-
-/**
- * Creates a new crawl session record in the DB.
- * Called at the start of every CrawlSession.start() so we can resume later.
- */
 export function saveSession(
 	db: Database,
 	sessionId: string,
@@ -21,9 +15,7 @@ export function saveSession(
 			`INSERT OR REPLACE INTO crawl_sessions (id, socket_id, target, options, status, updated_at)
 			 VALUES (?, ?, ?, ?, 'running', CURRENT_TIMESTAMP)`,
 		).run(sessionId, socketId, options.target, JSON.stringify(options));
-	} catch {
-		// Session persistence is best-effort — never abort a crawl
-	}
+	} catch {}
 }
 
 /**
@@ -38,14 +30,9 @@ export function updateSessionStats(
 		db.query(
 			`UPDATE crawl_sessions SET stats = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
 		).run(JSON.stringify(stats), sessionId);
-	} catch {
-		// Non-fatal
-	}
+	} catch {}
 }
 
-/**
- * Updates the lifecycle status of a session.
- */
 export function updateSessionStatus(
 	db: Database,
 	sessionId: string,
@@ -55,15 +42,9 @@ export function updateSessionStatus(
 		db.query(
 			`UPDATE crawl_sessions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
 		).run(status, sessionId);
-	} catch {
-		// Non-fatal
-	}
+	} catch {}
 }
 
-/**
- * Loads a session's options and stats by ID.
- * Returns null if the session doesn't exist.
- */
 export function loadSession(
 	db: Database,
 	sessionId: string,
@@ -96,17 +77,12 @@ export function loadSession(
 	}
 }
 
-// ─── Queue Item CRUD ───────────────────────────────────────────────────────────
-
 const _insertQueueItem = (db: Database) =>
 	db.prepare(
 		`INSERT OR IGNORE INTO queue_items (session_id, url, depth, retries, parent_url, domain)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 	);
 
-/**
- * Saves a batch of queue items in a single transaction for efficiency.
- */
 export function saveQueueItemBatch(
 	db: Database,
 	sessionId: string,
@@ -128,14 +104,9 @@ export function saveQueueItemBatch(
 			}
 		});
 		tx();
-	} catch {
-		// Non-fatal
-	}
+	} catch {}
 }
 
-/**
- * Removes a queue item once it has been successfully processed.
- */
 export function removeQueueItem(
 	db: Database,
 	sessionId: string,
@@ -146,15 +117,9 @@ export function removeQueueItem(
 			sessionId,
 			url,
 		);
-	} catch {
-		// Non-fatal
-	}
+	} catch {}
 }
 
-/**
- * Loads all pending (not-yet-processed) queue items for a session.
- * Used when resuming an interrupted crawl.
- */
 export function loadPendingQueueItems(
 	db: Database,
 	sessionId: string,

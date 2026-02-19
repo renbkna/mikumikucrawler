@@ -44,18 +44,12 @@ type WSMessage =
 	| { type: "attackEnd"; data: Stats }
 	| { type: "pageDetails"; data: CrawledPage | null };
 
-/**
- * Root cause fix for race condition: Export operation state is now tracked
- * per-request using requestId. This prevents data corruption when multiple
- * exports are requested concurrently.
- */
 interface ExportState {
 	requestId: string | null;
 	buffer: string[];
 	format: string;
 }
 
-/** Manages WebSocket connection and event orchestration for the crawler. */
 export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
 	const [socket, setSocket] = useState<WebSocket | null>(null);
 	const [connectionState, setConnectionState] =
@@ -68,8 +62,6 @@ export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
 	const reconnectAttemptsRef = useRef(0);
 	const isMountedRef = useRef(true);
 
-	// Root cause fix: Use refs for export state to persist across renders
-	// and prevent race conditions between concurrent exports
 	const exportStateRef = useRef<ExportState>({
 		requestId: null,
 		buffer: [],
@@ -87,14 +79,6 @@ export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
 		};
 	}, []);
 
-	/**
-	 * Establishes connection to the backend and sets up event listeners.
-	 *
-	 * Handles environment-specific URL resolution:
-	 * - Vite proxies in dev.
-	 * - Production URL injection.
-	 * - Protocol switching (http -> ws).
-	 */
 	const connect = useCallback(() => {
 		if (
 			socketRef.current?.readyState === WebSocket.OPEN ||
@@ -143,8 +127,6 @@ export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
 					return;
 				}
 
-				// Exponential backoff with jitter would be ideal, but simple exponential
-				// clamped to RECONNECTION_DELAY_MAX is sufficient for this UI.
 				const delay = Math.min(
 					SOCKET_CONFIG.RECONNECTION_DELAY * 2 ** reconnectAttemptsRef.current,
 					SOCKET_CONFIG.RECONNECTION_DELAY_MAX,
@@ -168,8 +150,7 @@ export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
 
 			ws.onmessage = (event) => {
 				try {
-					// Security: Limit message size to prevent DOS
-					const MAX_MESSAGE_SIZE = 10 * 1024 * 1024; // 10MB
+					const MAX_MESSAGE_SIZE = 10 * 1024 * 1024;
 					if (event.data.length > MAX_MESSAGE_SIZE) {
 						// biome-ignore lint/suspicious/noConsole: Security logging for message size exceeded
 						console.error("WebSocket message too large, dropping");
@@ -206,12 +187,7 @@ export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
 							});
 							break;
 						}
-						case "pageContent":
-							handlersRef.current.onPageContent(data);
-							break;
-						// Root cause fix: Export handling now uses requestId to prevent race conditions
 						case "exportStart": {
-							// Initialize new export state with the request ID
 							exportStateRef.current = {
 								requestId: data.requestId,
 								buffer: [],
@@ -225,26 +201,18 @@ export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
 							break;
 						}
 						case "exportChunk": {
-							// Root cause fix: Only process chunks for the current export operation
 							if (data.requestId === exportStateRef.current.requestId) {
 								exportStateRef.current.buffer.push(data.data);
-							} else {
-								// biome-ignore lint/suspicious/noConsole: Debug warning for race condition
-								console.warn(
-									`Received export chunk for stale request ${data.requestId}, ignoring`,
-								);
 							}
 							break;
 						}
 						case "exportComplete": {
-							// Root cause fix: Only complete if requestId matches
 							if (data.requestId === exportStateRef.current.requestId) {
 								const fullData = exportStateRef.current.buffer.join("");
 								handlersRef.current.onExportResult({
 									data: fullData,
 									format: exportStateRef.current.format,
 								});
-								// Reset export state
 								exportStateRef.current = {
 									requestId: null,
 									buffer: [],
@@ -256,12 +224,10 @@ export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
 						case "crawlError":
 						case "error": {
 							const message = data?.message || "Unknown error";
-							// If this error is related to an export, handle it specially
 							if (
 								data.requestId &&
 								data.requestId === exportStateRef.current.requestId
 							) {
-								// Reset export state on export error
 								exportStateRef.current = {
 									requestId: null,
 									buffer: [],

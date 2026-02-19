@@ -4,12 +4,6 @@ import type { CrawledPage, CrawlOptions, QueueStats, Stats } from "../types";
 
 type PageAction = { type: "add"; page: CrawledPage } | { type: "reset" };
 
-/**
- * Reducer function to manage the list of captured pages with buffer limits.
- *
- * NOTE: We enforce UI_LIMITS.MAX_PAGE_BUFFER to prevent the browser DOM
- * from crashing due to too many rendered rows during long crawls.
- */
 function pagesReducer(state: CrawledPage[], action: PageAction): CrawledPage[] {
 	switch (action.type) {
 		case "add": {
@@ -61,7 +55,6 @@ export interface UseCrawlStateReturn {
 	clearFilter: () => void;
 }
 
-/** Centralizes the state for crawl configuration, statistics, and captured data. */
 export function useCrawlState(): UseCrawlStateReturn {
 	const [target, setTarget] = useState("");
 	const [crawlOptions, setCrawlOptions] = useState<CrawlOptions>({
