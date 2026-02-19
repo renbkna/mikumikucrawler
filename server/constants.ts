@@ -5,14 +5,14 @@ export const CRAWL_QUEUE_CONSTANTS = {
 	MIN_SLEEP_MS: 50,
 	/** Number of consumed head slots before the queue array is compacted */
 	QUEUE_COMPACTION_THRESHOLD: 1000,
-	/** Maximum time to process a single queue item before timeout (90 seconds) */
-	ITEM_PROCESSING_TIMEOUT_MS: 90000,
-	/** Interval for stuck detection watchdog checks */
-	STUCK_DETECTION_INTERVAL_MS: 30000,
-	/** Time without progress before warning about potential stuck state */
-	STUCK_WARNING_THRESHOLD_MS: 60000,
-	/** Time without progress before force-clearing stuck items (3 minutes) */
-	STUCK_FORCE_CLEAR_THRESHOLD_MS: 180000,
+	/** Maximum time to process a single queue item before timeout (60 seconds - reduced from 90) */
+	ITEM_PROCESSING_TIMEOUT_MS: 60000,
+	/** Interval for stuck detection watchdog checks (15 seconds - more frequent) */
+	STUCK_DETECTION_INTERVAL_MS: 15000,
+	/** Time without progress before warning about potential stuck state (30 seconds) */
+	STUCK_WARNING_THRESHOLD_MS: 30000,
+	/** Time without progress before force-clearing stuck items (90 seconds - more aggressive) */
+	STUCK_FORCE_CLEAR_THRESHOLD_MS: 90000,
 } as const;
 
 export const TIMEOUT_CONSTANTS = {
