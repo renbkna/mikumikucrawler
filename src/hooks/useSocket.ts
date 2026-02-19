@@ -240,6 +240,10 @@ export function useSocket(handlers: SocketEventHandlers): UseSocketReturn {
 						case "attackEnd":
 							handlersRef.current.onAttackEnd(data);
 							break;
+						case "pageContent": {
+							handlersRef.current.onPageContent(data);
+							break;
+						}
 						case "pageDetails":
 							break;
 						default:

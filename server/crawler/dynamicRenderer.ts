@@ -244,7 +244,12 @@ export class DynamicRenderer {
 
 		this.logger.info("Recycling browser to prevent memory leaks");
 		try {
-			await this.browser.close();
+			// Add timeout to prevent hanging during browser close
+			const closePromise = this.browser.close();
+			const timeoutPromise = new Promise<void>((_, reject) =>
+				setTimeout(() => reject(new Error("Browser close timeout")), 10000),
+			);
+			await Promise.race([closePromise, timeoutPromise]);
 			await this.launchBrowser();
 		} catch (err) {
 			this.logger.warn(`Error recycling browser: ${getErrorMessage(err)}`);
@@ -258,22 +263,47 @@ export class DynamicRenderer {
 	private async safeExtractContent(
 		page: Page,
 	): Promise<{ content: string; title: string; description: string } | null> {
+		const EXTRACTION_TIMEOUT_MS = 10000; // 10 second timeout for content extraction
+
 		try {
 			// Check if page is still usable
 			if (page.isClosed()) {
 				return null;
 			}
 
-			// Get content first (most important)
-			const content = await page.content();
+			// Get content with timeout - page.content() can hang on complex pages
+			const contentPromise = page.content();
+			const contentTimeoutPromise = new Promise<string>((_, reject) =>
+				setTimeout(
+					() => reject(new Error("Content extraction timeout")),
+					EXTRACTION_TIMEOUT_MS,
+				),
+			);
+			const content = await Promise.race([
+				contentPromise,
+				contentTimeoutPromise,
+			]);
 
-			// Extract title and description in a single evaluate to minimize frame access
-			const metadata = await page.evaluate(() => {
+			// Extract title and description with timeout - evaluate can hang on JS-heavy pages
+			const metadataPromise = page.evaluate(() => {
 				const title = document.title || "";
 				const descMeta = document.querySelector('meta[name="description"]');
 				const description = descMeta?.getAttribute("content") || "";
 				return { title, description };
 			});
+			const metadataTimeoutPromise = new Promise<{
+				title: string;
+				description: string;
+			}>((_, reject) =>
+				setTimeout(
+					() => reject(new Error("Metadata extraction timeout")),
+					EXTRACTION_TIMEOUT_MS,
+				),
+			);
+			const metadata = await Promise.race([
+				metadataPromise,
+				metadataTimeoutPromise,
+			]);
 
 			return {
 				content,
@@ -286,8 +316,10 @@ export class DynamicRenderer {
 			if (
 				message.includes("detached Frame") ||
 				message.includes("Execution context was destroyed") ||
-				message.includes("Target closed")
+				message.includes("Target closed") ||
+				message.includes("timeout")
 			) {
+				this.logger.debug(`Content extraction failed for page: ${message}`);
 				return null;
 			}
 			throw err;
@@ -374,7 +406,13 @@ export class DynamicRenderer {
 				}
 			});
 
-			page.on("dialog", (dialog) => dialog.dismiss());
+			page.on("dialog", (dialog) => {
+				dialog.dismiss().catch((err) => {
+					this.logger.debug(
+						`Failed to dismiss dialog: ${getErrorMessage(err)}`,
+					);
+				});
+			});
 
 			const isComplex = DYNAMIC_RENDERER_CONSTANTS.COMPLEX_JS_SITES.some(
 				(site) => item.url.includes(site),
@@ -499,7 +537,11 @@ export class DynamicRenderer {
 				return null;
 			}
 
-			throw err;
+			// Unknown errors - log and fallback instead of crashing
+			this.logger.warn(
+				`Unexpected error during dynamic rendering of ${item.url}: ${errorMessage}`,
+			);
+			return null;
 		}
 	}
 
@@ -711,7 +753,12 @@ export class DynamicRenderer {
 				domain: cookieDomain,
 				path: "/",
 			}));
-			await page.setCookie(...cookiesToSet);
+			await Promise.race([
+				page.setCookie(...cookiesToSet),
+				new Promise<void>((_, reject) =>
+					setTimeout(() => reject(new Error("Cookie setting timeout")), 5000),
+				),
+			]);
 			this.logger.debug(
 				`Set ${cookiesToSet.length} cookies for ${cookieDomain}`,
 			);
