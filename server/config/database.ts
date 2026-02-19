@@ -225,24 +225,20 @@ export const setupDatabase = (logger?: Logger): Database => {
 		// to rebuild a content-table FTS index from the underlying source table.
 		try {
 			const ftsCount = (
-				dbInstance
-					.query("SELECT COUNT(*) AS n FROM pages_fts")
-					.get() as { n: number }
+				dbInstance.query("SELECT COUNT(*) AS n FROM pages_fts").get() as {
+					n: number;
+				}
 			).n;
 			const pagesCount = (
-				dbInstance
-					.query("SELECT COUNT(*) AS n FROM pages")
-					.get() as { n: number }
+				dbInstance.query("SELECT COUNT(*) AS n FROM pages").get() as {
+					n: number;
+				}
 			).n;
 
 			if (pagesCount > 0 && ftsCount === 0) {
-				dbInstance.exec(
-					"INSERT INTO pages_fts(pages_fts) VALUES('rebuild')",
-				);
+				dbInstance.exec("INSERT INTO pages_fts(pages_fts) VALUES('rebuild')");
 				if (logger) {
-					logger.info(
-						`FTS5 index rebuilt from ${pagesCount} existing pages`,
-					);
+					logger.info(`FTS5 index rebuilt from ${pagesCount} existing pages`);
 				}
 			}
 		} catch (err) {

@@ -5,6 +5,14 @@ export const CRAWL_QUEUE_CONSTANTS = {
 	MIN_SLEEP_MS: 50,
 	/** Number of consumed head slots before the queue array is compacted */
 	QUEUE_COMPACTION_THRESHOLD: 1000,
+	/** Maximum time to process a single queue item before timeout (90 seconds) */
+	ITEM_PROCESSING_TIMEOUT_MS: 90000,
+	/** Interval for stuck detection watchdog checks */
+	STUCK_DETECTION_INTERVAL_MS: 30000,
+	/** Time without progress before warning about potential stuck state */
+	STUCK_WARNING_THRESHOLD_MS: 60000,
+	/** Time without progress before force-clearing stuck items (3 minutes) */
+	STUCK_FORCE_CLEAR_THRESHOLD_MS: 180000,
 } as const;
 
 export const TIMEOUT_CONSTANTS = {
@@ -118,6 +126,10 @@ export const DYNAMIC_RENDERER_CONSTANTS = {
 		STANDARD_NAVIGATION: 30000,
 		SELECTOR_WAIT: 15000,
 		ADDITIONAL_WAIT: 2000,
+		/** Time to wait for navigation after consent bypass click */
+		CONSENT_NAVIGATION: 10000,
+		/** Time to wait for consent modal detection/interaction */
+		CONSENT_EVAL: 5000,
 	},
 } as const;
 

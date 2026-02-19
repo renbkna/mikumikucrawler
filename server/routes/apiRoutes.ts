@@ -271,8 +271,11 @@ export function createApiRoutes(
 									pagesScanned?: number;
 								};
 								pagesScanned = parsed.pagesScanned ?? 0;
-							} catch {
+							} catch (parseErr) {
 								// Malformed stats snapshot — skip count, don't fail the request
+								logger.debug(
+									`Malformed stats JSON for session ${row.id}: ${getErrorMessage(parseErr)}`,
+								);
 							}
 						}
 						return {

@@ -104,28 +104,25 @@ export function ResumeSessionsPanel({
 
 	// ── Event handlers ─────────────────────────────────────────────────────────
 
-	const handleDelete = useCallback(
-		async (sessionId: string) => {
-			setDeletingId(sessionId);
-			try {
-				const res = await fetch(`/api/sessions/${sessionId}`, {
-					method: "DELETE",
-				});
-				if (!res.ok) {
-					throw new Error(`Server responded with ${res.status}`);
-				}
-				// Remove locally — no need to re-fetch
-				setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-			} catch {
-				// Surface a brief inline error without a full re-fetch so the list
-				// remains visible and the user can try again.
-				setFetchError("Failed to delete session. Please try again.");
-			} finally {
-				setDeletingId(null);
+	const handleDelete = useCallback(async (sessionId: string) => {
+		setDeletingId(sessionId);
+		try {
+			const res = await fetch(`/api/sessions/${sessionId}`, {
+				method: "DELETE",
+			});
+			if (!res.ok) {
+				throw new Error(`Server responded with ${res.status}`);
 			}
-		},
-		[],
-	);
+			// Remove locally — no need to re-fetch
+			setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+		} catch {
+			// Surface a brief inline error without a full re-fetch so the list
+			// remains visible and the user can try again.
+			setFetchError("Failed to delete session. Please try again.");
+		} finally {
+			setDeletingId(null);
+		}
+	}, []);
 
 	const handleResume = useCallback(
 		(session: SessionSummary) => {
@@ -217,10 +214,7 @@ export function ResumeSessionsPanel({
 					{/* Empty state */}
 					{!isLoading && sessions.length === 0 && !fetchError && (
 						<div className="py-12 text-center">
-							<HeartIcon
-								className="text-miku-pink/30 mx-auto mb-3"
-								size={40}
-							/>
+							<HeartIcon className="text-miku-pink/30 mx-auto mb-3" size={40} />
 							<p className="text-miku-text/40 font-medium text-sm">
 								No interrupted sessions found.
 							</p>
