@@ -1,39 +1,37 @@
 /**
- * Request coalescing - prevents duplicate simultaneous crawls of the same URL
- * within a single session.
- *
- * Instantiate one RequestCoalescer per CrawlSession so that two different users
- * crawling the same URL do NOT share (and potentially corrupt) each other's results.
- * The global singleton below exists only for backwards-compatibility and should not
- * be used for new code.
+ * Request coalescing - prevents duplicate simultaneous crawls.
+ * If multiple users request the same URL, they all wait for one crawl result.
  */
-export class RequestCoalescer {
+import { Mutex } from "async-mutex";
+
+class RequestCoalescer {
 	private pending = new Map<string, Promise<unknown>>();
+	private mutex = new Mutex();
 
 	/**
 	 * Coalesce a request. If the same URL is already being processed,
 	 * returns the existing promise. Otherwise, executes the factory.
 	 *
-	 * JavaScript's single-threaded event loop ensures Map operations are atomic,
-	 * preventing race conditions without needing a mutex.
+	 * Uses mutex to synchronize the check-then-act pattern, preventing
+	 * race conditions where multiple concurrent requests for the same
+	 * URL could result in duplicate crawls.
 	 */
 	async coalesce<T>(url: string, factory: () => Promise<T>): Promise<T> {
-		// Check if already pending - this read is atomic
-		const existing = this.pending.get(url);
-		if (existing) {
-			return existing as Promise<T>;
-		}
+		const promise = await this.mutex.runExclusive(() => {
+			const existing = this.pending.get(url);
+			if (existing) {
+				return existing;
+			}
 
-		// Create the promise immediately and store it atomically
-		// This prevents the race condition where two concurrent calls
-		// could both pass the "existing" check before either sets the value
-		const newPromise = factory().finally(() => {
-			this.pending.delete(url);
+			const newPromise = factory().finally(() => {
+				this.pending.delete(url);
+			});
+
+			this.pending.set(url, newPromise);
+			return newPromise;
 		});
 
-		// Set it in the map - this write is atomic
-		this.pending.set(url, newPromise);
-		return newPromise;
+		return promise as Promise<T>;
 	}
 
 	/**

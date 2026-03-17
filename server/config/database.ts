@@ -1,7 +1,6 @@
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import path from "node:path";
-import { getErrorMessage } from "../utils/helpers.js";
 import { config } from "./env.js";
 import type { Logger } from "./logging.js";
 
@@ -15,7 +14,7 @@ const ensureDirectoryExists = (filePath: string): void => {
 };
 
 // Eager initialization at module load time eliminates race conditions
-// Top-level execution ensures this runs exactly once
+// Bun's top-level execution ensures this runs exactly once
 ensureDirectoryExists(DB_PATH);
 
 const dbInstance = new Database(DB_PATH);
@@ -28,7 +27,6 @@ dbInstance.exec(`
 	PRAGMA temp_store = MEMORY;
 	PRAGMA mmap_size = 67108864;		-- 64MB mmap (reduced from 256MB)
 	PRAGMA busy_timeout = 5000;
-	PRAGMA foreign_keys = ON;
 `);
 
 // Initialize schema at module load time
@@ -79,79 +77,6 @@ dbInstance.exec(`
 	CREATE INDEX IF NOT EXISTS idx_pages_crawled_at ON pages(crawled_at);
 	CREATE INDEX IF NOT EXISTS idx_links_source ON links(source_id);
 	CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_url);
-
-	-- Performance optimization: Essential indexes for common lookups
-	CREATE INDEX IF NOT EXISTS idx_pages_url ON pages(url);
-	CREATE INDEX IF NOT EXISTS idx_pages_language ON pages(language);
-	CREATE INDEX IF NOT EXISTS idx_pages_quality_score ON pages(quality_score)
-		WHERE quality_score IS NOT NULL;
-	CREATE INDEX IF NOT EXISTS idx_pages_word_count ON pages(word_count)
-		WHERE word_count IS NOT NULL;
-
-	-- Composite indexes for common query patterns
-	CREATE INDEX IF NOT EXISTS idx_pages_domain_crawled ON pages(domain, crawled_at);
-	CREATE INDEX IF NOT EXISTS idx_pages_crawled_id ON pages(crawled_at, id);
-
-	-- Crawl session persistence for pause/resume support
-	CREATE TABLE IF NOT EXISTS crawl_sessions (
-		id TEXT PRIMARY KEY,
-		socket_id TEXT NOT NULL,
-		target TEXT NOT NULL,
-		options TEXT NOT NULL,
-		stats TEXT,
-		status TEXT DEFAULT 'running',
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-
-	CREATE TABLE IF NOT EXISTS queue_items (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		session_id TEXT NOT NULL,
-		url TEXT NOT NULL,
-		depth INTEGER NOT NULL,
-		retries INTEGER DEFAULT 0,
-		parent_url TEXT,
-		domain TEXT NOT NULL,
-		UNIQUE(session_id, url),
-		FOREIGN KEY (session_id) REFERENCES crawl_sessions(id) ON DELETE CASCADE
-	);
-
-	CREATE INDEX IF NOT EXISTS idx_sessions_status ON crawl_sessions(status);
-	CREATE INDEX IF NOT EXISTS idx_queue_items_session ON queue_items(session_id);
-
-	-- Full-text search over crawled page content using SQLite FTS5.
-	-- 'porter ascii' applies Porter stemming so "crawling" matches "crawl".
-	-- url is UNINDEXED: stored for retrieval but excluded from ranking.
-	CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
-		url        UNINDEXED,
-		title,
-		description,
-		main_content,
-		keywords,
-		content    = 'pages',
-		content_rowid = 'id',
-		tokenize   = 'porter ascii'
-	);
-
-	CREATE TRIGGER IF NOT EXISTS pages_fts_ai
-		AFTER INSERT ON pages BEGIN
-			INSERT INTO pages_fts(rowid, url, title, description, main_content, keywords)
-			VALUES (new.id, new.url, new.title, new.description, new.main_content, new.keywords);
-		END;
-
-	CREATE TRIGGER IF NOT EXISTS pages_fts_ad
-		AFTER DELETE ON pages BEGIN
-			INSERT INTO pages_fts(pages_fts, rowid, url, title, description, main_content, keywords)
-			VALUES ('delete', old.id, old.url, old.title, old.description, old.main_content, old.keywords);
-		END;
-
-	CREATE TRIGGER IF NOT EXISTS pages_fts_au
-		AFTER UPDATE ON pages BEGIN
-			INSERT INTO pages_fts(pages_fts, rowid, url, title, description, main_content, keywords)
-			VALUES ('delete', old.id, old.url, old.title, old.description, old.main_content, old.keywords);
-			INSERT INTO pages_fts(rowid, url, title, description, main_content, keywords)
-			VALUES (new.id, new.url, new.title, new.description, new.main_content, new.keywords);
-		END;
 `);
 
 /**
@@ -188,7 +113,7 @@ export const setupDatabase = (logger?: Logger): Database => {
 					dbInstance.exec(`ALTER TABLE pages ADD COLUMN ${col}`);
 				} catch (err) {
 					// SQLite returns "duplicate column name" if column already exists
-					const message = getErrorMessage(err);
+					const message = err instanceof Error ? err.message : String(err);
 					if (!message.includes("duplicate column")) {
 						const errorMessage = `Migration failed for column ${col}: ${message}`;
 						if (logger) {
@@ -200,56 +125,8 @@ export const setupDatabase = (logger?: Logger): Database => {
 				}
 			}
 		}
-
-		// Conditional GET support: add etag column if missing (idempotent)
-		const hasEtag = tableInfo.some((col) => col.name === "etag");
-		if (!hasEtag) {
-			try {
-				dbInstance.exec("ALTER TABLE pages ADD COLUMN etag TEXT");
-			} catch (err) {
-				const message = getErrorMessage(err);
-				if (!message.includes("duplicate column")) {
-					const errorMessage = `Migration failed for column etag: ${message}`;
-					if (logger) {
-						logger.error(errorMessage);
-					} else {
-						throw new Error(errorMessage);
-					}
-				}
-			}
-		}
-
-		// FTS5 backfill: if the pages table already has rows but the FTS table is
-		// empty (e.g. on first startup after adding the FTS schema), populate it.
-		// INSERT INTO pages_fts(pages_fts) VALUES('rebuild') is the idiomatic way
-		// to rebuild a content-table FTS index from the underlying source table.
-		try {
-			const ftsCount = (
-				dbInstance.query("SELECT COUNT(*) AS n FROM pages_fts").get() as {
-					n: number;
-				}
-			).n;
-			const pagesCount = (
-				dbInstance.query("SELECT COUNT(*) AS n FROM pages").get() as {
-					n: number;
-				}
-			).n;
-
-			if (pagesCount > 0 && ftsCount === 0) {
-				dbInstance.exec("INSERT INTO pages_fts(pages_fts) VALUES('rebuild')");
-				if (logger) {
-					logger.info(`FTS5 index rebuilt from ${pagesCount} existing pages`);
-				}
-			}
-		} catch (err) {
-			// Non-fatal — FTS is a convenience feature, don't abort on rebuild failure
-			const message = getErrorMessage(err);
-			if (logger) {
-				logger.error(`FTS5 rebuild failed: ${message}`);
-			}
-		}
 	} catch (e) {
-		const errorMessage = `Migration check failed: ${getErrorMessage(e)}`;
+		const errorMessage = `Migration check failed: ${e instanceof Error ? e.message : String(e)}`;
 		if (logger) {
 			logger.error(errorMessage);
 		} else {
