@@ -1,7 +1,7 @@
 /**
  * Simple LRU (Least Recently Used) cache implementation with size limits.
- * Prevents unbounded memory growth by limiting the number of tracked items
- * and evicting least recently used entries when limit is reached.
+ * Root cause fix: Prevents unbounded memory growth by limiting the number
+ * of tracked items and evicting least recently used entries when limit is reached.
  */
 export class LRUCache<K, V> {
 	private cache: Map<K, V>;
@@ -17,13 +17,12 @@ export class LRUCache<K, V> {
 	}
 
 	get(key: K): V | undefined {
-		if (!this.cache.has(key)) {
-			return undefined;
+		const value = this.cache.get(key);
+		if (value !== undefined) {
+			// Move to end (most recently used)
+			this.cache.delete(key);
+			this.cache.set(key, value);
 		}
-		const value = this.cache.get(key) as V;
-		// Move to end (most recently used)
-		this.cache.delete(key);
-		this.cache.set(key, value);
 		return value;
 	}
 
@@ -102,23 +101,25 @@ export class LRUCacheWithTTL<K, V> {
 		this.cache.set(key, { value, timestamp: Date.now() });
 	}
 
-	/**
-	 * Returns the number of entries in the cache (including any not-yet-evicted
-	 * expired entries). Expired entries are removed lazily on `get`/`has` calls,
-	 * so the count may be slightly over-reported — acceptable for monitoring purposes.
-	 * Avoiding a full O(n) scan here keeps `size` O(1) and safe to call frequently.
-	 */
 	get size(): number {
+		// Clean up expired entries before returning size
+		const now = Date.now();
+		for (const [key, entry] of this.cache) {
+			if (now - entry.timestamp > this.ttlMs) {
+				this.cache.delete(key);
+			}
+		}
 		return this.cache.size;
 	}
 
-	/**
-	 * Returns an iterator over the keys currently in the map.
-	 * May include keys for entries that have expired but not yet been evicted.
-	 * For accurate results, callers should use `get()` (which checks TTL) rather
-	 * than iterating keys and accessing values directly.
-	 */
 	keys(): IterableIterator<K> {
+		// Clean up expired entries before returning keys
+		const now = Date.now();
+		for (const [key, entry] of this.cache) {
+			if (now - entry.timestamp > this.ttlMs) {
+				this.cache.delete(key);
+			}
+		}
 		return this.cache.keys();
 	}
 
