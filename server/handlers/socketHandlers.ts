@@ -1,12 +1,9 @@
 import type { Database } from "bun:sqlite";
+import crypto from "node:crypto";
 import { t } from "elysia";
 import type { SocketCrawledPage } from "../../src/types/socket.js";
 import type { Logger } from "../config/logging.js";
-import {
-	EXPORT_CONSTANTS,
-	REQUEST_CONSTANTS,
-	WEBSOCKET_RATE_LIMIT,
-} from "../constants.js";
+import { WEBSOCKET_RATE_LIMIT } from "../constants.js";
 import { CrawlSession } from "../crawler/CrawlSession.js";
 import type {
 	ClampOptions,
@@ -15,27 +12,21 @@ import type {
 	RawCrawlOptions,
 	SanitizedCrawlOptions,
 } from "../types.js";
-import { getErrorMessage } from "../utils/helpers.js";
 import { assertPublicHostname } from "../utils/validation.js";
 
-const ALLOWED_CRAWL_METHODS = new Set(["links", "media", "full"]);
+const ALLOWED_CRAWL_METHODS = new Set(["links", "content", "media", "full"]);
 const ALLOWED_EXPORT_FORMATS = new Set(["json", "csv"]);
-
-/** Maximum sockets to track before forcing aggressive cleanup */
-const RATE_LIMITER_MAX_SOCKETS = 1000;
 
 /** Rate limiter for WebSocket messages per socket */
 class WebSocketRateLimiter {
 	private messageCounts = new Map<string, number[]>();
-	/** Track size to avoid repeated Map.size calls in hot path */
-	private socketCount = 0;
 
 	canProceed(socketId: string): boolean {
 		const now = Date.now();
 		const windowStart = now - WEBSOCKET_RATE_LIMIT.WINDOW_MS;
 
 		// Get or create message timestamps for this socket
-		let timestamps = this.messageCounts.get(socketId) ?? [];
+		let timestamps = this.messageCounts.get(socketId) || [];
 
 		// Remove old timestamps outside the window
 		timestamps = timestamps.filter((ts) => ts > windowStart);
@@ -47,49 +38,22 @@ class WebSocketRateLimiter {
 
 		// Add current timestamp
 		timestamps.push(now);
-
-		// Track new sockets for size limiting
-		const isNew = !this.messageCounts.has(socketId);
 		this.messageCounts.set(socketId, timestamps);
-		if (isNew) {
-			this.socketCount++;
-		}
-
-		// Proactive cleanup when over limit to prevent memory exhaustion
-		if (this.socketCount > RATE_LIMITER_MAX_SOCKETS) {
-			this.cleanup();
-		}
-
 		return true;
 	}
 
 	cleanup(): void {
 		const now = Date.now();
 		const windowStart = now - WEBSOCKET_RATE_LIMIT.WINDOW_MS;
-		let removed = 0;
 
 		for (const [socketId, timestamps] of this.messageCounts) {
 			const filtered = timestamps.filter((ts) => ts > windowStart);
 			if (filtered.length === 0) {
 				this.messageCounts.delete(socketId);
-				removed++;
 			} else {
 				this.messageCounts.set(socketId, filtered);
 			}
 		}
-		this.socketCount = Math.max(0, this.socketCount - removed);
-	}
-
-	/** Immediately removes all data for a specific socket on disconnect */
-	removeSocket(socketId: string): void {
-		if (this.messageCounts.delete(socketId)) {
-			this.socketCount = Math.max(0, this.socketCount - 1);
-		}
-	}
-
-	/** Returns current number of tracked sockets for monitoring */
-	get size(): number {
-		return this.socketCount;
 	}
 }
 
@@ -140,19 +104,13 @@ export async function sanitizeOptions(
 
 	const crawlDepth = clampNumber(rawOptions.crawlDepth, {
 		min: 1,
-		max: 10,
+		max: 5,
 		fallback: 2,
 	});
 	const maxPages = clampNumber(rawOptions.maxPages, {
 		min: 1,
 		max: 200,
 		fallback: 50,
-	});
-	// 0 means unlimited; positive values cap pages per domain
-	const maxPagesPerDomain = clampNumber(rawOptions.maxPagesPerDomain, {
-		min: 0,
-		max: 200,
-		fallback: 0,
 	});
 	const crawlDelay = clampNumber(rawOptions.crawlDelay, {
 		min: 200,
@@ -182,7 +140,6 @@ export async function sanitizeOptions(
 		target: parsedUrl.toString(),
 		crawlDepth,
 		maxPages,
-		maxPagesPerDomain,
 		crawlDelay,
 		crawlMethod,
 		maxConcurrentRequests,
@@ -206,7 +163,8 @@ type WebSocketMessage = typeof WebSocketMessageSchema.static;
 
 /**
  * Tracks active export operations per socket to prevent race conditions.
- * Each export gets a unique request ID to identify active operations.
+ * Root cause fix: Each export gets a unique request ID, and we track
+ * which export operation is currently active per socket.
  */
 interface ExportOperation {
 	requestId: string;
@@ -217,31 +175,26 @@ interface ExportOperation {
 /** Creates the WebSocket message handler logic for crawler interactions. */
 export function createWebSocketHandlers(
 	activeCrawls: Map<string, CrawlSession>,
-	db: Database,
+	dbPromise: Promise<Database>,
 	logger: Logger,
 ) {
-	// Track active exports per socket to prevent race conditions
+	// Root cause fix: Track active exports per socket to prevent race conditions
 	const activeExports = new Map<string, ExportOperation>();
 	const rateLimiter = new WebSocketRateLimiter();
 
-	// Periodic cleanup of rate limiter data.
-	// Store the handle so it can be cleared on shutdown via dispose().
-	const cleanupInterval = setInterval(() => rateLimiter.cleanup(), 60_000);
-
-	/** Call this on server shutdown to release the cleanup interval. */
-	const dispose = (): void => {
-		clearInterval(cleanupInterval);
-	};
+	// Periodic cleanup of rate limiter data (runs every minute)
+	setInterval(() => rateLimiter.cleanup(), 60000);
 
 	const handleMessage = async (
 		ws: {
 			id: string;
 			send(data: string | object): number;
+			data: { id: string };
 		},
 		message: WebSocketMessage,
 	) => {
 		const socketWrapper: CrawlerSocket = {
-			id: ws.id,
+			id: ws.data.id || ws.id,
 			emit: (event, ...args) => {
 				ws.send({ type: event, data: args[0] });
 			},
@@ -281,15 +234,14 @@ export function createWebSocketHandlers(
 				try {
 					validatedOptions = await sanitizeOptions(options);
 				} catch (validationError) {
-					// Use a distinct name to avoid shadowing the outer `message` parameter
-					const errMsg =
+					const message =
 						validationError instanceof Error
 							? validationError.message
 							: "Invalid options";
 					logger.warn(
-						`Invalid crawl options from ${socketWrapper.id}: ${errMsg}`,
+						`Invalid crawl options from ${socketWrapper.id}: ${message}`,
 					);
-					socketWrapper.emit("crawlError", { message: errMsg });
+					socketWrapper.emit("crawlError", { message });
 					return;
 				}
 
@@ -300,7 +252,7 @@ export function createWebSocketHandlers(
 				const crawlSession = new CrawlSession(
 					socketWrapper,
 					validatedOptions,
-					db,
+					dbPromise,
 					logger,
 				);
 				activeCrawls.set(socketWrapper.id, crawlSession);
@@ -318,37 +270,6 @@ export function createWebSocketHandlers(
 				break;
 			}
 
-			case "resumeSession": {
-				const resumeData = message.data as { sessionId?: unknown };
-				const sessionId = resumeData?.sessionId;
-				if (!sessionId || typeof sessionId !== "string") {
-					socketWrapper.emit("crawlError", {
-						message: "Invalid session ID for resume",
-					});
-					break;
-				}
-				const existing = activeCrawls.get(socketWrapper.id);
-				if (existing) {
-					await existing.stop();
-					activeCrawls.delete(socketWrapper.id);
-				}
-				const resumed = CrawlSession.resume(
-					sessionId,
-					socketWrapper,
-					db,
-					logger,
-				);
-				if (!resumed) {
-					socketWrapper.emit("crawlError", {
-						message: `Session ${sessionId} not found or not resumable`,
-					});
-					break;
-				}
-				activeCrawls.set(socketWrapper.id, resumed);
-				resumed.start();
-				break;
-			}
-
 			case "getPageDetails": {
 				// Runtime validation: ensure message.data is a valid URL string
 				if (typeof message.data !== "string") {
@@ -359,19 +280,16 @@ export function createWebSocketHandlers(
 				}
 				const url = message.data;
 				// Validate URL length (prevent DoS with extremely long strings)
-				if (!url || url.length > REQUEST_CONSTANTS.MAX_URL_LENGTH) {
+				if (!url || url.length > 2000) {
 					socketWrapper.emit("crawlError", {
 						message: "Invalid URL",
 					});
 					return;
 				}
 				try {
+					const db = await dbPromise;
 					const pageRecord = db
-						.query(`
-							SELECT id, url, content, title, description, content_type, domain
-							FROM pages
-							WHERE url = ?
-						`)
+						.query(`SELECT * FROM pages WHERE url = ?`)
 						.get(url) as
 						| {
 								id: number;
@@ -386,7 +304,7 @@ export function createWebSocketHandlers(
 
 					if (pageRecord) {
 						const links = db
-							.query(`SELECT target_url, text FROM links WHERE source_id = ?`)
+							.query(`SELECT * FROM links WHERE source_id = ?`)
 							.all(pageRecord.id);
 
 						const mappedPage: CrawledPage = {
@@ -414,8 +332,8 @@ export function createWebSocketHandlers(
 						socketWrapper.emit("pageDetails", null);
 					}
 				} catch (err) {
-					const errMsg = getErrorMessage(err);
-					logger.error(`Error getting page details: ${errMsg}`);
+					const message = err instanceof Error ? err.message : "Unknown error";
+					logger.error(`Error getting page details: ${message}`);
 					socketWrapper.emit("crawlError", {
 						message: "Failed to get page details",
 					});
@@ -443,7 +361,7 @@ export function createWebSocketHandlers(
 					return;
 				}
 
-				// Check if there's already an active export for this socket
+				// Root cause fix: Check if there's already an active export for this socket
 				const existingExport = activeExports.get(socketWrapper.id);
 				if (existingExport) {
 					logger.warn(
@@ -455,8 +373,8 @@ export function createWebSocketHandlers(
 					return;
 				}
 
-				// Generate unique request ID for this export operation
-				const requestId = Bun.randomUUIDv7();
+				// Root cause fix: Generate unique request ID for this export operation
+				const requestId = crypto.randomUUID();
 				const exportOp: ExportOperation = {
 					requestId,
 					format: sanitizedFormat,
@@ -465,6 +383,7 @@ export function createWebSocketHandlers(
 				activeExports.set(socketWrapper.id, exportOp);
 
 				try {
+					const db = await dbPromise;
 					const rows = db
 						.query(
 							`SELECT id, url, domain, crawled_at, status_code,
@@ -472,13 +391,13 @@ export function createWebSocketHandlers(
 						)
 						.all() as Record<string, unknown>[];
 
-					// Include requestId in all export messages
+					// Root cause fix: Include requestId in all export messages
 					socketWrapper.emit("exportStart", {
 						format: sanitizedFormat,
 						requestId,
 					});
 
-					const CHUNK_SIZE = EXPORT_CONSTANTS.CHUNK_SIZE;
+					const CHUNK_SIZE = 500;
 					let chunk: string[] = [];
 					let isFirstChunk = true;
 					let rowCount = 0;
@@ -524,9 +443,8 @@ export function createWebSocketHandlers(
 						}
 
 						if (sanitizedFormat === "json") {
-							// rowCount was already incremented above, so row 1 → no comma,
-							// all subsequent rows → leading comma (streaming JSON array).
-							const prefix = rowCount > 1 ? "," : "";
+							const prefix: string =
+								!isFirstChunk || chunk.length > 0 ? "," : "";
 							chunk.push(prefix + JSON.stringify(rowObj, null, 2));
 						} else {
 							const csvRow = Object.keys(rowObj)
@@ -543,8 +461,7 @@ export function createWebSocketHandlers(
 							socketWrapper.emit("exportChunk", { data, requestId });
 							chunk = [];
 							isFirstChunk = false;
-							// Yield to the event loop between chunks to avoid blocking WS I/O
-							await Bun.sleep(0);
+							await new Promise((resolve) => setImmediate(resolve));
 						}
 					}
 
@@ -560,19 +477,21 @@ export function createWebSocketHandlers(
 						socketWrapper.emit("exportChunk", { data: "]", requestId });
 					}
 
-					// Include requestId in completion message
+					// Root cause fix: Include requestId in completion message
 					socketWrapper.emit("exportComplete", { count: rowCount, requestId });
 					logger.info(
 						`Export completed for socket ${socketWrapper.id}: ${rowCount} rows in ${Date.now() - exportOp.startTime}ms`,
 					);
 				} catch (err) {
-					const errMsg = getErrorMessage(err);
-					logger.error(`Error exporting data: ${errMsg}`);
+					const message = err instanceof Error ? err.message : "Unknown error";
+					logger.error(`Error exporting data: ${message}`);
+					// requestId is always assigned at this point (line 291)
 					socketWrapper.emit("crawlError", {
 						message: "Failed to export data",
 						requestId,
 					});
 				} finally {
+					// Root cause fix: Clean up active export tracking
 					activeExports.delete(socketWrapper.id);
 				}
 				break;
@@ -580,24 +499,19 @@ export function createWebSocketHandlers(
 		}
 	};
 
-	const handleClose = async (ws: { id: string }) => {
-		const id = ws.id;
+	const handleClose = async (ws: { id: string; data: { id: string } }) => {
+		const id = ws.data.id || ws.id;
 
-		// Clean up rate limiter data immediately on disconnect
-		rateLimiter.removeSocket(id);
-
-		// Clean up any active export for this socket
+		// Root cause fix: Clean up any active export for this socket
 		activeExports.delete(id);
 
 		const session = activeCrawls.get(id);
 		if (session) {
-			// interrupt() marks the session as 'interrupted' so it can be resumed later,
-			// rather than 'completed' which stop() would set.
-			session.interrupt();
+			await session.stop();
 			activeCrawls.delete(id);
 		}
 		logger.info(`Client disconnected: ${id}`);
 	};
 
-	return { handleMessage, handleClose, dispose };
+	return { handleMessage, handleClose };
 }

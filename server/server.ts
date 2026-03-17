@@ -1,9 +1,17 @@
+/**
+ * Miku Crawler API Entry Point
+ *
+ * Sets up the Elysia server, configures middleware (CORS, Rate Limit, Swagger),
+ * initializes the database and logging, and handles graceful shutdown.
+ *
+ * NOTE: We use Bun's native ESM support.
+ */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cors } from "@elysiajs/cors";
 import { staticPlugin } from "@elysiajs/static";
 import { swagger } from "@elysiajs/swagger";
-import { Elysia, t } from "elysia";
+import { Elysia } from "elysia";
 import { rateLimit } from "elysia-rate-limit";
 import { setupDatabase } from "./config/database.js";
 import { config } from "./config/env.js";
@@ -15,8 +23,10 @@ import {
 	WebSocketMessageSchema,
 } from "./handlers/socketHandlers.js";
 import { compression } from "./middleware/compression.js";
-import { createApiRoutes } from "./routes/apiRoutes.js";
+import { apiRoutes } from "./routes/apiRoutes.js";
 import { getErrorMessage } from "./utils/helpers.js";
+
+// Bun natively loads .env files - no dotenv needed
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -34,20 +44,24 @@ if (config.isRender)
 const FRONTEND_URL = config.frontendUrl;
 const PORT = config.port;
 
-// db is a synchronous bun:sqlite Database — no Promise wrapping needed
-const { handleMessage, handleClose, dispose } = createWebSocketHandlers(
+// Pass the database as a Promise to handlers that might need async access (e.g., inside closures)
+const { handleMessage, handleClose } = createWebSocketHandlers(
 	activeCrawls,
-	db,
+	Promise.resolve(db),
 	logger,
 );
 
 const distPath = path.join(__dirname, "..", "dist");
 
 const app = new Elysia()
+	.decorate("db", db)
+	.decorate("logger", logger)
+	.decorate("activeCrawls", activeCrawls)
 	.use(
 		cors({
 			origin: (request) => {
 				const origin = request.headers.get("origin");
+				// Only allow Vite's default dev server port
 				if (origin === "http://localhost:5173") {
 					return true;
 				}
@@ -60,10 +74,8 @@ const app = new Elysia()
 		rateLimit({
 			max: 100,
 			duration: 60_000,
-			skip: (request) => {
-				const pathname = new URL(request.url).pathname;
-				return pathname.startsWith("/ws") || pathname.startsWith("/health");
-			},
+			skip: (request) =>
+				request.url.includes("/ws") || request.url.includes("/health"),
 		}),
 	)
 	.use(compression())
@@ -79,7 +91,6 @@ const app = new Elysia()
 				tags: [
 					{ name: "Stats", description: "System and crawler statistics" },
 					{ name: "Content", description: "Crawled page content access" },
-					{ name: "System", description: "Server health and diagnostics" },
 				],
 			},
 		}),
@@ -90,69 +101,48 @@ const app = new Elysia()
 			prefix: "/assets",
 		}),
 	)
-	.use(createApiRoutes(db, logger, activeCrawls))
+	.use(apiRoutes)
 	.ws("/ws", {
 		body: WebSocketMessageSchema,
-		open(ws) {
-			// ws.id is Elysia's stable socket identifier (NOT ws.data.id)
+		// biome-ignore lint/suspicious/noExplicitAny: Elysia WS types mismatch
+		open(ws: any) {
 			logger.info(`Client connected: ${ws.id}`);
 		},
-		// The handlers use structural types ({ id, send }) that are a supertype
-		// of Elysia's full WS context, which is valid at runtime. The casts are
-		// required because TypeScript's strict function parameter checking cannot
-		// verify the structural compatibility with Elysia's deeply-generic WS type.
-		// biome-ignore lint/suspicious/noExplicitAny: Elysia WS structural type compat
+		// biome-ignore lint/suspicious/noExplicitAny: Elysia WS types mismatch
 		message: handleMessage as any,
-		// biome-ignore lint/suspicious/noExplicitAny: Elysia WS structural type compat
+		// biome-ignore lint/suspicious/noExplicitAny: Elysia WS types mismatch
 		close: handleClose as any,
 	})
-	.get(
-		"/health",
-		() => ({
-			status: "ok",
-			activeCrawls: activeCrawls.size,
-			uptime: process.uptime(),
-		}),
-		{
-			detail: {
-				tags: ["System"],
-				summary: "Health check",
-				description:
-					"Returns server status, number of active crawls, and process uptime.",
-			},
-			response: t.Object({
-				status: t.String(),
-				activeCrawls: t.Number(),
-				uptime: t.Number(),
-			}),
-		},
-	)
+	.get("/health", () => ({
+		status: "ok",
+		activeCrawls: activeCrawls.size,
+		uptime: process.uptime(),
+	}))
 	.onError(({ code, error, set }) => {
-		if (code === "VALIDATION") {
-			set.status = 422;
-			return { error: getErrorMessage(error) };
+		if (code === "NOT_FOUND") {
+			set.status = 404;
+			return { error: "Not Found" };
 		}
-		if (code === "PARSE") {
-			set.status = 400;
-			return { error: "Invalid request body" };
-		}
-		set.status = 500;
-		logger.error(`Global Error [${code}]: ${error}`);
-		return { error: getErrorMessage(error) };
+		logger.error(`Global Error: ${error}`);
+		const errorMessage = (error as Error)?.message || "Internal Server Error";
+		return { error: errorMessage };
 	})
 	.get(
 		"*",
-		async ({ path: reqPath, request }: { path: string; request: Request }) => {
+		async ({ path: reqPath, headers }: { path: string; headers: Headers }) => {
 			const filePath = path.join(distPath, reqPath);
 			const file = Bun.file(filePath);
 			if (await file.exists()) {
+				// Add cache headers for static assets
 				const isAsset =
 					/\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$/i.test(
 						reqPath,
 					);
 				if (isAsset) {
-					const etag = `${file.size}-${file.lastModified}`;
-					const ifNoneMatch = request.headers?.get?.("if-none-match") ?? null;
+					const etag = await file
+						.arrayBuffer()
+						.then((buf) => Bun.hash(buf).toString(16));
+					const ifNoneMatch = headers.get("if-none-match");
 					if (ifNoneMatch === etag) {
 						return new Response(null, { status: 304 });
 					}
@@ -186,11 +176,12 @@ const instance = app.listen(PORT, (server) => {
 	);
 });
 
+/**
+ * Ensures clean teardown of database connections and active crawl sessions
+ * on process termination (SIGTERM/SIGINT).
+ */
 async function gracefulShutdown(signal: string): Promise<void> {
 	logger.info(`${signal} received, shutting down gracefully`);
-
-	// Stop the rate-limiter cleanup interval
-	dispose();
 
 	for (const session of activeCrawls.values()) {
 		try {
@@ -207,7 +198,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
 		logger.warn(`Failed to close database cleanly: ${getErrorMessage(error)}`);
 	}
 
-	await instance.stop();
+	instance.stop();
 	logger.info("Server closed");
 	logger.close();
 	process.exit(0);
