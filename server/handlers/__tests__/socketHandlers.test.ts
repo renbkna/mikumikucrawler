@@ -1,6 +1,17 @@
 import { describe, expect, mock, test } from "bun:test";
 import dns from "node:dns";
+import { CrawlerError } from "../../errors.js";
 import { sanitizeOptions } from "../socketHandlers.js";
+
+/** Assert that an async call throws a CrawlerError with an SSRF code. */
+const expectSSRFBlock = async (promise: Promise<unknown>) => {
+	try {
+		await promise;
+		throw new Error("Expected SSRF block");
+	} catch (err) {
+		expect(CrawlerError.isSSRF(err)).toBe(true);
+	}
+};
 
 /**
  * CONTRACT: sanitizeOptions
@@ -56,82 +67,82 @@ import { sanitizeOptions } from "../socketHandlers.js";
  *   - Throws "Target URL is required" for empty/missing target
  *   - Throws "Target must be a valid URL" for malformed URLs
  *   - Throws "Only HTTP and HTTPS targets are supported" for other protocols
- *   - Throws "Target host is not allowed" for private/reserved IPs
- *   - Throws "Unable to resolve target hostname" for DNS failures
+ *   - Throws CrawlerError with SSRF_* codes for private/reserved IPs and localhost
+ *   - Throws CrawlerError with SSRF_DNS_FAILURE for unresolvable hostnames
  */
 
 describe("sanitizeOptions CONTRACT", () => {
 	describe("INVARIANT: Security - SSRF Prevention", () => {
 		test("rejects direct localhost IPv4 loopback", async () => {
 			// Loopback addresses are SSRF vectors
-			await expect(
+			await expectSSRFBlock(
 				sanitizeOptions({ target: "http://127.0.0.1" }),
-			).rejects.toThrow(/Target host is not allowed/);
+			);
 		});
 
 		test("rejects direct localhost IPv6 loopback", async () => {
-			await expect(sanitizeOptions({ target: "http://[::1]" })).rejects.toThrow(
-				/Target host is not allowed/,
+			await expectSSRFBlock(
+				sanitizeOptions({ target: "http://[::1]" }),
 			);
 		});
 
 		test("rejects IPv4-mapped IPv6 loopback", async () => {
-			await expect(
+			await expectSSRFBlock(
 				sanitizeOptions({ target: "http://[::ffff:127.0.0.1]" }),
-			).rejects.toThrow(/Target host is not allowed/);
+			);
 		});
 
 		test("rejects localhost hostname", async () => {
-			await expect(
+			await expectSSRFBlock(
 				sanitizeOptions({ target: "http://localhost" }),
-			).rejects.toThrow(/Target host is not allowed/);
+			);
 		});
 
 		test("rejects private IPv4 range: 10.x.x.x (RFC1918)", async () => {
 			// Private Class A network
-			await expect(
+			await expectSSRFBlock(
 				sanitizeOptions({ target: "http://10.0.0.1" }),
-			).rejects.toThrow(/Target host is not allowed/);
-			await expect(
+			);
+			await expectSSRFBlock(
 				sanitizeOptions({ target: "http://10.255.255.255" }),
-			).rejects.toThrow(/Target host is not allowed/);
+			);
 		});
 
 		test("rejects private IPv4 range: 172.16.x.x - 172.31.x.x (RFC1918)", async () => {
 			// Private Class B network
-			await expect(
+			await expectSSRFBlock(
 				sanitizeOptions({ target: "http://172.16.0.1" }),
-			).rejects.toThrow(/Target host is not allowed/);
-			await expect(
+			);
+			await expectSSRFBlock(
 				sanitizeOptions({ target: "http://172.31.255.255" }),
-			).rejects.toThrow(/Target host is not allowed/);
+			);
 			// Boundary: 172.15.x.x should be allowed (public)
 			// This requires mocking DNS, tested below
 		});
 
 		test("rejects private IPv4 range: 192.168.x.x (RFC1918)", async () => {
 			// Private Class C network
-			await expect(
+			await expectSSRFBlock(
 				sanitizeOptions({ target: "http://192.168.0.1" }),
-			).rejects.toThrow(/Target host is not allowed/);
-			await expect(
+			);
+			await expectSSRFBlock(
 				sanitizeOptions({ target: "http://192.168.255.255" }),
-			).rejects.toThrow(/Target host is not allowed/);
+			);
 		});
 
 		test("rejects link-local addresses: 169.254.x.x", async () => {
-			await expect(
+			await expectSSRFBlock(
 				sanitizeOptions({ target: "http://169.254.0.1" }),
-			).rejects.toThrow(/Target host is not allowed/);
+			);
 		});
 
 		test("rejects multicast addresses: 224.x.x.x - 239.x.x.x", async () => {
-			await expect(
+			await expectSSRFBlock(
 				sanitizeOptions({ target: "http://224.0.0.1" }),
-			).rejects.toThrow(/Target host is not allowed/);
-			await expect(
+			);
+			await expectSSRFBlock(
 				sanitizeOptions({ target: "http://239.255.255.255" }),
-			).rejects.toThrow(/Target host is not allowed/);
+			);
 		});
 
 		test("rejects DNS that resolves to private IP (SSRF via DNS)", async () => {
@@ -142,36 +153,32 @@ describe("sanitizeOptions CONTRACT", () => {
 			// What we CAN verify at this layer: sanitizeOptions always calls
 			// assertPublicHostname, which rejects hostnames that fail DNS validation.
 			// A hostname that does not resolve is still rejected (not silently allowed).
-			await expect(
+			await expectSSRFBlock(
 				sanitizeOptions({
 					target: "https://ssrf-dns-test-unresolvable.invalid",
 				}),
-			).rejects.toThrow(
-				/Target host is not allowed|Unable to resolve target hostname/,
 			);
 		});
 
 		test("rejects DNS with mixed records if ANY are private", async () => {
 			// Same DNS-binding limitation as above — coverage at secureFetch.test.ts level.
 			// INVARIANT: sanitizeOptions never allows a hostname that fails DNS validation.
-			await expect(
+			await expectSSRFBlock(
 				sanitizeOptions({
 					target: "https://mixed-dns-records-test-unresolvable.invalid",
 				}),
-			).rejects.toThrow(
-				/Target host is not allowed|Unable to resolve target hostname/,
 			);
 		});
 
 		test("rejects IPv6 private addresses", async () => {
 			// fc00::/7 Unique local addresses
-			await expect(
+			await expectSSRFBlock(
 				sanitizeOptions({ target: "http://[fc00::1]" }),
-			).rejects.toThrow(/Target host is not allowed/);
+			);
 			// fe80::/10 Link-local
-			await expect(
+			await expectSSRFBlock(
 				sanitizeOptions({ target: "http://[fe80::1]" }),
-			).rejects.toThrow(/Target host is not allowed/);
+			);
 		});
 	});
 
@@ -220,7 +227,7 @@ describe("sanitizeOptions CONTRACT", () => {
 			try {
 				await expect(
 					sanitizeOptions({ target: "ftp://some-host.example" }),
-				).rejects.toThrow(/Unable to resolve target hostname/);
+				).rejects.toThrow(/DNS resolution failed/);
 			} finally {
 				dns.promises.lookup = originalLookup;
 			}
@@ -237,7 +244,7 @@ describe("sanitizeOptions CONTRACT", () => {
 			try {
 				await expect(
 					sanitizeOptions({ target: "https://not-a-real-domain.invalid" }),
-				).rejects.toThrow(/Unable to resolve target hostname/);
+				).rejects.toThrow(/DNS resolution failed/);
 			} finally {
 				dns.promises.lookup = originalLookup;
 			}

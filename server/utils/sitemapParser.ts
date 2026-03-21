@@ -5,13 +5,18 @@ import type { SitemapEntry } from "../types.js";
 import { getErrorMessage } from "./helpers.js";
 import { secureFetch } from "./secureFetch.js";
 
+type SecureFetchFn = typeof secureFetch;
+
 /**
  * Fetches a URL and returns the response text.
  * Returns null on any error — sitemap discovery is best-effort and must not abort a crawl.
  */
-async function fetchXml(url: string): Promise<string | null> {
+async function fetchXml(
+	url: string,
+	secureFetchFn: SecureFetchFn,
+): Promise<string | null> {
 	try {
-		const response = await secureFetch({
+		const response = await secureFetchFn({
 			url,
 			headers: { ...FETCH_HEADERS, Accept: "application/xml,text/xml,*/*" },
 			signal: AbortSignal.timeout(SITEMAP_CONSTANTS.FETCH_TIMEOUT_MS),
@@ -83,11 +88,12 @@ async function crawlSitemap(
 	entries: SitemapEntry[],
 	depth: number,
 	logger: Logger,
+	secureFetchFn: SecureFetchFn,
 ): Promise<void> {
 	if (depth > SITEMAP_CONSTANTS.MAX_RECURSION_DEPTH) return;
 	if (entries.length >= SITEMAP_CONSTANTS.MAX_ENTRIES) return;
 
-	const xml = await fetchXml(url);
+	const xml = await fetchXml(url, secureFetchFn);
 	if (!xml) return;
 
 	// Detect whether this is a sitemap index or a urlset
@@ -104,7 +110,7 @@ async function crawlSitemap(
 			if (entries.length >= SITEMAP_CONSTANTS.MAX_ENTRIES) break;
 			if (!collected.has(childUrl)) {
 				collected.add(childUrl);
-				await crawlSitemap(childUrl, collected, entries, depth + 1, logger);
+				await crawlSitemap(childUrl, collected, entries, depth + 1, logger, secureFetchFn);
 			}
 		}
 	} else {
@@ -137,6 +143,7 @@ async function crawlSitemap(
 export async function fetchSitemap(
 	baseUrl: string,
 	logger: Logger,
+	secureFetchFn: SecureFetchFn = secureFetch,
 ): Promise<SitemapEntry[]> {
 	try {
 		const origin = new URL(baseUrl).origin;
@@ -146,7 +153,7 @@ export async function fetchSitemap(
 
 		// 1. Check robots.txt for Sitemap: directive
 		try {
-			const robotsText = await fetchXml(`${origin}/robots.txt`);
+			const robotsText = await fetchXml(`${origin}/robots.txt`, secureFetchFn);
 			if (robotsText) {
 				for (const line of robotsText.split("\n")) {
 					const match = /^Sitemap:\s*(.+)$/i.exec(line.trim());
@@ -178,7 +185,7 @@ export async function fetchSitemap(
 		// Crawl each candidate sitemap
 		for (const candidateUrl of candidateUrls) {
 			if (entries.length >= SITEMAP_CONSTANTS.MAX_ENTRIES) break;
-			await crawlSitemap(candidateUrl, collected, entries, 0, logger);
+			await crawlSitemap(candidateUrl, collected, entries, 0, logger, secureFetchFn);
 		}
 
 		if (entries.length === 0) return [];

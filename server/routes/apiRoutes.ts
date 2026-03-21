@@ -1,18 +1,19 @@
+import type { Database } from "bun:sqlite";
 import { Elysia, t } from "elysia";
 import type { CrawlSession } from "../crawler/CrawlSession.js";
-import type { DatabaseLike, LoggerLike } from "../types.js";
+import {
+	deleteSession,
+	getAggregateStats,
+	getInterruptedSessions,
+	getLanguageStats,
+	getPageContentById,
+	getQualityDistribution,
+	searchPages,
+	type LanguageStat,
+	type QualityStat,
+} from "../data/queries.js";
+import type { LoggerLike } from "../types.js";
 import { getErrorMessage } from "../utils/helpers.js";
-
-// ─── Session types (mirrored from sessionPersistence without bun:sqlite dep) ──
-
-interface InterruptedSessionRow {
-	id: string;
-	target: string;
-	status: string;
-	stats: string | null;
-	created_at: string;
-	updated_at: string;
-}
 
 const SessionSummarySchema = t.Object({
 	id: t.String(),
@@ -36,32 +37,6 @@ const DeleteResponseSchema = t.Object({
 // This keeps the dashboard responsive during active crawls while still shielding
 // the DB from polling at full request rate.
 const STATS_CACHE_TTL_MS = 30_000;
-
-interface BasicStats {
-	totalPages: number;
-	totalDataSize: number;
-	uniqueDomains: number;
-	lastCrawled: string;
-}
-
-interface EnhancedStats {
-	avgWordCount: number | null;
-	avgQualityScore: number | null;
-	avgReadingTime: number | null;
-	totalMedia: number | null;
-	totalInternalLinks: number | null;
-	totalExternalLinks: number | null;
-}
-
-interface LanguageStat {
-	language: string;
-	count: number;
-}
-
-interface QualityStat {
-	quality_range: string;
-	count: number;
-}
 
 /** Concrete type for the successful stats response — mirrors StatsResponseSchema. */
 interface StatsResult {
@@ -122,7 +97,7 @@ const ErrorResponseSchema = t.Object({ error: t.String() });
  * graph explicit and fully type-safe.
  */
 export function createApiRoutes(
-	db: DatabaseLike,
+	db: Database,
 	logger: LoggerLike,
 	activeCrawls: Map<string, CrawlSession>,
 ) {
@@ -151,53 +126,9 @@ export function createApiRoutes(
 						return statsCache.data;
 					}
 
-					// Combined basic and enhanced stats in a single query
-					const combinedStats = db
-						.query(`
-							SELECT
-								COUNT(*) as totalPages,
-								SUM(data_length) as totalDataSize,
-								COUNT(DISTINCT domain) as uniqueDomains,
-								MAX(crawled_at) as lastCrawled,
-								AVG(word_count) as avgWordCount,
-								AVG(quality_score) as avgQualityScore,
-								AVG(reading_time) as avgReadingTime,
-								SUM(media_count) as totalMedia,
-								SUM(internal_links_count) as totalInternalLinks,
-								SUM(external_links_count) as totalExternalLinks
-							FROM pages
-						`)
-						.get() as BasicStats & EnhancedStats;
-
-					const languageStats = db
-						.query(`
-							SELECT language, COUNT(*) as count
-							FROM pages
-							WHERE language IS NOT NULL AND language != 'unknown'
-							GROUP BY language
-							ORDER BY count DESC
-							LIMIT 10
-						`)
-						.all() as LanguageStat[];
-
-					const qualityStats = db
-						.query(`
-							SELECT quality_range, COUNT(*) as count
-							FROM (
-								SELECT
-									CASE
-										WHEN quality_score >= 80 THEN 'High (80-100)'
-										WHEN quality_score >= 60 THEN 'Medium (60-79)'
-										WHEN quality_score >= 40 THEN 'Low (40-59)'
-										ELSE 'Poor (0-39)'
-									END AS quality_range
-								FROM pages
-								WHERE quality_score IS NOT NULL
-							)
-							GROUP BY quality_range
-							ORDER BY count DESC
-						`)
-						.all() as QualityStat[];
+					const combinedStats = getAggregateStats(db);
+					const languageStats = getLanguageStats(db);
+					const qualityStats = getQualityDistribution(db);
 
 					// Explicitly pick only the fields that belong in the public response.
 					// Spreading `combinedStats` directly would also expose the raw avg*
@@ -254,14 +185,7 @@ export function createApiRoutes(
 			"/sessions",
 			({ set }) => {
 				try {
-					const rows = db
-						.query(
-							`SELECT id, target, status, stats, created_at, updated_at
-							 FROM crawl_sessions
-							 WHERE status = 'interrupted'
-							 ORDER BY updated_at DESC`,
-						)
-						.all() as InterruptedSessionRow[];
+					const rows = getInterruptedSessions(db);
 
 					const sessions = rows.map((row) => {
 						let pagesScanned = 0;
@@ -313,8 +237,7 @@ export function createApiRoutes(
 			"/sessions/:id",
 			({ params: { id }, set }) => {
 				try {
-					db.query("DELETE FROM queue_items WHERE session_id = ?").run(id);
-					db.query("DELETE FROM crawl_sessions WHERE id = ?").run(id);
+					deleteSession(db, id);
 					return { status: "ok" };
 				} catch (err) {
 					const message = getErrorMessage(err);
@@ -361,37 +284,7 @@ export function createApiRoutes(
 					const escaped = q.replace(/"/g, '""');
 					const ftsQuery = `"${escaped}"*`;
 
-					const rows = db
-						.query(
-							`SELECT
-								p.id,
-								p.url,
-								p.title,
-								p.description,
-								p.domain,
-								p.crawled_at,
-								p.word_count,
-								p.quality_score,
-								highlight(pages_fts, 1, '<mark>', '</mark>') AS title_hl,
-								snippet(pages_fts, 3, '<mark>', '</mark>', '…', 32) AS snippet
-							FROM pages_fts
-							JOIN pages p ON p.id = pages_fts.rowid
-							WHERE pages_fts MATCH ?
-							ORDER BY rank
-							LIMIT ?`,
-						)
-						.all(ftsQuery, limit) as {
-						id: number;
-						url: string;
-						title: string;
-						description: string;
-						domain: string;
-						crawled_at: string;
-						word_count: number | null;
-						quality_score: number | null;
-						title_hl: string;
-						snippet: string;
-					}[];
+					const rows = searchPages(db, ftsQuery, limit);
 
 					return { query: q, count: rows.length, results: rows };
 				} catch (err) {
@@ -418,19 +311,16 @@ export function createApiRoutes(
 			"/pages/:id/content",
 			({ params: { id }, set }) => {
 				try {
-					const page = db
-						.query("SELECT content FROM pages WHERE id = ?")
-						.get(id) as { content: string | null } | undefined;
+					const content = getPageContentById(db, Number(id));
 
-					if (!page) {
+					if (content === undefined) {
 						set.status = 404;
 						return { error: "Page not found" };
 					}
 
-					// content may be null when crawled in contentOnly (metadata-only) mode
 					return {
 						status: "ok",
-						content: page.content ?? "",
+						content,
 					};
 				} catch (err) {
 					const message = getErrorMessage(err);
