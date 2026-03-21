@@ -27,7 +27,6 @@ import { EventStream } from "./runtime/EventStream.js";
 import { RuntimeRegistry } from "./runtime/RuntimeRegistry.js";
 import { createStorage } from "./storage/db.js";
 import { getErrorMessage } from "./utils/helpers.js";
-import { hashContent } from "./utils/hashUtils.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -113,9 +112,7 @@ export const app = new Elysia()
 					);
 
 				if (isAsset) {
-					const etag = await file
-						.arrayBuffer()
-						.then((buffer) => hashContent(buffer));
+					const etag = `W/"${file.size}-${file.lastModified}"`;
 					const ifNoneMatch = headers["if-none-match"];
 					if (ifNoneMatch === etag) {
 						return new Response(null, { status: 304 });

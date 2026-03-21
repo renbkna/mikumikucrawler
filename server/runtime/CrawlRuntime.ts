@@ -97,16 +97,7 @@ export class CrawlRuntime {
 		type: TType,
 		payload: CrawlEventMap[TType],
 	) {
-		const event = this.deps.eventStream.publish(
-			this.deps.crawlId,
-			type,
-			payload,
-		);
-		this.deps.repos.crawlRuns.setEventSequence(
-			this.deps.crawlId,
-			event.sequence,
-		);
-		return event;
+		return this.deps.eventStream.publish(this.deps.crawlId, type, payload);
 	}
 
 	private persistProgress(status?: "starting" | "running" | "stopping") {
@@ -138,6 +129,10 @@ export class CrawlRuntime {
 		this.deps.repos.crawlRuns.updateProgress(
 			this.deps.crawlId,
 			this.state.counters,
+		);
+		this.deps.repos.crawlRuns.setEventSequence(
+			this.deps.crawlId,
+			this.deps.eventStream.getCurrentSequence(this.deps.crawlId),
 		);
 	}
 

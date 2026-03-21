@@ -20,7 +20,7 @@ const CONSENT_WALL_MARKERS = [
 	"zustimmen und fortfahren",
 ] as const;
 
-const CONSENT_ACTION_MARKERS = [
+export const CONSENT_ACTION_MARKERS = [
 	"accept all",
 	"accept cookies",
 	"i agree",

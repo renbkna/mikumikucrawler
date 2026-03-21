@@ -3,15 +3,12 @@ import type { CrawlOptions } from "../../contracts/crawl.js";
 import type { CrawlPagePayload } from "../../contracts/events.js";
 import { ContentProcessor } from "../../processors/ContentProcessor.js";
 import type { ExtractedLink } from "../../types.js";
+import type { PageRepo } from "../../storage/repos/pageRepo.js";
 import type { CrawlQueue, QueueItem } from "./CrawlQueue.js";
 import type { CrawlState } from "./CrawlState.js";
 import type { FetchService } from "./FetchService.js";
 import type { RobotsService } from "./RobotsService.js";
 import { filterDiscoveredLinks } from "./UrlPolicy.js";
-
-type PageRepo = ReturnType<
-	typeof import("../../storage/repos/pageRepo.js").createPageRepo
->;
 
 interface EventSink {
 	log(message: string): void;
