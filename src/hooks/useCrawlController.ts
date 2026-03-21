@@ -7,6 +7,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import type { CrawlSummary } from "../../server/contracts/crawl.js";
 import type { CrawlEventEnvelope } from "../../server/contracts/events.js";
 import type { CrawlExportFormat } from "../api/crawls";
 import {
@@ -30,6 +31,20 @@ import {
 
 interface UseCrawlControllerOptions {
 	addToast: (type: Toast["type"], message: string, timeout?: number) => void;
+}
+
+/**
+ * Resume returns the persisted crawl record from the backend.
+ * The controller must hydrate both target and options from that record so the
+ * visible form reflects the settings the runtime is actually using.
+ */
+export function getResumeHydrationActions(
+	crawl: Pick<CrawlSummary, "target" | "options">,
+): CrawlControllerAction[] {
+	return [
+		{ type: "crawlOptionsChanged", crawlOptions: crawl.options },
+		{ type: "targetChanged", target: crawl.target },
+	];
 }
 
 function useControllerState({ addToast }: UseCrawlControllerOptions) {
@@ -258,6 +273,9 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				return false;
 			}
 
+			for (const action of getResumeHydrationActions(result.data)) {
+				dispatch(action);
+			}
 			dispatch({
 				type: "crawlAccepted",
 				crawlId: result.data.id,

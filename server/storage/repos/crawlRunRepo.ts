@@ -27,6 +27,15 @@ interface ListOptions {
 	limit?: number;
 }
 
+function toSqliteDateTime(value: string): string {
+	const parsed = new Date(value);
+	if (Number.isNaN(parsed.getTime())) {
+		return value;
+	}
+
+	return parsed.toISOString().slice(0, 19).replace("T", " ");
+}
+
 export function createCrawlRunRepo(db: Database) {
 	const insertRun = db.prepare(`
 		INSERT INTO crawl_runs (
@@ -153,12 +162,12 @@ export function createCrawlRunRepo(db: Database) {
 
 		if (options.from) {
 			clauses.push("updated_at >= ?");
-			params.push(options.from);
+			params.push(toSqliteDateTime(options.from));
 		}
 
 		if (options.to) {
 			clauses.push("updated_at <= ?");
-			params.push(options.to);
+			params.push(toSqliteDateTime(options.to));
 		}
 
 		const whereClause =

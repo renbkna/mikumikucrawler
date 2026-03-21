@@ -107,6 +107,34 @@ describe("api contract", () => {
 		expect(invalidListResponse.status).toBe(422);
 	});
 
+	test("rejects non-integer crawl option fields", async () => {
+		const { app } = buildApp({
+			fetch: async () =>
+				new Response("<html><body><main>unused</main></body></html>", {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				}),
+		});
+
+		const response = await app.handle(
+			new Request("http://localhost/api/crawls", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					...crawlBody,
+					crawlDepth: 1.5,
+					crawlDelay: 200.2,
+					maxPages: 1.1,
+					maxPagesPerDomain: 0.5,
+					maxConcurrentRequests: 1.5,
+					retryLimit: 0.5,
+				}),
+			}),
+		);
+
+		expect(response.status).toBe(422);
+	});
+
 	test("create crawl, get crawl, list crawl, page content, and search", async () => {
 		const html =
 			"<html><body><main>Hello api contract</main><title>API Contract</title></body></html>";

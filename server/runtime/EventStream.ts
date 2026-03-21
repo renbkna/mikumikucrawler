@@ -14,6 +14,10 @@ interface StreamState {
 const MAX_HISTORY = 500;
 const DEFAULT_CLEANUP_DELAY_MS = 5 * 60 * 1000;
 
+function cloneValue<T>(value: T): T {
+	return structuredClone(value);
+}
+
 export class EventStream {
 	private readonly streams = new Map<string, StreamState>();
 	private readonly cleanupTimers = new Map<
@@ -63,7 +67,7 @@ export class EventStream {
 			crawlId,
 			sequence: state.sequence + 1,
 			timestamp: new Date().toISOString(),
-			payload,
+			payload: cloneValue(payload),
 		};
 
 		state.sequence = event.sequence;
@@ -73,10 +77,10 @@ export class EventStream {
 		}
 
 		for (const subscriber of state.subscribers) {
-			subscriber(event as CrawlEventEnvelope);
+			subscriber(cloneValue(event as CrawlEventEnvelope));
 		}
 
-		return event;
+		return cloneValue(event);
 	}
 
 	subscribe(
@@ -87,7 +91,7 @@ export class EventStream {
 		const state = this.getState(crawlId);
 		for (const event of state.history) {
 			if (event.sequence > afterSequence) {
-				onEvent(event);
+				onEvent(cloneValue(event));
 			}
 		}
 

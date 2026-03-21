@@ -23,6 +23,7 @@ export interface QueueSnapshot {
 export class CrawlState {
 	private readonly visited = new LRUCache<string, true>(50_000);
 	private readonly terminalOutcomes = new Map<string, TerminalOutcome>();
+	private readonly admittedUrls = new Set<string>();
 	private readonly domainDelays = new Map<string, number>();
 	private readonly domainNextAllowedAt = new Map<string, number>();
 	private readonly domainPageCounts = new Map<string, number>();
@@ -74,6 +75,7 @@ export class CrawlState {
 			}
 
 			this.terminalOutcomes.set(record.url, record.outcome);
+			this.restoreAdmission(record.url);
 			this.markVisited(record.url);
 
 			if (record.outcome !== "success") {
@@ -85,6 +87,23 @@ export class CrawlState {
 				this.recordDomainPage(domain);
 			} catch {}
 		}
+	}
+
+	restoreAdmission(url: string): void {
+		this.admittedUrls.add(url);
+	}
+
+	tryAdmit(url: string): boolean {
+		if (this.admittedUrls.has(url)) {
+			return true;
+		}
+
+		if (this.admittedUrls.size >= this.options.maxPages) {
+			return false;
+		}
+
+		this.admittedUrls.add(url);
+		return true;
 	}
 
 	requestStop(reason: string): void {

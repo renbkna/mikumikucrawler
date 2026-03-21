@@ -1,3 +1,4 @@
+import type { CrawlSummary } from "../../../server/contracts/crawl.js";
 import { describe, expect, test } from "bun:test";
 import type { CrawlEventEnvelope } from "../../../server/contracts/events.js";
 import { UI_LIMITS } from "../../constants";
@@ -7,6 +8,7 @@ import {
 	crawlControllerReducer,
 	createInitialCrawlControllerState,
 } from "../crawlControllerState";
+import { getResumeHydrationActions } from "../useCrawlController";
 
 function reduce(
 	state: CrawlControllerState,
@@ -199,5 +201,68 @@ describe("crawlControllerReducer", () => {
 		expect(state.logs).toHaveLength(UI_LIMITS.MAX_LOGS);
 		expect(warningCount).toBe(1);
 		expect(repeatedFallback.effects).toEqual([]);
+	});
+
+	test("resume hydration replaces local form state with persisted crawl settings", () => {
+		const summary: CrawlSummary = {
+			id: "crawl-1",
+			target: "https://resume.example/path",
+			status: "running",
+			options: {
+				target: "https://resume.example/path",
+				crawlMethod: "media",
+				crawlDepth: 4,
+				crawlDelay: 750,
+				maxPages: 42,
+				maxPagesPerDomain: 7,
+				maxConcurrentRequests: 3,
+				retryLimit: 2,
+				dynamic: true,
+				respectRobots: false,
+				contentOnly: true,
+				saveMedia: true,
+			},
+			counters: {
+				pagesScanned: 5,
+				successCount: 4,
+				failureCount: 1,
+				skippedCount: 0,
+				linksFound: 12,
+				mediaFiles: 3,
+				totalDataKb: 99,
+			},
+			createdAt: "2026-03-21T12:00:00.000Z",
+			startedAt: "2026-03-21T12:00:10.000Z",
+			updatedAt: "2026-03-21T12:01:00.000Z",
+			completedAt: null,
+			stopReason: null,
+			resumable: true,
+		};
+		const initial = reduce(
+			createInitialCrawlControllerState(),
+			{ type: "targetChanged", target: "https://draft.example" },
+			{
+				type: "crawlOptionsChanged",
+				crawlOptions: {
+					target: "https://draft.example",
+					crawlMethod: "links",
+					crawlDepth: 1,
+					crawlDelay: 0,
+					maxPages: 10,
+					maxPagesPerDomain: 0,
+					maxConcurrentRequests: 1,
+					retryLimit: 0,
+					dynamic: false,
+					respectRobots: true,
+					contentOnly: false,
+					saveMedia: false,
+				},
+			},
+		);
+
+		const resumed = reduce(initial, ...getResumeHydrationActions(summary));
+
+		expect(resumed.target).toBe(summary.target);
+		expect(resumed.crawlOptions).toEqual(summary.options);
 	});
 });

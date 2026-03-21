@@ -354,4 +354,81 @@ describe("crawl manager contract", () => {
 		expect(completed?.counters.successCount).toBe(2);
 		expect(rateAttempts).toBe(2);
 	});
+
+	test("maxPages caps admitted URLs even when a page discovers more links", async () => {
+		const httpClient: HttpClient = {
+			fetch: async ({ url }) => {
+				if (url.endsWith("/")) {
+					return new Response(
+						"<html><body><a href='https://example.com/a'>A</a><a href='https://example.com/b'>B</a><main>home</main></body></html>",
+						{
+							status: 200,
+							headers: { "content-type": "text/html" },
+						},
+					);
+				}
+
+				return new Response("<html><body><main>child</main></body></html>", {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				});
+			},
+		};
+
+		const { manager, storage } = createManager(httpClient);
+		const created = manager.create({
+			...createOptions(),
+			maxPages: 1,
+			maxConcurrentRequests: 3,
+		});
+
+		const completed = await waitFor(
+			() => storage.repos.crawlRuns.getById(created.id),
+			(run) => run?.status === "completed",
+		);
+
+		expect(completed?.counters.pagesScanned).toBe(1);
+		expect(completed?.counters.successCount).toBe(1);
+		expect(completed?.counters.skippedCount).toBe(0);
+		expect(storage.repos.pages.listForExport(created.id)).toHaveLength(1);
+	});
+
+	test("stop requested during startup does not publish a running state before stop is applied", async () => {
+		const storage = createInMemoryStorage();
+		const eventStream = new EventStream();
+		const registry = new RuntimeRegistry();
+		const resolver: Resolver = {
+			assertPublicHostname: async () => {
+				await Bun.sleep(200);
+			},
+			resolveHost: async () => ["93.184.216.34"],
+		};
+		const httpClient: HttpClient = {
+			fetch: async () =>
+				new Response("<html><body><main>Hello</main></body></html>", {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				}),
+		};
+		const manager = new CrawlManager({
+			logger: createLogger(),
+			repos: storage.repos,
+			eventStream,
+			registry,
+			resolver,
+			httpClient,
+		});
+
+		const created = manager.create(createOptions());
+		manager.stop(created.id);
+
+		const beforeRunning = storage.repos.crawlRuns.getById(created.id);
+		expect(beforeRunning?.status).not.toBe("stopping");
+
+		const stopped = await waitFor(
+			() => storage.repos.crawlRuns.getById(created.id),
+			(run) => run?.status === "stopped",
+		);
+		expect(stopped?.status).toBe("stopped");
+	});
 });

@@ -245,12 +245,13 @@ export class PagePipeline {
 
 		this.state.recordDiscoveredLinks(processedContent.links?.length ?? 0);
 
-		const mediaCount =
+		const retainedMedia =
 			this.options.saveMedia &&
 			(this.options.crawlMethod === "media" ||
 				this.options.crawlMethod === "full")
-				? (processedContent.media?.length ?? 0)
-				: 0;
+				? (processedContent.media ?? [])
+				: [];
+		const mediaCount = retainedMedia.length;
 
 		const robotsDirectives = mergeRobotsDirectives(
 			processedContent.metadata?.robots,
@@ -287,7 +288,10 @@ export class PagePipeline {
 			isDynamic: fetchResult.isDynamic,
 			lastModified: fetchResult.lastModified,
 			etag: fetchResult.etag,
-			processedContent,
+			processedContent: {
+				...processedContent,
+				media: retainedMedia,
+			},
 			links: filteredLinks,
 		});
 
@@ -315,7 +319,7 @@ export class PagePipeline {
 				},
 				metadata: processedContent.metadata,
 				analysis: processedContent.analysis,
-				media: processedContent.media,
+				media: retainedMedia,
 				qualityScore: processedContent.analysis?.quality?.score ?? 0,
 				language: processedContent.analysis?.language ?? "unknown",
 			},

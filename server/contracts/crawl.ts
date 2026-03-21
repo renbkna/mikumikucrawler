@@ -27,26 +27,32 @@ export const CrawlOptionsSchema = t.Object({
 	crawlDepth: t.Number({
 		minimum: CRAWL_OPTION_BOUNDS.crawlDepth.min,
 		maximum: CRAWL_OPTION_BOUNDS.crawlDepth.max,
+		multipleOf: 1,
 	}),
 	crawlDelay: t.Number({
 		minimum: CRAWL_OPTION_BOUNDS.crawlDelay.min,
 		maximum: CRAWL_OPTION_BOUNDS.crawlDelay.max,
+		multipleOf: 1,
 	}),
 	maxPages: t.Number({
 		minimum: CRAWL_OPTION_BOUNDS.maxPages.min,
 		maximum: CRAWL_OPTION_BOUNDS.maxPages.max,
+		multipleOf: 1,
 	}),
 	maxPagesPerDomain: t.Number({
 		minimum: CRAWL_OPTION_BOUNDS.maxPagesPerDomain.min,
 		maximum: CRAWL_OPTION_BOUNDS.maxPagesPerDomain.max,
+		multipleOf: 1,
 	}),
 	maxConcurrentRequests: t.Number({
 		minimum: CRAWL_OPTION_BOUNDS.maxConcurrentRequests.min,
 		maximum: CRAWL_OPTION_BOUNDS.maxConcurrentRequests.max,
+		multipleOf: 1,
 	}),
 	retryLimit: t.Number({
 		minimum: CRAWL_OPTION_BOUNDS.retryLimit.min,
 		maximum: CRAWL_OPTION_BOUNDS.retryLimit.max,
+		multipleOf: 1,
 	}),
 	dynamic: t.Boolean(),
 	respectRobots: t.Boolean(),
