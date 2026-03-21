@@ -1,16 +1,6 @@
 export const CRAWL_QUEUE_CONSTANTS = {
-	DOMAIN_CACHE_CLEANUP_THRESHOLD: 500,
-	DOMAIN_ENTRY_EXPIRY_MS: 60000,
 	DEFAULT_SLEEP_MS: 100,
-	MIN_SLEEP_MS: 50,
-	/** Maximum time to process a single queue item before timeout (60 seconds - reduced from 90) */
 	ITEM_PROCESSING_TIMEOUT_MS: 60000,
-	/** Interval for stuck detection watchdog checks (15 seconds - more frequent) */
-	STUCK_DETECTION_INTERVAL_MS: 15000,
-	/** Time without progress before warning about potential stuck state (30 seconds) */
-	STUCK_WARNING_THRESHOLD_MS: 30000,
-	/** Time without progress before force-clearing stuck items (90 seconds - more aggressive) */
-	STUCK_FORCE_CLEAR_THRESHOLD_MS: 90000,
 } as const;
 
 export const TIMEOUT_CONSTANTS = {
@@ -51,18 +41,6 @@ export const REQUEST_CONSTANTS = {
 	MAX_URL_LENGTH: 2000,
 } as const;
 
-/** Export configuration */
-export const EXPORT_CONSTANTS = {
-	/** Number of rows per chunk for data export */
-	CHUNK_SIZE: 500,
-} as const;
-
-/** Batch processing configuration */
-export const BATCH_CONSTANTS = {
-	/** Concurrency limit for link batch processing */
-	LINK_BATCH_CONCURRENCY: 10,
-} as const;
-
 /** PDF processing limits to prevent resource exhaustion */
 export const PDF_CONSTANTS = {
 	/** Maximum number of pages to process per PDF (prevents memory exhaustion) */
@@ -71,14 +49,6 @@ export const PDF_CONSTANTS = {
 	MAX_FILE_SIZE_MB: 50,
 	/** Timeout for PDF processing in ms (30 seconds) */
 	PROCESSING_TIMEOUT_MS: 30000,
-} as const;
-
-/** Request throttling configuration */
-export const WEBSOCKET_RATE_LIMIT = {
-	/** Maximum messages per minute per socket */
-	MAX_MESSAGES_PER_MINUTE: 100,
-	/** Window size in ms (1 minute) */
-	WINDOW_MS: 60000,
 } as const;
 
 export const DYNAMIC_RENDERER_CONSTANTS = {
@@ -186,14 +156,4 @@ export const SOFT_404_CONSTANTS = {
 		"cannot be found",
 		"no longer exists",
 	] as readonly string[],
-} as const;
-
-/** Sitemap discovery and parsing configuration */
-export const SITEMAP_CONSTANTS = {
-	/** Maximum total URLs to collect from all sitemaps (prevents memory exhaustion) */
-	MAX_ENTRIES: 5000,
-	/** Fetch timeout for sitemap requests in ms */
-	FETCH_TIMEOUT_MS: 10000,
-	/** Maximum sitemap index recursion depth (sitemap → sitemap index → ...) */
-	MAX_RECURSION_DEPTH: 3,
 } as const;

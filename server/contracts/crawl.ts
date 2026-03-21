@@ -1,4 +1,5 @@
 import { t } from "elysia";
+import { CRAWL_METHODS, CRAWL_OPTION_BOUNDS } from "../../shared/crawl.js";
 
 export const CrawlStatusValues = [
 	"pending",
@@ -13,22 +14,40 @@ export const CrawlStatusValues = [
 
 export type CrawlStatus = (typeof CrawlStatusValues)[number];
 
-export const CrawlStatusSchema = t.String();
+export const CrawlStatusSchema = t.UnionEnum([...CrawlStatusValues]);
 
-export const CrawlMethodValues = ["links", "media", "full"] as const;
+export const CrawlMethodValues = CRAWL_METHODS;
 export type CrawlMethod = (typeof CrawlMethodValues)[number];
 
-export const CrawlMethodSchema = t.String();
+export const CrawlMethodSchema = t.UnionEnum([...CrawlMethodValues]);
 
 export const CrawlOptionsSchema = t.Object({
 	target: t.String({ minLength: 1 }),
 	crawlMethod: CrawlMethodSchema,
-	crawlDepth: t.Number({ minimum: 1, maximum: 5 }),
-	crawlDelay: t.Number({ minimum: 200, maximum: 10_000 }),
-	maxPages: t.Number({ minimum: 1, maximum: 200 }),
-	maxPagesPerDomain: t.Number({ minimum: 0, maximum: 1000 }),
-	maxConcurrentRequests: t.Number({ minimum: 1, maximum: 10 }),
-	retryLimit: t.Number({ minimum: 0, maximum: 5 }),
+	crawlDepth: t.Number({
+		minimum: CRAWL_OPTION_BOUNDS.crawlDepth.min,
+		maximum: CRAWL_OPTION_BOUNDS.crawlDepth.max,
+	}),
+	crawlDelay: t.Number({
+		minimum: CRAWL_OPTION_BOUNDS.crawlDelay.min,
+		maximum: CRAWL_OPTION_BOUNDS.crawlDelay.max,
+	}),
+	maxPages: t.Number({
+		minimum: CRAWL_OPTION_BOUNDS.maxPages.min,
+		maximum: CRAWL_OPTION_BOUNDS.maxPages.max,
+	}),
+	maxPagesPerDomain: t.Number({
+		minimum: CRAWL_OPTION_BOUNDS.maxPagesPerDomain.min,
+		maximum: CRAWL_OPTION_BOUNDS.maxPagesPerDomain.max,
+	}),
+	maxConcurrentRequests: t.Number({
+		minimum: CRAWL_OPTION_BOUNDS.maxConcurrentRequests.min,
+		maximum: CRAWL_OPTION_BOUNDS.maxConcurrentRequests.max,
+	}),
+	retryLimit: t.Number({
+		minimum: CRAWL_OPTION_BOUNDS.retryLimit.min,
+		maximum: CRAWL_OPTION_BOUNDS.retryLimit.max,
+	}),
 	dynamic: t.Boolean(),
 	respectRobots: t.Boolean(),
 	contentOnly: t.Boolean(),

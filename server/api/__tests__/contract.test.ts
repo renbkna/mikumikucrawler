@@ -80,6 +80,33 @@ const crawlBody = {
 };
 
 describe("api contract", () => {
+	test("rejects crawl methods and status filters outside the declared contract", async () => {
+		const { app } = buildApp({
+			fetch: async () =>
+				new Response("<html><body><main>unused</main></body></html>", {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				}),
+		});
+
+		const invalidCreateResponse = await app.handle(
+			new Request("http://localhost/api/crawls", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					...crawlBody,
+					crawlMethod: "archive",
+				}),
+			}),
+		);
+		expect(invalidCreateResponse.status).toBe(422);
+
+		const invalidListResponse = await app.handle(
+			new Request("http://localhost/api/crawls?status=unknown"),
+		);
+		expect(invalidListResponse.status).toBe(422);
+	});
+
 	test("create crawl, get crawl, list crawl, page content, and search", async () => {
 		const html =
 			"<html><body><main>Hello api contract</main><title>API Contract</title></body></html>";
