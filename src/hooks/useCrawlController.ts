@@ -6,7 +6,13 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { api, getBackendUrl } from "../api/client";
+import {
+	api,
+	type CrawlExportFormat,
+	downloadCrawlExport,
+	getBackendUrl,
+} from "../api/client";
+import { parseCrawlEventEnvelope } from "../api/crawlEvents";
 import type { SessionSummary } from "../components";
 import { CRAWLER_DEFAULTS, TOAST_DEFAULTS, UI_LIMITS } from "../constants";
 import type {
@@ -258,14 +264,22 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 			);
 
 			const handleEnvelope = (raw: MessageEvent<string>) => {
-				const envelope = JSON.parse(raw.data) as {
-					type: string;
-					payload: Record<string, unknown>;
-				};
+				const envelope = parseCrawlEventEnvelope(raw.data);
+				if (!envelope) {
+					return;
+				}
 
 				switch (envelope.type) {
+					case "crawl.started": {
+						addLog(
+							envelope.payload.resume
+								? `[Resume] Crawl runtime resumed for ${envelope.payload.target}`
+								: `[Crawler] Crawl started for ${envelope.payload.target}`,
+						);
+						break;
+					}
 					case "crawl.log": {
-						const message = String(envelope.payload.message ?? "");
+						const message = envelope.payload.message;
 						if (message) {
 							addLog(message);
 						}
@@ -274,18 +288,15 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 					case "crawl.page": {
 						dispatchPages({
 							type: "add",
-							page: envelope.payload as unknown as CrawledPage,
+							page: envelope.payload,
 						});
 						break;
 					}
 					case "crawl.progress": {
-						const counters = envelope.payload.counters as Parameters<
-							typeof buildStats
-						>[0];
-						const nextQueue = envelope.payload.queue as QueueStats;
-						const nextStats = buildStats(counters, {
-							elapsedSeconds: Number(envelope.payload.elapsedSeconds ?? 0),
-							pagesPerSecond: Number(envelope.payload.pagesPerSecond ?? 0),
+						const nextQueue: QueueStats = envelope.payload.queue;
+						const nextStats = buildStats(envelope.payload.counters, {
+							elapsedSeconds: envelope.payload.elapsedSeconds,
+							pagesPerSecond: envelope.payload.pagesPerSecond,
 						});
 						queueStatsRef.current = nextQueue;
 						setQueueStats(nextQueue);
@@ -296,10 +307,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 					case "crawl.completed":
 					case "crawl.stopped":
 					case "crawl.failed": {
-						const counters = envelope.payload.counters as Parameters<
-							typeof buildStats
-						>[0];
-						const nextStats = buildStats(counters);
+						const nextStats = buildStats(envelope.payload.counters);
 						setStats(nextStats);
 						setIsAttacking(false);
 						setConnectionState("connected");
@@ -314,12 +322,12 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 								TOAST_DEFAULTS.LONG_TIMEOUT,
 							);
 						} else if (envelope.type === "crawl.stopped") {
-							addToast("info", "Crawler stopped");
-						} else {
 							addToast(
-								"error",
-								String(envelope.payload.error ?? "Crawl failed"),
+								"info",
+								envelope.payload.stopReason || "Crawler stopped",
 							);
+						} else {
+							addToast("error", envelope.payload.error || "Crawl failed");
 						}
 						break;
 					}
@@ -339,6 +347,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				"crawl.log",
 				"crawl.page",
 				"crawl.progress",
+				"crawl.started",
 				"crawl.completed",
 				"crawl.stopped",
 				"crawl.failed",
@@ -413,8 +422,11 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 
 	const stopCrawl = useCallback(async () => {
 		if (!crawlId) return;
-		await api.api.crawls({ id: crawlId }).stop.post();
-	}, [crawlId]);
+		const response = await api.api.crawls({ id: crawlId }).stop.post();
+		if (response.error) {
+			addToast("error", getTreatyErrorMessage(response.error.value));
+		}
+	}, [addToast, crawlId]);
 
 	const resumeCrawl = useCallback(
 		async (sessionId: string, sessionTarget: string) => {
@@ -446,31 +458,37 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				addToast("warning", "No crawl selected for export");
 				return;
 			}
-
-			const response = await fetch(
-				`${getBackendUrl()}/api/crawls/${crawlId}/export?format=${format}`,
-			);
-
-			if (!response.ok) {
-				addToast("error", "Failed to export crawl");
+			if (format !== "json" && format !== "csv") {
+				addToast("error", "Unsupported export format");
 				return;
 			}
 
-			const blob = await response.blob();
-			const url = URL.createObjectURL(blob);
-			const anchor = document.createElement("a");
-			anchor.href = url;
-			anchor.download = `miku-crawler-export.${format}`;
-			document.body.appendChild(anchor);
-			anchor.click();
-			setTimeout(() => {
-				anchor.remove();
-				URL.revokeObjectURL(url);
-			}, 100);
-			addToast(
-				"success",
-				`Data exported successfully as ${format.toUpperCase()}`,
-			);
+			try {
+				const { blob, filename } = await downloadCrawlExport(
+					crawlId,
+					format as CrawlExportFormat,
+				);
+				const url = URL.createObjectURL(blob);
+				const anchor = document.createElement("a");
+				anchor.href = url;
+				anchor.download = filename;
+				document.body.appendChild(anchor);
+				anchor.click();
+				setTimeout(() => {
+					anchor.remove();
+					URL.revokeObjectURL(url);
+				}, 100);
+				addToast(
+					"success",
+					`Data exported successfully as ${format.toUpperCase()}`,
+				);
+			} catch (error) {
+				addToast(
+					"error",
+					error instanceof Error ? error.message : "Failed to export crawl",
+				);
+				return;
+			}
 		},
 		[addToast, crawlId],
 	);

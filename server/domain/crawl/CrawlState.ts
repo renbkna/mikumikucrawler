@@ -1,4 +1,5 @@
 import type { CrawlCounters, CrawlOptions } from "../../contracts/crawl.js";
+import type { QueueStats } from "../../types.js";
 import { LRUCache } from "../../utils/lruCache.js";
 
 type TerminalOutcome = "success" | "failure" | "skip";
@@ -178,15 +179,21 @@ export class CrawlState {
 			Math.floor((Date.now() - this.startedAtMs) / 1000),
 			0,
 		);
+		const pagesPerSecond =
+			elapsedSeconds > 0
+				? Number((this.counters.pagesScanned / elapsedSeconds).toFixed(2))
+				: 0;
+		const queueStats: QueueStats = {
+			...queue,
+			elapsedTime: elapsedSeconds,
+			pagesPerSecond,
+		};
 
 		return {
 			counters: this.counters,
-			queue,
+			queue: queueStats,
 			elapsedSeconds,
-			pagesPerSecond:
-				elapsedSeconds > 0
-					? Number((this.counters.pagesScanned / elapsedSeconds).toFixed(2))
-					: 0,
+			pagesPerSecond,
 			stopReason: this.stopReason,
 		};
 	}

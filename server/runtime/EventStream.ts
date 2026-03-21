@@ -1,5 +1,7 @@
 import type {
 	CrawlEventEnvelope,
+	CrawlEventEnvelopeBase,
+	CrawlEventMap,
 	CrawlEventType,
 } from "../contracts/events.js";
 
@@ -33,13 +35,13 @@ export class EventStream {
 		state.sequence = Math.max(state.sequence, sequence);
 	}
 
-	publish(
+	publish<TType extends CrawlEventType>(
 		crawlId: string,
-		type: CrawlEventType,
-		payload: Record<string, unknown>,
-	): CrawlEventEnvelope {
+		type: TType,
+		payload: CrawlEventMap[TType],
+	): CrawlEventEnvelopeBase<TType> {
 		const state = this.getState(crawlId);
-		const event: CrawlEventEnvelope = {
+		const event: CrawlEventEnvelopeBase<TType> = {
 			type,
 			crawlId,
 			sequence: state.sequence + 1,
@@ -48,13 +50,13 @@ export class EventStream {
 		};
 
 		state.sequence = event.sequence;
-		state.history.push(event);
+		state.history.push(event as CrawlEventEnvelope);
 		if (state.history.length > MAX_HISTORY) {
 			state.history.splice(0, state.history.length - MAX_HISTORY);
 		}
 
 		for (const subscriber of state.subscribers) {
-			subscriber(event);
+			subscriber(event as CrawlEventEnvelope);
 		}
 
 		return event;

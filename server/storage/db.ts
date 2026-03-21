@@ -143,6 +143,14 @@ export interface CrawlRunRecord {
 	resumable: boolean;
 }
 
+function toIsoDateTime(value: string | null): string | null {
+	if (!value) {
+		return null;
+	}
+
+	return value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+}
+
 export function mapCrawlRunRow(row: CrawlRunRow): CrawlRunRecord {
 	return {
 		id: row.id,
@@ -150,10 +158,10 @@ export function mapCrawlRunRow(row: CrawlRunRow): CrawlRunRecord {
 		status: row.status,
 		options: JSON.parse(row.options_json) as CrawlOptions,
 		stopReason: row.stop_reason,
-		createdAt: row.created_at,
-		startedAt: row.started_at,
-		updatedAt: row.updated_at,
-		completedAt: row.completed_at,
+		createdAt: toIsoDateTime(row.created_at) ?? row.created_at,
+		startedAt: toIsoDateTime(row.started_at),
+		updatedAt: toIsoDateTime(row.updated_at) ?? row.updated_at,
+		completedAt: toIsoDateTime(row.completed_at),
 		counters: {
 			pagesScanned: row.pages_scanned,
 			successCount: row.success_count,

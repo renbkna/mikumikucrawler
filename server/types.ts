@@ -1,4 +1,3 @@
-import type { Database } from "bun:sqlite";
 import type {
 	ContentAnalysis,
 	CrawlOptions,
@@ -7,9 +6,7 @@ import type {
 	MediaInfo,
 	PageMetadata,
 	ProcessingError,
-	Stats,
 } from "../src/types/shared.js";
-import type { Logger } from "./config/logging.js";
 
 // Re-export shared types
 export * from "../src/types/shared.js";
@@ -20,22 +17,6 @@ export interface QueueItem {
 	depth: number;
 	retries: number;
 	parentUrl?: string;
-}
-
-export interface RawCrawlOptions {
-	target?: string;
-	crawlDepth?: number;
-	maxPages?: number;
-	/** Per-domain page cap. 0 = unlimited. */
-	maxPagesPerDomain?: number;
-	crawlDelay?: number;
-	crawlMethod?: string;
-	maxConcurrentRequests?: number;
-	retryLimit?: number;
-	dynamic?: boolean;
-	respectRobots?: boolean;
-	contentOnly?: boolean;
-	saveMedia?: boolean;
 }
 
 export interface SanitizedCrawlOptions extends CrawlOptions {
@@ -122,46 +103,9 @@ export interface ProcessedContent {
 	errors: ProcessingError[];
 }
 
-export interface CrawlStats extends Stats {
-	isActive?: boolean;
-	startTime?: number;
-}
-
-export type DatabaseInstance = Database;
-export interface CrawlerSocket {
-	id: string;
-	emit(event: string, data?: unknown): void;
-}
-export type SocketInstance = CrawlerSocket;
-export type LoggerInstance = Logger;
-
-export interface ClampOptions {
-	min: number;
-	max: number;
-	fallback: number;
-}
-
-export interface DatabaseStatement {
-	get(...params: unknown[]): unknown;
-	all(...params: unknown[]): unknown[];
-	run(...params: unknown[]): void;
-}
-
-export interface DatabaseLike {
-	query(sql: string): DatabaseStatement;
-}
-
 export interface LoggerLike {
 	debug(message: string): void;
 	warn(message: string): void;
 	info(message: string): void;
 	error(message: string): void;
-}
-
-/** A single URL entry discovered from a sitemap.xml file. */
-export interface SitemapEntry {
-	url: string;
-	lastmod?: string;
-	priority?: number;
-	changefreq?: string;
 }

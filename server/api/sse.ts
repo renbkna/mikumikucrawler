@@ -1,14 +1,13 @@
 import { Elysia } from "elysia";
 import { CrawlIdParamsSchema } from "../contracts/crawl.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
+import type { CrawlEventEnvelope } from "../contracts/events.js";
 import type { CrawlManager } from "../runtime/CrawlManager.js";
 import type { EventStream } from "../runtime/EventStream.js";
 
 const encoder = new TextEncoder();
 
-function serializeEvent(
-	event: Record<string, unknown> & { type: string; sequence: number },
-) {
+function serializeEvent(event: CrawlEventEnvelope) {
 	return encoder.encode(
 		`id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
 	);
