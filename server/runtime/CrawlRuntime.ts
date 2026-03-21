@@ -6,7 +6,7 @@ import type {
 	CrawlEventType,
 	CrawlPagePayload,
 } from "../contracts/events.js";
-import { CrawlQueue } from "../domain/crawl/CrawlQueue.js";
+import { CrawlQueue, type QueueItem } from "../domain/crawl/CrawlQueue.js";
 import { CrawlState } from "../domain/crawl/CrawlState.js";
 import { DynamicRenderer } from "../domain/crawl/DynamicRenderer.js";
 import { FetchService } from "../domain/crawl/FetchService.js";
@@ -50,7 +50,10 @@ export class CrawlRuntime {
 	private interrupted = false;
 
 	constructor(private readonly deps: CrawlRuntimeDependencies) {
-		this.state = new CrawlState(deps.options, deps.initialCounters);
+		this.state = new CrawlState(deps.options, deps.initialCounters, {
+			onTerminal: (url, outcome) =>
+				deps.repos.crawlTerminals.upsert(deps.crawlId, url, outcome),
+		});
 		this.dynamicRenderer = new DynamicRenderer(
 			deps.options,
 			deps.logger,
@@ -63,9 +66,23 @@ export class CrawlRuntime {
 			deps.logger,
 		);
 		this.robotsService = new RobotsService(deps.httpClient, deps.logger);
+		const toPersistedQueueItem = (
+			item: QueueItem,
+		): QueueItem & { availableAt: number } => ({
+			...item,
+			availableAt: item.availableAt ?? 0,
+		});
 		this.queue = new CrawlQueue(deps.options, this.state, deps.logger, {
 			enqueueMany: (items) =>
-				deps.repos.crawlQueue.enqueueMany(deps.crawlId, items),
+				deps.repos.crawlQueue.enqueueMany(
+					deps.crawlId,
+					items.map(toPersistedQueueItem),
+				),
+			reschedule: (item) =>
+				deps.repos.crawlQueue.reschedule(
+					deps.crawlId,
+					toPersistedQueueItem(item),
+				),
 			remove: (url) => deps.repos.crawlQueue.remove(deps.crawlId, url),
 			clear: () => deps.repos.crawlQueue.clear(deps.crawlId),
 		});
@@ -97,7 +114,16 @@ export class CrawlRuntime {
 		type: TType,
 		payload: CrawlEventMap[TType],
 	) {
-		return this.deps.eventStream.publish(this.deps.crawlId, type, payload);
+		const event = this.deps.eventStream.publish(
+			this.deps.crawlId,
+			type,
+			payload,
+		);
+		this.deps.repos.crawlRuns.setEventSequence(
+			this.deps.crawlId,
+			event.sequence,
+		);
+		return event;
 	}
 
 	private persistProgress(status?: "starting" | "running" | "stopping") {
@@ -130,10 +156,6 @@ export class CrawlRuntime {
 			this.deps.crawlId,
 			this.state.counters,
 		);
-		this.deps.repos.crawlRuns.setEventSequence(
-			this.deps.crawlId,
-			this.deps.eventStream.getCurrentSequence(this.deps.crawlId),
-		);
 	}
 
 	private emitProgress() {
@@ -149,10 +171,10 @@ export class CrawlRuntime {
 
 	private async seedInitialQueue(): Promise<void> {
 		if (this.deps.resume) {
-			const visitedUrls = this.deps.repos.pages.getVisitedUrls(
+			const terminalUrls = this.deps.repos.crawlTerminals.listByCrawlId(
 				this.deps.crawlId,
 			);
-			this.state.restoreVisited(visitedUrls);
+			this.state.restoreTerminals(terminalUrls);
 			const pending = this.deps.repos.crawlQueue.listPending(this.deps.crawlId);
 			this.queue.restore(pending);
 			return;
@@ -194,12 +216,14 @@ export class CrawlRuntime {
 	private async launchWork(
 		item: Parameters<PagePipeline["process"]>[0],
 	): Promise<void> {
+		const controller = new AbortController();
 		const task = withTimeout(
-			this.pipeline.process(item),
+			this.pipeline.process(item, controller.signal),
 			CRAWL_QUEUE_CONSTANTS.ITEM_PROCESSING_TIMEOUT_MS,
 			`Processing ${item.url}`,
 		)
 			.catch((error) => {
+				controller.abort(error);
 				this.deps.logger.error(
 					`[Runtime] Failed to process ${item.url}: ${error instanceof Error ? error.message : String(error)}`,
 				);

@@ -80,4 +80,137 @@ describe("page pipeline contract", () => {
 		);
 		expect(eventSink.page).not.toHaveBeenCalled();
 	});
+
+	test("records a skipped terminal outcome when max pages has already been reached", async () => {
+		const eventSink = {
+			log: mock(() => undefined),
+			page: mock(() => undefined),
+		};
+		const recordTerminal = mock(() => true);
+		const pipeline = new PagePipeline(
+			"crawl-1",
+			{
+				crawlDepth: 1,
+				retryLimit: 0,
+				respectRobots: false,
+				saveMedia: false,
+				crawlMethod: "links",
+				contentOnly: false,
+			} as never,
+			{
+				canScheduleMore: () => false,
+				hasVisited: () => false,
+				isDomainBudgetExceeded: () => false,
+				recordTerminal,
+			} as never,
+			{
+				enqueue: mock(() => undefined),
+				scheduleRetry: mock(() => undefined),
+			} as never,
+			{} as never,
+			{
+				fetch: mock(async () => {
+					throw new Error("fetch should not be called");
+				}),
+			} as never,
+			{} as never,
+			eventSink,
+			createLogger(),
+		);
+
+		await pipeline.process({
+			url: "https://example.com/overflow",
+			domain: "example.com",
+			depth: 1,
+			retries: 0,
+		});
+
+		expect(recordTerminal).toHaveBeenCalledWith(
+			"https://example.com/overflow",
+			"skip",
+		);
+		expect(eventSink.log).toHaveBeenCalledWith(
+			"[Limit] Max pages reached: https://example.com/overflow",
+		);
+	});
+
+	test("aborted processing does not persist or emit a late success", async () => {
+		const eventSink = {
+			log: mock(() => undefined),
+			page: mock(() => undefined),
+		};
+		const save = mock(() => 1);
+		const recordTerminal = mock(() => true);
+		const controller = new AbortController();
+		const pipeline = new PagePipeline(
+			"crawl-1",
+			{
+				crawlDepth: 1,
+				retryLimit: 0,
+				respectRobots: false,
+				saveMedia: false,
+				crawlMethod: "links",
+				contentOnly: false,
+			} as never,
+			{
+				canScheduleMore: () => true,
+				hasVisited: () => false,
+				isDomainBudgetExceeded: () => false,
+				recordTerminal,
+				recordDiscoveredLinks: mock(() => undefined),
+				recordDomainPage: mock(() => undefined),
+			} as never,
+			{
+				enqueue: mock(() => undefined),
+				scheduleRetry: mock(() => undefined),
+			} as never,
+			{
+				save,
+			} as never,
+			{
+				fetch: async (
+					_crawlId: string,
+					_item: unknown,
+					signal?: AbortSignal,
+				) => {
+					controller.abort(new Error("timeout"));
+					if (!signal) {
+						throw new Error("Expected signal");
+					}
+					return {
+						type: "success",
+						content: "<html><body><main>late</main></body></html>",
+						statusCode: 200,
+						contentType: "text/html",
+						contentLength: 44,
+						title: "",
+						description: "",
+						lastModified: null,
+						etag: null,
+						xRobotsTag: null,
+						isDynamic: false,
+					} as const;
+				},
+			} as never,
+			{} as never,
+			eventSink,
+			createLogger(),
+		);
+
+		await expect(
+			pipeline.process(
+				{
+					url: "https://example.com/late",
+					domain: "example.com",
+					depth: 0,
+					retries: 0,
+				},
+				controller.signal,
+			),
+		).rejects.toThrow("timeout");
+
+		expect(save).not.toHaveBeenCalled();
+		expect(recordTerminal).not.toHaveBeenCalled();
+		expect(eventSink.page).not.toHaveBeenCalled();
+	});
 });

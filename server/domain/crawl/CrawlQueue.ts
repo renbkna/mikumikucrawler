@@ -8,11 +8,13 @@ export interface QueueItem {
 	domain: string;
 	depth: number;
 	retries: number;
+	availableAt?: number;
 	parentUrl?: string;
 }
 
 interface QueuePersistence {
 	enqueueMany(items: QueueItem[]): void;
+	reschedule(item: QueueItem): void;
 	remove(url: string): void;
 	clear(): void;
 }
@@ -21,7 +23,7 @@ export class CrawlQueue {
 	private readonly pending: QueueItem[] = [];
 	private readonly queuedUrls = new Set<string>();
 	private readonly activeUrls = new Set<string>();
-	private readonly retryTimers = new Set<ReturnType<typeof setTimeout>>();
+	private readonly rescheduledUrls = new Set<string>();
 
 	constructor(
 		private readonly options: CrawlOptions,
@@ -47,7 +49,11 @@ export class CrawlQueue {
 	}
 
 	enqueue(
-		item: Omit<QueueItem, "domain"> & { url: string; domain?: string },
+		item: Omit<QueueItem, "domain" | "availableAt"> & {
+			url: string;
+			domain?: string;
+			availableAt?: number;
+		},
 	): boolean {
 		const normalized = normalizeHttpUrl(item.url);
 		if ("error" in normalized || !normalized.url) {
@@ -69,6 +75,7 @@ export class CrawlQueue {
 			domain,
 			depth: item.depth,
 			retries: item.retries,
+			availableAt: item.availableAt ?? Date.now(),
 			parentUrl: item.parentUrl,
 		};
 
@@ -79,25 +86,21 @@ export class CrawlQueue {
 	}
 
 	scheduleRetry(item: QueueItem, delayMs: number): void {
-		const timer = setTimeout(() => {
-			this.retryTimers.delete(timer);
-			this.enqueue({
-				url: item.url,
-				domain: item.domain,
-				depth: item.depth,
-				retries: item.retries + 1,
-				parentUrl: item.parentUrl,
-			});
-		}, delayMs);
+		const retryItem: QueueItem = {
+			...item,
+			retries: item.retries + 1,
+			availableAt: Date.now() + delayMs,
+		};
 
-		this.retryTimers.add(timer);
+		this.pending.push(retryItem);
+		this.queuedUrls.add(retryItem.url);
+		this.rescheduledUrls.add(retryItem.url);
+		this.persistence.reschedule(retryItem);
 	}
 
 	clearRetryTimers(): void {
-		for (const timer of this.retryTimers) {
-			clearTimeout(timer);
-		}
-		this.retryTimers.clear();
+		// Retries are modeled as delayed persisted queue items instead of
+		// process-local timers, so interruption does not discard future work.
 	}
 
 	nextReady(now = Date.now()): { item: QueueItem | null; waitMs: number } {
@@ -115,7 +118,10 @@ export class CrawlQueue {
 			}
 			this.queuedUrls.delete(candidate.url);
 
-			const waitMs = this.state.timeUntilDomainReady(candidate.domain, now);
+			const waitMs = Math.max(
+				(candidate.availableAt ?? 0) - now,
+				this.state.timeUntilDomainReady(candidate.domain, now),
+			);
 			if (waitMs > 0) {
 				minimumWait = Math.min(minimumWait, waitMs);
 				this.pending.push(candidate);
@@ -138,6 +144,9 @@ export class CrawlQueue {
 
 	markDone(item: QueueItem): void {
 		this.activeUrls.delete(item.url);
+		if (this.rescheduledUrls.delete(item.url)) {
+			return;
+		}
 		this.persistence.remove(item.url);
 	}
 

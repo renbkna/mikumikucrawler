@@ -6,6 +6,7 @@ import { config } from "../config/env.js";
 import type { CrawlOptions, CrawlStatus } from "../contracts/crawl.js";
 import { createCrawlQueueRepo } from "./repos/crawlQueueRepo.js";
 import { createCrawlRunRepo } from "./repos/crawlRunRepo.js";
+import { createCrawlTerminalRepo } from "./repos/crawlTerminalRepo.js";
 import { createPageRepo } from "./repos/pageRepo.js";
 import { createSearchRepo } from "./repos/searchRepo.js";
 
@@ -16,6 +17,7 @@ const migrationsDirectory = path.join(__dirname, "migrations");
 export interface StorageRepos {
 	crawlRuns: ReturnType<typeof createCrawlRunRepo>;
 	crawlQueue: ReturnType<typeof createCrawlQueueRepo>;
+	crawlTerminals: ReturnType<typeof createCrawlTerminalRepo>;
 	pages: ReturnType<typeof createPageRepo>;
 	search: ReturnType<typeof createSearchRepo>;
 }
@@ -87,6 +89,7 @@ export function createStorage(databasePath = config.dbPath): Storage {
 		repos: {
 			crawlRuns: createCrawlRunRepo(db),
 			crawlQueue: createCrawlQueueRepo(db),
+			crawlTerminals: createCrawlTerminalRepo(db),
 			pages: createPageRepo(db),
 			search: createSearchRepo(db),
 		},

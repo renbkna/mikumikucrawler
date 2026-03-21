@@ -15,6 +15,18 @@ interface EventSink {
 	page(payload: CrawlPagePayload): void;
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+	if (!signal?.aborted) {
+		return;
+	}
+
+	if (signal.reason instanceof Error) {
+		throw signal.reason;
+	}
+
+	throw new Error("Page processing aborted");
+}
+
 function parseRobotsDirectives(value: string | null | undefined) {
 	const result = { noindex: false, nofollow: false };
 	if (!value) return result;
@@ -95,12 +107,15 @@ export class PagePipeline {
 	private async enqueueLinks(
 		item: QueueItem,
 		links: ExtractedLink[],
+		signal?: AbortSignal,
 	): Promise<void> {
+		throwIfAborted(signal);
 		if (item.depth >= this.options.crawlDepth) {
 			return;
 		}
 
 		for (const link of links) {
+			throwIfAborted(signal);
 			if (!link.url || link.nofollow) {
 				continue;
 			}
@@ -125,8 +140,11 @@ export class PagePipeline {
 		}
 	}
 
-	async process(item: QueueItem): Promise<void> {
+	async process(item: QueueItem, signal?: AbortSignal): Promise<void> {
+		throwIfAborted(signal);
 		if (!this.state.canScheduleMore() && !this.state.hasVisited(item.url)) {
+			this.state.recordTerminal(item.url, "skip");
+			this.eventSink.log(`[Limit] Max pages reached: ${item.url}`);
 			return;
 		}
 
@@ -140,7 +158,12 @@ export class PagePipeline {
 			return;
 		}
 
-		const fetchResult = await this.fetchService.fetch(this.crawlId, item);
+		const fetchResult = await this.fetchService.fetch(
+			this.crawlId,
+			item,
+			signal,
+		);
+		throwIfAborted(signal);
 		if (fetchResult.type === "unchanged") {
 			this.state.recordTerminal(item.url, "success");
 			const cachedLinks = this.pageRepo.getLinksByPageUrl(
@@ -150,7 +173,9 @@ export class PagePipeline {
 			await this.enqueueLinks(
 				item,
 				cachedLinks.map((url) => ({ url, isInternal: true })),
+				signal,
 			);
+			throwIfAborted(signal);
 			this.eventSink.log(`[Crawler] Unchanged: ${item.url} (304)`);
 			return;
 		}
@@ -163,7 +188,8 @@ export class PagePipeline {
 			);
 			if (
 				item.retries < this.options.retryLimit &&
-				!this.state.isStopRequested
+				!this.state.isStopRequested &&
+				!signal?.aborted
 			) {
 				this.queue.scheduleRetry(item, fetchResult.retryAfterMs);
 				this.eventSink.log(
@@ -200,6 +226,7 @@ export class PagePipeline {
 			item.url,
 			fetchResult.contentType,
 		);
+		throwIfAborted(signal);
 
 		const resolvedTitle =
 			fetchResult.title || processedContent.metadata?.title || "";
@@ -235,7 +262,7 @@ export class PagePipeline {
 			this.state.recordTerminal(item.url, "skip");
 			this.eventSink.log(`[Robots] noindex: ${item.url}`);
 			if (!robotsDirectives.nofollow) {
-				await this.enqueueLinks(item, filteredLinks);
+				await this.enqueueLinks(item, filteredLinks, signal);
 			}
 			return;
 		}
@@ -246,6 +273,7 @@ export class PagePipeline {
 			return;
 		}
 
+		throwIfAborted(signal);
 		const pageId = this.pageRepo.save({
 			crawlId: this.crawlId,
 			url: item.url,
@@ -295,7 +323,7 @@ export class PagePipeline {
 
 		this.eventSink.log(`[Crawler] Crawled ${item.url}`);
 		if (!robotsDirectives.nofollow) {
-			await this.enqueueLinks(item, filteredLinks);
+			await this.enqueueLinks(item, filteredLinks, signal);
 		}
 	}
 }

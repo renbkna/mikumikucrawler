@@ -27,6 +27,7 @@ import { EventStream } from "./runtime/EventStream.js";
 import { RuntimeRegistry } from "./runtime/RuntimeRegistry.js";
 import { createStorage } from "./storage/db.js";
 import { getErrorMessage } from "./utils/helpers.js";
+import { resolveStaticFilePath } from "./utils/staticFilePath.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -103,7 +104,10 @@ export const app = new Elysia()
 				return Response.json({ error: "Not Found" }, { status: 404 });
 			}
 
-			const filePath = path.join(distPath, requestPath);
+			const filePath = resolveStaticFilePath(distPath, requestPath);
+			if (!filePath) {
+				return Response.json({ error: "Not Found" }, { status: 404 });
+			}
 			const file = Bun.file(filePath);
 			if (await file.exists()) {
 				const isAsset =

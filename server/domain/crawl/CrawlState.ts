@@ -2,9 +2,18 @@ import type { CrawlCounters, CrawlOptions } from "../../contracts/crawl.js";
 import type { QueueStats } from "../../types.js";
 import { LRUCache } from "../../utils/lruCache.js";
 
-type TerminalOutcome = "success" | "failure" | "skip";
+export type TerminalOutcome = "success" | "failure" | "skip";
 
 const FAILURE_CIRCUIT_BREAKER_THRESHOLD = 20;
+
+interface CrawlStateHooks {
+	onTerminal?: (url: string, outcome: TerminalOutcome) => void;
+}
+
+export interface RestoredTerminalRecord {
+	url: string;
+	outcome: TerminalOutcome;
+}
 
 export interface QueueSnapshot {
 	activeRequests: number;
@@ -27,6 +36,7 @@ export class CrawlState {
 	constructor(
 		private readonly options: CrawlOptions,
 		initialCounters?: CrawlCounters,
+		private readonly hooks: CrawlStateHooks = {},
 	) {
 		this.counters = initialCounters ?? {
 			pagesScanned: 0,
@@ -57,11 +67,21 @@ export class CrawlState {
 		this.visited.set(url, true);
 	}
 
-	restoreVisited(urls: string[]): void {
-		for (const url of urls) {
-			this.markVisited(url);
+	restoreTerminals(records: RestoredTerminalRecord[]): void {
+		for (const record of records) {
+			if (this.terminalOutcomes.has(record.url)) {
+				continue;
+			}
+
+			this.terminalOutcomes.set(record.url, record.outcome);
+			this.markVisited(record.url);
+
+			if (record.outcome !== "success") {
+				continue;
+			}
+
 			try {
-				const domain = new URL(url).hostname;
+				const domain = new URL(record.url).hostname;
 				this.recordDomainPage(domain);
 			} catch {}
 		}
@@ -171,6 +191,7 @@ export class CrawlState {
 			this.counters.mediaFiles += options.mediaFiles;
 		}
 
+		this.hooks.onTerminal?.(url, outcome);
 		return true;
 	}
 
