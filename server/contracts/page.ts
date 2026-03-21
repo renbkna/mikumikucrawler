@@ -1,7 +1,8 @@
 import { t } from "elysia";
+import { PositiveIntegerIdSchema } from "./http.js";
 
 export const PageContentParamsSchema = t.Object({
-	id: t.Numeric({ minimum: 1, multipleOf: 1 }),
+	id: PositiveIntegerIdSchema,
 });
 
 export const PageContentResponseSchema = t.Object({

@@ -1,8 +1,9 @@
 import { t } from "elysia";
+import { OptionalBoundedListLimitSchema } from "./http.js";
 
 export const SearchQuerySchema = t.Object({
 	q: t.String({ minLength: 1 }),
-	limit: t.Optional(t.Numeric({ minimum: 1, maximum: 100, multipleOf: 1 })),
+	limit: OptionalBoundedListLimitSchema,
 });
 
 export const SearchResultSchema = t.Object({

@@ -1,4 +1,4 @@
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import type { CrawlStatus } from "../contracts/crawl.js";
 import {
 	CrawlIdParamsSchema,
@@ -6,6 +6,7 @@ import {
 	CrawlListResponseSchema,
 	CreateCrawlBodySchema,
 	CreateCrawlResponseSchema,
+	DeleteCrawlResponseSchema,
 	ExportQuerySchema,
 	GetCrawlResponseSchema,
 	ResumeCrawlResponseSchema,
@@ -30,6 +31,173 @@ interface CrawlsApiDependencies {
 }
 
 export function crawlsApi({ crawlManager, repos }: CrawlsApiDependencies) {
+	const crawlByIdRoutes = new Elysia().guard(
+		{
+			params: CrawlIdParamsSchema,
+		},
+		(app) =>
+			app
+				.post(
+					"/:id/stop",
+					({ params, set }) => {
+						const crawl = crawlManager.stop(params.id);
+						if (!crawl) {
+							set.status = 404;
+							return { error: "Crawl not found" };
+						}
+						return crawl;
+					},
+					{
+						response: {
+							200: StopCrawlResponseSchema,
+							404: ApiErrorSchema,
+						},
+						detail: {
+							tags: ["Crawls"],
+							summary: "Request graceful crawl stop",
+						},
+					},
+				)
+				.post(
+					"/:id/resume",
+					({ params, set }) => {
+						const crawl = crawlManager.resume(params.id);
+						if (!crawlManager.get(params.id)) {
+							set.status = 404;
+							return { error: "Crawl not found" };
+						}
+
+						if (!crawl) {
+							set.status = 409;
+							return { error: "Only interrupted crawls can be resumed" };
+						}
+
+						return crawl;
+					},
+					{
+						response: {
+							200: ResumeCrawlResponseSchema,
+							404: ApiErrorSchema,
+							409: ApiErrorSchema,
+						},
+						detail: {
+							tags: ["Crawls"],
+							summary: "Resume an interrupted crawl",
+						},
+					},
+				)
+				.get(
+					"/:id",
+					({ params, set }) => {
+						const crawl = crawlManager.get(params.id);
+						if (!crawl) {
+							set.status = 404;
+							return { error: "Crawl not found" };
+						}
+						return crawl;
+					},
+					{
+						response: {
+							200: GetCrawlResponseSchema,
+							404: ApiErrorSchema,
+						},
+						detail: {
+							tags: ["Crawls"],
+							summary: "Get crawl state",
+						},
+					},
+				)
+				.get(
+					"/:id/export",
+					({ params, query, set }) => {
+						const crawl = crawlManager.get(params.id);
+						if (!crawl) {
+							set.status = 404;
+							return { error: "Crawl not found" };
+						}
+
+						const pages = repos.pages.listForExport(params.id);
+						const format = query.format ?? "json";
+
+						if (format === "csv") {
+							const rows = [
+								[
+									"id",
+									"url",
+									"title",
+									"description",
+									"contentType",
+									"domain",
+									"crawledAt",
+								],
+								...pages.map((page: (typeof pages)[number]) => [
+									String(page.id),
+									page.url,
+									page.title,
+									page.description,
+									page.contentType,
+									page.domain,
+									page.crawledAt,
+								]),
+							];
+
+							const csv = rows
+								.map((row) =>
+									row.map((cell: string) => escapeCsvCell(cell)).join(","),
+								)
+								.join("\n");
+
+							set.headers["content-type"] = "text/csv; charset=utf-8";
+							set.headers["content-disposition"] =
+								`attachment; filename="${params.id}.csv"`;
+							return csv;
+						}
+
+						set.headers["content-type"] = "application/json; charset=utf-8";
+						set.headers["content-disposition"] =
+							`attachment; filename="${params.id}.json"`;
+						return JSON.stringify(pages, null, 2);
+					},
+					{
+						query: ExportQuerySchema,
+						response: {
+							200: t.String(),
+							404: ApiErrorSchema,
+						},
+						detail: {
+							tags: ["Crawls"],
+							summary: "Export crawl pages",
+						},
+					},
+				)
+				.delete(
+					"/:id",
+					({ params, set }) => {
+						const deleted = crawlManager.delete(params.id);
+						if (!crawlManager.get(params.id) && !deleted) {
+							set.status = 404;
+							return { error: "Crawl not found" };
+						}
+						if (!deleted) {
+							set.status = 409;
+							return { error: "Active crawls cannot be deleted" };
+						}
+						return { status: "ok" };
+					},
+					{
+						response: {
+							200: DeleteCrawlResponseSchema,
+							404: ApiErrorSchema,
+							409: ApiErrorSchema,
+						},
+						detail: {
+							tags: ["Crawls"],
+							summary: "Delete a stored crawl run",
+						},
+					},
+				),
+	);
+
 	return new Elysia({ name: "crawls-api", prefix: "/api/crawls" })
 		.post(
 			"/",
@@ -57,79 +225,6 @@ export function crawlsApi({ crawlManager, repos }: CrawlsApiDependencies) {
 				},
 			},
 		)
-		.post(
-			"/:id/stop",
-			({ params, set }) => {
-				const crawl = crawlManager.stop(params.id);
-				if (!crawl) {
-					set.status = 404;
-					return { error: "Crawl not found" };
-				}
-				return crawl;
-			},
-			{
-				params: CrawlIdParamsSchema,
-				response: {
-					200: StopCrawlResponseSchema,
-					404: ApiErrorSchema,
-				},
-				detail: {
-					tags: ["Crawls"],
-					summary: "Request graceful crawl stop",
-				},
-			},
-		)
-		.post(
-			"/:id/resume",
-			({ params, set }) => {
-				const crawl = crawlManager.resume(params.id);
-				if (!crawlManager.get(params.id)) {
-					set.status = 404;
-					return { error: "Crawl not found" };
-				}
-
-				if (!crawl) {
-					set.status = 409;
-					return { error: "Only interrupted crawls can be resumed" };
-				}
-
-				return crawl;
-			},
-			{
-				params: CrawlIdParamsSchema,
-				response: {
-					200: ResumeCrawlResponseSchema,
-					404: ApiErrorSchema,
-					409: ApiErrorSchema,
-				},
-				detail: {
-					tags: ["Crawls"],
-					summary: "Resume an interrupted crawl",
-				},
-			},
-		)
-		.get(
-			"/:id",
-			({ params, set }) => {
-				const crawl = crawlManager.get(params.id);
-				if (!crawl) {
-					set.status = 404;
-					return { error: "Crawl not found" };
-				}
-				return crawl;
-			},
-			{
-				params: CrawlIdParamsSchema,
-				response: {
-					200: GetCrawlResponseSchema,
-					404: ApiErrorSchema,
-				},
-				detail: {
-					tags: ["Crawls"],
-					summary: "Get crawl state",
-				},
-			},
-		)
 		.get(
 			"/",
 			({ query }) => ({
@@ -151,88 +246,5 @@ export function crawlsApi({ crawlManager, repos }: CrawlsApiDependencies) {
 				},
 			},
 		)
-		.get(
-			"/:id/export",
-			({ params, query, set }) => {
-				const crawl = crawlManager.get(params.id);
-				if (!crawl) {
-					set.status = 404;
-					return { error: "Crawl not found" };
-				}
-
-				const pages = repos.pages.listForExport(params.id);
-				const format = query.format ?? "json";
-
-				if (format === "csv") {
-					const rows = [
-						[
-							"id",
-							"url",
-							"title",
-							"description",
-							"contentType",
-							"domain",
-							"crawledAt",
-						],
-						...pages.map((page: (typeof pages)[number]) => [
-							String(page.id),
-							page.url,
-							page.title,
-							page.description,
-							page.contentType,
-							page.domain,
-							page.crawledAt,
-						]),
-					];
-
-					const csv = rows
-						.map((row) =>
-							row.map((cell: string) => escapeCsvCell(cell)).join(","),
-						)
-						.join("\n");
-
-					set.headers["content-type"] = "text/csv; charset=utf-8";
-					set.headers["content-disposition"] =
-						`attachment; filename="${params.id}.csv"`;
-					return csv;
-				}
-
-				set.headers["content-type"] = "application/json; charset=utf-8";
-				set.headers["content-disposition"] =
-					`attachment; filename="${params.id}.json"`;
-				return JSON.stringify(pages, null, 2);
-			},
-			{
-				params: CrawlIdParamsSchema,
-				query: ExportQuerySchema,
-				response: { 404: ApiErrorSchema },
-				detail: {
-					tags: ["Crawls"],
-					summary: "Export crawl pages",
-				},
-			},
-		)
-		.delete(
-			"/:id",
-			({ params, set }) => {
-				const deleted = crawlManager.delete(params.id);
-				if (!crawlManager.get(params.id) && !deleted) {
-					set.status = 404;
-					return { error: "Crawl not found" };
-				}
-				if (!deleted) {
-					set.status = 409;
-					return { error: "Active crawls cannot be deleted" };
-				}
-				return { status: "ok" };
-			},
-			{
-				params: CrawlIdParamsSchema,
-				response: { 404: ApiErrorSchema, 409: ApiErrorSchema },
-				detail: {
-					tags: ["Crawls"],
-					summary: "Delete a stored crawl run",
-				},
-			},
-		);
+		.use(crawlByIdRoutes);
 }

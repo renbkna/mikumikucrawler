@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { Elysia } from "elysia";
 import type { Logger } from "../../config/logging.js";
+import { handleAppError } from "../../errorHandling.js";
 import type { HttpClient, Resolver } from "../../plugins/security.js";
 import { CrawlManager } from "../../runtime/CrawlManager.js";
 import { EventStream } from "../../runtime/EventStream.js";
@@ -42,12 +43,13 @@ function buildApp(httpClient: HttpClient) {
 	const storage = createInMemoryStorage();
 	const eventStream = new EventStream();
 	const registry = new RuntimeRegistry();
+	const logger = createLogger();
 	const resolver: Resolver = {
 		assertPublicHostname: async () => {},
 		resolveHost: async () => ["93.184.216.34"],
 	};
 	const crawlManager = new CrawlManager({
-		logger: createLogger(),
+		logger,
 		repos: storage.repos,
 		eventStream,
 		registry,
@@ -56,6 +58,14 @@ function buildApp(httpClient: HttpClient) {
 	});
 
 	const app = new Elysia()
+		.onError(({ code, error, set }) =>
+			handleAppError({
+				code,
+				error,
+				set,
+				logger,
+			}),
+		)
 		.use(crawlsApi({ crawlManager, repos: storage.repos }))
 		.use(sseApi(eventStream, crawlManager))
 		.use(pagesApi(storage.repos))
@@ -130,6 +140,26 @@ describe("api contract", () => {
 			new Request("http://localhost/api/pages/1.5/content"),
 		);
 		expect(pageContentResponse.status).toBe(422);
+	});
+
+	test("rejects malformed SSE replay headers at the API boundary", async () => {
+		const { app } = buildApp({
+			fetch: async () =>
+				new Response("<html><body><main>unused</main></body></html>", {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				}),
+		});
+
+		const response = await app.handle(
+			new Request("http://localhost/api/crawls/example/events", {
+				headers: {
+					"last-event-id": "not-a-sequence",
+				},
+			}),
+		);
+
+		expect(response.status).toBe(422);
 	});
 
 	test("rejects non-integer crawl option fields", async () => {

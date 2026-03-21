@@ -1,4 +1,5 @@
 import type { ApiError } from "./contracts/errors.js";
+import type { ValidationErrorDetail } from "./contracts/http.js";
 import type { LoggerLike } from "./types.js";
 import { getErrorMessage } from "./utils/helpers.js";
 
@@ -39,6 +40,42 @@ function readJsonSummary(value: string | null): string | null {
 	} catch {}
 
 	return null;
+}
+
+function readValidationDetails(error: unknown): ValidationErrorDetail[] | null {
+	if (!error || typeof error !== "object" || !("all" in error)) {
+		return null;
+	}
+
+	const all = (error as Record<string, unknown>).all;
+	if (!Array.isArray(all)) {
+		return null;
+	}
+
+	const details = all.flatMap((item) => {
+		if (!item || typeof item !== "object") {
+			return [];
+		}
+
+		const path = (item as Record<string, unknown>).path;
+		const summary = (item as Record<string, unknown>).summary;
+		const message = (item as Record<string, unknown>).message;
+
+		const resolvedMessage =
+			typeof summary === "string" && summary.length > 0
+				? summary
+				: typeof message === "string" && message.length > 0
+					? message
+					: null;
+
+		if (typeof path !== "string" || !resolvedMessage) {
+			return [];
+		}
+
+		return [{ path, message: resolvedMessage }];
+	});
+
+	return details.length > 0 ? details : null;
 }
 
 export function resolveErrorStatus(
@@ -121,7 +158,10 @@ export function handleAppError({
 	}
 
 	set.status = status;
+
+	const details = status < 500 ? readValidationDetails(error) : null;
 	return {
 		error: buildPublicErrorMessage(status, error),
+		details: details ?? undefined,
 	};
 }
