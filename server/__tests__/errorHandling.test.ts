@@ -45,6 +45,7 @@ describe("app error handling", () => {
 		expect(response.status).toBe(422);
 		expect(await response.json()).toEqual({
 			error: "Expected number",
+			details: [{ path: "/value", message: "Expected number" }],
 		});
 		expect(logger.error).not.toHaveBeenCalled();
 	});

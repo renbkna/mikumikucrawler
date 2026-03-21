@@ -1,5 +1,6 @@
 import { t } from "elysia";
 import { CRAWL_METHODS, CRAWL_OPTION_BOUNDS } from "../../shared/crawl.js";
+import { OkResponseSchema, OptionalBoundedListLimitSchema } from "./http.js";
 
 export const CrawlStatusValues = [
 	"pending",
@@ -94,7 +95,7 @@ export const CrawlListQuerySchema = t.Object({
 	status: t.Optional(CrawlStatusSchema),
 	from: t.Optional(t.String({ format: "date-time" })),
 	to: t.Optional(t.String({ format: "date-time" })),
-	limit: t.Optional(t.Numeric({ minimum: 1, maximum: 100, multipleOf: 1 })),
+	limit: OptionalBoundedListLimitSchema,
 });
 
 export const CrawlListResponseSchema = t.Object({
@@ -105,6 +106,7 @@ export const CreateCrawlResponseSchema = CrawlSummarySchema;
 export const StopCrawlResponseSchema = CrawlSummarySchema;
 export const ResumeCrawlResponseSchema = CrawlSummarySchema;
 export const GetCrawlResponseSchema = CrawlSummarySchema;
+export const DeleteCrawlResponseSchema = OkResponseSchema;
 
 export const CreateCrawlBodySchema = CrawlOptionsSchema;
 

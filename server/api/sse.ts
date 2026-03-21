@@ -1,6 +1,7 @@
 import { Elysia } from "elysia";
 import { CrawlIdParamsSchema } from "../contracts/crawl.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
+import { SseHeadersSchema } from "../contracts/http.js";
 import type { CrawlEventEnvelope } from "../contracts/events.js";
 import type { CrawlManager } from "../runtime/CrawlManager.js";
 import type { EventStream } from "../runtime/EventStream.js";
@@ -16,7 +17,7 @@ function serializeEvent(event: CrawlEventEnvelope) {
 export function sseApi(eventStream: EventStream, crawlManager: CrawlManager) {
 	return new Elysia({ name: "sse-api", prefix: "/api/crawls" }).get(
 		"/:id/events",
-		({ params, request, set }) => {
+		({ headers, params, request, set }) => {
 			const crawl = crawlManager.get(params.id);
 			if (!crawl) {
 				set.status = 404;
@@ -24,7 +25,7 @@ export function sseApi(eventStream: EventStream, crawlManager: CrawlManager) {
 			}
 
 			const requestedSequence = Number.parseInt(
-				request.headers.get("last-event-id") ?? "0",
+				headers["last-event-id"] ?? "0",
 				10,
 			);
 
@@ -88,6 +89,7 @@ export function sseApi(eventStream: EventStream, crawlManager: CrawlManager) {
 			});
 		},
 		{
+			headers: SseHeadersSchema,
 			params: CrawlIdParamsSchema,
 			response: {
 				404: ApiErrorSchema,
