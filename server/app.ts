@@ -64,7 +64,7 @@ export const app = new Elysia()
 		cors({
 			origin: (request) => {
 				const origin = request.headers.get("origin");
-				if (origin === "http://localhost:5173") {
+				if (!config.isProduction && origin === "http://localhost:5173") {
 					return true;
 				}
 				return origin === config.frontendUrl;

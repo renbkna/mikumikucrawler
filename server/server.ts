@@ -27,7 +27,6 @@ async function gracefulShutdown(signal: string): Promise<void> {
 	await instance.stop();
 	storage.db.close();
 	logger.close();
-	process.exit(0);
 }
 
 process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));

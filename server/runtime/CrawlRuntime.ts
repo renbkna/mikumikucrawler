@@ -161,14 +161,23 @@ export class CrawlRuntime {
 	}
 
 	private emitProgress() {
+		const counters = this.state.snapshotCounters();
 		this.publish(
 			"crawl.progress",
-			this.state.buildProgress({
-				activeRequests: this.queue.activeCount,
-				queueLength: this.queue.pendingCount,
-			}),
+			this.state.buildProgress(
+				{
+					activeRequests: this.queue.activeCount,
+					queueLength: this.queue.pendingCount,
+				},
+				counters,
+			),
 		);
-		this.persistProgress();
+		const eventSequence = this.getCurrentSequence();
+		this.deps.repos.crawlRuns.updateProgress(
+			this.deps.crawlId,
+			counters,
+			eventSequence,
+		);
 	}
 
 	private async seedInitialQueue(): Promise<void> {
