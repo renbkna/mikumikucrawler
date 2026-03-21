@@ -142,7 +142,10 @@ export const SITE_COOKIES: Record<
  * Pages with HTTP 200 but "not found" content are flagged and skipped.
  */
 export const SOFT_404_CONSTANTS = {
-	/** Content-length in bytes below which a page is unconditionally flagged as soft 404. */
+	/**
+	 * Content-length in bytes below which an effectively empty page is flagged
+	 * as a soft 404.
+	 */
 	TINY_CONTENT_BYTES: 500,
 	/** Content-length below which keyword matching is also checked. */
 	SHORT_CONTENT_BYTES: 3000,

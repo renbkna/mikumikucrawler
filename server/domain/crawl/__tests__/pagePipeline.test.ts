@@ -214,6 +214,78 @@ describe("page pipeline contract", () => {
 		expect(eventSink.page).not.toHaveBeenCalled();
 	});
 
+	test("small valid pages are not treated as soft 404s solely because they are short", async () => {
+		const eventSink = {
+			log: mock(() => undefined),
+			page: mock(() => undefined),
+		};
+		const save = mock(() => 11);
+		const recordTerminal = mock(() => true);
+		const recordDomainPage = mock(() => undefined);
+		const pipeline = new PagePipeline(
+			"crawl-1",
+			{
+				crawlDepth: 1,
+				retryLimit: 0,
+				respectRobots: false,
+				saveMedia: false,
+				crawlMethod: "links",
+				contentOnly: false,
+			} as never,
+			{
+				canScheduleMore: () => true,
+				hasVisited: () => false,
+				isDomainBudgetExceeded: () => false,
+				recordTerminal,
+				recordDiscoveredLinks: mock(() => undefined),
+				recordDomainPage,
+			} as never,
+			{
+				enqueue: mock(() => undefined),
+				scheduleRetry: mock(() => undefined),
+			} as never,
+			{
+				save,
+			} as never,
+			{
+				fetch: async () => ({
+					type: "success",
+					content: "<html><body><main>Hello world</main></body></html>",
+					statusCode: 200,
+					contentType: "text/html",
+					contentLength: 50,
+					title: "",
+					description: "",
+					lastModified: null,
+					etag: null,
+					xRobotsTag: null,
+					isDynamic: false,
+				}),
+			} as never,
+			{} as never,
+			eventSink,
+			createLogger(),
+		);
+
+		await pipeline.process({
+			url: "https://example.com/",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(save).toHaveBeenCalled();
+		expect(recordDomainPage).toHaveBeenCalledWith("example.com");
+		expect(recordTerminal).toHaveBeenCalledWith(
+			"https://example.com/",
+			"success",
+			expect.objectContaining({ dataKb: 0, mediaFiles: 0 }),
+		);
+		expect(eventSink.log).toHaveBeenCalledWith(
+			"[Crawler] Crawled https://example.com/",
+		);
+	});
+
 	test("saveMedia=false strips extracted media from persisted and emitted page data", async () => {
 		let savedPageInput: any = null;
 		let emittedPage: any = null;
