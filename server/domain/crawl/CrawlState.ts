@@ -214,14 +214,19 @@ export class CrawlState {
 		return true;
 	}
 
-	buildProgress(queue: QueueSnapshot) {
+	snapshotCounters(): CrawlCounters {
+		return { ...this.counters };
+	}
+
+	buildProgress(queue: QueueSnapshot, counters?: CrawlCounters) {
+		const snapshot = counters ?? this.counters;
 		const elapsedSeconds = Math.max(
 			Math.floor((Date.now() - this.startedAtMs) / 1000),
 			0,
 		);
 		const pagesPerSecond =
 			elapsedSeconds > 0
-				? Number((this.counters.pagesScanned / elapsedSeconds).toFixed(2))
+				? Number((snapshot.pagesScanned / elapsedSeconds).toFixed(2))
 				: 0;
 		const queueStats: QueueStats = {
 			...queue,
@@ -230,7 +235,7 @@ export class CrawlState {
 		};
 
 		return {
-			counters: this.counters,
+			counters: snapshot,
 			queue: queueStats,
 			elapsedSeconds,
 			pagesPerSecond,

@@ -128,6 +128,7 @@ export function crawlsApi() {
 
 						const pages = repos.pages.listForExport(params.id);
 						const format = query.format ?? "json";
+						const safeFilename = params.id.replace(/[^a-zA-Z0-9_-]/g, "_");
 
 						if (format === "csv") {
 							const rows = [
@@ -159,13 +160,13 @@ export function crawlsApi() {
 
 							set.headers["content-type"] = "text/csv; charset=utf-8";
 							set.headers["content-disposition"] =
-								`attachment; filename="${params.id}.csv"`;
+								`attachment; filename="${safeFilename}.csv"`;
 							return csv;
 						}
 
 						set.headers["content-type"] = "application/json; charset=utf-8";
 						set.headers["content-disposition"] =
-							`attachment; filename="${params.id}.json"`;
+							`attachment; filename="${safeFilename}.json"`;
 						return JSON.stringify(pages, null, 2);
 					},
 					{
