@@ -61,4 +61,35 @@ describe("security contract", () => {
 		expect((init.headers as Record<string, string>).Host).toBe("example.com");
 		expect(init.tls?.serverName).toBe("example.com");
 	});
+
+	test("re-validates redirect targets before following them", async () => {
+		const resolver: Resolver = {
+			resolveHost: async () => ["93.184.216.34"],
+			assertPublicHostname: async (hostname) => {
+				if (hostname === "169.254.169.254") {
+					throw new Error("Private or reserved IP address: 169.254.169.254");
+				}
+			},
+		};
+		const fetchMock = mock(
+			async () =>
+				new Response(null, {
+					status: 302,
+					headers: {
+						location: "http://169.254.169.254/latest/meta-data/",
+					},
+				}),
+		);
+		const httpClient = new PinnedHttpClient(
+			resolver,
+			fetchMock as unknown as typeof fetch,
+		);
+
+		await expect(
+			httpClient.fetch({
+				url: "https://example.com/start",
+			}),
+		).rejects.toThrow("Private or reserved IP address");
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
 });

@@ -104,7 +104,7 @@ export class PinnedHttpClient implements HttpClient {
 				...request.headers,
 				Host: url.port ? `${url.hostname}:${url.port}` : url.hostname,
 			},
-			redirect: request.redirect ?? "follow",
+			redirect: "manual",
 			signal: request.signal,
 		};
 
@@ -114,7 +114,30 @@ export class PinnedHttpClient implements HttpClient {
 			};
 		}
 
-		return this.fetchFn(pinnedUrl.toString(), init);
+		const response = await this.fetchFn(pinnedUrl.toString(), init);
+
+		if (response.status >= 300 && response.status < 400) {
+			const location = response.headers.get("location");
+			if (!location) return response;
+
+			const redirectUrl = new URL(location, request.url);
+			if (
+				redirectUrl.protocol !== "http:" &&
+				redirectUrl.protocol !== "https:"
+			) {
+				throw new Error(
+					`Redirect to disallowed protocol: ${redirectUrl.protocol}`,
+				);
+			}
+
+			await this.resolver.assertPublicHostname(redirectUrl.hostname);
+			return this.fetch({
+				...request,
+				url: redirectUrl.toString(),
+			});
+		}
+
+		return response;
 	}
 }
 

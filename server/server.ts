@@ -18,7 +18,10 @@ const instance = app.listen(config.port, (server) => {
 	);
 });
 
+let isShuttingDown = false;
 async function gracefulShutdown(signal: string): Promise<void> {
+	if (isShuttingDown) return;
+	isShuttingDown = true;
 	logger.info(`${signal} received, shutting down gracefully`);
 	await crawlManager.shutdownAll();
 	await instance.stop();

@@ -176,7 +176,9 @@ export function createPageRepo(db: Database) {
 			return db
 				.query(
 					`
-					SELECT id, url, title, description, content_type, domain, content, crawled_at
+					SELECT id, url, title, description,
+						content_type AS contentType, domain, content,
+						crawled_at AS crawledAt
 					FROM pages
 					WHERE crawl_id = ?
 					ORDER BY crawled_at DESC, id DESC

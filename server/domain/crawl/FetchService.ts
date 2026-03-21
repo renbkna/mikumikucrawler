@@ -221,15 +221,13 @@ export class FetchService {
 		}
 
 		const content = await response.text();
+		const contentLength = Buffer.byteLength(content, "utf8");
 		return {
 			type: "success",
 			content,
 			statusCode: response.status,
 			contentType: response.headers.get("content-type") ?? "",
-			contentLength: Number.parseInt(
-				response.headers.get("content-length") ?? "0",
-				10,
-			),
+			contentLength,
 			title: "",
 			description: "",
 			lastModified: response.headers.get("last-modified"),
