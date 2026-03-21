@@ -7,10 +7,14 @@ import {
 } from "../contracts/search.js";
 import type { StorageRepos } from "../storage/db.js";
 
-export function searchApi(repos: StorageRepos) {
+export function searchApi() {
 	return new Elysia({ name: "search-api", prefix: "/api" }).get(
 		"/search",
-		({ query }) => {
+		(context) => {
+			const { query, repos } = context as typeof context & {
+				query: typeof SearchQuerySchema.static;
+				repos: StorageRepos;
+			};
 			const escaped = query.q.replace(/"/g, '""');
 			const ftsQuery = `"${escaped}"*`;
 			const results = repos.search.search(

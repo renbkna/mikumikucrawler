@@ -6,10 +6,14 @@ import {
 } from "../contracts/page.js";
 import type { StorageRepos } from "../storage/db.js";
 
-export function pagesApi(repos: StorageRepos) {
+export function pagesApi() {
 	return new Elysia({ name: "pages-api", prefix: "/api/pages" }).get(
 		"/:id/content",
-		({ params, set }) => {
+		(context) => {
+			const { params, repos, set } = context as typeof context & {
+				params: { id: number };
+				repos: StorageRepos;
+			};
 			const content = repos.pages.getContentById(params.id);
 			if (content === null) {
 				set.status = 404;

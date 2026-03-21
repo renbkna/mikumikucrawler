@@ -3,6 +3,7 @@ import type { Logger } from "../../config/logging.js";
 import type { HttpClient, Resolver } from "../../plugins/security.js";
 import { createInMemoryStorage } from "../../storage/db.js";
 import { CrawlManager } from "../CrawlManager.js";
+import { CrawlRuntime } from "../CrawlRuntime.js";
 import { EventStream } from "../EventStream.js";
 import { RuntimeRegistry } from "../RuntimeRegistry.js";
 
@@ -115,6 +116,62 @@ describe("crawl manager contract", () => {
 		]);
 		expect(storage.repos.crawlRuns.getById(created.id)?.eventSequence).toBe(
 			eventStream.getCurrentSequence(created.id),
+		);
+	});
+
+	test("non-progress SSE events do not force an immediate event_sequence write", async () => {
+		const httpClient: HttpClient = {
+			fetch: async () =>
+				new Response("<html><body><main>Hello world</main></body></html>", {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				}),
+		};
+		const storage = createInMemoryStorage();
+		const eventStream = new EventStream();
+		const resolver: Resolver = {
+			assertPublicHostname: async () => {},
+			resolveHost: async () => ["93.184.216.34"],
+		};
+		const crawlId = "crawl-seq-check";
+		storage.repos.crawlRuns.createRun(crawlId, "https://sequence.example", {
+			...createOptions(),
+			target: "https://sequence.example",
+		});
+		const observedPersistedSequence: number[] = [];
+		const unsubscribe = eventStream.subscribe(crawlId, (event) => {
+			if (event.type === "crawl.started") {
+				observedPersistedSequence.push(
+					storage.repos.crawlRuns.getById(event.crawlId)?.eventSequence ?? -1,
+				);
+			}
+		});
+
+		const runtime = new CrawlRuntime({
+			crawlId,
+			options: {
+				...createOptions(),
+				target: "https://sequence.example",
+			},
+			logger: createLogger(),
+			repos: storage.repos,
+			eventStream,
+			resolver,
+			httpClient,
+			resume: false,
+			onSettled: () => {},
+		});
+		await runtime.start();
+		unsubscribe();
+
+		const completed = await waitFor(
+			() => storage.repos.crawlRuns.getById(crawlId),
+			(run) => run?.status === "completed",
+		);
+
+		expect(observedPersistedSequence).toEqual([0]);
+		expect(completed?.eventSequence).toBe(
+			eventStream.getCurrentSequence(crawlId),
 		);
 	});
 

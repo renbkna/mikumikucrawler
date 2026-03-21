@@ -25,12 +25,7 @@ function escapeCsvCell(value: string | null | undefined): string {
 	return `"${sanitized.replaceAll('"', '""')}"`;
 }
 
-interface CrawlsApiDependencies {
-	crawlManager: CrawlManager;
-	repos: StorageRepos;
-}
-
-export function crawlsApi({ crawlManager, repos }: CrawlsApiDependencies) {
+export function crawlsApi() {
 	const crawlByIdRoutes = new Elysia().guard(
 		{
 			params: CrawlIdParamsSchema,
@@ -39,7 +34,10 @@ export function crawlsApi({ crawlManager, repos }: CrawlsApiDependencies) {
 			app
 				.post(
 					"/:id/stop",
-					({ params, set }) => {
+					(context) => {
+						const { crawlManager, params, set } = context as typeof context & {
+							crawlManager: CrawlManager;
+						};
 						const crawl = crawlManager.stop(params.id);
 						if (!crawl) {
 							set.status = 404;
@@ -60,7 +58,10 @@ export function crawlsApi({ crawlManager, repos }: CrawlsApiDependencies) {
 				)
 				.post(
 					"/:id/resume",
-					({ params, set }) => {
+					(context) => {
+						const { crawlManager, params, set } = context as typeof context & {
+							crawlManager: CrawlManager;
+						};
 						const crawl = crawlManager.resume(params.id);
 						if (!crawlManager.get(params.id)) {
 							set.status = 404;
@@ -88,7 +89,10 @@ export function crawlsApi({ crawlManager, repos }: CrawlsApiDependencies) {
 				)
 				.get(
 					"/:id",
-					({ params, set }) => {
+					(context) => {
+						const { crawlManager, params, set } = context as typeof context & {
+							crawlManager: CrawlManager;
+						};
 						const crawl = crawlManager.get(params.id);
 						if (!crawl) {
 							set.status = 404;
@@ -109,7 +113,13 @@ export function crawlsApi({ crawlManager, repos }: CrawlsApiDependencies) {
 				)
 				.get(
 					"/:id/export",
-					({ params, query, set }) => {
+					(context) => {
+						const { crawlManager, params, query, repos, set } =
+							context as typeof context & {
+								crawlManager: CrawlManager;
+								repos: StorageRepos;
+								query: typeof ExportQuerySchema.static;
+							};
 						const crawl = crawlManager.get(params.id);
 						if (!crawl) {
 							set.status = 404;
@@ -172,7 +182,10 @@ export function crawlsApi({ crawlManager, repos }: CrawlsApiDependencies) {
 				)
 				.delete(
 					"/:id",
-					({ params, set }) => {
+					(context) => {
+						const { crawlManager, params, set } = context as typeof context & {
+							crawlManager: CrawlManager;
+						};
 						const deleted = crawlManager.delete(params.id);
 						if (!crawlManager.get(params.id) && !deleted) {
 							set.status = 404;
@@ -201,7 +214,11 @@ export function crawlsApi({ crawlManager, repos }: CrawlsApiDependencies) {
 	return new Elysia({ name: "crawls-api", prefix: "/api/crawls" })
 		.post(
 			"/",
-			({ body, set }) => {
+			(context) => {
+				const { body, crawlManager, set } = context as typeof context & {
+					body: typeof CreateCrawlBodySchema.static;
+					crawlManager: CrawlManager;
+				};
 				const normalizedTarget = normalizeHttpUrl(body.target);
 				if ("error" in normalizedTarget) {
 					set.status = 422;
@@ -227,14 +244,25 @@ export function crawlsApi({ crawlManager, repos }: CrawlsApiDependencies) {
 		)
 		.get(
 			"/",
-			({ query }) => ({
-				crawls: crawlManager.list({
-					status: query.status as CrawlStatus | undefined,
-					from: query.from,
-					to: query.to,
-					limit: query.limit ?? 25,
-				}),
-			}),
+			(context) => {
+				const { crawlManager, query } = context as typeof context & {
+					crawlManager: CrawlManager;
+					query: {
+						status?: CrawlStatus;
+						from?: string;
+						to?: string;
+						limit?: number;
+					};
+				};
+				return {
+					crawls: crawlManager.list({
+						status: query.status,
+						from: query.from,
+						to: query.to,
+						limit: query.limit ?? 25,
+					}),
+				};
+			},
 			{
 				query: CrawlListQuerySchema,
 				response: {

@@ -1,8 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
 import { Elysia } from "elysia";
-import type { Logger } from "../../config/logging.js";
+import type { AppLogger } from "../../config/logging.js";
 import { handleAppError } from "../../errorHandling.js";
+import { dbPlugin } from "../../plugins/db.js";
 import type { HttpClient, Resolver } from "../../plugins/security.js";
+import { securityPlugin } from "../../plugins/security.js";
+import { servicesPlugin } from "../../plugins/services.js";
+import { loggerPlugin } from "../../plugins/logger.js";
 import { CrawlManager } from "../../runtime/CrawlManager.js";
 import { EventStream } from "../../runtime/EventStream.js";
 import { RuntimeRegistry } from "../../runtime/RuntimeRegistry.js";
@@ -12,7 +16,7 @@ import { pagesApi } from "../pages.js";
 import { searchApi } from "../search.js";
 import { sseApi } from "../sse.js";
 
-function createLogger(): Logger {
+function createLogger(): AppLogger {
 	return {
 		level: "info",
 		info: mock(() => undefined),
@@ -23,7 +27,8 @@ function createLogger(): Logger {
 		trace: mock(() => undefined),
 		silent: mock(() => undefined),
 		child: mock(() => createLogger()),
-	} as unknown as Logger;
+		close: mock(() => undefined),
+	} as unknown as AppLogger;
 }
 
 async function waitFor<T>(read: () => T, predicate: (value: T) => boolean) {
@@ -58,7 +63,17 @@ function buildApp(httpClient: HttpClient) {
 	});
 
 	const app = new Elysia()
-		.onError(({ code, error, set }) =>
+		.use(loggerPlugin(logger))
+		.use(dbPlugin(storage))
+		.use(securityPlugin(resolver, httpClient))
+		.use(
+			servicesPlugin({
+				crawlManager,
+				eventStream,
+				runtimeRegistry: registry,
+			}),
+		)
+		.onError(({ code, error, logger, set }) =>
 			handleAppError({
 				code,
 				error,
@@ -66,10 +81,10 @@ function buildApp(httpClient: HttpClient) {
 				logger,
 			}),
 		)
-		.use(crawlsApi({ crawlManager, repos: storage.repos }))
-		.use(sseApi(eventStream, crawlManager))
-		.use(pagesApi(storage.repos))
-		.use(searchApi(storage.repos));
+		.use(crawlsApi())
+		.use(sseApi())
+		.use(pagesApi())
+		.use(searchApi());
 
 	return { app, crawlManager, storage };
 }

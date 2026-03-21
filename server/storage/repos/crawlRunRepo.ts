@@ -80,6 +80,7 @@ export function createCrawlRunRepo(db: Database) {
 		status: CrawlStatus,
 		counters: CrawlCounters,
 		stopReason: string | null,
+		eventSequence?: number,
 		timestamps: { started?: boolean; completed?: boolean } = {},
 	): CrawlRunRecord | null {
 		db.query(
@@ -97,7 +98,8 @@ export function createCrawlRunRepo(db: Database) {
 				skipped_count = ?,
 				links_found = ?,
 				media_files = ?,
-				total_data_kb = ?
+				total_data_kb = ?,
+				event_sequence = COALESCE(?, event_sequence)
 			WHERE id = ?
 		`,
 		).run(
@@ -112,13 +114,18 @@ export function createCrawlRunRepo(db: Database) {
 			counters.linksFound,
 			counters.mediaFiles,
 			counters.totalDataKb,
+			eventSequence ?? null,
 			id,
 		);
 
 		return getById(id);
 	}
 
-	function updateProgress(id: string, counters: CrawlCounters): void {
+	function updateProgress(
+		id: string,
+		counters: CrawlCounters,
+		eventSequence?: number,
+	): void {
 		db.query(
 			`
 			UPDATE crawl_runs
@@ -130,7 +137,8 @@ export function createCrawlRunRepo(db: Database) {
 				skipped_count = ?,
 				links_found = ?,
 				media_files = ?,
-				total_data_kb = ?
+				total_data_kb = ?,
+				event_sequence = COALESCE(?, event_sequence)
 			WHERE id = ?
 		`,
 		).run(
@@ -141,14 +149,9 @@ export function createCrawlRunRepo(db: Database) {
 			counters.linksFound,
 			counters.mediaFiles,
 			counters.totalDataKb,
+			eventSequence ?? null,
 			id,
 		);
-	}
-
-	function setEventSequence(id: string, sequence: number): void {
-		db.query(
-			"UPDATE crawl_runs SET event_sequence = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-		).run(sequence, id);
 	}
 
 	function list(options: ListOptions = {}): CrawlRunRecord[] {
@@ -193,41 +196,68 @@ export function createCrawlRunRepo(db: Database) {
 		getInterruptedRuns(limit = 25): CrawlRunRecord[] {
 			return list({ status: "interrupted", limit });
 		},
-		markStarting(id: string, counters: CrawlCounters = ZERO_COUNTERS) {
-			return updateStatus(id, "starting", counters, null, { started: true });
+		markStarting(
+			id: string,
+			counters: CrawlCounters = ZERO_COUNTERS,
+			eventSequence?: number,
+		) {
+			return updateStatus(id, "starting", counters, null, eventSequence, {
+				started: true,
+			});
 		},
-		markRunning(id: string, counters: CrawlCounters = ZERO_COUNTERS) {
-			return updateStatus(id, "running", counters, null, { started: true });
+		markRunning(
+			id: string,
+			counters: CrawlCounters = ZERO_COUNTERS,
+			eventSequence?: number,
+		) {
+			return updateStatus(id, "running", counters, null, eventSequence, {
+				started: true,
+			});
 		},
 		markStopping(
 			id: string,
 			counters: CrawlCounters,
 			stopReason: string | null,
+			eventSequence?: number,
 		) {
-			return updateStatus(id, "stopping", counters, stopReason);
+			return updateStatus(id, "stopping", counters, stopReason, eventSequence);
 		},
 		markCompleted(
 			id: string,
 			counters: CrawlCounters,
 			stopReason: string | null,
+			eventSequence?: number,
 		) {
-			return updateStatus(id, "completed", counters, stopReason, {
-				started: true,
-				completed: true,
-			});
+			return updateStatus(
+				id,
+				"completed",
+				counters,
+				stopReason,
+				eventSequence,
+				{
+					started: true,
+					completed: true,
+				},
+			);
 		},
 		markStopped(
 			id: string,
 			counters: CrawlCounters,
 			stopReason: string | null,
+			eventSequence?: number,
 		) {
-			return updateStatus(id, "stopped", counters, stopReason, {
+			return updateStatus(id, "stopped", counters, stopReason, eventSequence, {
 				started: true,
 				completed: true,
 			});
 		},
-		markFailed(id: string, counters: CrawlCounters, stopReason: string | null) {
-			return updateStatus(id, "failed", counters, stopReason, {
+		markFailed(
+			id: string,
+			counters: CrawlCounters,
+			stopReason: string | null,
+			eventSequence?: number,
+		) {
+			return updateStatus(id, "failed", counters, stopReason, eventSequence, {
 				started: true,
 				completed: true,
 			});
@@ -236,12 +266,19 @@ export function createCrawlRunRepo(db: Database) {
 			id: string,
 			counters: CrawlCounters,
 			stopReason: string | null,
+			eventSequence?: number,
 		) {
-			return updateStatus(id, "interrupted", counters, stopReason, {
-				started: true,
-			});
+			return updateStatus(
+				id,
+				"interrupted",
+				counters,
+				stopReason,
+				eventSequence,
+				{
+					started: true,
+				},
+			);
 		},
 		updateProgress,
-		setEventSequence,
 	};
 }
