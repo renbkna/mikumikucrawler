@@ -1,7 +1,12 @@
 import { URL } from "node:url";
 import type { CheerioAPI } from "cheerio";
 import type { Element } from "domhandler";
-import type { ExtractedLink, MediaInfo } from "../types.js";
+import type {
+	ExtractedLink,
+	LoggerLike,
+	MediaInfo,
+	PageMetadata,
+} from "../types.js";
 import { getErrorMessage, normalizeUrl } from "../utils/helpers.js";
 
 /** Pre-compiled regex for downloadable file extensions */
@@ -13,19 +18,6 @@ interface StructuredData {
 	openGraph: Record<string, string>;
 	twitterCards: Record<string, string>;
 	schema: Record<string, unknown>;
-}
-
-interface PageMetadata {
-	title: string;
-	description: string;
-	author: string;
-	publishDate: string;
-	modifiedDate: string;
-	canonical: string;
-	robots: string;
-	viewport: string;
-	charset: string;
-	generator: string;
 }
 
 /**
@@ -43,6 +35,7 @@ export function cleanText(text: string | null | undefined): string {
  */
 export function extractStructuredData(
 	cheerioInstance: CheerioAPI,
+	logger?: LoggerLike,
 ): StructuredData {
 	if (typeof cheerioInstance !== "function") {
 		throw new TypeError(
@@ -67,9 +60,7 @@ export function extractStructuredData(
 					structured.jsonLd.push(jsonData);
 				}
 			} catch (err) {
-				// Malformed JSON-LD is common on third-party sites; log for debugging
-				// biome-ignore lint/suspicious/noConsole: Debug logging for malformed third-party content
-				console.debug(`Malformed JSON-LD: ${getErrorMessage(err)}`);
+				logger?.debug(`Malformed JSON-LD: ${getErrorMessage(err)}`);
 			}
 		},
 	);
@@ -168,6 +159,7 @@ export function extractMainContent(cheerioInstance: CheerioAPI): string {
 export function extractMediaInfo(
 	cheerioInstance: CheerioAPI,
 	baseUrl: string,
+	logger?: LoggerLike,
 ): MediaInfo[] {
 	if (typeof cheerioInstance !== "function") {
 		throw new TypeError("Invalid Cheerio instance passed to extractMediaInfo");
@@ -193,9 +185,7 @@ export function extractMediaInfo(
 				height: cheerioInstance(element).attr("height"),
 			});
 		} catch (err) {
-			// Malformed URLs are common in user content
-			// biome-ignore lint/suspicious/noConsole: Debug logging for malformed URLs
-			console.debug(`Malformed image URL: ${getErrorMessage(err)}`);
+			logger?.debug(`Malformed image URL: ${getErrorMessage(err)}`);
 		}
 	});
 
@@ -206,8 +196,7 @@ export function extractMediaInfo(
 				const absoluteUrl = new URL(src, baseUrl).href;
 				media.push({ type: "video", url: absoluteUrl });
 			} catch (err) {
-				// biome-ignore lint/suspicious/noConsole: Debug logging for malformed URLs
-				console.debug(`Malformed video URL: ${getErrorMessage(err)}`);
+				logger?.debug(`Malformed video URL: ${getErrorMessage(err)}`);
 			}
 		}
 	});
@@ -219,8 +208,7 @@ export function extractMediaInfo(
 				const absoluteUrl = new URL(src, baseUrl).href;
 				media.push({ type: "audio", url: absoluteUrl });
 			} catch (err) {
-				// biome-ignore lint/suspicious/noConsole: Debug logging for malformed URLs
-				console.debug(`Malformed audio URL: ${getErrorMessage(err)}`);
+				logger?.debug(`Malformed audio URL: ${getErrorMessage(err)}`);
 			}
 		}
 	});
@@ -237,6 +225,7 @@ export function extractMediaInfo(
 export function processLinks(
 	cheerioInstance: CheerioAPI,
 	baseUrl: string,
+	logger?: LoggerLike,
 ): ExtractedLink[] {
 	if (typeof cheerioInstance !== "function") {
 		throw new TypeError("Invalid Cheerio instance passed to processLinks");
@@ -291,8 +280,7 @@ export function processLinks(
 				nofollow,
 			});
 		} catch (err) {
-			// biome-ignore lint/suspicious/noConsole: Debug logging for malformed URLs
-			console.debug(`Malformed link URL: ${getErrorMessage(err)}`);
+			logger?.debug(`Malformed link URL: ${getErrorMessage(err)}`);
 		}
 	});
 

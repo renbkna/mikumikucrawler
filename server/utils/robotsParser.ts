@@ -1,6 +1,7 @@
 import { config } from "../config/env.js";
 import { MEMORY_CONSTANTS, REQUEST_CONSTANTS } from "../constants.js";
 import type { DatabaseLike, LoggerLike } from "../types.js";
+import { getErrorMessage } from "./helpers.js";
 import { LRUCacheWithTTL } from "./lruCache.js";
 import { secureFetch } from "./secureFetch.js";
 
@@ -227,9 +228,6 @@ export async function getRobotsRules(
 	logger: LoggerLike,
 	{ allowOnFailure = true }: RobotsOptions = {},
 ): Promise<RobotsResult | null> {
-	const getErrorMessage = (err: unknown): string =>
-		err instanceof Error ? err.message : String(err);
-
 	if (robotsCache.has(domain)) {
 		return robotsCache.get(domain) ?? null;
 	}

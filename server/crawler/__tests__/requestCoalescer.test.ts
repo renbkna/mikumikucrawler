@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-	coalesceCrawl,
-	requestCoalescer,
-} from "../../utils/requestCoalescer.js";
+import { RequestCoalescer } from "../../utils/requestCoalescer.js";
 
 /**
  * CONTRACT: RequestCoalescer
@@ -34,99 +31,76 @@ import {
  */
 
 describe("RequestCoalescer CONTRACT", () => {
-	// NOTE: These tests verify the basic API contract.
-	// Full concurrency testing is difficult due to the async nature of
-	// the mutex and Promise handling. The implementation has been
-	// manually verified to correctly coalesce concurrent requests.
-
 	test("factory returns correct result", async () => {
-		requestCoalescer.clear();
+		const coalescer = new RequestCoalescer();
 
 		const factory = async () => {
 			return "result";
 		};
 
-		const result = await requestCoalescer.coalesce(
-			"https://example.com",
-			factory,
-		);
+		const result = await coalescer.coalesce("https://example.com", factory);
 
 		expect(result).toBe("result");
 	});
 
 	test("isPending returns false for unknown URLs", () => {
-		requestCoalescer.clear();
+		const coalescer = new RequestCoalescer();
 
-		expect(requestCoalescer.isPending("https://unknown.com")).toBe(false);
+		expect(coalescer.isPending("https://unknown.com")).toBe(false);
 	});
 
 	test("getPendingCount returns zero when empty", () => {
-		requestCoalescer.clear();
+		const coalescer = new RequestCoalescer();
 
-		expect(requestCoalescer.getPendingCount()).toBe(0);
+		expect(coalescer.getPendingCount()).toBe(0);
 	});
 
 	test("clear removes all pending requests", async () => {
-		requestCoalescer.clear();
+		const coalescer = new RequestCoalescer();
 
-		expect(requestCoalescer.getPendingCount()).toBe(0);
+		coalescer.clear();
+		expect(coalescer.getPendingCount()).toBe(0);
 	});
 
 	test("handles factory resolving to null", async () => {
-		requestCoalescer.clear();
+		const coalescer = new RequestCoalescer();
 
 		const factory = async () => null;
 
-		const result = await requestCoalescer.coalesce(
-			"https://example.com",
-			factory,
-		);
+		const result = await coalescer.coalesce("https://example.com", factory);
 
 		expect(result).toBeNull();
 	});
 
 	test("handles factory resolving to undefined", async () => {
-		requestCoalescer.clear();
+		const coalescer = new RequestCoalescer();
 
 		const factory = async () => undefined;
 
-		const result = await requestCoalescer.coalesce(
-			"https://example.com",
-			factory,
-		);
+		const result = await coalescer.coalesce("https://example.com", factory);
 
 		expect(result).toBeUndefined();
 	});
 
 	test("handles empty string URL", async () => {
-		requestCoalescer.clear();
+		const coalescer = new RequestCoalescer();
 
 		const factory = async () => "result";
 
-		const result = await requestCoalescer.coalesce("", factory);
+		const result = await coalescer.coalesce("", factory);
 
 		expect(result).toBe("result");
 	});
 
-	test("coalesceCrawl helper works", async () => {
-		requestCoalescer.clear();
-
-		const factory = async () => ({ crawled: true });
-
-		const result = await coalesceCrawl("https://example.com", factory);
-
-		expect(result).toEqual({ crawled: true });
-	});
-
 	test("handles factory throwing error", async () => {
-		requestCoalescer.clear();
+		const coalescer = new RequestCoalescer();
 
 		const factory = async () => {
 			throw new Error("Test error");
 		};
 
 		await expect(
-			requestCoalescer.coalesce("https://example.com", factory),
+			coalescer.coalesce("https://example.com", factory),
 		).rejects.toThrow("Test error");
 	});
 });

@@ -24,11 +24,3 @@ export function isInvalidIpAddress(address: string): boolean {
 	const range = parsed.range();
 	return !ALLOWED_IP_RANGES.has(range);
 }
-
-/**
- * Gets the set of allowed IP ranges for SSRF protection.
- * Currently only allows unicast and global ranges.
- */
-export function getAllowedIpRanges(): Set<string> {
-	return new Set(ALLOWED_IP_RANGES);
-}

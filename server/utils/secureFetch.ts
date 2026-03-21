@@ -1,10 +1,9 @@
 import { lookup } from "node:dns/promises";
 import net from "node:net";
 import { URL } from "node:url";
-import ipaddr from "ipaddr.js";
+import { isInvalidIpAddress } from "./ipValidation.js";
 import { LRUCacheWithTTL } from "./lruCache.js";
 
-const ALLOWED_IP_RANGES = new Set(["unicast", "global"]);
 const CACHE_TTL_MS = 300000; // 5 minutes
 const MAX_CACHE_SIZE = 1000; // Maximum 1000 unique hostnames
 
@@ -24,29 +23,6 @@ interface SecureFetchOptions {
 interface ResolvedUrl {
 	url: string;
 	resolvedHost: string;
-}
-
-/**
- * Validates that an IP address is not in a private/reserved range.
- * Returns true if the IP is invalid or in a disallowed range.
- */
-function isInvalidIpAddress(address: string): boolean {
-	let parsed: ipaddr.IPv4 | ipaddr.IPv6;
-	try {
-		parsed = ipaddr.parse(address);
-	} catch {
-		return true;
-	}
-
-	if (
-		parsed.kind() === "ipv6" &&
-		(parsed as ipaddr.IPv6).isIPv4MappedAddress()
-	) {
-		parsed = (parsed as ipaddr.IPv6).toIPv4Address();
-	}
-
-	const range = parsed.range();
-	return !ALLOWED_IP_RANGES.has(range);
 }
 
 /**

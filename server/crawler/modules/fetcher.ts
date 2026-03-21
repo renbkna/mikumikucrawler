@@ -1,9 +1,7 @@
 import type { Database } from "bun:sqlite";
-import * as cheerio from "cheerio";
 import type { Logger } from "../../config/logging.js";
 import { FETCH_HEADERS, TIMEOUT_CONSTANTS } from "../../constants.js";
 import type { FetchResult, QueueItem } from "../../types.js";
-import { extractMetadata } from "../../utils/helpers.js";
 import { secureFetch } from "../../utils/secureFetch.js";
 import type { DynamicRenderer } from "../dynamicRenderer.js";
 
@@ -18,6 +16,19 @@ interface CachedPageHeaders {
 	last_modified: string | null;
 	etag: string | null;
 }
+
+const defaultFetchResult: FetchResult = {
+	content: "",
+	statusCode: 0,
+	contentType: "",
+	contentLength: 0,
+	title: "",
+	description: "",
+	lastModified: null,
+	etag: null,
+	xRobotsTag: null,
+	isDynamic: false,
+};
 
 export async function fetchContent({
 	item,
@@ -77,16 +88,10 @@ export async function fetchContent({
 		if (response.status === 304) {
 			logger.info(`[Crawler] Unchanged: ${item.url} (304)`);
 			return {
-				content: "",
+				...defaultFetchResult,
 				statusCode: 304,
-				contentType: "",
-				contentLength: 0,
-				title: "",
-				description: "",
 				lastModified: cached?.last_modified ?? null,
 				etag: cached?.etag ?? null,
-				xRobotsTag: null,
-				isDynamic: false,
 				unchanged: true,
 			};
 		}
@@ -97,23 +102,48 @@ export async function fetchContent({
 				`[Crawler] Rate-limited ${item.url} (${response.status}), retry after ${retryAfterMs}ms`,
 			);
 			return {
-				content: "",
+				...defaultFetchResult,
 				statusCode: response.status,
-				contentType: "",
-				contentLength: 0,
-				title: "",
-				description: "",
-				lastModified: null,
-				etag: null,
-				xRobotsTag: null,
-				isDynamic: false,
 				rateLimited: true,
 				retryAfterMs,
 			};
 		}
 
+		const finalUrl = response.url !== item.url ? response.url : undefined;
+
+		if (
+			response.status === 404 ||
+			response.status === 410 ||
+			response.status === 501
+		) {
+			return {
+				...defaultFetchResult,
+				statusCode: response.status,
+				permanentFailure: true,
+				finalUrl,
+			};
+		}
+		if (response.status === 403) {
+			return {
+				...defaultFetchResult,
+				statusCode: response.status,
+				blocked: true,
+				finalUrl,
+			};
+		}
 		if (!response.ok) {
 			throw new Error(`HTTP error! status: ${response.status}`);
+		}
+
+		const contentLengthHeader = Number.parseInt(
+			response.headers.get("content-length") || "0",
+			10,
+		);
+		if (
+			contentLengthHeader > 10 * 1024 * 1024 &&
+			!response.headers.get("content-type")?.includes("text/")
+		) {
+			throw new Error(`Response too large: ${contentLengthHeader} bytes`);
 		}
 
 		content = await response.text();
@@ -126,17 +156,20 @@ export async function fetchContent({
 		lastModified = response.headers.get("last-modified") ?? null;
 		etag = response.headers.get("etag") ?? null;
 		xRobotsTag = response.headers.get("x-robots-tag") ?? null;
-	}
 
-	if (contentType.includes("text/html") && (!title || !description)) {
-		const $ = cheerio.load(content);
-		const metadata = extractMetadata($);
-		if (!title) {
-			title = metadata.title;
-		}
-		if (!description) {
-			description = metadata.description;
-		}
+		return {
+			content,
+			statusCode,
+			contentType,
+			contentLength,
+			title,
+			description,
+			lastModified,
+			etag,
+			xRobotsTag,
+			isDynamic,
+			finalUrl,
+		};
 	}
 
 	if (!contentLength && content) {
