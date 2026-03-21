@@ -44,6 +44,7 @@ export type FetchResult =
 	| {
 			type: "blocked";
 			statusCode: number;
+			reason?: string;
 	  };
 
 function parseRetryAfter(value: string | null): number {
@@ -74,25 +75,37 @@ export class FetchService {
 			: null;
 
 		if (dynamicResult) {
+			if (dynamicResult.type === "consentBlocked") {
+				this.logger.warn(dynamicResult.message);
+				return {
+					type: "blocked",
+					statusCode: dynamicResult.statusCode,
+					reason: dynamicResult.message,
+				};
+			}
+
+			const renderedPage = dynamicResult.result;
 			const contentLength =
-				dynamicResult.contentLength ||
-				Buffer.byteLength(dynamicResult.content, "utf8");
+				renderedPage.contentLength ||
+				Buffer.byteLength(renderedPage.content, "utf8");
 
 			return {
 				type: "success",
-				content: dynamicResult.content,
-				statusCode: dynamicResult.statusCode,
-				contentType: dynamicResult.contentType,
+				content: renderedPage.content,
+				statusCode: renderedPage.statusCode,
+				contentType: renderedPage.contentType,
 				contentLength,
-				title: dynamicResult.title,
-				description: dynamicResult.description,
-				lastModified: dynamicResult.lastModified ?? null,
+				title: renderedPage.title,
+				description: renderedPage.description,
+				lastModified: renderedPage.lastModified ?? null,
 				etag: null,
-				xRobotsTag: dynamicResult.xRobotsTag ?? null,
+				xRobotsTag: renderedPage.xRobotsTag ?? null,
 				isDynamic: true,
 			};
 		}
 
+		// Consent-sensitive domains should not silently degrade to static junk when
+		// the dynamic path already proved access is blocked by an interstitial wall.
 		this.logger.info(`[Fetch] Static crawl for ${item.url}`);
 		const cachedHeaders = this.pageRepo.getHeaders(crawlId, item.url);
 		const conditionalHeaders: Record<string, string> = {};

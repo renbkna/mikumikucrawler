@@ -189,9 +189,13 @@ export class PagePipeline {
 		) {
 			this.state.adaptDomainDelay(item.domain, fetchResult.statusCode);
 			this.state.recordTerminal(item.url, "failure");
-			this.eventSink.log(
-				`[Crawler] Failed ${item.url} with ${fetchResult.statusCode}`,
-			);
+			if (fetchResult.type === "blocked" && fetchResult.reason) {
+				this.eventSink.log(`[Crawler] ${fetchResult.reason}`);
+			} else {
+				this.eventSink.log(
+					`[Crawler] Failed ${item.url} with ${fetchResult.statusCode}`,
+				);
+			}
 			return;
 		}
 

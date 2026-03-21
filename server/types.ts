@@ -36,6 +36,22 @@ export interface DynamicRenderResult {
 	xRobotsTag?: string | null;
 }
 
+export interface DynamicRenderConsentBlocked {
+	type: "consentBlocked";
+	message: string;
+	statusCode: number;
+}
+
+export interface DynamicRenderSuccess {
+	type: "success";
+	result: DynamicRenderResult;
+}
+
+export type DynamicRenderAttempt =
+	| DynamicRenderSuccess
+	| DynamicRenderConsentBlocked
+	| null;
+
 /** Base fields shared by all fetch result variants. */
 interface FetchResultBase {
 	statusCode: number;
@@ -77,6 +93,7 @@ export interface FetchPermanentFailure extends FetchResultBase {
 /** 403 — blocked by bot detection. */
 export interface FetchBlocked extends FetchResultBase {
 	type: "blocked";
+	reason?: string;
 }
 
 export type FetchResult =
