@@ -1,5 +1,6 @@
 import { History, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { api } from "../api/client";
 import { useFocusTrap } from "../hooks";
 import { HeartIcon, SparkleIcon } from "./KawaiiIcons";
 
@@ -63,18 +64,44 @@ export function ResumeSessionsPanel({
 		onClose,
 	});
 
+	const getApiErrorMessage = useCallback((errorValue: unknown): string => {
+		if (!errorValue || typeof errorValue !== "object") {
+			return "Request failed";
+		}
+
+		if ("error" in errorValue && typeof errorValue.error === "string") {
+			return errorValue.error;
+		}
+
+		if ("message" in errorValue && typeof errorValue.message === "string") {
+			return errorValue.message;
+		}
+
+		return "Request failed";
+	}, []);
+
 	// ── Data fetching ──────────────────────────────────────────────────────────
 
 	const fetchSessions = useCallback(async () => {
 		setIsLoading(true);
 		setFetchError(null);
 		try {
-			const res = await fetch("/api/sessions");
-			if (!res.ok) {
-				throw new Error(`Server responded with ${res.status}`);
+			const response = await api.api.crawls.get({
+				query: { status: "interrupted" },
+			});
+			if (response.error || !response.data) {
+				throw new Error(getApiErrorMessage(response.error?.value));
 			}
-			const json = (await res.json()) as { sessions: SessionSummary[] };
-			setSessions(json.sessions);
+			setSessions(
+				response.data.crawls.map((crawl) => ({
+					id: crawl.id,
+					target: crawl.target,
+					status: crawl.status,
+					pagesScanned: crawl.counters.pagesScanned,
+					createdAt: crawl.createdAt,
+					updatedAt: crawl.updatedAt,
+				})),
+			);
 		} catch (err) {
 			setFetchError(
 				err instanceof Error ? err.message : "Could not load sessions.",
@@ -82,7 +109,7 @@ export function ResumeSessionsPanel({
 		} finally {
 			setIsLoading(false);
 		}
-	}, []);
+	}, [getApiErrorMessage]);
 
 	// Fetch whenever the panel opens
 	useEffect(() => {
@@ -104,25 +131,26 @@ export function ResumeSessionsPanel({
 
 	// ── Event handlers ─────────────────────────────────────────────────────────
 
-	const handleDelete = useCallback(async (sessionId: string) => {
-		setDeletingId(sessionId);
-		try {
-			const res = await fetch(`/api/sessions/${sessionId}`, {
-				method: "DELETE",
-			});
-			if (!res.ok) {
-				throw new Error(`Server responded with ${res.status}`);
+	const handleDelete = useCallback(
+		async (sessionId: string) => {
+			setDeletingId(sessionId);
+			try {
+				const response = await api.api.crawls({ id: sessionId }).delete();
+				if (response.error) {
+					throw new Error(getApiErrorMessage(response.error.value));
+				}
+				// Remove locally — no need to re-fetch
+				setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+			} catch {
+				// Surface a brief inline error without a full re-fetch so the list
+				// remains visible and the user can try again.
+				setFetchError("Failed to delete session. Please try again.");
+			} finally {
+				setDeletingId(null);
 			}
-			// Remove locally — no need to re-fetch
-			setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-		} catch {
-			// Surface a brief inline error without a full re-fetch so the list
-			// remains visible and the user can try again.
-			setFetchError("Failed to delete session. Please try again.");
-		} finally {
-			setDeletingId(null);
-		}
-	}, []);
+		},
+		[getApiErrorMessage],
+	);
 
 	const handleResume = useCallback(
 		(session: SessionSummary) => {
