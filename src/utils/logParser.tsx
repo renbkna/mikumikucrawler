@@ -141,7 +141,11 @@ export function getLogCategory(message: string): string {
 	if (lowerMsg.includes("fetch")) return "🌐 Network";
 	if (lowerMsg.includes("crawl") || lowerMsg.includes("session"))
 		return "🕷️ Crawler";
-	if (lowerMsg.includes("puppeteer") || lowerMsg.includes("chrome"))
+	if (
+		lowerMsg.includes("puppeteer") ||
+		lowerMsg.includes("playwright") ||
+		lowerMsg.includes("chrome")
+	)
 		return "🎭 Browser";
 	if (lowerMsg.includes("client") || lowerMsg.includes("socket"))
 		return "🔌 Connection";

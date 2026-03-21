@@ -51,7 +51,11 @@ export class CrawlRuntime {
 
 	constructor(private readonly deps: CrawlRuntimeDependencies) {
 		this.state = new CrawlState(deps.options, deps.initialCounters);
-		this.dynamicRenderer = new DynamicRenderer(deps.options, deps.logger);
+		this.dynamicRenderer = new DynamicRenderer(
+			deps.options,
+			deps.logger,
+			deps.resolver,
+		);
 		this.fetchService = new FetchService(
 			deps.repos.pages,
 			deps.httpClient,
