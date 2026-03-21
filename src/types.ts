@@ -1,12 +1,5 @@
 export * from "../shared/types.js";
 
-// Frontend-only types
-import type { Stats } from "../shared/types.js";
-
-export interface StatsPayload extends Partial<Stats> {
-	log?: string;
-}
-
 export interface Toast {
 	id: number;
 	type: "success" | "error" | "info" | "warning";

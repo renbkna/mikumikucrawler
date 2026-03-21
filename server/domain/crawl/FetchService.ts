@@ -5,12 +5,9 @@ import {
 	TIMEOUT_CONSTANTS,
 } from "../../constants.js";
 import type { HttpClient } from "../../plugins/security.js";
+import type { PageRepo } from "../../storage/repos/pageRepo.js";
 import type { QueueItem } from "./CrawlQueue.js";
 import type { DynamicRenderer } from "./DynamicRenderer.js";
-
-type PageRepo = ReturnType<
-	typeof import("../../storage/repos/pageRepo.js")["createPageRepo"]
->;
 
 export type FetchResult =
 	| {

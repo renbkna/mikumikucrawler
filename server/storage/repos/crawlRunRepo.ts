@@ -109,10 +109,7 @@ export function createCrawlRunRepo(db: Database) {
 		return getById(id);
 	}
 
-	function updateProgress(
-		id: string,
-		counters: CrawlCounters,
-	): CrawlRunRecord | null {
+	function updateProgress(id: string, counters: CrawlCounters): void {
 		db.query(
 			`
 			UPDATE crawl_runs
@@ -137,8 +134,6 @@ export function createCrawlRunRepo(db: Database) {
 			counters.totalDataKb,
 			id,
 		);
-
-		return getById(id);
 	}
 
 	function setEventSequence(id: string, sequence: number): void {

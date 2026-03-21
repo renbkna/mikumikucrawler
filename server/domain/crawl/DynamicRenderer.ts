@@ -16,6 +16,7 @@ import { logMemoryStatus } from "../../utils/memoryMonitor.js";
 import { withTimeout, withTimeoutFallback } from "../../utils/timeout.js";
 import type { QueueItem } from "./CrawlQueue.js";
 import {
+	CONSENT_ACTION_MARKERS,
 	CONSENT_BUTTON_SELECTORS,
 	isConsentWallText,
 	requiresStrictConsentBypass,
@@ -530,7 +531,13 @@ export class DynamicRenderer {
 			for (const frame of page.frames()) {
 				clicked = await withTimeoutFallback(
 					frame.evaluate(
-						(selectors) => {
+						({
+							selectors,
+							actionMarkers,
+						}: {
+							selectors: string[];
+							actionMarkers: string[];
+						}) => {
 							const interactiveSelector =
 								"button, input[type='submit'], a[role='button'], [role='button']";
 
@@ -574,33 +581,15 @@ export class DynamicRenderer {
 							const exactMatch = buttons.find(
 								(button) =>
 									isVisible(button) &&
-									selectors.some((selector) => button.matches(selector)),
+									selectors.some((selector: string) =>
+										button.matches(selector),
+									),
 							);
 							if (exactMatch) {
 								exactMatch.click();
 								return true;
 							}
 
-							const actionMarkers = [
-								"accept all",
-								"accept cookies",
-								"i agree",
-								"agree all",
-								"accept",
-								"agree",
-								"allow",
-								"allow all",
-								"got it",
-								"continue",
-								"agree to the use of cookies",
-								"alle akzeptieren",
-								"alle annehmen",
-								"akzeptieren",
-								"zustimmen",
-								"ich stimme zu",
-								"zustimmen und fortfahren",
-								"einverstanden",
-							];
 							const normalize = (value: string | null | undefined) =>
 								(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 							const matchesAction = (
@@ -608,7 +597,7 @@ export class DynamicRenderer {
 							) =>
 								values.some((value) => {
 									const normalized = normalize(value);
-									return actionMarkers.some((marker) =>
+									return actionMarkers.some((marker: string) =>
 										normalized.includes(marker),
 									);
 								});
@@ -629,7 +618,10 @@ export class DynamicRenderer {
 
 							return false;
 						},
-						[...CONSENT_BUTTON_SELECTORS],
+						{
+							selectors: [...CONSENT_BUTTON_SELECTORS],
+							actionMarkers: [...CONSENT_ACTION_MARKERS],
+						},
 					),
 					EVAL_TIMEOUT_MS,
 					false,
