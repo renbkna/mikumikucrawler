@@ -1,4 +1,4 @@
-export type { ConnectionState } from "./useCrawlController";
+export type { ConnectionState } from "./crawlControllerState";
 export { useCrawlController } from "./useCrawlController";
 export { useFocusTrap } from "./useFocusTrap";
 export type { TheatreStatus, UseTheatreModeReturn } from "./useTheatreMode";
