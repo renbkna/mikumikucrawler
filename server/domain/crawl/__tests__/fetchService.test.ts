@@ -167,4 +167,49 @@ describe("fetch service contract", () => {
 		}
 		expect(result.contentLength).toBe(Buffer.byteLength(content, "utf8"));
 	});
+
+	test("measures dynamic contentLength from rendered DOM instead of renderer metadata", async () => {
+		const content =
+			"<html><body><main>This dynamic DOM is larger than the stale content-length metadata.</main></body></html>";
+		const service = new FetchService(
+			{
+				getHeaders: () => null,
+			} as never,
+			{
+				fetch: mock(async () => new Response("should not be called")),
+			},
+			{
+				isEnabled: () => true,
+				render: async () => ({
+					type: "success",
+					result: {
+						isDynamic: true,
+						content,
+						statusCode: 200,
+						contentType: "text/html",
+						contentLength: 12,
+						title: "Dynamic",
+						description: "",
+						lastModified: undefined,
+						xRobotsTag: null,
+					},
+				}),
+			} as never,
+			createLogger(),
+		);
+
+		const result = await service.fetch("crawl-1", {
+			url: "https://example.com/dynamic",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(result.type).toBe("success");
+		if (result.type !== "success") {
+			throw new Error("Expected successful dynamic fetch result");
+		}
+		expect(result.isDynamic).toBe(true);
+		expect(result.contentLength).toBe(Buffer.byteLength(content, "utf8"));
+	});
 });

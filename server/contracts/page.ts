@@ -1,7 +1,7 @@
 import { t } from "elysia";
 
 export const PageContentParamsSchema = t.Object({
-	id: t.Numeric(),
+	id: t.Numeric({ minimum: 1, multipleOf: 1 }),
 });
 
 export const PageContentResponseSchema = t.Object({

@@ -25,8 +25,8 @@ import { telemetryPlugin } from "./plugins/telemetry.js";
 import { CrawlManager } from "./runtime/CrawlManager.js";
 import { EventStream } from "./runtime/EventStream.js";
 import { RuntimeRegistry } from "./runtime/RuntimeRegistry.js";
+import { handleAppError } from "./errorHandling.js";
 import { createStorage } from "./storage/db.js";
-import { getErrorMessage } from "./utils/helpers.js";
 import { resolveStaticFilePath } from "./utils/staticFilePath.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -80,18 +80,15 @@ export const app = new Elysia()
 	.use(pagesApi(storage.repos))
 	.use(searchApi(storage.repos))
 	.use(healthApi(runtimeRegistry))
-	.onError(({ code, error, set }) => {
-		if (code === "NOT_FOUND") {
-			set.status = 404;
-			return { error: "Not Found" };
-		}
-
-		logger.error(`[App] ${getErrorMessage(error)}`);
-		set.status = 500;
-		return {
-			error: error instanceof Error ? error.message : "Internal Server Error",
-		} satisfies typeof ApiErrorSchema.static;
-	})
+	.onError(
+		({ code, error, set }) =>
+			handleAppError({
+				code,
+				error,
+				set,
+				logger,
+			}) satisfies typeof ApiErrorSchema.static,
+	)
 	.get(
 		"*",
 		async (context: {

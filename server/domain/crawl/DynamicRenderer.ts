@@ -422,10 +422,6 @@ export class DynamicRenderer {
 			const statusCode = response?.status() ?? 0;
 			const headers = response?.headers() ?? {};
 			const contentType = headers["content-type"] || "";
-			const contentLength = Number.parseInt(
-				headers["content-length"] || "0",
-				10,
-			);
 			const lastModified = headers["last-modified"];
 			const xRobotsTag = headers["x-robots-tag"] ?? null;
 
@@ -500,8 +496,7 @@ export class DynamicRenderer {
 					content: extracted.content,
 					statusCode,
 					contentType,
-					contentLength:
-						contentLength || Buffer.byteLength(extracted.content, "utf8"),
+					contentLength: Buffer.byteLength(extracted.content, "utf8"),
 					title: extracted.title,
 					description: extracted.description || "",
 					lastModified,

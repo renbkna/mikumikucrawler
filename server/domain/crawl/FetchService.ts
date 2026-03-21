@@ -146,9 +146,7 @@ export class FetchService {
 				return classifiedDynamicStatus;
 			}
 
-			const contentLength =
-				renderedPage.contentLength ||
-				Buffer.byteLength(renderedPage.content, "utf8");
+			const contentLength = Buffer.byteLength(renderedPage.content, "utf8");
 
 			return {
 				type: "success",
