@@ -79,4 +79,19 @@ describe("event stream contract", () => {
 
 		expect(seen).toEqual([1, 2]);
 	});
+
+	test("cleans up inactive crawl history after the cleanup delay", async () => {
+		const stream = new EventStream();
+		stream.publish("crawl-cleanup", "crawl.log", { message: "hello" });
+		stream.scheduleCleanup("crawl-cleanup", 5);
+		await Bun.sleep(20);
+
+		const seen: number[] = [];
+		const unsubscribe = stream.subscribe("crawl-cleanup", (event) => {
+			seen.push(event.sequence);
+		});
+		unsubscribe();
+
+		expect(seen).toEqual([]);
+	});
 });

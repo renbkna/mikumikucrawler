@@ -6,6 +6,7 @@ export interface QueueItemRecord {
 	retries: number;
 	parentUrl?: string;
 	domain: string;
+	availableAt?: number;
 }
 
 export function createCrawlQueueRepo(db: Database) {
@@ -16,8 +17,27 @@ export function createCrawlQueueRepo(db: Database) {
 			depth,
 			retries,
 			parent_url,
-			domain
-		) VALUES (?, ?, ?, ?, ?, ?)
+			domain,
+			available_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+	`);
+	const upsertItem = db.prepare(`
+		INSERT INTO crawl_queue_items (
+			crawl_id,
+			url,
+			depth,
+			retries,
+			parent_url,
+			domain,
+			available_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(crawl_id, url) DO UPDATE SET
+			depth = excluded.depth,
+			retries = excluded.retries,
+			parent_url = excluded.parent_url,
+			domain = excluded.domain,
+			available_at = excluded.available_at,
+			created_at = CURRENT_TIMESTAMP
 	`);
 
 	const insertManyTransaction = db.transaction(
@@ -30,6 +50,7 @@ export function createCrawlQueueRepo(db: Database) {
 					item.retries,
 					item.parentUrl ?? null,
 					item.domain,
+					item.availableAt ?? 0,
 				);
 			}
 		},
@@ -45,9 +66,10 @@ export function createCrawlQueueRepo(db: Database) {
 				.query(
 					`
 					SELECT url, depth, retries, parent_url, domain
+						, available_at
 					FROM crawl_queue_items
 					WHERE crawl_id = ?
-					ORDER BY created_at ASC, id ASC
+					ORDER BY available_at ASC, created_at ASC, id ASC
 				`,
 				)
 				.all(crawlId) as Array<{
@@ -56,6 +78,7 @@ export function createCrawlQueueRepo(db: Database) {
 				retries: number;
 				parent_url: string | null;
 				domain: string;
+				available_at: number;
 			}>;
 
 			return rows.map((row) => ({
@@ -64,7 +87,19 @@ export function createCrawlQueueRepo(db: Database) {
 				retries: row.retries,
 				parentUrl: row.parent_url ?? undefined,
 				domain: row.domain,
+				availableAt: row.available_at,
 			}));
+		},
+		reschedule(crawlId: string, item: QueueItemRecord): void {
+			upsertItem.run(
+				crawlId,
+				item.url,
+				item.depth,
+				item.retries,
+				item.parentUrl ?? null,
+				item.domain,
+				item.availableAt ?? 0,
+			);
 		},
 		remove(crawlId: string, url: string): void {
 			db.query(

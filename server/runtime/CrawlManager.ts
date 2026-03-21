@@ -44,6 +44,7 @@ export class CrawlManager {
 			resume: config.resume,
 			onSettled: () => {
 				this.deps.registry.delete(crawlId);
+				this.deps.eventStream.scheduleCleanup(crawlId);
 			},
 		});
 
@@ -109,6 +110,7 @@ export class CrawlManager {
 		const record = this.deps.repos.crawlRuns.getById(crawlId);
 		if (!record) return false;
 		this.deps.repos.crawlRuns.deleteRun(crawlId);
+		this.deps.eventStream.delete(crawlId);
 		return true;
 	}
 

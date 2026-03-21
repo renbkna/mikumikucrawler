@@ -12,11 +12,27 @@ interface StreamState {
 }
 
 const MAX_HISTORY = 500;
+const DEFAULT_CLEANUP_DELAY_MS = 5 * 60 * 1000;
 
 export class EventStream {
 	private readonly streams = new Map<string, StreamState>();
+	private readonly cleanupTimers = new Map<
+		string,
+		ReturnType<typeof setTimeout>
+	>();
+
+	private cancelCleanup(crawlId: string): void {
+		const timer = this.cleanupTimers.get(crawlId);
+		if (!timer) {
+			return;
+		}
+
+		clearTimeout(timer);
+		this.cleanupTimers.delete(crawlId);
+	}
 
 	private getState(crawlId: string): StreamState {
+		this.cancelCleanup(crawlId);
 		const existing = this.streams.get(crawlId);
 		if (existing) return existing;
 
@@ -31,6 +47,7 @@ export class EventStream {
 	}
 
 	initialize(crawlId: string, sequence = 0): void {
+		this.cancelCleanup(crawlId);
 		const state = this.getState(crawlId);
 		state.sequence = Math.max(state.sequence, sequence);
 	}
@@ -78,6 +95,32 @@ export class EventStream {
 		return () => {
 			state.subscribers.delete(onEvent);
 		};
+	}
+
+	delete(crawlId: string): void {
+		this.cancelCleanup(crawlId);
+		this.streams.delete(crawlId);
+	}
+
+	scheduleCleanup(crawlId: string, delayMs = DEFAULT_CLEANUP_DELAY_MS): void {
+		this.cancelCleanup(crawlId);
+		this.cleanupTimers.set(
+			crawlId,
+			setTimeout(() => {
+				this.cleanupTimers.delete(crawlId);
+				const state = this.streams.get(crawlId);
+				if (!state) {
+					return;
+				}
+
+				if (state.subscribers.size > 0) {
+					this.scheduleCleanup(crawlId, delayMs);
+					return;
+				}
+
+				this.streams.delete(crawlId);
+			}, delayMs),
+		);
 	}
 
 	getCurrentSequence(crawlId: string): number {

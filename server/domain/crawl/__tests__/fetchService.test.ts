@@ -93,4 +93,39 @@ describe("fetch service contract", () => {
 			reason: "Access blocked for https://example.com/blocked",
 		});
 	});
+
+	test("honors short HTTP-date retry-after values instead of forcing the max delay", async () => {
+		const retryAfterAt = new Date(Date.now() + 5_000).toUTCString();
+		const service = new FetchService(
+			{
+				getHeaders: () => null,
+			} as never,
+			{
+				fetch: async () =>
+					new Response("", {
+						status: 429,
+						headers: { "retry-after": retryAfterAt },
+					}),
+			},
+			{
+				isEnabled: () => false,
+				render: async () => null,
+			} as never,
+			createLogger(),
+		);
+
+		const result = await service.fetch("crawl-1", {
+			url: "https://example.com/rate-limited",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(result.type).toBe("rateLimited");
+		if (result.type !== "rateLimited") {
+			throw new Error("Expected rate-limited result");
+		}
+		expect(result.retryAfterMs).toBeLessThan(10_000);
+		expect(result.retryAfterMs).toBeGreaterThan(0);
+	});
 });
