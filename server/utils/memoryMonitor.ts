@@ -41,7 +41,7 @@ function getMemoryStatus(): MemoryStatus {
 		...usage,
 		isLowMemory: lowMem,
 		recommendation: lowMem
-			? "Consider upgrading to at least 1GB RAM for Puppeteer support"
+			? "Consider upgrading to at least 1GB RAM for Playwright support"
 			: "Memory levels OK for dynamic crawling",
 		totalEstimated: `${usage.rss}MB total | Heap: ${usage.heapUsed}MB`,
 		percentUsed: Math.round((usage.rss / 512) * 100),

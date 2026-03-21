@@ -85,6 +85,29 @@ export class FetchService {
 			}
 
 			const renderedPage = dynamicResult.result;
+			if (renderedPage.statusCode === 429 || renderedPage.statusCode === 503) {
+				return {
+					type: "rateLimited",
+					statusCode: renderedPage.statusCode,
+					retryAfterMs: RETRY_CONSTANTS.MAX_DELAY,
+				};
+			}
+
+			if ([404, 410, 501].includes(renderedPage.statusCode)) {
+				return {
+					type: "permanentFailure",
+					statusCode: renderedPage.statusCode,
+				};
+			}
+
+			if (renderedPage.statusCode === 401 || renderedPage.statusCode === 403) {
+				return {
+					type: "blocked",
+					statusCode: renderedPage.statusCode,
+					reason: `Access blocked for ${item.url}`,
+				};
+			}
+
 			const contentLength =
 				renderedPage.contentLength ||
 				Buffer.byteLength(renderedPage.content, "utf8");

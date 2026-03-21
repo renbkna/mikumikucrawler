@@ -100,20 +100,20 @@ The Docker container is configured to work with these environment variables:
 ## What the Docker Setup Does
 
 1. **Base Image**: Uses Node.js 20 slim with Chrome dependencies
-2. **System Dependencies**: Installs all required libraries for Puppeteer
-3. **Browser Installation**: Puppeteer auto-downloads Chromium during `bun install`
+2. **System Dependencies**: Installs all required libraries for Playwright/Chromium
+3. **Browser Installation**: Playwright provides the browser automation runtime used by the crawler
 4. **Dependencies**: Installs packages via Bun
 5. **Build**: Runs `bun run build` to build frontend assets
-6. **Configuration**: Sets up proper environment for Puppeteer
+6. **Configuration**: Sets up proper environment for Playwright
 7. **Health Check**: Includes a health check endpoint at `/health`
 8. **Optimization**: Uses Docker layer caching for faster builds
 
 ## Troubleshooting
 
-### If Puppeteer fails to find browsers
+### If Playwright fails to find browsers
 
 1. Check the deployment logs on Render
-2. Puppeteer will log if browser binaries are missing
+2. Playwright will log if browser binaries are missing
 3. Ensure the container built successfully
 
 ### If the build fails
@@ -130,11 +130,11 @@ The Docker container is configured to work with these environment variables:
 
 ## Features Included
 
-- ✅ Puppeteer with Chromium support
+- ✅ Playwright with Chromium support
 - ✅ Health check endpoint at `/health`
 - ✅ Production optimizations
 - ✅ Docker layer caching
-- ✅ Security configurations for Puppeteer
+- ✅ Security configurations for browser automation
 - ✅ Frontend build process
 - ✅ Automatic dependency installation via Bun
 
@@ -142,7 +142,7 @@ The Docker container is configured to work with these environment variables:
 
 - First deployment may take 5-10 minutes (installing Chrome, building)
 - Subsequent deployments will be faster due to Docker layer caching
-- Browser binaries are large but necessary for Puppeteer
+- Browser binaries are large but necessary for Playwright
 - Container includes health checks for Render's monitoring
 
-Your application should now be successfully running on Render with full Puppeteer support!
+Your application should now be successfully running on Render with full Playwright support!

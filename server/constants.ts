@@ -15,7 +15,7 @@ export const CRAWL_QUEUE_CONSTANTS = {
 
 export const TIMEOUT_CONSTANTS = {
 	STATIC_FETCH: 10000, // 10s for HTTP requests
-	DYNAMIC_RENDER: 30000, // 30s for Puppeteer
+	DYNAMIC_RENDER: 30000, // 30s for browser-backed rendering
 	CONTENT_PROCESSING: 5000, // 5s for HTML parsing/analysis
 	DATABASE_OPERATION: 10000, // 10s for DB queries
 } as const;
@@ -143,7 +143,8 @@ export const SITE_SELECTORS: Record<string, string> = {
 	"x.com": '[data-testid="tweet"]',
 	"linkedin.com": ".feed-container-theme",
 	"instagram.com": '[role="main"]',
-	"reddit.com": '[data-testid="post-container"]',
+	"reddit.com":
+		'shreddit-post, [data-testid="post-container"], article, [role="main"]',
 	"facebook.com": '[role="main"]',
 	"meta.com": '[role="main"]',
 	"github.com": ".js-repo-root, .repository-content",
