@@ -107,6 +107,31 @@ describe("api contract", () => {
 		expect(invalidListResponse.status).toBe(422);
 	});
 
+	test("rejects fractional numeric query and path parameters at the API boundary", async () => {
+		const { app } = buildApp({
+			fetch: async () =>
+				new Response("<html><body><main>unused</main></body></html>", {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				}),
+		});
+
+		const crawlListResponse = await app.handle(
+			new Request("http://localhost/api/crawls?limit=1.5"),
+		);
+		expect(crawlListResponse.status).toBe(422);
+
+		const searchResponse = await app.handle(
+			new Request("http://localhost/api/search?q=contract&limit=1.5"),
+		);
+		expect(searchResponse.status).toBe(422);
+
+		const pageContentResponse = await app.handle(
+			new Request("http://localhost/api/pages/1.5/content"),
+		);
+		expect(pageContentResponse.status).toBe(422);
+	});
+
 	test("rejects non-integer crawl option fields", async () => {
 		const { app } = buildApp({
 			fetch: async () =>
@@ -133,6 +158,60 @@ describe("api contract", () => {
 		);
 
 		expect(response.status).toBe(422);
+	});
+
+	test("rejects invalid crawl targets at create time", async () => {
+		const { app, storage } = buildApp({
+			fetch: async () =>
+				new Response("<html><body><main>unused</main></body></html>", {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				}),
+		});
+
+		const response = await app.handle(
+			new Request("http://localhost/api/crawls", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					...crawlBody,
+					target: "mailto:test@example.com",
+				}),
+			}),
+		);
+
+		expect(response.status).toBe(422);
+		expect(await response.json()).toEqual({
+			error: "Only HTTP and HTTPS URLs are supported",
+			code: "INVALID_TARGET",
+		});
+		expect(storage.repos.crawlRuns.list()).toHaveLength(0);
+	});
+
+	test("normalizes accepted crawl targets before persisting the crawl", async () => {
+		const { app } = buildApp({
+			fetch: async () =>
+				new Response("<html><body><main>unused</main></body></html>", {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				}),
+		});
+
+		const response = await app.handle(
+			new Request("http://localhost/api/crawls", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					...crawlBody,
+					target: "example.com/path?b=2&a=1#fragment",
+				}),
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		const created = await response.json();
+		expect(created.target).toBe("http://example.com/path?a=1&b=2");
+		expect(created.options.target).toBe("http://example.com/path?a=1&b=2");
 	});
 
 	test("create crawl, get crawl, list crawl, page content, and search", async () => {

@@ -14,6 +14,7 @@ import {
 import { ApiErrorSchema } from "../contracts/errors.js";
 import type { CrawlManager } from "../runtime/CrawlManager.js";
 import type { StorageRepos } from "../storage/db.js";
+import { normalizeHttpUrl } from "../../shared/url.js";
 
 const CSV_INJECTION_PREFIX = /^[=+\-@|\t]/;
 
@@ -30,16 +31,32 @@ interface CrawlsApiDependencies {
 
 export function crawlsApi({ crawlManager, repos }: CrawlsApiDependencies) {
 	return new Elysia({ name: "crawls-api", prefix: "/api/crawls" })
-		.post("/", ({ body }) => crawlManager.create(body), {
-			body: CreateCrawlBodySchema,
-			response: {
-				200: CreateCrawlResponseSchema,
+		.post(
+			"/",
+			({ body, set }) => {
+				const normalizedTarget = normalizeHttpUrl(body.target);
+				if ("error" in normalizedTarget) {
+					set.status = 422;
+					return { error: normalizedTarget.error, code: "INVALID_TARGET" };
+				}
+
+				return crawlManager.create({
+					...body,
+					target: normalizedTarget.url,
+				});
 			},
-			detail: {
-				tags: ["Crawls"],
-				summary: "Create a crawl run",
+			{
+				body: CreateCrawlBodySchema,
+				response: {
+					200: CreateCrawlResponseSchema,
+					422: ApiErrorSchema,
+				},
+				detail: {
+					tags: ["Crawls"],
+					summary: "Create a crawl run",
+				},
 			},
-		})
+		)
 		.post(
 			"/:id/stop",
 			({ params, set }) => {
