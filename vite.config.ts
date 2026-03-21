@@ -5,16 +5,15 @@ import { defineConfig } from "vite";
 export default defineConfig({
 	plugins: [react(), tailwindcss()],
 	build: {
+		target: "es2022",
 		rollupOptions: {
 			output: {
-				manualChunks: {
-					vendor: ["react", "react-dom"],
+				manualChunks(id) {
+					if (id.includes("node_modules")) {
+						return "vendor";
+					}
 				},
 			},
 		},
-	},
-	esbuild: {
-		target: "es2022",
-		format: "esm",
 	},
 });

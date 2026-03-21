@@ -232,9 +232,9 @@ const CrawledPageCard = memo(function CrawledPageCard({
 								Processing Errors
 							</div>
 							<ul className="space-y-1">
-								{processedData.errors.map((error, idx) => (
+								{processedData.errors.map((error) => (
 									<li
-										key={`${error.type}-${idx}`}
+										key={`${error.type}-${error.message}-${error.timestamp ?? "no-timestamp"}`}
 										className="text-xs text-rose-600 font-medium"
 									>
 										{error.message}
