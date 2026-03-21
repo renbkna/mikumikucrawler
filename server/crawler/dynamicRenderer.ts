@@ -10,17 +10,27 @@ import {
 	SITE_SELECTORS,
 } from "../constants.js";
 import type {
-	DynamicRenderResult,
+	DynamicRenderAttempt,
 	QueueItem,
 	SanitizedCrawlOptions,
 } from "../types.js";
 import { getErrorMessage } from "../utils/helpers.js";
 import { logMemoryStatus } from "../utils/memoryMonitor.js";
 import { withTimeout, withTimeoutFallback } from "../utils/timeout.js";
+import {
+	CONSENT_BUTTON_SELECTORS,
+	isConsentWallText,
+	requiresStrictConsentBypass,
+} from "./consent.js";
 
 interface InitializeResult {
 	dynamicEnabled: boolean;
 	fallbackLog?: string;
+}
+
+interface ConsentBypassResult {
+	detected: boolean;
+	clicked: boolean;
 }
 
 /**
@@ -304,7 +314,7 @@ export class DynamicRenderer {
 	}
 
 	/** Navigates to a URL, waits for content to stabilize, and returns the rendered HTML. */
-	async render(item: QueueItem): Promise<DynamicRenderResult | null> {
+	async render(item: QueueItem): Promise<DynamicRenderAttempt> {
 		if (!this.isEnabled()) {
 			return null;
 		}
@@ -413,10 +423,21 @@ export class DynamicRenderer {
 			// Handle consent modals BEFORE tracking navigation.
 			// Consent bypass may trigger a navigation which is expected and desired.
 			// We track this to avoid incorrectly aborting on consent-triggered navigations.
-			const consentNavigationExpected = await this.handleConsentModals(
-				page,
-				item.url,
-			);
+			const consentBypass = await this.handleConsentModals(page, item.url);
+			if (
+				consentBypass.detected &&
+				!consentBypass.clicked &&
+				requiresStrictConsentBypass(item.url)
+			) {
+				page.off("framenavigated", navigationHandler);
+				await this.closePageSafely(page);
+				return {
+					type: "consentBlocked",
+					message: `Consent wall could not be bypassed for ${item.url}`,
+					statusCode:
+						response && response.status() >= 400 ? response.status() : 403,
+				};
+			}
 
 			// Now start tracking navigation for unexpected SPA route changes
 			page.on("framenavigated", navigationHandler);
@@ -427,7 +448,7 @@ export class DynamicRenderer {
 
 			// Only abort on unexpected navigation (not consent-triggered)
 			// Reset navigationOccurred after consent since any prior navigation was expected
-			if (consentNavigationExpected) {
+			if (consentBypass.clicked) {
 				navigationOccurred = false;
 			}
 
@@ -472,15 +493,18 @@ export class DynamicRenderer {
 			await page.close();
 
 			return {
-				isDynamic: true,
-				content,
-				statusCode,
-				contentType,
-				contentLength,
-				title,
-				description: description || "",
-				lastModified,
-				xRobotsTag,
+				type: "success",
+				result: {
+					isDynamic: true,
+					content,
+					statusCode,
+					contentType,
+					contentLength,
+					title,
+					description: description || "",
+					lastModified,
+					xRobotsTag,
+				},
 			};
 		} catch (err) {
 			page.off("framenavigated", navigationHandler);
@@ -512,100 +536,145 @@ export class DynamicRenderer {
 	 *
 	 * @returns true if consent was clicked and navigation may occur, false otherwise
 	 */
-	async handleConsentModals(page: Page, url: string): Promise<boolean> {
+	async handleConsentModals(
+		page: Page,
+		url: string,
+	): Promise<ConsentBypassResult> {
 		const EVAL_TIMEOUT_MS = DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.CONSENT_EVAL;
 		const NAV_TIMEOUT_MS =
 			DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.CONSENT_NAVIGATION;
 
 		try {
-			const isConsentScreen = await withTimeoutFallback(
+			const bodyText = await withTimeoutFallback(
 				page.evaluate(() => {
-					const text = (document.body?.textContent ?? "").toLowerCase();
-					return (
-						text.includes("before you continue") ||
-						text.includes("agree to the use of cookies") ||
-						text.includes("accept all cookies") ||
-						text.includes("cookie preferences") ||
-						text.includes("we value your privacy")
-					);
+					return document.body?.textContent ?? "";
 				}),
 				EVAL_TIMEOUT_MS,
-				false,
+				"",
 			);
 
-			if (!isConsentScreen) {
-				return false;
+			if (!isConsentWallText(bodyText)) {
+				return { detected: false, clicked: false };
 			}
 
 			this.logger.info(
 				`Consent wall detected on ${url}. Attempting to bypass...`,
 			);
 
-			const clicked = await withTimeoutFallback(
-				page.evaluate(() => {
-					// YouTube-specific consent button selectors
-					const youtubeSelectors = [
-						'button[aria-label*="Accept"]',
-						'button[aria-label*="agree"]',
-						"ytd-button-renderer#accept-button button",
-						"button.yt-spec-button-shape-next--call-to-action",
-						'#dialog button[aria-label*="Accept all"]',
-					];
+			let clicked = false;
+			for (const frame of page.frames()) {
+				clicked = await withTimeoutFallback(
+					frame.evaluate(
+						(selectors) => {
+							const interactiveSelector =
+								"button, input[type='submit'], a[role='button'], [role='button']";
 
-					// Try YouTube-specific selectors first
-					for (const selector of youtubeSelectors) {
-						const btn = document.querySelector(selector) as HTMLElement;
-						if (btn && !btn.hidden) {
-							btn.click();
-							return true;
-						}
-					}
+							function collectInteractiveElements(
+								root: ParentNode,
+							): HTMLElement[] {
+								const elements = Array.from(
+									root.querySelectorAll(interactiveSelector),
+								) as HTMLElement[];
+								const walker = document.createTreeWalker(
+									root,
+									NodeFilter.SHOW_ELEMENT,
+								);
+								const shadowElements: HTMLElement[] = [];
 
-					// Generic keyword-based search
-					const keywords = [
-						"accept all",
-						"accept cookies",
-						"i agree",
-						"agree all",
-						"accept",
-						"agree",
-						"allow",
-						"allow all",
-						"got it",
-						"continue",
-						"agree to the use of cookies",
-					];
-					const buttons = Array.from(
-						document.querySelectorAll(
-							"button, input[type='submit'], a[role='button'], [role='button']",
-						),
-					) as HTMLElement[];
+								while (walker.nextNode()) {
+									const node = walker.currentNode;
+									if (!(node instanceof Element)) continue;
+									if (node.shadowRoot) {
+										shadowElements.push(
+											...collectInteractiveElements(node.shadowRoot),
+										);
+									}
+								}
 
-					for (const keyword of keywords) {
-						const match = buttons.find((btn) => {
-							const text = (btn.textContent ?? "").toLowerCase();
-							const label = btn.getAttribute("aria-label")?.toLowerCase() ?? "";
-							const title = btn.getAttribute("title")?.toLowerCase() ?? "";
-							return (
-								text.includes(keyword) ||
-								label.includes(keyword) ||
-								title.includes(keyword)
+								return [...elements, ...shadowElements];
+							}
+
+							function isVisible(element: HTMLElement): boolean {
+								if (element.hidden) return false;
+								if ("disabled" in element && element.disabled) return false;
+								const style = window.getComputedStyle(element);
+								return (
+									style.display !== "none" &&
+									style.visibility !== "hidden" &&
+									style.pointerEvents !== "none"
+								);
+							}
+
+							const buttons = collectInteractiveElements(document);
+							const exactMatch = buttons.find(
+								(button) =>
+									isVisible(button) &&
+									selectors.some((selector) => button.matches(selector)),
 							);
-						});
-						if (match) {
-							match.click();
-							return true;
-						}
-					}
-					return false;
-				}),
-				EVAL_TIMEOUT_MS,
-				false,
-			);
+							if (exactMatch) {
+								exactMatch.click();
+								return true;
+							}
+
+							const actionMarkers = [
+								"accept all",
+								"accept cookies",
+								"i agree",
+								"agree all",
+								"accept",
+								"agree",
+								"allow",
+								"allow all",
+								"got it",
+								"continue",
+								"agree to the use of cookies",
+								"alle akzeptieren",
+								"alle annehmen",
+								"akzeptieren",
+								"zustimmen",
+								"ich stimme zu",
+								"zustimmen und fortfahren",
+								"einverstanden",
+							];
+							const normalize = (value: string | null | undefined) =>
+								(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+							const matchesAction = (
+								...values: Array<string | null | undefined>
+							) =>
+								values.some((value) => {
+									const normalized = normalize(value);
+									return actionMarkers.some((marker) =>
+										normalized.includes(marker),
+									);
+								});
+
+							const textMatch = buttons.find((button) => {
+								if (!isVisible(button)) return false;
+								return matchesAction(
+									button.textContent,
+									button.getAttribute("aria-label"),
+									button.getAttribute("title"),
+									button.getAttribute("value"),
+								);
+							});
+							if (textMatch) {
+								textMatch.click();
+								return true;
+							}
+
+							return false;
+						},
+						[...CONSENT_BUTTON_SELECTORS],
+					),
+					EVAL_TIMEOUT_MS,
+					false,
+				);
+				if (clicked) break;
+			}
 
 			if (!clicked) {
 				this.logger.info(`No consent button found on ${url}`);
-				return false;
+				return { detected: true, clicked: false };
 			}
 
 			this.logger.info(
@@ -628,12 +697,12 @@ export class DynamicRenderer {
 			}
 
 			await Bun.sleep(1000);
-			return true;
+			return { detected: true, clicked: true };
 		} catch (error) {
 			this.logger.info(
 				`Consent bypass attempt failed: ${getErrorMessage(error)}`,
 			);
-			return false;
+			return { detected: true, clicked: false };
 		}
 	}
 
