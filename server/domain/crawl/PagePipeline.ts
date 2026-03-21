@@ -59,9 +59,11 @@ function isSoft404(
 	mainContent: string,
 	contentLength: number,
 ): boolean {
+	const trimmedMainContent = mainContent.trim();
 	if (
 		contentLength > 0 &&
-		contentLength < SOFT_404_CONSTANTS.TINY_CONTENT_BYTES
+		contentLength < SOFT_404_CONSTANTS.TINY_CONTENT_BYTES &&
+		trimmedMainContent.length === 0
 	) {
 		return true;
 	}
@@ -74,7 +76,7 @@ function isSoft404(
 	}
 
 	if (contentLength < SOFT_404_CONSTANTS.SHORT_CONTENT_BYTES) {
-		const contentLower = mainContent.toLowerCase().slice(0, 1000);
+		const contentLower = trimmedMainContent.toLowerCase().slice(0, 1000);
 		if (
 			SOFT_404_CONSTANTS.KEYWORDS.some((keyword) =>
 				contentLower.includes(keyword),
