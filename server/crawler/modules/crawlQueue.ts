@@ -6,11 +6,11 @@ import type {
 	QueueItem,
 	SanitizedCrawlOptions,
 } from "../../types.js";
-import { getErrorMessage, normalizeUrl } from "../../utils/helpers.js";
 import {
 	removeQueueItem,
 	saveQueueItemBatch,
-} from "../../utils/sessionPersistence.js";
+} from "../../data/queries.js";
+import { getErrorMessage, normalizeUrl } from "../../utils/helpers.js";
 import { withTimeout } from "../../utils/timeout.js";
 import type { CrawlState } from "./crawlState.js";
 

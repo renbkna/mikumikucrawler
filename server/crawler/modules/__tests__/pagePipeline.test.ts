@@ -70,6 +70,7 @@ import type { CrawlState } from "../crawlState.js";
 // Bun hoists mock.module() calls so pagePipeline.ts gets the mock when loaded.
 const mockFetchContent = mock(
 	async (_opts: unknown): Promise<FetchResult> => ({
+		type: "success",
 		content: "<html><body><h1>Test Page</h1></body></html>",
 		statusCode: 200,
 		contentType: "text/html",
@@ -137,6 +138,8 @@ const createMockState = (): Partial<CrawlState> => ({
 	recordDomainPage: mock(() => {}),
 	adaptDomainDelay: mock(() => {}),
 	isDomainBudgetExceeded: mock(() => false),
+	emitLog: mock(() => {}),
+	emitStats: mock(() => {}),
 	isActive: true,
 	stats: {
 		pagesScanned: 0,
@@ -217,6 +220,7 @@ describe("PagePipeline CONTRACT", () => {
 	beforeEach(() => {
 		// Reset mock to default 200 response before each test
 		mockFetchContent.mockImplementation(async () => ({
+			type: "success" as const,
 			content: "<html><body><h1>Test Page</h1></body></html>",
 			statusCode: 200,
 			contentType: "text/html",
@@ -341,15 +345,16 @@ describe("PagePipeline CONTRACT", () => {
 		});
 
 		test("emits stats at least once during processing", async () => {
-			const { processItem, socket } = buildPipeline();
+			const { processItem, state } = buildPipeline();
 
 			await processItem(createQueueItem());
 
-			const emissions = socket.getEmissions();
-			const statsEmissions = emissions.filter((e) => e.event === "stats");
-
-			// At minimum, one stats update is emitted
-			expect(statsEmissions.length).toBeGreaterThanOrEqual(1);
+			// Stats emission now goes through state.emitStats/emitLog
+			const emitStatsCalls = (state.emitStats as ReturnType<typeof mock>).mock
+				.calls.length;
+			const emitLogCalls = (state.emitLog as ReturnType<typeof mock>).mock.calls
+				.length;
+			expect(emitStatsCalls + emitLogCalls).toBeGreaterThanOrEqual(1);
 		});
 	});
 
@@ -393,17 +398,10 @@ describe("PagePipeline CONTRACT", () => {
 	describe("INVARIANT: 304 Not Modified", () => {
 		test("marks visited and records success on 304", async () => {
 			mockFetchContent.mockImplementation(async () => ({
-				unchanged: true as const,
-				content: "",
+				type: "unchanged" as const,
 				statusCode: 304,
-				contentType: "text/html",
-				contentLength: 0,
-				title: "",
-				description: "",
 				lastModified: null,
 				etag: null,
-				xRobotsTag: null,
-				isDynamic: false,
 			}));
 
 			const { processItem, state } = buildPipeline();
@@ -421,18 +419,9 @@ describe("PagePipeline CONTRACT", () => {
 	describe("INVARIANT: Rate Limiting", () => {
 		test("rate-limited response schedules retry with Retry-After delay", async () => {
 			mockFetchContent.mockImplementation(async () => ({
-				rateLimited: true as const,
+				type: "rateLimited" as const,
 				retryAfterMs: 5000,
-				content: "",
 				statusCode: 429,
-				contentType: "text/html",
-				contentLength: 0,
-				title: "",
-				description: "",
-				lastModified: null,
-				etag: null,
-				xRobotsTag: null,
-				isDynamic: false,
 			}));
 
 			const { processItem, queue, logger } = buildPipeline();
@@ -458,6 +447,7 @@ describe("PagePipeline CONTRACT", () => {
 			// ContentProcessor parsing is needed for meta-based robots detection.
 			// The X-Robots-Tag path is directly in the FetchResult and always processed.
 			mockFetchContent.mockImplementation(async () => ({
+				type: "success" as const,
 				content: "<html><body><h1>Page</h1></body></html>",
 				statusCode: 200,
 				contentType: "text/html",
@@ -483,6 +473,7 @@ describe("PagePipeline CONTRACT", () => {
 
 		test("noindex pages do not emit pageContent", async () => {
 			mockFetchContent.mockImplementation(async () => ({
+				type: "success" as const,
 				content: "<html><body><h1>Page</h1></body></html>",
 				statusCode: 200,
 				contentType: "text/html",
@@ -511,6 +502,7 @@ describe("PagePipeline CONTRACT", () => {
 	describe("INVARIANT: Soft 404 Detection", () => {
 		test("detects soft 404 by title keyword — page not stored", async () => {
 			mockFetchContent.mockImplementation(async () => ({
+				type: "success" as const,
 				content:
 					"<html><body><h1>404 Not Found</h1><p>Page missing.</p></body></html>",
 				statusCode: 200,

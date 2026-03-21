@@ -56,9 +56,16 @@ export interface DynamicRenderResult {
 	xRobotsTag?: string | null;
 }
 
-export interface FetchResult {
-	content: string;
+/** Base fields shared by all fetch result variants. */
+interface FetchResultBase {
 	statusCode: number;
+	finalUrl?: string;
+}
+
+/** Successful fetch with content. */
+export interface FetchSuccess extends FetchResultBase {
+	type: "success";
+	content: string;
 	contentType: string;
 	contentLength: number;
 	title: string;
@@ -66,21 +73,38 @@ export interface FetchResult {
 	lastModified: string | null;
 	etag: string | null;
 	isDynamic: boolean;
-	/** Value of the X-Robots-Tag HTTP response header, if present. */
 	xRobotsTag: string | null;
-	/** True when server returned 304 Not Modified — caller should skip re-processing. */
-	unchanged?: true;
-	/** True when server returned 429/503 with a Retry-After directive. */
-	rateLimited?: true;
-	/** Milliseconds to wait before retrying, parsed from the Retry-After header. */
-	retryAfterMs?: number;
-	/** The actual URL after redirects (from response.url), if different from requested URL. */
-	finalUrl?: string;
-	/** True for 404, 410, 501 — do not retry these URLs. */
-	permanentFailure?: true;
-	/** True for 403 — bot detection, increase domain delay. */
-	blocked?: true;
 }
+
+/** 304 Not Modified — content unchanged since last crawl. */
+export interface FetchUnchanged extends FetchResultBase {
+	type: "unchanged";
+	lastModified: string | null;
+	etag: string | null;
+}
+
+/** 429/503 — server is rate limiting. */
+export interface FetchRateLimited extends FetchResultBase {
+	type: "rateLimited";
+	retryAfterMs: number;
+}
+
+/** 404/410/501 — permanent failure, do not retry. */
+export interface FetchPermanentFailure extends FetchResultBase {
+	type: "permanentFailure";
+}
+
+/** 403 — blocked by bot detection. */
+export interface FetchBlocked extends FetchResultBase {
+	type: "blocked";
+}
+
+export type FetchResult =
+	| FetchSuccess
+	| FetchUnchanged
+	| FetchRateLimited
+	| FetchPermanentFailure
+	| FetchBlocked;
 
 /**
  * Server-side superset of processed data.

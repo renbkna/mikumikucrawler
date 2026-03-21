@@ -33,6 +33,23 @@ interface InitializeResult {
  *
  * This is more robust than manual consent handling and is maintained by the community.
  */
+/**
+ * Checks if an error is a recoverable Puppeteer error that should trigger static fallback.
+ * Uses error.name (Puppeteer's TimeoutError, ProtocolError) as the primary check,
+ * with message matching only for edge cases that don't use typed error classes.
+ */
+function isRecoverableBrowserError(err: unknown): boolean {
+	if (!(err instanceof Error)) return false;
+	// Puppeteer typed errors: TimeoutError, ProtocolError (includes TargetCloseError)
+	if (err.name === "TimeoutError" || err.name === "ProtocolError") return true;
+	// Fallback for frame/context errors not covered by typed classes
+	const msg = err.message;
+	return (
+		msg.includes("detached Frame") ||
+		msg.includes("Execution context was destroyed")
+	);
+}
+
 export class DynamicRenderer {
 	private static readonly instances = new Set<DynamicRenderer>();
 	private static handlersRegistered = false;
@@ -86,15 +103,11 @@ export class DynamicRenderer {
 	private static registerGlobalHandlers(): void {
 		if (DynamicRenderer.handlersRegistered) return;
 
-		const cleanupAll = async (): Promise<void> => {
-			const closePromises = [...DynamicRenderer.instances].map((instance) =>
-				instance.close().catch(() => {}),
-			);
-			await Promise.all(closePromises);
-		};
-
 		const exitHandler = (): void => {
-			// Sync cleanup on exit - best effort
+			// Sync-only cleanup on exit — best effort.
+			// SIGINT/SIGTERM are handled by server.ts gracefulShutdown which calls
+			// session.stop() → dynamicRenderer.close() for every active session.
+			// Uncaught exceptions crash fast — the OS reclaims child processes.
 			for (const instance of DynamicRenderer.instances) {
 				if (instance.browser) {
 					instance.browser.close().catch(() => {});
@@ -102,20 +115,7 @@ export class DynamicRenderer {
 			}
 		};
 
-		const uncaughtHandler = async (err: Error): Promise<void> => {
-			// biome-ignore lint/suspicious/noConsole: Process-level error handler - logger may not be available
-			console.error(`Uncaught Exception: ${err.message}`);
-			await cleanupAll();
-			process.exit(1);
-		};
-
-		// NOTE: SIGINT and SIGTERM are intentionally NOT registered here.
-		// server.ts owns graceful shutdown for those signals and already calls
-		// session.stop() → dynamicRenderer.close() for every active session.
-		// Registering them here too would cause double-close races and
-		// non-deterministic teardown ordering.
 		process.on("exit", exitHandler);
-		process.on("uncaughtException", uncaughtHandler);
 
 		DynamicRenderer.handlersRegistered = true;
 	}
@@ -293,15 +293,10 @@ export class DynamicRenderer {
 				description: metadata.description,
 			};
 		} catch (err) {
-			const message = getErrorMessage(err);
-			// Frame detachment is expected on SPAs - return null to trigger static fallback
-			if (
-				message.includes("detached Frame") ||
-				message.includes("Execution context was destroyed") ||
-				message.includes("Target closed") ||
-				message.includes("timeout")
-			) {
-				this.logger.debug(`Content extraction failed for page: ${message}`);
+			if (isRecoverableBrowserError(err)) {
+				this.logger.debug(
+					`Content extraction failed for page: ${getErrorMessage(err)}`,
+				);
 				return null;
 			}
 			throw err;
@@ -491,31 +486,16 @@ export class DynamicRenderer {
 			page.off("framenavigated", navigationHandler);
 			await this.closePageSafely(page);
 
-			const errorMessage = getErrorMessage(err);
-
-			if (
-				errorMessage.includes("Target closed") ||
-				errorMessage.includes("Session closed") ||
-				errorMessage.includes("Connection closed") ||
-				errorMessage.includes("detached Frame") ||
-				errorMessage.includes("Execution context was destroyed")
-			) {
+			if (isRecoverableBrowserError(err)) {
 				this.logger.debug(
-					`Browser context error for ${item.url}, falling back to static crawling`,
-				);
-				return null;
-			}
-
-			if (errorMessage.includes("Timeout")) {
-				this.logger.debug(
-					`Navigation timeout for ${item.url}, falling back to static crawling`,
+					`Recoverable browser error for ${item.url}, falling back to static crawling: ${getErrorMessage(err)}`,
 				);
 				return null;
 			}
 
 			// Unknown errors - log and fallback instead of crashing
 			this.logger.warn(
-				`Unexpected error during dynamic rendering of ${item.url}: ${errorMessage}`,
+				`Unexpected error during dynamic rendering of ${item.url}: ${getErrorMessage(err)}`,
 			);
 			return null;
 		}

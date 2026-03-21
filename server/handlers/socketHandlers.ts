@@ -5,9 +5,13 @@ import type { SocketCrawledPage } from "../../src/types/socket.js";
 import type { Logger } from "../config/logging.js";
 import { WEBSOCKET_RATE_LIMIT } from "../constants.js";
 import { CrawlSession } from "../crawler/CrawlSession.js";
+import {
+	getLinksBySourceId,
+	getPageByUrl,
+	getPagesPaginated,
+} from "../data/queries.js";
 import type {
 	ClampOptions,
-	CrawledPage,
 	CrawlerSocket,
 	RawCrawlOptions,
 	SanitizedCrawlOptions,
@@ -296,45 +300,14 @@ export function createWebSocketHandlers(
 					return;
 				}
 				try {
-					const pageRecord = db
-						.query(`SELECT * FROM pages WHERE url = ?`)
-						.get(url) as
-						| {
-								id: number;
-								url: string;
-								content: string;
-								title: string;
-								description: string;
-								content_type: string;
-								domain: string;
-						  }
-						| undefined;
+					const pageRecord = getPageByUrl(db, url);
 
-					if (pageRecord) {
-						const links = db
-							.query(`SELECT * FROM links WHERE source_id = ?`)
-							.all(pageRecord.id);
-
-						const mappedPage: CrawledPage = {
-							id: pageRecord.id,
-							url: pageRecord.url,
-							content: pageRecord.content,
-							title: pageRecord.title,
-							description: pageRecord.description,
-							contentType: pageRecord.content_type,
-							domain: pageRecord.domain,
-						};
-
-						const mappedLinks = (
-							links as { target_url: string; text: string }[]
-						).map((l) => ({
-							url: l.target_url,
-							text: l.text,
-						}));
+					if (pageRecord && pageRecord.id !== null) {
+						const links = getLinksBySourceId(db, pageRecord.id);
 
 						socketWrapper.emit("pageDetails", {
-							...mappedPage,
-							links: mappedLinks,
+							...pageRecord,
+							links,
 						} as SocketCrawledPage);
 					} else {
 						socketWrapper.emit("pageDetails", null);
@@ -434,15 +407,7 @@ export function createWebSocketHandlers(
 
 					// Keyset pagination: O(1) per page vs OFFSET which is O(n)
 					while (true) {
-						const rows = db
-							.query(
-								`SELECT id, url, domain, crawled_at, status_code,
-								 data_length, title, description
-								 FROM pages WHERE id > ? ORDER BY id LIMIT ?`,
-							)
-							.all(lastId, CHUNK_SIZE) as (Record<string, unknown> & {
-							id: number;
-						})[];
+						const rows = getPagesPaginated(db, lastId, CHUNK_SIZE);
 
 						if (rows.length === 0) break;
 						lastId = rows[rows.length - 1].id;
