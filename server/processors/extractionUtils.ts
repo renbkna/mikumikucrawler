@@ -7,7 +7,8 @@ import type {
 	MediaInfo,
 	PageMetadata,
 } from "../types.js";
-import { getErrorMessage, normalizeUrl } from "../utils/helpers.js";
+import { normalizeHttpUrl } from "../../shared/url.js";
+import { getErrorMessage } from "../utils/helpers.js";
 
 /** Pre-compiled regex for downloadable file extensions */
 const DOWNLOAD_EXTENSIONS = /\.(pdf|doc|docx|xls|xlsx|zip|rar)$/i;
@@ -261,17 +262,18 @@ export function processLinks(
 
 		try {
 			const url = new URL(href, resolveBase);
-			// Normalize the resolved URL: strip fragments, remove trailing slashes,
-			// and enforce default ports so both code paths (processLinks here and
-			// linkExtractor.ts) produce identical canonical URLs.
-			const normalized = normalizeUrl(url.href);
-			if ("error" in normalized || !normalized.url) return;
-
 			const isInternal = url.hostname === baseHost;
 			const linkType = classifyLink(url, text);
+			const normalizedUrl =
+				url.protocol === "http:" || url.protocol === "https:"
+					? normalizeHttpUrl(url.href)
+					: url.protocol === "mailto:" || url.protocol === "tel:"
+						? { url: url.toString() }
+						: { error: "Unsupported link scheme" };
+			if ("error" in normalizedUrl || !normalizedUrl.url) return;
 
 			links.push({
-				url: normalized.url,
+				url: normalizedUrl.url,
 				text,
 				title,
 				isInternal,

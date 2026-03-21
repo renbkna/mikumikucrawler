@@ -1,7 +1,7 @@
-export * from "./types/shared.js";
+export * from "../shared/types.js";
 
 // Frontend-only types
-import type { Stats } from "./types/shared.js";
+import type { Stats } from "../shared/types.js";
 
 export interface StatsPayload extends Partial<Stats> {
 	log?: string;

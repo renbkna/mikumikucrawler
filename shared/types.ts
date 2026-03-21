@@ -1,9 +1,10 @@
-/**
- * SHARED TYPES
- * These types are used by both the Frontend (React) and Backend (Bun/Elysia).
- * Ensure any changes here are compatible with both environments.
- */
+import type { CrawlMethod } from "./crawl.js";
 
+/**
+ * Shared runtime-facing types used by both the React client and Bun server.
+ * These live outside `src/` so neither runtime depends on the other's module
+ * tree for cross-boundary contracts.
+ */
 export interface ExtractedLink {
 	url: string;
 	text?: string;
@@ -114,7 +115,7 @@ export interface QueueStats {
 
 export interface CrawlOptions {
 	target: string;
-	crawlMethod: "links" | "media" | "full";
+	crawlMethod: CrawlMethod;
 	crawlDepth: number;
 	crawlDelay: number;
 	maxPages: number;

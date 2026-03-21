@@ -14,5 +14,5 @@
 		"checkJs": false,
 		"types": ["bun"]
 	},
-	"include": ["server/**/*", "server/types/**/*.d.ts"]
+	"include": ["server/**/*", "shared/**/*", "server/types/**/*.d.ts"]
 }

@@ -47,6 +47,9 @@ export type FetchResult =
 			reason?: string;
 	  };
 
+const RATE_LIMIT_STATUS_CODES = new Set([429, 503]);
+const PERMANENT_FAILURE_STATUS_CODES = new Set([404, 410, 501]);
+
 function parseRetryAfter(value: string | null): number {
 	if (!value) return RETRY_CONSTANTS.MAX_DELAY;
 	if (/^\d+$/.test(value.trim())) {
@@ -59,6 +62,40 @@ function parseRetryAfter(value: string | null): number {
 	}
 
 	return RETRY_CONSTANTS.MAX_DELAY;
+}
+
+function classifyFetchStatus(
+	statusCode: number,
+	options: {
+		retryAfterMs?: number;
+		blockedStatuses: readonly number[];
+		blockedReason?: string;
+	},
+): Exclude<FetchResult, { type: "success" | "unchanged" }> | null {
+	if (RATE_LIMIT_STATUS_CODES.has(statusCode)) {
+		return {
+			type: "rateLimited",
+			statusCode,
+			retryAfterMs: options.retryAfterMs ?? RETRY_CONSTANTS.MAX_DELAY,
+		};
+	}
+
+	if (PERMANENT_FAILURE_STATUS_CODES.has(statusCode)) {
+		return {
+			type: "permanentFailure",
+			statusCode,
+		};
+	}
+
+	if (options.blockedStatuses.includes(statusCode)) {
+		return {
+			type: "blocked",
+			statusCode,
+			reason: options.blockedReason,
+		};
+	}
+
+	return null;
 }
 
 export class FetchService {
@@ -85,27 +122,16 @@ export class FetchService {
 			}
 
 			const renderedPage = dynamicResult.result;
-			if (renderedPage.statusCode === 429 || renderedPage.statusCode === 503) {
-				return {
-					type: "rateLimited",
-					statusCode: renderedPage.statusCode,
+			const classifiedDynamicStatus = classifyFetchStatus(
+				renderedPage.statusCode,
+				{
 					retryAfterMs: RETRY_CONSTANTS.MAX_DELAY,
-				};
-			}
-
-			if ([404, 410, 501].includes(renderedPage.statusCode)) {
-				return {
-					type: "permanentFailure",
-					statusCode: renderedPage.statusCode,
-				};
-			}
-
-			if (renderedPage.statusCode === 401 || renderedPage.statusCode === 403) {
-				return {
-					type: "blocked",
-					statusCode: renderedPage.statusCode,
-					reason: `Access blocked for ${item.url}`,
-				};
+					blockedStatuses: [401, 403],
+					blockedReason: `Access blocked for ${item.url}`,
+				},
+			);
+			if (classifiedDynamicStatus) {
+				return classifiedDynamicStatus;
 			}
 
 			const contentLength =
@@ -159,26 +185,12 @@ export class FetchService {
 			};
 		}
 
-		if (response.status === 429 || response.status === 503) {
-			return {
-				type: "rateLimited",
-				statusCode: response.status,
-				retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
-			};
-		}
-
-		if ([404, 410, 501].includes(response.status)) {
-			return {
-				type: "permanentFailure",
-				statusCode: response.status,
-			};
-		}
-
-		if (response.status === 403) {
-			return {
-				type: "blocked",
-				statusCode: response.status,
-			};
+		const classifiedStaticStatus = classifyFetchStatus(response.status, {
+			retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
+			blockedStatuses: [403],
+		});
+		if (classifiedStaticStatus) {
+			return classifiedStaticStatus;
 		}
 
 		if (!response.ok) {
