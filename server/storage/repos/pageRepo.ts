@@ -29,6 +29,8 @@ export interface ExportPageRow {
 	crawledAt: string;
 }
 
+export type PageRepo = ReturnType<typeof createPageRepo>;
+
 export function createPageRepo(db: Database) {
 	const insertPage = db.prepare(`
 		INSERT INTO pages (
