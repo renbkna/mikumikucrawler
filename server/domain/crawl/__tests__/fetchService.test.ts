@@ -128,4 +128,43 @@ describe("fetch service contract", () => {
 		expect(result.retryAfterMs).toBeLessThan(10_000);
 		expect(result.retryAfterMs).toBeGreaterThan(0);
 	});
+
+	test("measures contentLength from the decoded response body instead of the header value", async () => {
+		const content =
+			"<html><body><main>This body is longer than the compressed header would imply.</main></body></html>";
+		const service = new FetchService(
+			{
+				getHeaders: () => null,
+			} as never,
+			{
+				fetch: async () =>
+					new Response(content, {
+						status: 200,
+						headers: {
+							"content-type": "text/html",
+							"content-length": "12",
+							"content-encoding": "gzip",
+						},
+					}),
+			},
+			{
+				isEnabled: () => false,
+				render: async () => null,
+			} as never,
+			createLogger(),
+		);
+
+		const result = await service.fetch("crawl-1", {
+			url: "https://example.com/decoded",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(result.type).toBe("success");
+		if (result.type !== "success") {
+			throw new Error("Expected successful static fetch result");
+		}
+		expect(result.contentLength).toBe(Buffer.byteLength(content, "utf8"));
+	});
 });

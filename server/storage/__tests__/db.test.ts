@@ -151,4 +151,59 @@ describe("storage contract", () => {
 				.map((run) => run.id),
 		).toContain("crawl-filter");
 	});
+
+	test("export rows expose camelCase fields expected by the API layer", () => {
+		const storage = createInMemoryStorage();
+		const created = storage.repos.crawlRuns.createRun(
+			"crawl-export",
+			"https://export.example",
+			{
+				target: "https://export.example",
+				crawlMethod: "links",
+				crawlDepth: 1,
+				crawlDelay: 200,
+				maxPages: 5,
+				maxPagesPerDomain: 0,
+				maxConcurrentRequests: 1,
+				retryLimit: 0,
+				dynamic: false,
+				respectRobots: false,
+				contentOnly: false,
+				saveMedia: false,
+			},
+		);
+
+		storage.repos.pages.save({
+			crawlId: created.id,
+			url: "https://export.example/page",
+			domain: "export.example",
+			contentType: "text/html",
+			statusCode: 200,
+			contentLength: 123,
+			title: "Exported page",
+			description: "Export description",
+			content: "Export body",
+			isDynamic: false,
+			lastModified: null,
+			etag: null,
+			processedContent: {
+				extractedData: {},
+				metadata: {},
+				analysis: {},
+				media: [],
+				links: [],
+				errors: [],
+			},
+			links: [],
+		});
+
+		const rows = storage.repos.pages.listForExport(created.id);
+		const rawRow = rows[0] as unknown as Record<string, unknown>;
+		expect(rows).toHaveLength(1);
+		expect(rows[0].contentType).toBe("text/html");
+		expect(typeof rows[0].crawledAt).toBe("string");
+		expect(rows[0].crawledAt.length).toBeGreaterThan(0);
+		expect(rawRow.content_type).toBeUndefined();
+		expect(rawRow.crawled_at).toBeUndefined();
+	});
 });

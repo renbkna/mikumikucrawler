@@ -7,9 +7,20 @@ export function withTimeout<T>(
 	ms: number,
 	operation: string,
 ): Promise<T> {
+	let settled = false;
 	return Promise.race([
-		promise,
+		promise.then(
+			(v) => {
+				settled = true;
+				return v;
+			},
+			(e) => {
+				settled = true;
+				throw e;
+			},
+		),
 		Bun.sleep(ms).then(() => {
+			if (settled) return undefined as never;
 			throw new Error(`Timeout: ${operation} exceeded ${ms}ms`);
 		}),
 	]);
@@ -24,5 +35,21 @@ export function withTimeoutFallback<T>(
 	ms: number,
 	fallback: T,
 ): Promise<T> {
-	return Promise.race([promise, Bun.sleep(ms).then(() => fallback)]);
+	let settled = false;
+	return Promise.race([
+		promise.then(
+			(v) => {
+				settled = true;
+				return v;
+			},
+			(e) => {
+				settled = true;
+				throw e;
+			},
+		),
+		Bun.sleep(ms).then(() => {
+			if (settled) return undefined as never;
+			return fallback;
+		}),
+	]);
 }
