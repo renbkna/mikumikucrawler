@@ -74,6 +74,12 @@ export interface FetchResult {
 	rateLimited?: true;
 	/** Milliseconds to wait before retrying, parsed from the Retry-After header. */
 	retryAfterMs?: number;
+	/** The actual URL after redirects (from response.url), if different from requested URL. */
+	finalUrl?: string;
+	/** True for 404, 410, 501 — do not retry these URLs. */
+	permanentFailure?: true;
+	/** True for 403 — bot detection, increase domain delay. */
+	blocked?: true;
 }
 
 /**

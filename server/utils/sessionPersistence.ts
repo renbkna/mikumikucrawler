@@ -1,5 +1,10 @@
 import type { Database } from "bun:sqlite";
-import type { CrawlStats, QueueItem, SanitizedCrawlOptions } from "../types.js";
+import type {
+	CrawlStats,
+	LoggerLike,
+	QueueItem,
+	SanitizedCrawlOptions,
+} from "../types.js";
 import { getErrorMessage } from "./helpers.js";
 
 export type SessionStatus = "running" | "completed" | "interrupted";
@@ -9,13 +14,18 @@ export function saveSession(
 	sessionId: string,
 	socketId: string,
 	options: SanitizedCrawlOptions,
+	logger?: LoggerLike,
 ): void {
 	try {
 		db.query(
 			`INSERT OR REPLACE INTO crawl_sessions (id, socket_id, target, options, status, updated_at)
 			 VALUES (?, ?, ?, ?, 'running', CURRENT_TIMESTAMP)`,
 		).run(sessionId, socketId, options.target, JSON.stringify(options));
-	} catch {}
+	} catch (err) {
+		logger?.debug(
+			`Failed to save session ${sessionId}: ${getErrorMessage(err)}`,
+		);
+	}
 }
 
 /**
@@ -25,29 +35,40 @@ export function updateSessionStats(
 	db: Database,
 	sessionId: string,
 	stats: CrawlStats,
+	logger?: LoggerLike,
 ): void {
 	try {
 		db.query(
 			`UPDATE crawl_sessions SET stats = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
 		).run(JSON.stringify(stats), sessionId);
-	} catch {}
+	} catch (err) {
+		logger?.debug(
+			`Failed to update session stats for ${sessionId}: ${getErrorMessage(err)}`,
+		);
+	}
 }
 
 export function updateSessionStatus(
 	db: Database,
 	sessionId: string,
 	status: SessionStatus,
+	logger?: LoggerLike,
 ): void {
 	try {
 		db.query(
 			`UPDATE crawl_sessions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
 		).run(status, sessionId);
-	} catch {}
+	} catch (err) {
+		logger?.debug(
+			`Failed to update session status for ${sessionId}: ${getErrorMessage(err)}`,
+		);
+	}
 }
 
 export function loadSession(
 	db: Database,
 	sessionId: string,
+	logger?: LoggerLike,
 ): {
 	options: SanitizedCrawlOptions;
 	stats: CrawlStats | null;
@@ -69,10 +90,13 @@ export function loadSession(
 		const status = row.status as SessionStatus;
 		return { options, stats, status };
 	} catch (err) {
-		// biome-ignore lint/suspicious/noConsole: Error logging for session load failure
-		console.error(
-			`Failed to load session ${sessionId}: ${getErrorMessage(err)}`,
-		);
+		const msg = `Failed to load session ${sessionId}: ${getErrorMessage(err)}`;
+		if (logger) {
+			logger.error(msg);
+		} else {
+			// biome-ignore lint/suspicious/noConsole: Logger unavailable during early session load
+			console.error(msg);
+		}
 		return null;
 	}
 }
@@ -87,6 +111,7 @@ export function saveQueueItemBatch(
 	db: Database,
 	sessionId: string,
 	items: QueueItem[],
+	logger?: LoggerLike,
 ): void {
 	if (items.length === 0) return;
 	try {
@@ -104,25 +129,35 @@ export function saveQueueItemBatch(
 			}
 		});
 		tx();
-	} catch {}
+	} catch (err) {
+		logger?.debug(
+			`Failed to save queue items for ${sessionId}: ${getErrorMessage(err)}`,
+		);
+	}
 }
 
 export function removeQueueItem(
 	db: Database,
 	sessionId: string,
 	url: string,
+	logger?: LoggerLike,
 ): void {
 	try {
 		db.query(`DELETE FROM queue_items WHERE session_id = ? AND url = ?`).run(
 			sessionId,
 			url,
 		);
-	} catch {}
+	} catch (err) {
+		logger?.debug(
+			`Failed to remove queue item ${url}: ${getErrorMessage(err)}`,
+		);
+	}
 }
 
 export function loadPendingQueueItems(
 	db: Database,
 	sessionId: string,
+	logger?: LoggerLike,
 ): QueueItem[] {
 	try {
 		const rows = db
@@ -147,7 +182,10 @@ export function loadPendingQueueItems(
 			parentUrl: row.parent_url ?? undefined,
 			domain: row.domain,
 		}));
-	} catch {
+	} catch (err) {
+		logger?.debug(
+			`Failed to load queue items for ${sessionId}: ${getErrorMessage(err)}`,
+		);
 		return [];
 	}
 }

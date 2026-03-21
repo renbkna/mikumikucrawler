@@ -3,7 +3,19 @@
     "allow": [
       "Bash(npx tsc:*)",
       "Bash(bun build:*)",
-      "Bash(bun test)"
+      "Bash(bun test)",
+      "Bash(bun test:*)",
+      "Bash(bun add:*)",
+      "Bash(curl -s --max-time 5 -I https://easylist.to/easylist/easylist.txt)",
+      "Bash(grep -rn \"Promise\\\\.race\\\\|new Promise.*setTimeout\" /home/ren/Projects/Website/mikumikucrawler/server --include=\"*.ts\" ! -path \"*/__tests__/*\")",
+      "Bash(grep -r \"getErrorMessage\\(\" /home/ren/Projects/Website/mikumikucrawler/server --include=\"*.ts\" ! -path \"*/__tests__/*\")",
+      "Bash(grep:*)",
+      "Bash(find /home/ren/Projects/Website/mikumikucrawler -name \"*.ts\" -type f ! -path \"*/node_modules/*\" ! -path \"*/.next/*\" -exec grep -l \"\\\\.query\\\\|\\\\.exec\\\\|\\\\.run\\\\|\\\\.all\\\\|\\\\.get\\\\|iterate\\\\|cursor\" {})",
+      "Bash(ls /home/ren/Projects/Website/mikumikucrawler/tsconfig*.json)",
+      "Bash(xxd /home/ren/Projects/Website/mikumikucrawler/server/routes/apiRoutes.ts)",
+      "Bash(bun)",
+      "Bash(bun run:*)",
+      "Bash(bun install:*)"
     ]
   }
 }

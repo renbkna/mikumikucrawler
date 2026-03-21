@@ -93,30 +93,3 @@ export function normalizeUrl(url: string): NormalizeResult {
 		return { error: "Invalid URL format" };
 	}
 }
-
-type CheerioLike = (selector: string) => {
-	text(): string;
-	each(callback: (index: number, element: unknown) => void): void;
-	attr(name: string): string | undefined;
-};
-
-interface MetadataResult {
-	title: string;
-	description: string;
-}
-
-export function extractMetadata($: CheerioLike): MetadataResult {
-	const title = $("title").text().trim() || "";
-
-	let description = "";
-	$('meta[name="description"]').each((_: number, el: unknown) => {
-		description = $(el as string).attr("content") || "";
-	});
-	if (!description) {
-		$('meta[property="og:description"]').each((_: number, el: unknown) => {
-			description = $(el as string).attr("content") || "";
-		});
-	}
-
-	return { title, description };
-}

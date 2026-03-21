@@ -16,6 +16,7 @@ import type {
 } from "../types.js";
 import { getErrorMessage } from "../utils/helpers.js";
 import { logMemoryStatus } from "../utils/memoryMonitor.js";
+import { withTimeout, withTimeoutFallback } from "../utils/timeout.js";
 
 interface InitializeResult {
 	dynamicEnabled: boolean;
@@ -35,11 +36,9 @@ interface InitializeResult {
 export class DynamicRenderer {
 	private static readonly instances = new Set<DynamicRenderer>();
 	private static handlersRegistered = false;
-	private static blockerPromise: Promise<
-		InstanceType<
-			typeof import("@ghostery/adblocker-puppeteer").PuppeteerBlocker
-		>
-	> | null = null;
+	private static blockerPromise: Promise<InstanceType<
+		typeof import("@ghostery/adblocker-puppeteer").PuppeteerBlocker
+	> | null> | null = null;
 
 	private readonly options: SanitizedCrawlOptions;
 	private readonly logger: Logger;
@@ -52,26 +51,29 @@ export class DynamicRenderer {
 	 * Lazily initializes the adblocker with EasyList filter lists.
 	 * Shared across all instances to avoid re-downloading filter lists.
 	 */
-	private static async getBlocker(): Promise<
-		InstanceType<
-			typeof import("@ghostery/adblocker-puppeteer").PuppeteerBlocker
-		>
-	> {
+	private static async getBlocker(): Promise<InstanceType<
+		typeof import("@ghostery/adblocker-puppeteer").PuppeteerBlocker
+	> | null> {
 		if (!DynamicRenderer.blockerPromise) {
 			DynamicRenderer.blockerPromise = (async () => {
-				const { PuppeteerBlocker } = await import(
-					"@ghostery/adblocker-puppeteer"
-				);
-				const fetch = (await import("cross-fetch")).default;
+				try {
+					const { PuppeteerBlocker } = await import(
+						"@ghostery/adblocker-puppeteer"
+					);
 
-				return PuppeteerBlocker.fromLists(fetch, [
-					// Main ad blocking list
-					"https://easylist.to/easylist/easylist.txt",
-					// Cookie consent and newsletter popup blocking
-					"https://easylist.to/easylist/easylist_cookie.txt",
-					// Annoyances (popups, overlays, newsletter prompts)
-					"https://easylist.to/easylist/easylist_annoyance.txt",
-				]);
+					const result = await withTimeoutFallback(
+						PuppeteerBlocker.fromLists(globalThis.fetch, [
+							"https://easylist.to/easylist/easylist.txt",
+							"https://easylist.to/easylist/easylist_cookie.txt",
+							"https://easylist.to/easylist/easylist_annoyance.txt",
+						]),
+						15000,
+						null,
+					);
+					return result;
+				} catch {
+					return null;
+				}
 			})();
 		}
 		return DynamicRenderer.blockerPromise;
@@ -244,12 +246,7 @@ export class DynamicRenderer {
 
 		this.logger.info("Recycling browser to prevent memory leaks");
 		try {
-			// Add timeout to prevent hanging during browser close
-			const closePromise = this.browser.close();
-			const timeoutPromise = new Promise<void>((_, reject) =>
-				setTimeout(() => reject(new Error("Browser close timeout")), 10000),
-			);
-			await Promise.race([closePromise, timeoutPromise]);
+			await withTimeout(this.browser.close(), 10000, "Browser close");
 			await this.launchBrowser();
 		} catch (err) {
 			this.logger.warn(`Error recycling browser: ${getErrorMessage(err)}`);
@@ -272,38 +269,23 @@ export class DynamicRenderer {
 			}
 
 			// Get content with timeout - page.content() can hang on complex pages
-			const contentPromise = page.content();
-			const contentTimeoutPromise = new Promise<string>((_, reject) =>
-				setTimeout(
-					() => reject(new Error("Content extraction timeout")),
-					EXTRACTION_TIMEOUT_MS,
-				),
+			const content = await withTimeout(
+				page.content(),
+				EXTRACTION_TIMEOUT_MS,
+				"Content extraction",
 			);
-			const content = await Promise.race([
-				contentPromise,
-				contentTimeoutPromise,
-			]);
 
 			// Extract title and description with timeout - evaluate can hang on JS-heavy pages
-			const metadataPromise = page.evaluate(() => {
-				const title = document.title || "";
-				const descMeta = document.querySelector('meta[name="description"]');
-				const description = descMeta?.getAttribute("content") || "";
-				return { title, description };
-			});
-			const metadataTimeoutPromise = new Promise<{
-				title: string;
-				description: string;
-			}>((_, reject) =>
-				setTimeout(
-					() => reject(new Error("Metadata extraction timeout")),
-					EXTRACTION_TIMEOUT_MS,
-				),
+			const metadata = await withTimeout(
+				page.evaluate(() => {
+					const title = document.title || "";
+					const descMeta = document.querySelector('meta[name="description"]');
+					const description = descMeta?.getAttribute("content") || "";
+					return { title, description };
+				}),
+				EXTRACTION_TIMEOUT_MS,
+				"Metadata extraction",
 			);
-			const metadata = await Promise.race([
-				metadataPromise,
-				metadataTimeoutPromise,
-			]);
 
 			return {
 				content,
@@ -379,22 +361,16 @@ export class DynamicRenderer {
 				// Check if already handled (cooperative intercept mode)
 				if (req.isInterceptResolutionHandled()) return;
 
-				// Check adblocker for ads, trackers, cookie banners
-				// Using type assertion to work with the blocker's match API
-				const result = blocker.match(
-					// biome-ignore lint/suspicious/noExplicitAny: Blocker API requires internal Request type
-					{ type: req.resourceType(), url: req.url() } as any,
-				);
-				if (result.match) {
-					// Log if blocking something that might be important (scripts, documents)
-					const resourceType = req.resourceType();
-					if (resourceType === "script" || resourceType === "document") {
-						this.logger.debug(
-							`[Adblocker] Blocking ${resourceType}: ${req.url().substring(0, 100)}`,
-						);
+				// Check adblocker for ads, trackers, cookie banners (if available)
+				if (blocker) {
+					const result = blocker.match({
+						type: req.resourceType(),
+						url: req.url(),
+					} as unknown as Parameters<typeof blocker.match>[0]);
+					if (result.match) {
+						req.abort();
+						return;
 					}
-					req.abort();
-					return;
 				}
 
 				// Block non-essential resources for bandwidth optimization
@@ -561,16 +537,8 @@ export class DynamicRenderer {
 		const NAV_TIMEOUT_MS =
 			DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.CONSENT_NAVIGATION;
 
-		const withTimeout = <T>(p: Promise<T>, fallback: T): Promise<T> =>
-			Promise.race([
-				p,
-				new Promise<T>((resolve) =>
-					setTimeout(() => resolve(fallback), EVAL_TIMEOUT_MS),
-				),
-			]);
-
 		try {
-			const isConsentScreen = await withTimeout(
+			const isConsentScreen = await withTimeoutFallback(
 				page.evaluate(() => {
 					const text = (document.body?.textContent ?? "").toLowerCase();
 					return (
@@ -581,6 +549,7 @@ export class DynamicRenderer {
 						text.includes("we value your privacy")
 					);
 				}),
+				EVAL_TIMEOUT_MS,
 				false,
 			);
 
@@ -592,7 +561,7 @@ export class DynamicRenderer {
 				`Consent wall detected on ${url}. Attempting to bypass...`,
 			);
 
-			const clicked = await withTimeout(
+			const clicked = await withTimeoutFallback(
 				page.evaluate(() => {
 					// YouTube-specific consent button selectors
 					const youtubeSelectors = [
@@ -650,6 +619,7 @@ export class DynamicRenderer {
 					}
 					return false;
 				}),
+				EVAL_TIMEOUT_MS,
 				false,
 			);
 
@@ -663,15 +633,14 @@ export class DynamicRenderer {
 			);
 
 			try {
-				await Promise.race([
+				await withTimeoutFallback(
 					page.waitForNavigation({
 						waitUntil: "domcontentloaded",
 						timeout: NAV_TIMEOUT_MS,
 					}),
-					new Promise<void>((resolve) =>
-						setTimeout(() => resolve(undefined), NAV_TIMEOUT_MS),
-					),
-				]);
+					NAV_TIMEOUT_MS,
+					null,
+				);
 			} catch {
 				this.logger.debug(
 					`Consent navigation wait completed/timed out for ${url}`,
@@ -753,12 +722,11 @@ export class DynamicRenderer {
 				domain: cookieDomain,
 				path: "/",
 			}));
-			await Promise.race([
+			await withTimeout(
 				page.setCookie(...cookiesToSet),
-				new Promise<void>((_, reject) =>
-					setTimeout(() => reject(new Error("Cookie setting timeout")), 5000),
-				),
-			]);
+				5000,
+				"Cookie setting",
+			);
 			this.logger.debug(
 				`Set ${cookiesToSet.length} cookies for ${cookieDomain}`,
 			);

@@ -17,20 +17,3 @@ export function hashContent(content: string | Buffer | ArrayBuffer): string {
 
 	return Bun.hash(buffer).toString(16);
 }
-
-/**
- * Creates a short hash suitable for cache keys.
- * Truncates to first 16 chars for readability while maintaining uniqueness.
- */
-export function shortHash(content: string | Buffer | ArrayBuffer): string {
-	return hashContent(content).slice(0, 16);
-}
-
-/**
- * Hashes multiple values together.
- * Useful for compound cache keys.
- */
-export function hashValues(...values: (string | number | boolean)[]): string {
-	const combined = values.join("|");
-	return hashContent(combined);
-}

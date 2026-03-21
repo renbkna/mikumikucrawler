@@ -237,7 +237,7 @@ describe("LRUCacheWithTTL", () => {
 	});
 
 	describe("size tracking", () => {
-		test("size includes expired entries until accessed", async () => {
+		test("size cleans up expired entries automatically", async () => {
 			const cache = new LRUCacheWithTTL<string, number>(3, 50);
 
 			cache.set("a", 1);
@@ -247,22 +247,53 @@ describe("LRUCacheWithTTL", () => {
 
 			await new Promise((resolve) => setTimeout(resolve, 60));
 
-			expect(cache.size).toBe(2);
-
-			cache.has("a");
-			cache.has("b");
-
+			// INVARIANT: size getter cleans up expired entries before returning count
 			expect(cache.size).toBe(0);
+
+			// After cleanup, has() returns false for expired
+			expect(cache.has("a")).toBe(false);
+			expect(cache.has("b")).toBe(false);
+		});
+
+		test("size returns correct count with mixed expired and valid entries", async () => {
+			const cache = new LRUCacheWithTTL<string, number>(3, 50);
+
+			cache.set("a", 1);
+			cache.set("b", 2);
+
+			await new Promise((resolve) => setTimeout(resolve, 60));
+
+			// Add a fresh entry after expiration
+			cache.set("c", 3);
+
+			// size should clean up a,b and return 1 (only c)
+			expect(cache.size).toBe(1);
+			expect(cache.has("c")).toBe(true);
 		});
 	});
 
 	describe("keys iterator", () => {
-		test("returns all keys including potentially expired", () => {
+		test("returns non-expired keys only", async () => {
+			const cache = new LRUCacheWithTTL<string, number>(3, 50);
+
+			cache.set("a", 1);
+			cache.set("b", 2);
+
+			await new Promise((resolve) => setTimeout(resolve, 60));
+
+			// INVARIANT: keys() cleans up expired entries before returning
+			const keys = [...cache.keys()];
+
+			expect(keys).toHaveLength(0);
+		});
+
+		test("returns valid keys excluding expired", async () => {
 			const cache = new LRUCacheWithTTL<string, number>(3, 10000);
 
 			cache.set("a", 1);
 			cache.set("b", 2);
 
+			// INVARIANT: keys() returns non-expired keys
 			const keys = [...cache.keys()];
 
 			expect(keys).toContain("a");

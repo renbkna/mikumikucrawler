@@ -6,6 +6,7 @@
  *
  * NOTE: We use Bun's native ESM support.
  */
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cors } from "@elysiajs/cors";
@@ -23,7 +24,8 @@ import {
 	WebSocketMessageSchema,
 } from "./handlers/socketHandlers.js";
 import { compression } from "./middleware/compression.js";
-import { apiRoutes } from "./routes/apiRoutes.js";
+import { createApiRoutes } from "./routes/apiRoutes.js";
+import { hashContent } from "./utils/hashUtils.js";
 import { getErrorMessage } from "./utils/helpers.js";
 
 // Bun natively loads .env files - no dotenv needed
@@ -44,14 +46,15 @@ if (config.isRender)
 const FRONTEND_URL = config.frontendUrl;
 const PORT = config.port;
 
-// Pass the database as a Promise to handlers that might need async access (e.g., inside closures)
 const { handleMessage, handleClose } = createWebSocketHandlers(
 	activeCrawls,
-	Promise.resolve(db),
+	db,
 	logger,
 );
 
 const distPath = path.join(__dirname, "..", "dist");
+const distAssetsPath = path.join(distPath, "assets");
+const hasDistAssets = existsSync(distAssetsPath);
 
 const app = new Elysia()
 	.decorate("db", db)
@@ -96,22 +99,29 @@ const app = new Elysia()
 		}),
 	)
 	.use(
-		staticPlugin({
-			assets: path.join(distPath, "assets"),
-			prefix: "/assets",
-		}),
+		hasDistAssets
+			? staticPlugin({ assets: distAssetsPath, prefix: "/assets" })
+			: new Elysia(),
 	)
-	.use(apiRoutes)
+	.use(createApiRoutes(db, logger, activeCrawls))
 	.ws("/ws", {
 		body: WebSocketMessageSchema,
-		// biome-ignore lint/suspicious/noExplicitAny: Elysia WS types mismatch
-		open(ws: any) {
+		open(ws) {
 			logger.info(`Client connected: ${ws.id}`);
 		},
-		// biome-ignore lint/suspicious/noExplicitAny: Elysia WS types mismatch
-		message: handleMessage as any,
-		// biome-ignore lint/suspicious/noExplicitAny: Elysia WS types mismatch
-		close: handleClose as any,
+		async message(ws, message) {
+			await handleMessage(
+				{
+					id: ws.id,
+					send: (data: string | object) => ws.send(data),
+					data: { id: ws.id },
+				},
+				message,
+			);
+		},
+		async close(ws) {
+			await handleClose({ id: ws.id, data: { id: ws.id } });
+		},
 	})
 	.get("/health", () => ({
 		status: "ok",
@@ -127,43 +137,38 @@ const app = new Elysia()
 		const errorMessage = (error as Error)?.message || "Internal Server Error";
 		return { error: errorMessage };
 	})
-	.get(
-		"*",
-		async ({ path: reqPath, headers }: { path: string; headers: Headers }) => {
-			const filePath = path.join(distPath, reqPath);
-			const file = Bun.file(filePath);
-			if (await file.exists()) {
-				// Add cache headers for static assets
-				const isAsset =
-					/\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$/i.test(
-						reqPath,
-					);
-				if (isAsset) {
-					const etag = await file
-						.arrayBuffer()
-						.then((buf) => Bun.hash(buf).toString(16));
-					const ifNoneMatch = headers.get("if-none-match");
-					if (ifNoneMatch === etag) {
-						return new Response(null, { status: 304 });
-					}
-					return new Response(file, {
-						headers: {
-							"Content-Type": file.type,
-							"Cache-Control": "public, max-age=31536000, immutable",
-							ETag: etag,
-						},
-					});
+	.get("*", async ({ path: reqPath, headers }) => {
+		const filePath = path.join(distPath, reqPath);
+		const file = Bun.file(filePath);
+		if (await file.exists()) {
+			// Add cache headers for static assets
+			const isAsset =
+				/\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$/i.test(
+					reqPath,
+				);
+			if (isAsset) {
+				const etag = await file.arrayBuffer().then((buf) => hashContent(buf));
+				const ifNoneMatch = headers["if-none-match"];
+				if (ifNoneMatch === etag) {
+					return new Response(null, { status: 304 });
 				}
-				return file;
+				return new Response(file, {
+					headers: {
+						"Content-Type": file.type,
+						"Cache-Control": "public, max-age=31536000, immutable",
+						ETag: etag,
+					},
+				});
 			}
+			return file;
+		}
 
-			if (reqPath.startsWith("/api")) {
-				return Response.json({ error: "Not Found" }, { status: 404 });
-			}
+		if (reqPath.startsWith("/api")) {
+			return Response.json({ error: "Not Found" }, { status: 404 });
+		}
 
-			return Bun.file(path.join(distPath, "index.html"));
-		},
-	);
+		return Bun.file(path.join(distPath, "index.html"));
+	});
 
 const instance = app.listen(PORT, (server) => {
 	// biome-ignore lint/suspicious/noConsole: Startup banner is intentional output

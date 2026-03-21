@@ -70,11 +70,11 @@ export const StatsGrid = memo(function StatsGrid({
 					<div className="flex gap-2">
 						<div className="flex items-center gap-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 border border-emerald-100 px-2.5 py-1 rounded-full">
 							<CheckCircle className="w-3 h-3" />
-							{stats.successCount ?? 0}
+							{stats.successCount}
 						</div>
 						<div className="flex items-center gap-1.5 text-xs font-bold text-rose-500 bg-rose-50 border border-rose-100 px-2.5 py-1 rounded-full">
 							<XCircle className="w-3 h-3" />
-							{stats.failureCount ?? 0}
+							{stats.failureCount}
 						</div>
 					</div>
 				</div>

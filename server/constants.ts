@@ -3,8 +3,6 @@ export const CRAWL_QUEUE_CONSTANTS = {
 	DOMAIN_ENTRY_EXPIRY_MS: 60000,
 	DEFAULT_SLEEP_MS: 100,
 	MIN_SLEEP_MS: 50,
-	/** Number of consumed head slots before the queue array is compacted */
-	QUEUE_COMPACTION_THRESHOLD: 1000,
 	/** Maximum time to process a single queue item before timeout (60 seconds - reduced from 90) */
 	ITEM_PROCESSING_TIMEOUT_MS: 60000,
 	/** Interval for stuck detection watchdog checks (15 seconds - more frequent) */
@@ -187,23 +185,6 @@ export const SOFT_404_CONSTANTS = {
 		"cannot be found",
 		"no longer exists",
 	] as readonly string[],
-} as const;
-
-/**
- * Adaptive throttle thresholds.
- * The crawler adjusts per-domain delays based on observed response times.
- */
-export const ADAPTIVE_THROTTLE = {
-	/** Response time in ms above which the domain delay is increased. */
-	SLOW_RESPONSE_MS: 3000,
-	/** Response time in ms below which the domain delay may be decreased. */
-	FAST_RESPONSE_MS: 500,
-	/** Multiplier applied to delay when a slow response is observed (delay × factor). */
-	SLOW_FACTOR: 1.5,
-	/** Multiplier applied to delay when a fast response is observed (delay × factor). */
-	FAST_FACTOR: 0.9,
-	/** Absolute maximum delay the adaptive system can set (ms). */
-	MAX_DELAY_MS: 30_000,
 } as const;
 
 /** Sitemap discovery and parsing configuration */
