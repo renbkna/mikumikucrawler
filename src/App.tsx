@@ -43,7 +43,7 @@ function App() {
 		crawledPages,
 		progress,
 		logs,
-		setLogs,
+		clearLogs,
 		filterText,
 		setFilterText,
 		displayedPages,
@@ -51,6 +51,11 @@ function App() {
 		isAttacking,
 		connectionState,
 		interruptedSessions,
+		interruptedSessionsLoading,
+		interruptedSessionsError,
+		deletingInterruptedSessionId,
+		refreshInterruptedSessions,
+		deleteInterruptedSession,
 		startCrawl,
 		stopCrawl,
 		resumeCrawl,
@@ -245,7 +250,7 @@ function App() {
 							</div>
 							<LogsSection
 								logs={logs}
-								setLogs={setLogs}
+								clearLogs={clearLogs}
 								logContainerRef={
 									logContainerRef as React.RefObject<HTMLDivElement>
 								}
@@ -344,6 +349,14 @@ function App() {
 
 			<ResumeSessionsPanel
 				isOpen={openResumePanel}
+				sessions={interruptedSessions}
+				isLoading={interruptedSessionsLoading}
+				fetchError={interruptedSessionsError}
+				deletingId={deletingInterruptedSessionId}
+				onRefresh={refreshInterruptedSessions}
+				onDelete={(sessionId) => {
+					void deleteInterruptedSession(sessionId);
+				}}
 				onClose={() => setOpenResumePanel(false)}
 				onResume={handleResumeSession}
 			/>
