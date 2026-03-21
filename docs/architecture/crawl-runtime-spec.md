@@ -285,6 +285,8 @@ The runtime must not restore:
 - resuming an interrupted crawl preserves `crawlId`
 - resumed execution appends new events with higher sequence numbers
 - resuming a terminal crawl is rejected
+- persisted `eventSequence` is a resume checkpoint and may lag live in-memory SSE
+  sequence between checkpoints
 
 ## Persistence Contract
 
@@ -314,6 +316,8 @@ Rules:
 - lifecycle data lives in typed columns
 - counters live in typed columns
 - `options_json` is validated before write
+- `event_sequence` is checkpointed with lifecycle/progress persistence writes, not
+  by a dedicated write on every emitted event
 
 ### `crawl_queue_items`
 

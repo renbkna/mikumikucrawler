@@ -48,6 +48,7 @@ export class CrawlRuntime {
 	private readonly activeTasks = new Map<string, Promise<void>>();
 	private runPromise: Promise<void> | null = null;
 	private interrupted = false;
+	private interruptionPersisted = false;
 	private started = false;
 
 	constructor(private readonly deps: CrawlRuntimeDependencies) {
@@ -115,23 +116,20 @@ export class CrawlRuntime {
 		type: TType,
 		payload: CrawlEventMap[TType],
 	) {
-		const event = this.deps.eventStream.publish(
-			this.deps.crawlId,
-			type,
-			payload,
-		);
-		this.deps.repos.crawlRuns.setEventSequence(
-			this.deps.crawlId,
-			event.sequence,
-		);
-		return event;
+		return this.deps.eventStream.publish(this.deps.crawlId, type, payload);
+	}
+
+	private getCurrentSequence(): number {
+		return this.deps.eventStream.getCurrentSequence(this.deps.crawlId);
 	}
 
 	private persistProgress(status?: "starting" | "running" | "stopping") {
+		const eventSequence = this.getCurrentSequence();
 		if (status === "starting") {
 			this.deps.repos.crawlRuns.markStarting(
 				this.deps.crawlId,
 				this.state.counters,
+				eventSequence,
 			);
 			return;
 		}
@@ -140,6 +138,7 @@ export class CrawlRuntime {
 			this.deps.repos.crawlRuns.markRunning(
 				this.deps.crawlId,
 				this.state.counters,
+				eventSequence,
 			);
 			return;
 		}
@@ -149,6 +148,7 @@ export class CrawlRuntime {
 				this.deps.crawlId,
 				this.state.counters,
 				this.state.stopReason,
+				eventSequence,
 			);
 			return;
 		}
@@ -156,6 +156,7 @@ export class CrawlRuntime {
 		this.deps.repos.crawlRuns.updateProgress(
 			this.deps.crawlId,
 			this.state.counters,
+			eventSequence,
 		);
 	}
 
@@ -208,12 +209,22 @@ export class CrawlRuntime {
 		this.interrupted = true;
 		this.state.requestStop(reason);
 		this.queue.clearRetryTimers();
+		this.persistInterrupted(reason);
+		await this.dynamicRenderer.close();
+	}
+
+	private persistInterrupted(reason: string): void {
+		if (this.interruptionPersisted) {
+			return;
+		}
+
 		this.deps.repos.crawlRuns.markInterrupted(
 			this.deps.crawlId,
 			this.state.counters,
 			reason,
+			this.getCurrentSequence(),
 		);
-		await this.dynamicRenderer.close();
+		this.interruptionPersisted = true;
 	}
 
 	private async launchWork(
@@ -326,11 +337,7 @@ export class CrawlRuntime {
 			this.queue.clearRetryTimers();
 
 			if (this.interrupted) {
-				this.deps.repos.crawlRuns.markInterrupted(
-					this.deps.crawlId,
-					this.state.counters,
-					this.state.stopReason ?? "Process shutdown",
-				);
+				this.persistInterrupted(this.state.stopReason ?? "Process shutdown");
 				return;
 			}
 
@@ -339,39 +346,42 @@ export class CrawlRuntime {
 			await this.dynamicRenderer.close();
 
 			if (this.state.stopReason && this.state.isStopRequested) {
-				this.deps.repos.crawlRuns.markStopped(
-					this.deps.crawlId,
-					this.state.counters,
-					this.state.stopReason,
-				);
 				this.publish("crawl.stopped", {
 					stopReason: this.state.stopReason,
 					counters: this.state.counters,
 				});
+				this.deps.repos.crawlRuns.markStopped(
+					this.deps.crawlId,
+					this.state.counters,
+					this.state.stopReason,
+					this.getCurrentSequence(),
+				);
 				return;
 			}
 
+			this.publish("crawl.completed", {
+				counters: this.state.counters,
+			});
 			this.deps.repos.crawlRuns.markCompleted(
 				this.deps.crawlId,
 				this.state.counters,
 				null,
+				this.getCurrentSequence(),
 			);
-			this.publish("crawl.completed", {
-				counters: this.state.counters,
-			});
 		} catch (error) {
 			this.queue.clearRetryTimers();
 			await this.dynamicRenderer.close();
 			const message = error instanceof Error ? error.message : String(error);
-			this.deps.repos.crawlRuns.markFailed(
-				this.deps.crawlId,
-				this.state.counters,
-				message,
-			);
 			this.publish("crawl.failed", {
 				error: message,
 				counters: this.state.counters,
 			});
+			this.deps.repos.crawlRuns.markFailed(
+				this.deps.crawlId,
+				this.state.counters,
+				message,
+				this.getCurrentSequence(),
+			);
 		} finally {
 			this.deps.onSettled();
 		}
