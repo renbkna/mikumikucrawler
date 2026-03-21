@@ -213,4 +213,157 @@ describe("page pipeline contract", () => {
 		expect(recordTerminal).not.toHaveBeenCalled();
 		expect(eventSink.page).not.toHaveBeenCalled();
 	});
+
+	test("saveMedia=false strips extracted media from persisted and emitted page data", async () => {
+		let savedPageInput: any = null;
+		let emittedPage: any = null;
+		const eventSink = {
+			log: mock(() => undefined),
+			page: mock((payload: any) => {
+				emittedPage = payload;
+			}),
+		};
+		const recordTerminal = mock(() => true);
+		const save = mock((input: any) => {
+			savedPageInput = input;
+			return 7;
+		});
+		const pipeline = new PagePipeline(
+			"crawl-1",
+			{
+				crawlDepth: 1,
+				retryLimit: 0,
+				respectRobots: false,
+				saveMedia: false,
+				crawlMethod: "media",
+				contentOnly: false,
+			} as never,
+			{
+				canScheduleMore: () => true,
+				hasVisited: () => false,
+				isDomainBudgetExceeded: () => false,
+				recordTerminal,
+				recordDiscoveredLinks: mock(() => undefined),
+				recordDomainPage: mock(() => undefined),
+			} as never,
+			{
+				enqueue: mock(() => undefined),
+				scheduleRetry: mock(() => undefined),
+			} as never,
+			{
+				save,
+			} as never,
+			{
+				fetch: async () => ({
+					type: "success",
+					content:
+						'<html><body><main>This is a long enough article body to exercise the successful persistence path during the contract test execution path.</main><img src="/image.png" alt="cover" /></body></html>',
+					statusCode: 200,
+					contentType: "text/html",
+					contentLength: 4000,
+					title: "",
+					description: "",
+					lastModified: null,
+					etag: null,
+					xRobotsTag: null,
+					isDynamic: false,
+				}),
+			} as never,
+			{} as never,
+			eventSink,
+			createLogger(),
+		);
+
+		await pipeline.process({
+			url: "https://example.com/post",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(save).toHaveBeenCalled();
+		expect(savedPageInput?.processedContent?.media).toEqual([]);
+		expect(recordTerminal).toHaveBeenCalledWith(
+			"https://example.com/post",
+			"success",
+			expect.objectContaining({ mediaFiles: 0 }),
+		);
+		expect(emittedPage?.processedData?.media).toEqual([]);
+	});
+
+	test("media mode with saveMedia=true keeps extracted media metadata", async () => {
+		let savedPageInput: any = null;
+		let emittedPage: any = null;
+		const eventSink = {
+			log: mock(() => undefined),
+			page: mock((payload: any) => {
+				emittedPage = payload;
+			}),
+		};
+		const recordTerminal = mock(() => true);
+		const save = mock((input: any) => {
+			savedPageInput = input;
+			return 8;
+		});
+		const pipeline = new PagePipeline(
+			"crawl-1",
+			{
+				crawlDepth: 1,
+				retryLimit: 0,
+				respectRobots: false,
+				saveMedia: true,
+				crawlMethod: "media",
+				contentOnly: false,
+			} as never,
+			{
+				canScheduleMore: () => true,
+				hasVisited: () => false,
+				isDomainBudgetExceeded: () => false,
+				recordTerminal,
+				recordDiscoveredLinks: mock(() => undefined),
+				recordDomainPage: mock(() => undefined),
+			} as never,
+			{
+				enqueue: mock(() => undefined),
+				scheduleRetry: mock(() => undefined),
+			} as never,
+			{
+				save,
+			} as never,
+			{
+				fetch: async () => ({
+					type: "success",
+					content:
+						'<html><body><main>This is a long enough article body to exercise the successful persistence path during the contract test execution path.</main><img src="/image.png" alt="cover" /></body></html>',
+					statusCode: 200,
+					contentType: "text/html",
+					contentLength: 4000,
+					title: "",
+					description: "",
+					lastModified: null,
+					etag: null,
+					xRobotsTag: null,
+					isDynamic: false,
+				}),
+			} as never,
+			{} as never,
+			eventSink,
+			createLogger(),
+		);
+
+		await pipeline.process({
+			url: "https://example.com/post",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(savedPageInput?.processedContent?.media).toHaveLength(1);
+		expect(recordTerminal).toHaveBeenCalledWith(
+			"https://example.com/post",
+			"success",
+			expect.objectContaining({ mediaFiles: 1 }),
+		);
+		expect(emittedPage?.processedData?.media).toHaveLength(1);
+	});
 });

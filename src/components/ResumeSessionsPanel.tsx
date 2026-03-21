@@ -231,7 +231,8 @@ export function ResumeSessionsPanel({
 				{/* ── Footer note ────────────────────────────────────────────────── */}
 				{sessions.length > 0 && (
 					<p className="mt-4 text-xs text-miku-text/30 text-center font-medium">
-						Resuming picks up from where the previous crawl left off ✨
+						Resume continues from the saved queue and restores the saved crawl
+						settings for that session.
 					</p>
 				)}
 			</div>

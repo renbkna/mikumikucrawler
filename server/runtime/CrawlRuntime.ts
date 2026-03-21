@@ -48,6 +48,7 @@ export class CrawlRuntime {
 	private readonly activeTasks = new Map<string, Promise<void>>();
 	private runPromise: Promise<void> | null = null;
 	private interrupted = false;
+	private started = false;
 
 	constructor(private readonly deps: CrawlRuntimeDependencies) {
 		this.state = new CrawlState(deps.options, deps.initialCounters, {
@@ -198,7 +199,9 @@ export class CrawlRuntime {
 
 	requestStop(reason = "Stop requested"): void {
 		this.state.requestStop(reason);
-		this.persistProgress("stopping");
+		if (this.started) {
+			this.persistProgress("stopping");
+		}
 	}
 
 	async interrupt(reason = "Runtime interrupted"): Promise<void> {
@@ -274,10 +277,14 @@ export class CrawlRuntime {
 
 		await this.seedInitialQueue();
 		this.persistProgress("running");
+		this.started = true;
 		this.publish("crawl.started", {
 			target: this.deps.options.target,
 			resume: this.deps.resume,
 		});
+		if (this.state.isStopRequested) {
+			this.persistProgress("stopping");
+		}
 		this.emitProgress();
 	}
 

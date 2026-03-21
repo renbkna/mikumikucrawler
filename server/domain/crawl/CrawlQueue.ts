@@ -43,6 +43,7 @@ export class CrawlQueue {
 	restore(items: QueueItem[]): void {
 		for (const item of items) {
 			if (this.queuedUrls.has(item.url)) continue;
+			this.state.restoreAdmission(item.url);
 			this.pending.push(item);
 			this.queuedUrls.add(item.url);
 		}
@@ -66,6 +67,10 @@ export class CrawlQueue {
 			this.activeUrls.has(url) ||
 			this.queuedUrls.has(url)
 		) {
+			return false;
+		}
+
+		if (!this.state.tryAdmit(url)) {
 			return false;
 		}
 
