@@ -12,6 +12,7 @@ describe("storage contract", () => {
 			"0001_crawl_runs.sql",
 			"0002_queue_pages.sql",
 			"0003_pages_fts.sql",
+			"0004_runtime_persistence.sql",
 		]);
 	});
 
@@ -70,6 +71,7 @@ describe("storage contract", () => {
 				depth: 1,
 				retries: 0,
 				parentUrl: undefined,
+				availableAt: 0,
 			},
 		]);
 	});

@@ -363,7 +363,15 @@ export class DynamicRenderer {
 		}
 	}
 
-	async render(item: QueueItem): Promise<DynamicRenderAttempt> {
+	async render(
+		item: QueueItem,
+		signal?: AbortSignal,
+	): Promise<DynamicRenderAttempt> {
+		if (signal?.aborted) {
+			throw signal.reason instanceof Error
+				? signal.reason
+				: new Error("Dynamic render aborted");
+		}
 		if (!this.isEnabled()) {
 			return null;
 		}
@@ -393,6 +401,11 @@ export class DynamicRenderer {
 		try {
 			await this.resolver.assertPublicHostname(new URL(item.url).hostname);
 			await this.configurePage(page, item.url, session);
+			if (signal?.aborted) {
+				throw signal.reason instanceof Error
+					? signal.reason
+					: new Error("Dynamic render aborted");
+			}
 
 			const isComplex = DYNAMIC_RENDERER_CONSTANTS.COMPLEX_JS_SITES.some(
 				(site) => item.url.includes(site),
@@ -421,6 +434,11 @@ export class DynamicRenderer {
 			}
 
 			const consentBypass = await this.handleConsentModals(page, item.url);
+			if (signal?.aborted) {
+				throw signal.reason instanceof Error
+					? signal.reason
+					: new Error("Dynamic render aborted");
+			}
 			if (
 				consentBypass.detected &&
 				!consentBypass.clicked &&
@@ -457,6 +475,11 @@ export class DynamicRenderer {
 			}
 
 			const extracted = await this.safeExtractContent(page);
+			if (signal?.aborted) {
+				throw signal.reason instanceof Error
+					? signal.reason
+					: new Error("Dynamic render aborted");
+			}
 			if (!extracted || navigationOccurred) {
 				page.off("framenavigated", navigationHandler);
 				session.markBad();

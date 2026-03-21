@@ -50,12 +50,18 @@ const PERMANENT_FAILURE_STATUS_CODES = new Set([404, 410, 501]);
 function parseRetryAfter(value: string | null): number {
 	if (!value) return RETRY_CONSTANTS.MAX_DELAY;
 	if (/^\d+$/.test(value.trim())) {
-		return Number.parseInt(value, 10) * 1000;
+		return Math.min(
+			Number.parseInt(value, 10) * 1000,
+			RETRY_CONSTANTS.MAX_DELAY,
+		);
 	}
 
 	const parsedDate = Date.parse(value);
 	if (!Number.isNaN(parsedDate)) {
-		return Math.max(parsedDate - Date.now(), RETRY_CONSTANTS.MAX_DELAY);
+		return Math.min(
+			Math.max(parsedDate - Date.now(), 0),
+			RETRY_CONSTANTS.MAX_DELAY,
+		);
 	}
 
 	return RETRY_CONSTANTS.MAX_DELAY;
@@ -103,12 +109,21 @@ export class FetchService {
 		private readonly logger: Logger,
 	) {}
 
-	async fetch(crawlId: string, item: QueueItem): Promise<FetchResult> {
+	async fetch(
+		crawlId: string,
+		item: QueueItem,
+		signal?: AbortSignal,
+	): Promise<FetchResult> {
 		const dynamicResult = this.dynamicRenderer.isEnabled()
-			? await this.dynamicRenderer.render(item)
+			? await this.dynamicRenderer.render(item, signal)
 			: null;
 
 		if (dynamicResult) {
+			if (signal?.aborted) {
+				throw signal.reason instanceof Error
+					? signal.reason
+					: new Error("Fetch aborted");
+			}
 			if (dynamicResult.type === "consentBlocked") {
 				this.logger.warn(dynamicResult.message);
 				return {
@@ -170,8 +185,19 @@ export class FetchService {
 				...FETCH_HEADERS,
 				...conditionalHeaders,
 			},
-			signal: AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH),
+			signal:
+				signal && "any" in AbortSignal
+					? AbortSignal.any([
+							signal,
+							AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH),
+						])
+					: AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH),
 		});
+		if (signal?.aborted) {
+			throw signal.reason instanceof Error
+				? signal.reason
+				: new Error("Fetch aborted");
+		}
 
 		if (response.status === 304) {
 			return {
