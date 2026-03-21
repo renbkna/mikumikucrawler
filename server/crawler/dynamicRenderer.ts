@@ -221,9 +221,10 @@ export class DynamicRenderer {
 			retireBrowserAfterPageCount: config.isRender
 				? DYNAMIC_RENDERER_CONSTANTS.RECYCLE_THRESHOLD.RENDER_ENV
 				: DYNAMIC_RENDERER_CONSTANTS.RECYCLE_THRESHOLD.DEFAULT,
-			closeInactiveBrowserAfterMillis: 30_000,
-			operationTimeoutMillis:
-				DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.COMPLEX_NAVIGATION,
+			closeInactiveBrowserAfterSecs: 30,
+			operationTimeoutSecs: Math.ceil(
+				DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.COMPLEX_NAVIGATION / 1000,
+			),
 		});
 
 		const warmupPage = (await this.browserPool.newPage()) as Page;
