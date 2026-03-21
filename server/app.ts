@@ -21,13 +21,14 @@ import {
 	PinnedHttpClient,
 	securityPlugin,
 } from "./plugins/security.js";
+import { servicesPlugin } from "./plugins/services.js";
+import { spaStaticPlugin } from "./plugins/spaStatic.js";
 import { telemetryPlugin } from "./plugins/telemetry.js";
 import { CrawlManager } from "./runtime/CrawlManager.js";
 import { EventStream } from "./runtime/EventStream.js";
 import { RuntimeRegistry } from "./runtime/RuntimeRegistry.js";
 import { handleAppError } from "./errorHandling.js";
 import { createStorage } from "./storage/db.js";
-import { resolveStaticFilePath } from "./utils/staticFilePath.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -53,6 +54,13 @@ export const app = new Elysia()
 	.use(dbPlugin(storage))
 	.use(securityPlugin(resolver, httpClient))
 	.use(
+		servicesPlugin({
+			crawlManager,
+			eventStream,
+			runtimeRegistry,
+		}),
+	)
+	.use(
 		cors({
 			origin: (request) => {
 				const origin = request.headers.get("origin");
@@ -75,63 +83,20 @@ export const app = new Elysia()
 	.use(compression())
 	.use(openapiPlugin())
 	.use(telemetryPlugin())
-	.use(crawlsApi({ crawlManager, repos: storage.repos }))
-	.use(sseApi(eventStream, crawlManager))
-	.use(pagesApi(storage.repos))
-	.use(searchApi(storage.repos))
-	.use(healthApi(runtimeRegistry))
+	.use(crawlsApi())
+	.use(sseApi())
+	.use(pagesApi())
+	.use(searchApi())
+	.use(healthApi())
+	.use(spaStaticPlugin({ distPath }))
 	.onError(
-		({ code, error, set }) =>
+		({ code, error, logger: requestLogger, set }) =>
 			handleAppError({
 				code,
 				error,
 				set,
-				logger,
+				logger: requestLogger,
 			}) satisfies typeof ApiErrorSchema.static,
-	)
-	.get(
-		"*",
-		async (context: {
-			path: string;
-			headers: Record<string, string | undefined>;
-		}) => {
-			const requestPath = context.path;
-			const headers = context.headers;
-			if (requestPath.startsWith("/api") || requestPath === "/health") {
-				return Response.json({ error: "Not Found" }, { status: 404 });
-			}
-
-			const filePath = resolveStaticFilePath(distPath, requestPath);
-			if (!filePath) {
-				return Response.json({ error: "Not Found" }, { status: 404 });
-			}
-			const file = Bun.file(filePath);
-			if (await file.exists()) {
-				const isAsset =
-					/\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$/i.test(
-						requestPath,
-					);
-
-				if (isAsset) {
-					const etag = `W/"${file.size}-${file.lastModified}"`;
-					const ifNoneMatch = headers["if-none-match"];
-					if (ifNoneMatch === etag) {
-						return new Response(null, { status: 304 });
-					}
-					return new Response(file, {
-						headers: {
-							"Content-Type": file.type,
-							"Cache-Control": "public, max-age=31536000, immutable",
-							ETag: etag,
-						},
-					});
-				}
-
-				return file;
-			}
-
-			return Bun.file(path.join(distPath, "index.html"));
-		},
 	);
 
 export type App = typeof app;
