@@ -85,6 +85,11 @@ export class CrawlManager {
 			initialSequence: record.eventSequence,
 			initialCounters: record.counters,
 		});
+		this.deps.repos.crawlRuns.markStarting(
+			crawlId,
+			record.counters,
+			record.eventSequence,
+		);
 		void runtime.start();
 		return this.deps.repos.crawlRuns.getById(crawlId);
 	}

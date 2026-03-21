@@ -109,10 +109,8 @@ export function createPageRepo(db: Database) {
 			input.processedContent.analysis?.quality?.score ?? 0,
 			JSON.stringify(input.processedContent.extractedData ?? {}),
 			input.processedContent.media?.length ?? 0,
-			input.processedContent.links?.filter((link) => link.isInternal).length ??
-				0,
-			input.processedContent.links?.filter((link) => !link.isInternal).length ??
-				0,
+			input.links.filter((link) => link.isInternal).length,
+			input.links.filter((link) => !link.isInternal).length,
 		) as { id: number };
 
 		clearLinks.run(pageRow.id);
@@ -157,7 +155,7 @@ export function createPageRepo(db: Database) {
 			const row = db
 				.query("SELECT content FROM pages WHERE id = ? LIMIT 1")
 				.get(id) as { content: string | null } | null;
-			return row ? (row.content ?? "") : null;
+			return row ? row.content : null;
 		},
 		getLinksByPageUrl(crawlId: string, pageUrl: string): string[] {
 			const rows = db
