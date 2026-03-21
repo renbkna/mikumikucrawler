@@ -13,7 +13,7 @@ export function createSearchRepo(db: Database) {
 						COALESCE(p.title, '') as title,
 						COALESCE(p.description, '') as description,
 						p.domain,
-						p.crawled_at as crawledAt,
+						strftime('%Y-%m-%dT%H:%M:%SZ', p.crawled_at) as crawledAt,
 						p.word_count as wordCount,
 						p.quality_score as qualityScore,
 						highlight(pages_fts, 1, '<mark>', '</mark>') AS titleHighlight,
