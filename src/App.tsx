@@ -251,9 +251,7 @@ function App() {
 							<LogsSection
 								logs={logs}
 								clearLogs={clearLogs}
-								logContainerRef={
-									logContainerRef as React.RefObject<HTMLDivElement>
-								}
+								logContainerRef={logContainerRef}
 							/>
 						</section>
 						<section

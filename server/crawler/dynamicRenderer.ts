@@ -117,14 +117,14 @@ export class DynamicRenderer {
 		this.resolver = resolver;
 		this.browserPool = null;
 		this.sessionPool = null;
-		this.enabled = options.dynamic !== false;
+		this.enabled = options.dynamic;
 
 		DynamicRenderer.instances.add(this);
 		DynamicRenderer.registerGlobalHandlers();
 	}
 
 	isEnabled(): boolean {
-		return Boolean(this.enabled && this.options.dynamic !== false);
+		return this.enabled;
 	}
 
 	disableDynamic(reason?: string): void {
@@ -238,10 +238,10 @@ export class DynamicRenderer {
 		session: Session,
 	): Promise<void> {
 		await page.setViewportSize(DYNAMIC_RENDERER_CONSTANTS.VIEWPORT);
-		await page.setDefaultTimeout(
+		page.setDefaultTimeout(
 			DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.STANDARD_NAVIGATION,
 		);
-		await page.setDefaultNavigationTimeout(
+		page.setDefaultNavigationTimeout(
 			DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.STANDARD_NAVIGATION,
 		);
 		await page.setExtraHTTPHeaders({

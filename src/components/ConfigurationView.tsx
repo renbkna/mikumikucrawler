@@ -4,6 +4,10 @@ import { useFocusTrap } from "../hooks";
 import type { CrawlOptions } from "../types";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 
+function isCrawlMethod(value: string): value is CrawlOptions["crawlMethod"] {
+	return value === "links" || value === "media" || value === "full";
+}
+
 interface ConfigurationViewProps {
 	isOpen: boolean;
 	onClose: () => void;
@@ -74,7 +78,7 @@ export function ConfigurationView({
 					</h2>
 					<button
 						type="button"
-						ref={initialFocusRef as React.RefObject<HTMLButtonElement>}
+						ref={initialFocusRef}
 						onClick={onClose}
 						className="p-2 rounded-full hover:bg-miku-pink/10 text-miku-text/40 hover:text-miku-pink transition-colors"
 						aria-label="Close configuration dialog"
@@ -104,13 +108,17 @@ export function ConfigurationView({
 								<select
 									id="config-crawl-method"
 									value={options.crawlMethod}
-									onChange={(e) =>
+									onChange={(e) => {
+										const nextMethod = e.target.value;
+										if (!isCrawlMethod(nextMethod)) {
+											return;
+										}
+
 										onOptionsChange({
 											...options,
-											crawlMethod: e.target
-												.value as CrawlOptions["crawlMethod"],
-										})
-									}
+											crawlMethod: nextMethod,
+										});
+									}}
 									className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
 								>
 									<option value="links">

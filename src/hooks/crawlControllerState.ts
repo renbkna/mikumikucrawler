@@ -215,8 +215,7 @@ export function normalizeAndValidateUrl(
 		if (!/^https?:\/\//i.test(url)) {
 			normalizedUrl = `http://${url}`;
 		}
-		new URL(normalizedUrl);
-		return { url: normalizedUrl };
+		return { url: new URL(normalizedUrl).toString() };
 	} catch {
 		return { error: "Please enter a valid URL" };
 	}

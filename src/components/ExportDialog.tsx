@@ -63,7 +63,7 @@ export function ExportDialog({
 				<div className="space-y-3">
 					<button
 						type="button"
-						ref={initialFocusRef as React.RefObject<HTMLButtonElement>}
+						ref={initialFocusRef}
 						onClick={() => {
 							onExport("json");
 							onClose();

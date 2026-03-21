@@ -77,7 +77,10 @@ export function normalizeUrl(url: string): NormalizeResult {
 					params.delete(key);
 				}
 			}
-			const sorted = new URLSearchParams([...params.entries()].sort());
+			const sortedEntries = [...params.entries()].toSorted(([left], [right]) =>
+				left.localeCompare(right),
+			);
+			const sorted = new URLSearchParams(sortedEntries);
 			parsed.search = sorted.toString() ? `?${sorted.toString()}` : "";
 		}
 

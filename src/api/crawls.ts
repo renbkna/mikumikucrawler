@@ -137,6 +137,27 @@ export interface CrawlEventSubscription {
 	close(): void;
 }
 
+function createEnvelopeListener(
+	handler: (event: CrawlEventEnvelope) => void,
+): EventListener {
+	return (event) => {
+		if (!(event instanceof MessageEvent) || typeof event.data !== "string") {
+			return;
+		}
+
+		const envelope = parseCrawlEventEnvelope(event.data);
+		if (envelope) {
+			handler(envelope);
+		}
+	};
+}
+
+function createSignalListener(handler: () => void): EventListener {
+	return () => {
+		handler();
+	};
+}
+
 export function subscribeToCrawlEvents(
 	crawlId: string,
 	handlers: {
@@ -148,16 +169,10 @@ export function subscribeToCrawlEvents(
 	const source = new EventSource(
 		`${getBackendUrl()}/api/crawls/${crawlId}/events`,
 	);
+	const handleEnvelope = createEnvelopeListener(handlers.onEvent);
 
-	const handleEnvelope = (raw: MessageEvent<string>) => {
-		const envelope = parseCrawlEventEnvelope(raw.data);
-		if (envelope) {
-			handlers.onEvent(envelope);
-		}
-	};
-
-	source.onopen = handlers.onOpen;
-	source.onerror = handlers.onError;
+	source.addEventListener("open", createSignalListener(handlers.onOpen));
+	source.addEventListener("error", createSignalListener(handlers.onError));
 
 	for (const type of [
 		"crawl.log",
@@ -168,7 +183,7 @@ export function subscribeToCrawlEvents(
 		"crawl.stopped",
 		"crawl.failed",
 	]) {
-		source.addEventListener(type, handleEnvelope as EventListener);
+		source.addEventListener(type, handleEnvelope);
 	}
 
 	return {

@@ -28,6 +28,7 @@ import { CrawlManager } from "./runtime/CrawlManager.js";
 import { EventStream } from "./runtime/EventStream.js";
 import { RuntimeRegistry } from "./runtime/RuntimeRegistry.js";
 import { createStorage } from "./storage/db.js";
+import { getErrorMessage } from "./utils/helpers.js";
 import { hashContent } from "./utils/hashUtils.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -94,9 +95,7 @@ export const app = new Elysia()
 			return { error: "Not Found" };
 		}
 
-		logger.error(
-			`[App] ${error instanceof Error ? error.message : String(error)}`,
-		);
+		logger.error(`[App] ${getErrorMessage(error)}`);
 		set.status = 500;
 		return {
 			error: error instanceof Error ? error.message : "Internal Server Error",

@@ -1,4 +1,5 @@
 import DOMPurify from "dompurify";
+import type { PageContentResponse } from "../../server/contracts/page.js";
 import {
 	AlertCircle,
 	ChevronDown,
@@ -20,6 +21,16 @@ import { Virtuoso } from "react-virtuoso";
 import { api } from "../api/client";
 import type { CrawledPage } from "../types";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
+
+function getPageContentErrorMessage(errorValue: unknown): string {
+	if (!errorValue || typeof errorValue !== "object") {
+		return "Failed to load";
+	}
+
+	return "error" in errorValue && typeof errorValue.error === "string"
+		? errorValue.error
+		: "Failed to load";
+}
 
 const PageLimitFooter = memo(function PageLimitFooter({
 	pageLimit,
@@ -86,12 +97,10 @@ const CrawledPageCard = memo(function CrawledPageCard({
 				.content.get({ fetch: { signal: AbortSignal.timeout(15_000) } });
 
 			if (error) {
-				throw new Error(
-					(error.value as { error?: string })?.error || "Failed to load",
-				);
+				throw new Error(getPageContentErrorMessage(error.value));
 			}
 
-			const response = data as { status: string; content?: string } | null;
+			const response = data as PageContentResponse | null;
 			if (response?.status === "ok") {
 				// content is "" when page was crawled in metadata-only mode
 				setFetchedContent(
@@ -151,7 +160,7 @@ const CrawledPageCard = memo(function CrawledPageCard({
 						type="button"
 						onClick={(e) => {
 							setFetchedContent(null);
-							handleToggleSource(e);
+							void handleToggleSource(e);
 						}}
 						className="mt-2 px-3 py-1 bg-rose-500/20 hover:bg-rose-500/30 rounded text-xs text-rose-300 transition-colors"
 					>

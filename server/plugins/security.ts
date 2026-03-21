@@ -104,7 +104,7 @@ export class PinnedHttpClient implements HttpClient {
 
 		const init: RequestInit & { tls?: { serverName?: string } } = {
 			headers: {
-				...(request.headers ?? {}),
+				...request.headers,
 				Host: url.port ? `${url.hostname}:${url.port}` : url.hostname,
 			},
 			redirect: request.redirect ?? "follow",

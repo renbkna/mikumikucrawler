@@ -28,7 +28,9 @@ The runtime contract lives in [docs/architecture/crawl-runtime-spec.md](/home/re
 - EventSource / SSE
 - React 19
 - Vite
-- Biome
+- Biome formatter
+- Oxlint
+- Lefthook
 
 ## Development
 
@@ -99,9 +101,10 @@ The backend refactor is considered complete only when the runtime contract,
 repository docs, and verification suite agree. The main validation commands are:
 
 ```bash
-./node_modules/.bin/tsc -p tsconfig.server.json --noEmit
-./node_modules/.bin/tsc -p tsconfig.json --noEmit
+bun run format:check
+bun run lint
+bun run lint:type-aware
+bun run typecheck
 bun test
 bun run build
-./node_modules/.bin/biome check .
 ```
