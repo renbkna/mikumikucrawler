@@ -1,6 +1,11 @@
 import type { Logger } from "../config/logging.js";
 import { CRAWL_QUEUE_CONSTANTS } from "../constants.js";
 import type { CrawlCounters, CrawlOptions } from "../contracts/crawl.js";
+import type {
+	CrawlEventMap,
+	CrawlEventType,
+	CrawlPagePayload,
+} from "../contracts/events.js";
 import { CrawlQueue } from "../domain/crawl/CrawlQueue.js";
 import { CrawlState } from "../domain/crawl/CrawlState.js";
 import { DynamicRenderer } from "../domain/crawl/DynamicRenderer.js";
@@ -24,6 +29,11 @@ interface CrawlRuntimeDependencies {
 	initialCounters?: CrawlCounters;
 	resume: boolean;
 	onSettled: () => void;
+}
+
+interface EventSink {
+	log(message: string): void;
+	page(payload: CrawlPagePayload): void;
 }
 
 const sleep = (ms: number) => Bun.sleep(ms);
@@ -55,6 +65,13 @@ export class CrawlRuntime {
 			remove: (url) => deps.repos.crawlQueue.remove(deps.crawlId, url),
 			clear: () => deps.repos.crawlQueue.clear(deps.crawlId),
 		});
+		const eventSink: EventSink = {
+			log: (message) =>
+				this.publish("crawl.log", {
+					message,
+				}),
+			page: (payload) => this.publish("crawl.page", payload),
+		};
 		this.pipeline = new PagePipeline(
 			deps.crawlId,
 			deps.options,
@@ -63,13 +80,7 @@ export class CrawlRuntime {
 			deps.repos.pages,
 			this.fetchService,
 			this.robotsService,
-			{
-				log: (message) =>
-					this.publish("crawl.log", {
-						message,
-					}),
-				page: (payload) => this.publish("crawl.page", payload),
-			},
+			eventSink,
 			deps.logger,
 		);
 
@@ -78,9 +89,9 @@ export class CrawlRuntime {
 		}
 	}
 
-	private publish(
-		type: Parameters<EventStream["publish"]>[1],
-		payload: Record<string, unknown>,
+	private publish<TType extends CrawlEventType>(
+		type: TType,
+		payload: CrawlEventMap[TType],
 	) {
 		const event = this.deps.eventStream.publish(
 			this.deps.crawlId,

@@ -14,8 +14,9 @@ The following files have been created/updated for Docker deployment:
 
 1. `Dockerfile` - Main Docker configuration
 2. `.dockerignore` - Excludes unnecessary files from build
-3. `server/crawler/CrawlSession.ts` - Orchestrates the modular crawler pieces
-4. `server/crawler/modules/` - Houses `crawlQueue`, `crawlState`, `pagePipeline`, and `linkExtractor`
+3. `server/app.ts` - Composes the Elysia HTTP + SSE application boundary
+4. `server/runtime/` - Owns crawl lifecycle, event streaming, and active runtime registry
+5. `server/storage/` - Owns SQLite migrations and typed repositories
 
 ## Local Testing
 

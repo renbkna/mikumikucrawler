@@ -1,5 +1,6 @@
 import { SOFT_404_CONSTANTS } from "../../constants.js";
 import type { CrawlOptions } from "../../contracts/crawl.js";
+import type { CrawlPagePayload } from "../../contracts/events.js";
 import { ContentProcessor } from "../../processors/ContentProcessor.js";
 import type { ExtractedLink } from "../../types.js";
 import type { CrawlQueue, QueueItem } from "./CrawlQueue.js";
@@ -14,7 +15,7 @@ type PageRepo = ReturnType<
 
 interface EventSink {
 	log(message: string): void;
-	page(payload: Record<string, unknown>): void;
+	page(payload: CrawlPagePayload): void;
 }
 
 function parseRobotsDirectives(value: string | null | undefined) {
