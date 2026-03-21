@@ -1,6 +1,7 @@
 import type {
 	CrawlCompletedPayload,
 	CrawlEventEnvelope,
+	CrawlEventEnvelopeBase,
 	CrawlFailedPayload,
 	CrawlLogPayload,
 	CrawlPagePayload,
@@ -98,6 +99,30 @@ function isStoppedPayload(value: unknown): value is CrawlStoppedPayload {
 	);
 }
 
+function toEnvelopeBase<TType extends CrawlEventEnvelope["type"]>(
+	value: Record<string, unknown>,
+	type: TType,
+): Omit<CrawlEventEnvelopeBase<TType>, "payload"> {
+	const crawlId = value.crawlId;
+	const sequence = value.sequence;
+	const timestamp = value.timestamp;
+
+	if (
+		typeof crawlId !== "string" ||
+		typeof sequence !== "number" ||
+		typeof timestamp !== "string"
+	) {
+		throw new Error("Invalid crawl event envelope base");
+	}
+
+	return {
+		type,
+		crawlId,
+		sequence,
+		timestamp,
+	};
+}
+
 export function parseCrawlEventEnvelope(
 	raw: string,
 ): CrawlEventEnvelope | null {
@@ -123,31 +148,52 @@ export function parseCrawlEventEnvelope(
 	switch (parsed.type) {
 		case "crawl.started":
 			return isStartedPayload(parsed.payload)
-				? (parsed as unknown as CrawlEventEnvelope)
+				? {
+						...toEnvelopeBase(parsed, "crawl.started"),
+						payload: parsed.payload,
+					}
 				: null;
 		case "crawl.progress":
 			return isProgressPayload(parsed.payload)
-				? (parsed as unknown as CrawlEventEnvelope)
+				? {
+						...toEnvelopeBase(parsed, "crawl.progress"),
+						payload: parsed.payload,
+					}
 				: null;
 		case "crawl.page":
 			return isPagePayload(parsed.payload)
-				? (parsed as unknown as CrawlEventEnvelope)
+				? {
+						...toEnvelopeBase(parsed, "crawl.page"),
+						payload: parsed.payload,
+					}
 				: null;
 		case "crawl.log":
 			return isLogPayload(parsed.payload)
-				? (parsed as unknown as CrawlEventEnvelope)
+				? {
+						...toEnvelopeBase(parsed, "crawl.log"),
+						payload: parsed.payload,
+					}
 				: null;
 		case "crawl.completed":
 			return isCompletedPayload(parsed.payload)
-				? (parsed as unknown as CrawlEventEnvelope)
+				? {
+						...toEnvelopeBase(parsed, "crawl.completed"),
+						payload: parsed.payload,
+					}
 				: null;
 		case "crawl.failed":
 			return isFailedPayload(parsed.payload)
-				? (parsed as unknown as CrawlEventEnvelope)
+				? {
+						...toEnvelopeBase(parsed, "crawl.failed"),
+						payload: parsed.payload,
+					}
 				: null;
 		case "crawl.stopped":
 			return isStoppedPayload(parsed.payload)
-				? (parsed as unknown as CrawlEventEnvelope)
+				? {
+						...toEnvelopeBase(parsed, "crawl.stopped"),
+						payload: parsed.payload,
+					}
 				: null;
 		default:
 			return null;

@@ -140,7 +140,7 @@ export function ResumeSessionsPanel({
 						</button>
 						<button
 							type="button"
-							ref={initialFocusRef as React.RefObject<HTMLButtonElement>}
+							ref={initialFocusRef}
 							onClick={onClose}
 							className="p-2 rounded-full hover:bg-miku-pink/10 text-miku-text/40 hover:text-miku-pink transition-colors"
 							aria-label="Close dialog"

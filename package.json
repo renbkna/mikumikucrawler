@@ -8,15 +8,20 @@
 		"url": "https://github.com/renbkna"
 	},
 	"scripts": {
+		"prepare": "lefthook install --force",
 		"dev": "concurrently --ks SIGKILL -n \"Client,Server\" \"npm run dev:client\" \"npm run dev:server\"",
 		"dev:server": "bun --watch server/server.ts",
 		"dev:client": "vite",
 		"build": "vite build",
-		"lint": "biome check .",
-		"format": "biome format . --write",
+		"check": "bun run format:check && bun run lint && bun run lint:type-aware && bun run typecheck && bun test && bun run build",
+		"format:check": "biome format --files-ignore-unknown=true server src docs package.json tsconfig.json tsconfig.server.json vite.config.ts biome.json README.md .oxlintrc.json",
+		"format": "biome format --write --files-ignore-unknown=true server src docs package.json tsconfig.json tsconfig.server.json vite.config.ts biome.json README.md .oxlintrc.json",
+		"lint": "oxlint --config .oxlintrc.json --deny-warnings server src vite.config.ts",
+		"lint:type-aware": "oxlint --config .oxlintrc.json --type-aware --deny-warnings server src vite.config.ts",
 		"preview": "vite preview",
 		"start": "bun server/server.ts",
-		"test": "bun test"
+		"test": "bun test",
+		"typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit"
 	},
 	"dependencies": {
 		"@elysiajs/cors": "^1.4.1",
@@ -53,6 +58,8 @@
 		"@types/react-dom": "^19.2.3",
 		"@types/sanitize-html": "^2.16.1",
 		"@vitejs/plugin-react": "^6.0.1",
+		"lefthook": "^2.1.4",
+		"oxlint": "^1.56.0",
 		"tailwindcss": "^4.2.2",
 		"typescript": "^5.9.3",
 		"vite": "^8.0.1"

@@ -1,0 +1,39 @@
+{
+	"plugins": ["react", "promise", "node", "jsx-a11y", "import"],
+	"categories": {
+		"correctness": "error",
+		"suspicious": "error"
+	},
+	"rules": {
+		"no-console": "off",
+		"import/no-unassigned-import": "off",
+		"promise/always-return": "off",
+		"react/jsx-uses-react": "off",
+		"react/react-in-jsx-scope": "off",
+		"typescript-eslint/await-thenable": "error",
+		"typescript-eslint/no-base-to-string": "error",
+		"typescript-eslint/no-floating-promises": "error",
+		"typescript-eslint/no-misused-promises": "error",
+		"typescript-eslint/no-unsafe-type-assertion": "off",
+		"typescript-eslint/no-unnecessary-type-assertion": "off",
+		"typescript-eslint/restrict-template-expressions": "error",
+		"typescript-eslint/require-array-sort-compare": "error",
+		"unicorn/consistent-function-scoping": "off",
+		"unicorn/no-array-sort": "off"
+	},
+	"env": {
+		"builtin": true
+	},
+	"globals": {
+		"Bun": "readonly"
+	},
+	"ignorePatterns": [
+		"node_modules/**",
+		"dist/**",
+		"coverage/**",
+		"logs/**",
+		"data/**",
+		"**/*.d.ts",
+		"**/__tests__/**"
+	]
+}
