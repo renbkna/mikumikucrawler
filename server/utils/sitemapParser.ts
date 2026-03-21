@@ -110,7 +110,14 @@ async function crawlSitemap(
 			if (entries.length >= SITEMAP_CONSTANTS.MAX_ENTRIES) break;
 			if (!collected.has(childUrl)) {
 				collected.add(childUrl);
-				await crawlSitemap(childUrl, collected, entries, depth + 1, logger, secureFetchFn);
+				await crawlSitemap(
+					childUrl,
+					collected,
+					entries,
+					depth + 1,
+					logger,
+					secureFetchFn,
+				);
 			}
 		}
 	} else {
@@ -185,7 +192,14 @@ export async function fetchSitemap(
 		// Crawl each candidate sitemap
 		for (const candidateUrl of candidateUrls) {
 			if (entries.length >= SITEMAP_CONSTANTS.MAX_ENTRIES) break;
-			await crawlSitemap(candidateUrl, collected, entries, 0, logger, secureFetchFn);
+			await crawlSitemap(
+				candidateUrl,
+				collected,
+				entries,
+				0,
+				logger,
+				secureFetchFn,
+			);
 		}
 
 		if (entries.length === 0) return [];

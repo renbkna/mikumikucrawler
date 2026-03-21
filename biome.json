@@ -70,9 +70,7 @@
 			"quoteStyle": "double",
 			"trailingCommas": "all"
 		},
-		"globals": [
-			"Bun"
-		]
+		"globals": ["Bun"]
 	},
 	"css": {
 		"parser": {
