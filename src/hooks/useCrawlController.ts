@@ -1,460 +1,246 @@
 import {
+	startTransition,
 	useCallback,
 	useEffect,
+	useEffectEvent,
 	useMemo,
-	useReducer,
 	useRef,
 	useState,
 } from "react";
+import type { CrawlEventEnvelope } from "../../server/contracts/events.js";
+import type { CrawlExportFormat } from "../api/crawls";
 import {
-	api,
-	type CrawlExportFormat,
-	downloadCrawlExport,
-	getBackendUrl,
-} from "../api/client";
-import { parseCrawlEventEnvelope } from "../api/crawlEvents";
-import type { SessionSummary } from "../components";
-import { CRAWLER_DEFAULTS, TOAST_DEFAULTS, UI_LIMITS } from "../constants";
-import type {
-	CrawledPage,
-	CrawlOptions,
-	QueueStats,
-	Stats,
-	Toast,
-} from "../types";
-
-export type ConnectionState = "connecting" | "connected" | "disconnected";
-
-type PageAction = { type: "add"; page: CrawledPage } | { type: "reset" };
-
-function pagesReducer(state: CrawledPage[], action: PageAction): CrawledPage[] {
-	switch (action.type) {
-		case "add": {
-			const next = [action.page, ...state];
-			return next.length > UI_LIMITS.MAX_PAGE_BUFFER
-				? next.slice(0, UI_LIMITS.MAX_PAGE_BUFFER)
-				: next;
-		}
-		case "reset":
-			return [];
-	}
-}
-
-const INITIAL_STATS: Stats = {
-	pagesScanned: 0,
-	linksFound: 0,
-	totalData: 0,
-	mediaFiles: 0,
-	successCount: 0,
-	failureCount: 0,
-	skippedCount: 0,
-};
-
-function toElapsedTime(totalSeconds: number) {
-	return {
-		hours: Math.floor(totalSeconds / 3600),
-		minutes: Math.floor((totalSeconds % 3600) / 60),
-		seconds: totalSeconds % 60,
-	};
-}
-
-function buildStats(
-	counters: {
-		pagesScanned: number;
-		successCount: number;
-		failureCount: number;
-		skippedCount: number;
-		linksFound: number;
-		mediaFiles: number;
-		totalDataKb: number;
-	},
-	extras?: {
-		elapsedSeconds?: number;
-		pagesPerSecond?: number;
-	},
-): Stats {
-	const successRate = counters.pagesScanned
-		? `${((counters.successCount / counters.pagesScanned) * 100).toFixed(1)}%`
-		: "0%";
-
-	return {
-		pagesScanned: counters.pagesScanned,
-		linksFound: counters.linksFound,
-		totalData: counters.totalDataKb,
-		mediaFiles: counters.mediaFiles,
-		successCount: counters.successCount,
-		failureCount: counters.failureCount,
-		skippedCount: counters.skippedCount,
-		elapsedTime:
-			extras?.elapsedSeconds !== undefined
-				? toElapsedTime(extras.elapsedSeconds)
-				: undefined,
-		pagesPerSecond:
-			extras?.pagesPerSecond !== undefined
-				? extras.pagesPerSecond.toFixed(2)
-				: undefined,
-		successRate,
-	};
-}
-
-function normalizeAndValidateUrl(
-	url: string,
-): { url: string } | { error: string } {
-	try {
-		let normalizedUrl = url;
-		if (!/^https?:\/\//i.test(url)) {
-			normalizedUrl = `http://${url}`;
-		}
-		new URL(normalizedUrl);
-		return { url: normalizedUrl };
-	} catch {
-		return { error: "Please enter a valid URL" };
-	}
-}
-
-function getTreatyErrorMessage(errorValue: unknown): string {
-	if (!errorValue || typeof errorValue !== "object") {
-		return "Request failed";
-	}
-
-	if ("error" in errorValue && typeof errorValue.error === "string") {
-		return errorValue.error;
-	}
-
-	if ("message" in errorValue && typeof errorValue.message === "string") {
-		return errorValue.message;
-	}
-
-	return "Request failed";
-}
+	createCrawl,
+	deleteCrawl,
+	exportCrawl,
+	listInterruptedCrawls,
+	resumeCrawl as resumeCrawlRequest,
+	stopCrawl as stopCrawlRequest,
+	subscribeToCrawlEvents,
+} from "../api/crawls";
+import type { Toast } from "../types";
+import {
+	type CrawlControllerAction,
+	type CrawlControllerState,
+	crawlControllerReducer,
+	createInitialCrawlControllerState,
+	normalizeAndValidateUrl,
+} from "./crawlControllerState";
 
 interface UseCrawlControllerOptions {
 	addToast: (type: Toast["type"], message: string, timeout?: number) => void;
 }
 
-export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
-	const [target, setTarget] = useState("");
-	const [crawlOptions, setCrawlOptions] = useState<CrawlOptions>({
-		target: "",
-		crawlMethod: CRAWLER_DEFAULTS.CRAWL_METHOD,
-		crawlDepth: CRAWLER_DEFAULTS.CRAWL_DEPTH,
-		crawlDelay: CRAWLER_DEFAULTS.CRAWL_DELAY,
-		maxPages: CRAWLER_DEFAULTS.MAX_PAGES,
-		maxPagesPerDomain: CRAWLER_DEFAULTS.MAX_PAGES_PER_DOMAIN,
-		maxConcurrentRequests: CRAWLER_DEFAULTS.MAX_CONCURRENT_REQUESTS,
-		retryLimit: CRAWLER_DEFAULTS.RETRY_LIMIT,
-		dynamic: CRAWLER_DEFAULTS.DYNAMIC,
-		respectRobots: CRAWLER_DEFAULTS.RESPECT_ROBOTS,
-		contentOnly: CRAWLER_DEFAULTS.CONTENT_ONLY,
-		saveMedia: CRAWLER_DEFAULTS.SAVE_MEDIA,
-	});
-	const [crawlId, setCrawlId] = useState<string | null>(null);
-	const [isAttacking, setIsAttacking] = useState(false);
-	const [connectionState, setConnectionState] =
-		useState<ConnectionState>("connected");
-	const [stats, setStats] = useState<Stats>(INITIAL_STATS);
-	const [queueStats, setQueueStats] = useState<QueueStats | null>(null);
-	const [crawledPages, dispatchPages] = useReducer(pagesReducer, []);
-	const [progress, setProgress] = useState(0);
-	const [logs, setLogs] = useState<string[]>([]);
-	const [filterText, setFilterText] = useState("");
-	const [interruptedSessions, setInterruptedSessions] = useState<
-		SessionSummary[]
-	>([]);
-
-	const eventSourceRef = useRef<EventSource | null>(null);
-	const queueStatsRef = useRef<QueueStats | null>(null);
-	const fallbackToastShownRef = useRef(false);
-	const maxPagesRef = useRef(crawlOptions.maxPages);
+function useControllerState({ addToast }: UseCrawlControllerOptions) {
+	const [state, setState] = useState<CrawlControllerState>(
+		createInitialCrawlControllerState,
+	);
+	const stateRef = useRef(state);
 
 	useEffect(() => {
-		maxPagesRef.current = crawlOptions.maxPages;
-	}, [crawlOptions.maxPages]);
+		stateRef.current = state;
+	}, [state]);
 
-	const handleTargetChange = useCallback((nextTarget: string) => {
-		setTarget(nextTarget);
-		setCrawlOptions((previous) => ({ ...previous, target: nextTarget }));
-	}, []);
-
-	const resetLiveState = useCallback(() => {
-		setStats(INITIAL_STATS);
-		setQueueStats(null);
-		queueStatsRef.current = null;
-		dispatchPages({ type: "reset" });
-		setProgress(0);
-		setLogs([]);
-		setFilterText("");
-		fallbackToastShownRef.current = false;
-	}, []);
-
-	const addLog = useCallback(
-		(message: string) => {
-			setLogs((previous) =>
-				[message, ...previous].slice(0, UI_LIMITS.MAX_LOGS),
-			);
-			if (
-				message.toLowerCase().includes("falling back to static crawling") &&
-				!fallbackToastShownRef.current
-			) {
-				addToast(
-					"warning",
-					"Tip: Try disabling JavaScript crawling in settings for better performance",
-					TOAST_DEFAULTS.LONG_TIMEOUT,
-				);
-				fallbackToastShownRef.current = true;
+	const dispatch = useCallback(
+		(action: CrawlControllerAction) => {
+			const transition = crawlControllerReducer(stateRef.current, action);
+			stateRef.current = transition.state;
+			setState(transition.state);
+			for (const effect of transition.effects) {
+				if (effect.type === "toast") {
+					addToast(effect.level, effect.message, effect.timeout);
+				}
 			}
 		},
 		[addToast],
 	);
 
-	const updateProgress = useCallback(
-		(nextStats: Stats, nextQueue: QueueStats | null) => {
-			const queueSize =
-				nextQueue?.queueLength ?? queueStatsRef.current?.queueLength ?? 0;
-			const activeSize =
-				nextQueue?.activeRequests ?? queueStatsRef.current?.activeRequests ?? 0;
-			const scanned = nextStats.pagesScanned ?? 0;
-			const totalWork = scanned + queueSize + activeSize;
-			const effectiveTotal = Math.max(totalWork, maxPagesRef.current, 1);
-			setProgress(
-				totalWork > 0 ? Math.min((scanned / effectiveTotal) * 100, 100) : 0,
-			);
-		},
-		[],
-	);
+	return { state, dispatch };
+}
 
-	const closeEventSource = useCallback(() => {
-		eventSourceRef.current?.close();
-		eventSourceRef.current = null;
-	}, []);
+export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
+	const { state, dispatch } = useControllerState({ addToast });
+	const subscriptionRef = useRef<ReturnType<
+		typeof subscribeToCrawlEvents
+	> | null>(null);
 
-	const refreshInterruptedSessions = useCallback(async () => {
-		const response = await api.api.crawls.get({
-			query: { status: "interrupted" },
+	const closeSubscription = useEffectEvent(() => {
+		subscriptionRef.current?.close();
+		subscriptionRef.current = null;
+	});
+
+	const applyEnvelope = useEffectEvent((envelope: CrawlEventEnvelope) => {
+		startTransition(() => {
+			dispatch({ type: "sseEventReceived", envelope });
 		});
 
-		if (response.error || !response.data) {
+		if (
+			envelope.type === "crawl.completed" ||
+			envelope.type === "crawl.failed" ||
+			envelope.type === "crawl.stopped"
+		) {
+			closeSubscription();
+			void refreshInterruptedSessions();
+		}
+	});
+
+	const connectToEvents = useEffectEvent((crawlId: string) => {
+		closeSubscription();
+		dispatch({ type: "connectionChanged", connectionState: "connecting" });
+		subscriptionRef.current = subscribeToCrawlEvents(crawlId, {
+			onOpen: () =>
+				dispatch({ type: "connectionChanged", connectionState: "connected" }),
+			onError: () =>
+				dispatch({
+					type: "connectionChanged",
+					connectionState: "disconnected",
+				}),
+			onEvent: applyEnvelope,
+		});
+	});
+
+	const refreshInterruptedSessions = useCallback(async () => {
+		dispatch({ type: "interruptedSessionsLoading" });
+		const result = await listInterruptedCrawls();
+		if (!result.ok) {
+			dispatch({
+				type: "interruptedSessionsFailed",
+				error: result.error,
+			});
 			return;
 		}
 
-		setInterruptedSessions(
-			response.data.crawls.map(
-				(crawl: (typeof response.data.crawls)[number]) => ({
-					id: crawl.id,
-					target: crawl.target,
-					status: crawl.status,
-					pagesScanned: crawl.counters.pagesScanned,
-					createdAt: crawl.createdAt,
-					updatedAt: crawl.updatedAt,
-				}),
-			),
-		);
-	}, []);
+		dispatch({
+			type: "interruptedSessionsLoaded",
+			sessions: result.data,
+		});
+	}, [dispatch]);
 
 	useEffect(() => {
 		void refreshInterruptedSessions();
 	}, [refreshInterruptedSessions]);
 
-	const connectToEvents = useCallback(
-		(nextCrawlId: string) => {
-			closeEventSource();
-			setConnectionState("connecting");
-			const source = new EventSource(
-				`${getBackendUrl()}/api/crawls/${nextCrawlId}/events`,
-			);
+	useEffect(() => {
+		return () => {
+			closeSubscription();
+		};
+	}, []);
 
-			const handleEnvelope = (raw: MessageEvent<string>) => {
-				const envelope = parseCrawlEventEnvelope(raw.data);
-				if (!envelope) {
-					return;
-				}
-
-				switch (envelope.type) {
-					case "crawl.started": {
-						addLog(
-							envelope.payload.resume
-								? `[Resume] Crawl runtime resumed for ${envelope.payload.target}`
-								: `[Crawler] Crawl started for ${envelope.payload.target}`,
-						);
-						break;
-					}
-					case "crawl.log": {
-						const message = envelope.payload.message;
-						if (message) {
-							addLog(message);
-						}
-						break;
-					}
-					case "crawl.page": {
-						dispatchPages({
-							type: "add",
-							page: envelope.payload,
-						});
-						break;
-					}
-					case "crawl.progress": {
-						const nextQueue: QueueStats = envelope.payload.queue;
-						const nextStats = buildStats(envelope.payload.counters, {
-							elapsedSeconds: envelope.payload.elapsedSeconds,
-							pagesPerSecond: envelope.payload.pagesPerSecond,
-						});
-						queueStatsRef.current = nextQueue;
-						setQueueStats(nextQueue);
-						setStats(nextStats);
-						updateProgress(nextStats, nextQueue);
-						break;
-					}
-					case "crawl.completed":
-					case "crawl.stopped":
-					case "crawl.failed": {
-						const nextStats = buildStats(envelope.payload.counters);
-						setStats(nextStats);
-						setIsAttacking(false);
-						setConnectionState("connected");
-						setProgress(100);
-						closeEventSource();
-						void refreshInterruptedSessions();
-
-						if (envelope.type === "crawl.completed") {
-							addToast(
-								"success",
-								`Crawl completed! Scanned ${nextStats.pagesScanned} pages`,
-								TOAST_DEFAULTS.LONG_TIMEOUT,
-							);
-						} else if (envelope.type === "crawl.stopped") {
-							addToast(
-								"info",
-								envelope.payload.stopReason || "Crawler stopped",
-							);
-						} else {
-							addToast("error", envelope.payload.error || "Crawl failed");
-						}
-						break;
-					}
-					default:
-						break;
-				}
-			};
-
-			source.onopen = () => {
-				setConnectionState("connected");
-			};
-			source.onerror = () => {
-				setConnectionState("disconnected");
-			};
-
-			for (const type of [
-				"crawl.log",
-				"crawl.page",
-				"crawl.progress",
-				"crawl.started",
-				"crawl.completed",
-				"crawl.stopped",
-				"crawl.failed",
-			]) {
-				source.addEventListener(type, handleEnvelope as EventListener);
-			}
-
-			eventSourceRef.current = source;
+	const handleTargetChange = useCallback(
+		(nextTarget: string) => {
+			dispatch({ type: "targetChanged", target: nextTarget });
 		},
-		[
-			addLog,
-			addToast,
-			closeEventSource,
-			refreshInterruptedSessions,
-			updateProgress,
-		],
+		[dispatch],
 	);
 
-	useEffect(() => () => closeEventSource(), [closeEventSource]);
+	const setCrawlOptions = useCallback(
+		(
+			next:
+				| typeof state.crawlOptions
+				| ((previous: typeof state.crawlOptions) => typeof state.crawlOptions),
+		) => {
+			const nextValue =
+				typeof next === "function" ? next(state.crawlOptions) : next;
+			dispatch({ type: "crawlOptionsChanged", crawlOptions: nextValue });
+		},
+		[dispatch, state.crawlOptions],
+	);
 
 	const startCrawl = useCallback(
 		async (isQuick = false) => {
-			if (!target.trim()) {
+			if (!state.target.trim()) {
 				addToast("error", "Please enter a target URL!");
 				return false;
 			}
 
-			const validationResult = normalizeAndValidateUrl(target);
+			const validationResult = normalizeAndValidateUrl(state.target);
 			if ("error" in validationResult) {
 				addToast("error", validationResult.error);
 				return false;
 			}
 
 			const normalizedTarget = validationResult.url;
-			if (normalizedTarget !== target) {
-				handleTargetChange(normalizedTarget);
+			if (normalizedTarget !== state.target) {
+				dispatch({ type: "targetChanged", target: normalizedTarget });
 			}
 
-			resetLiveState();
-			setIsAttacking(true);
+			dispatch({ type: "liveStateReset" });
+			dispatch({ type: "commandStarted", kind: "start" });
 
 			if (isQuick) {
 				addToast("info", "Lightning Strike! Skipping animation...");
 			}
 
-			const response = await api.api.crawls.post({
-				...crawlOptions,
+			const result = await createCrawl({
+				...state.crawlOptions,
 				target: normalizedTarget,
 			});
 
-			if (response.error || !response.data) {
-				setIsAttacking(false);
-				addToast("error", getTreatyErrorMessage(response.error?.value));
+			if (!result.ok) {
+				dispatch({ type: "commandFailed", kind: "start", error: result.error });
 				return false;
 			}
 
-			setCrawlId(response.data.id);
-			connectToEvents(response.data.id);
-			addLog("Initiating Miku Beam Sequence...");
+			dispatch({
+				type: "crawlAccepted",
+				crawlId: result.data.id,
+				kind: "start",
+			});
+			dispatch({
+				type: "logAppended",
+				message: "Initiating Miku Beam Sequence...",
+			});
+			connectToEvents(result.data.id);
 			return true;
 		},
-		[
-			addLog,
-			addToast,
-			connectToEvents,
-			crawlOptions,
-			handleTargetChange,
-			resetLiveState,
-			target,
-		],
+		[addToast, dispatch, state.crawlOptions, state.target],
 	);
 
 	const stopCrawl = useCallback(async () => {
-		if (!crawlId) return;
-		const response = await api.api.crawls({ id: crawlId }).stop.post();
-		if (response.error) {
-			addToast("error", getTreatyErrorMessage(response.error.value));
+		if (!state.activeCrawlId) return;
+
+		dispatch({ type: "commandStarted", kind: "stop" });
+		const result = await stopCrawlRequest(state.activeCrawlId);
+		if (!result.ok) {
+			dispatch({ type: "commandFailed", kind: "stop", error: result.error });
 		}
-	}, [addToast, crawlId]);
+	}, [dispatch, state.activeCrawlId]);
 
 	const resumeCrawl = useCallback(
 		async (sessionId: string, sessionTarget: string) => {
-			resetLiveState();
-			handleTargetChange(sessionTarget);
-			addLog(`[Resume] Continuing crawl of ${sessionTarget}...`);
+			dispatch({ type: "liveStateReset" });
+			dispatch({ type: "targetChanged", target: sessionTarget });
+			dispatch({ type: "commandStarted", kind: "resume" });
 
-			const response = await api.api.crawls({ id: sessionId }).resume.post();
-			if (response.error || !response.data) {
-				addToast("error", getTreatyErrorMessage(response.error?.value));
+			const result = await resumeCrawlRequest(sessionId);
+			if (!result.ok) {
+				dispatch({
+					type: "commandFailed",
+					kind: "resume",
+					error: result.error,
+				});
 				return false;
 			}
 
-			setCrawlId(response.data.id);
-			setIsAttacking(true);
-			connectToEvents(response.data.id);
-			setInterruptedSessions((previous: SessionSummary[]) =>
-				previous.filter((session) => session.id !== sessionId),
-			);
+			dispatch({
+				type: "crawlAccepted",
+				crawlId: result.data.id,
+				kind: "resume",
+			});
+			dispatch({
+				type: "interruptedSessionDeleted",
+				sessionId,
+			});
 			addToast("info", "Resuming interrupted crawl...");
+			connectToEvents(result.data.id);
 			return true;
 		},
-		[addLog, addToast, connectToEvents, handleTargetChange, resetLiveState],
+		[addToast, dispatch],
 	);
 
-	const exportCrawl = useCallback(
+	const exportCurrentCrawl = useCallback(
 		async (format: string) => {
-			if (!crawlId) {
+			if (!state.activeCrawlId) {
 				addToast("warning", "No crawl selected for export");
 				return;
 			}
@@ -463,68 +249,104 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				return;
 			}
 
-			try {
-				const { blob, filename } = await downloadCrawlExport(
-					crawlId,
-					format as CrawlExportFormat,
-				);
-				const url = URL.createObjectURL(blob);
-				const anchor = document.createElement("a");
-				anchor.href = url;
-				anchor.download = filename;
-				document.body.appendChild(anchor);
-				anchor.click();
-				setTimeout(() => {
-					anchor.remove();
-					URL.revokeObjectURL(url);
-				}, 100);
-				addToast(
-					"success",
-					`Data exported successfully as ${format.toUpperCase()}`,
-				);
-			} catch (error) {
-				addToast(
-					"error",
-					error instanceof Error ? error.message : "Failed to export crawl",
-				);
+			dispatch({ type: "commandStarted", kind: "export" });
+			const result = await exportCrawl(
+				state.activeCrawlId,
+				format as CrawlExportFormat,
+			);
+			if (!result.ok) {
+				dispatch({
+					type: "commandFailed",
+					kind: "export",
+					error: result.error,
+				});
 				return;
 			}
+
+			const { blob, filename } = result.data;
+			const url = URL.createObjectURL(blob);
+			const anchor = document.createElement("a");
+			anchor.href = url;
+			anchor.download = filename;
+			document.body.appendChild(anchor);
+			anchor.click();
+			setTimeout(() => {
+				anchor.remove();
+				URL.revokeObjectURL(url);
+			}, 100);
+
+			addToast(
+				"success",
+				`Data exported successfully as ${format.toUpperCase()}`,
+			);
 		},
-		[addToast, crawlId],
+		[addToast, dispatch, state.activeCrawlId],
 	);
 
-	const filteredPages = useMemo(() => {
-		if (!filterText.trim()) return crawledPages;
-		const loweredFilter = filterText.toLowerCase();
-		return crawledPages.filter(
+	const deleteInterruptedSession = useCallback(
+		async (sessionId: string) => {
+			dispatch({ type: "interruptedSessionDeleting", sessionId });
+			const result = await deleteCrawl(sessionId);
+			if (!result.ok) {
+				dispatch({
+					type: "interruptedSessionDeleteFailed",
+					error: result.error,
+				});
+				return false;
+			}
+
+			dispatch({ type: "interruptedSessionDeleted", sessionId });
+			return true;
+		},
+		[dispatch],
+	);
+
+	const displayedPages = useMemo(() => {
+		if (!state.filterText.trim()) {
+			return state.crawledPages;
+		}
+
+		const loweredFilter = state.filterText.toLowerCase();
+		return state.crawledPages.filter(
 			(page) =>
 				page.url.toLowerCase().includes(loweredFilter) ||
 				page.title?.toLowerCase().includes(loweredFilter) ||
 				page.description?.toLowerCase().includes(loweredFilter),
 		);
-	}, [crawledPages, filterText]);
+	}, [state.crawledPages, state.filterText]);
 
 	return {
-		target,
-		crawlOptions,
+		target: state.target,
+		crawlOptions: state.crawlOptions,
 		setCrawlOptions,
 		handleTargetChange,
-		stats,
-		queueStats,
-		crawledPages,
-		progress,
-		logs,
-		setLogs,
-		filterText,
-		setFilterText,
-		displayedPages: filterText.trim() ? filteredPages : crawledPages,
-		clearFilter: () => setFilterText(""),
-		isAttacking,
-		connectionState,
-		interruptedSessions,
+		stats: state.stats,
+		queueStats: state.queueStats,
+		crawledPages: state.crawledPages,
+		progress: state.progress,
+		logs: state.logs,
+		clearLogs: () => dispatch({ type: "logsCleared" }),
+		filterText: state.filterText,
+		setFilterText: (filterText: string) =>
+			dispatch({ type: "filterChanged", filterText }),
+		displayedPages,
+		clearFilter: () => dispatch({ type: "filterChanged", filterText: "" }),
+		isAttacking:
+			state.runPhase === "starting" ||
+			state.runPhase === "running" ||
+			state.runPhase === "stopping",
+		connectionState: state.connectionState,
+		interruptedSessions: state.interruptedSessions.items,
+		interruptedSessionsLoading: state.interruptedSessions.isLoading,
+		interruptedSessionsError: state.interruptedSessions.error,
+		deletingInterruptedSessionId: state.interruptedSessions.deletingId,
+		refreshInterruptedSessions,
+		deleteInterruptedSession,
 		startCrawl,
 		stopCrawl,
 		resumeCrawl,
-		exportCrawl,
+		exportCrawl: exportCurrentCrawl,
 	};
 }
+
+export type UseCrawlControllerReturn = ReturnType<typeof useCrawlController>;

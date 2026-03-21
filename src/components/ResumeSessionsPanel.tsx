@@ -1,20 +1,19 @@
 import { History, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "../api/client";
+import { useCallback, useEffect, useRef } from "react";
+import type { InterruptedSessionSummary } from "../api/crawls";
 import { useFocusTrap } from "../hooks";
 import { HeartIcon, SparkleIcon } from "./KawaiiIcons";
 
-export interface SessionSummary {
-	id: string;
-	target: string;
-	status: string;
-	pagesScanned: number;
-	createdAt: string;
-	updatedAt: string;
-}
+export type SessionSummary = InterruptedSessionSummary;
 
 interface ResumeSessionsPanelProps {
 	isOpen: boolean;
+	sessions: SessionSummary[];
+	isLoading: boolean;
+	fetchError: string | null;
+	deletingId: string | null;
+	onRefresh: () => void;
+	onDelete: (sessionId: string) => void;
 	onClose: () => void;
 	/**
 	 * Called when the user confirms a session resume.
@@ -50,73 +49,27 @@ function shortenUrl(url: string, maxLength = 45): string {
 
 export function ResumeSessionsPanel({
 	isOpen,
+	sessions,
+	isLoading,
+	fetchError,
+	deletingId,
+	onRefresh,
+	onDelete,
 	onClose,
 	onResume,
 }: Readonly<ResumeSessionsPanelProps>) {
-	const [sessions, setSessions] = useState<SessionSummary[]>([]);
-	const [isLoading, setIsLoading] = useState(false);
-	const [deletingId, setDeletingId] = useState<string | null>(null);
-	const [fetchError, setFetchError] = useState<string | null>(null);
-
 	const dialogRef = useRef<HTMLDialogElement>(null);
 	const { modalRef, initialFocusRef } = useFocusTrap<HTMLDivElement>({
 		isOpen,
 		onClose,
 	});
 
-	const getApiErrorMessage = useCallback((errorValue: unknown): string => {
-		if (!errorValue || typeof errorValue !== "object") {
-			return "Request failed";
-		}
-
-		if ("error" in errorValue && typeof errorValue.error === "string") {
-			return errorValue.error;
-		}
-
-		if ("message" in errorValue && typeof errorValue.message === "string") {
-			return errorValue.message;
-		}
-
-		return "Request failed";
-	}, []);
-
-	// ── Data fetching ──────────────────────────────────────────────────────────
-
-	const fetchSessions = useCallback(async () => {
-		setIsLoading(true);
-		setFetchError(null);
-		try {
-			const response = await api.api.crawls.get({
-				query: { status: "interrupted" },
-			});
-			if (response.error || !response.data) {
-				throw new Error(getApiErrorMessage(response.error?.value));
-			}
-			setSessions(
-				response.data.crawls.map((crawl) => ({
-					id: crawl.id,
-					target: crawl.target,
-					status: crawl.status,
-					pagesScanned: crawl.counters.pagesScanned,
-					createdAt: crawl.createdAt,
-					updatedAt: crawl.updatedAt,
-				})),
-			);
-		} catch (err) {
-			setFetchError(
-				err instanceof Error ? err.message : "Could not load sessions.",
-			);
-		} finally {
-			setIsLoading(false);
-		}
-	}, [getApiErrorMessage]);
-
 	// Fetch whenever the panel opens
 	useEffect(() => {
 		if (isOpen) {
-			fetchSessions();
+			onRefresh();
 		}
-	}, [isOpen, fetchSessions]);
+	}, [isOpen, onRefresh]);
 
 	// Keep the native <dialog> element in sync with the isOpen prop
 	useEffect(() => {
@@ -130,27 +83,6 @@ export function ResumeSessionsPanel({
 	}, [isOpen]);
 
 	// ── Event handlers ─────────────────────────────────────────────────────────
-
-	const handleDelete = useCallback(
-		async (sessionId: string) => {
-			setDeletingId(sessionId);
-			try {
-				const response = await api.api.crawls({ id: sessionId }).delete();
-				if (response.error) {
-					throw new Error(getApiErrorMessage(response.error.value));
-				}
-				// Remove locally — no need to re-fetch
-				setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-			} catch {
-				// Surface a brief inline error without a full re-fetch so the list
-				// remains visible and the user can try again.
-				setFetchError("Failed to delete session. Please try again.");
-			} finally {
-				setDeletingId(null);
-			}
-		},
-		[getApiErrorMessage],
-	);
 
 	const handleResume = useCallback(
 		(session: SessionSummary) => {
@@ -196,7 +128,7 @@ export function ResumeSessionsPanel({
 					<div className="flex items-center gap-2">
 						<button
 							type="button"
-							onClick={fetchSessions}
+							onClick={onRefresh}
 							disabled={isLoading}
 							className="p-2 rounded-full hover:bg-miku-teal/10 text-miku-text/40 hover:text-miku-teal transition-colors disabled:opacity-40"
 							aria-label="Refresh session list"
@@ -283,7 +215,7 @@ export function ResumeSessionsPanel({
 								<div className="flex items-center gap-2 shrink-0">
 									<button
 										type="button"
-										onClick={() => handleDelete(session.id)}
+										onClick={() => onDelete(session.id)}
 										disabled={deletingId === session.id}
 										className="p-2 rounded-xl text-miku-text/30 hover:text-rose-500 hover:bg-rose-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
 										aria-label={`Delete session for ${session.target}`}
