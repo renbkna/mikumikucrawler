@@ -28,10 +28,11 @@ export function ConfigurationView({
 	if (!isOpen) return null;
 
 	const crawlMethodDesc = {
-		links: "Follows internal HTML links only — fastest and most focused",
+		links:
+			"Follows internal HTML links and skips media metadata in saved results",
 		media:
-			"Follows internal links and extracts images, videos, and audio files",
-		full: "Seeds from sitemap.xml, follows all links (cross-domain), and extracts media",
+			"Follows internal HTML links and keeps extracted image, video, and audio metadata",
+		full: "Follows internal and external HTML links and keeps extracted media metadata",
 	}[options.crawlMethod];
 
 	return (
@@ -107,13 +108,13 @@ export function ConfigurationView({
 									className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
 								>
 									<option value="links">
-										Links — follow internal links only
+										Links — internal links, no saved media metadata
 									</option>
 									<option value="media">
-										Media — links + extract media files
+										Media — internal links + saved media metadata
 									</option>
 									<option value="full">
-										Full — sitemap seed + all links + media
+										Full — internal + external links + saved media metadata
 									</option>
 								</select>
 								<p className="mt-2 text-xs text-miku-text/50 font-medium">
@@ -365,8 +366,8 @@ export function ConfigurationView({
 								},
 								{
 									id: "saveMedia",
-									label: "Process Media Files",
-									desc: "(Images, PDFs, etc.)",
+									label: "Keep Media Metadata",
+									desc: "(Store extracted image/video/audio metadata in results)",
 									checked: options.saveMedia,
 								},
 							].map((item) => (

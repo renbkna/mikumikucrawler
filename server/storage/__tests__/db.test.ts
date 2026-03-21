@@ -123,4 +123,32 @@ describe("storage contract", () => {
 			totalDataKb: 42,
 		});
 	});
+
+	test("date filters accept API ISO timestamps without dropping matching rows", () => {
+		const storage = createInMemoryStorage();
+		const created = storage.repos.crawlRuns.createRun(
+			"crawl-filter",
+			"https://filter.example",
+			{
+				target: "https://filter.example",
+				crawlMethod: "links",
+				crawlDepth: 1,
+				crawlDelay: 200,
+				maxPages: 5,
+				maxPagesPerDomain: 0,
+				maxConcurrentRequests: 1,
+				retryLimit: 0,
+				dynamic: false,
+				respectRobots: false,
+				contentOnly: false,
+				saveMedia: false,
+			},
+		);
+
+		expect(
+			storage.repos.crawlRuns
+				.list({ from: created.createdAt })
+				.map((run) => run.id),
+		).toContain("crawl-filter");
+	});
 });

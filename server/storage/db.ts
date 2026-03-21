@@ -73,8 +73,10 @@ export function applyMigrations(db: Database): void {
 		}
 
 		const sql = readFileSync(path.join(migrationsDirectory, fileName), "utf8");
-		db.exec(sql);
-		insertMigration.run(fileName);
+		db.transaction(() => {
+			db.exec(sql);
+			insertMigration.run(fileName);
+		})();
 	}
 }
 
