@@ -135,7 +135,13 @@ export async function resolveUrlSecurely(
 export async function secureFetch(
 	options: SecureFetchOptions,
 ): Promise<Response> {
-	const { url, signal, headers, redirect = "follow", fetchFn = globalThis.fetch } = options;
+	const {
+		url,
+		signal,
+		headers,
+		redirect = "follow",
+		fetchFn = globalThis.fetch,
+	} = options;
 
 	const resolved = await resolveUrlSecurely(url);
 	const parsedUrl = new URL(url);

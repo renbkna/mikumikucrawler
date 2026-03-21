@@ -1,0 +1,214 @@
+import { describe, expect, mock, test } from "bun:test";
+import { Elysia } from "elysia";
+import type { Logger } from "../../config/logging.js";
+import type { HttpClient, Resolver } from "../../plugins/security.js";
+import { CrawlManager } from "../../runtime/CrawlManager.js";
+import { EventStream } from "../../runtime/EventStream.js";
+import { RuntimeRegistry } from "../../runtime/RuntimeRegistry.js";
+import { createInMemoryStorage } from "../../storage/db.js";
+import { crawlsApi } from "../crawls.js";
+import { pagesApi } from "../pages.js";
+import { searchApi } from "../search.js";
+import { sseApi } from "../sse.js";
+
+function createLogger(): Logger {
+	return {
+		level: "info",
+		info: mock(() => undefined),
+		warn: mock(() => undefined),
+		error: mock(() => undefined),
+		debug: mock(() => undefined),
+		fatal: mock(() => undefined),
+		trace: mock(() => undefined),
+		silent: mock(() => undefined),
+		child: mock(() => createLogger()),
+	} as unknown as Logger;
+}
+
+async function waitFor<T>(read: () => T, predicate: (value: T) => boolean) {
+	const timeoutAt = Date.now() + 5000;
+	while (Date.now() < timeoutAt) {
+		const value = read();
+		if (predicate(value)) {
+			return value;
+		}
+		await Bun.sleep(25);
+	}
+
+	throw new Error("Timed out waiting for condition");
+}
+
+function buildApp(httpClient: HttpClient) {
+	const storage = createInMemoryStorage();
+	const eventStream = new EventStream();
+	const registry = new RuntimeRegistry();
+	const resolver: Resolver = {
+		assertPublicHostname: async () => {},
+		resolveHost: async () => ["93.184.216.34"],
+	};
+	const crawlManager = new CrawlManager({
+		logger: createLogger(),
+		repos: storage.repos,
+		eventStream,
+		registry,
+		resolver,
+		httpClient,
+	});
+
+	const app = new Elysia()
+		.use(crawlsApi({ crawlManager, repos: storage.repos }))
+		.use(sseApi(eventStream, crawlManager))
+		.use(pagesApi(storage.repos))
+		.use(searchApi(storage.repos));
+
+	return { app, crawlManager, storage };
+}
+
+const crawlBody = {
+	target: "https://example.com",
+	crawlMethod: "links",
+	crawlDepth: 2,
+	crawlDelay: 200,
+	maxPages: 2,
+	maxPagesPerDomain: 0,
+	maxConcurrentRequests: 1,
+	retryLimit: 0,
+	dynamic: false,
+	respectRobots: false,
+	contentOnly: false,
+	saveMedia: false,
+};
+
+describe("api contract", () => {
+	test("create crawl, get crawl, list crawl, page content, and search", async () => {
+		const html =
+			"<html><body><main>Hello api contract</main><title>API Contract</title></body></html>";
+		const { app, storage } = buildApp({
+			fetch: async () =>
+				new Response(html, {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				}),
+		});
+
+		const createResponse = await app.handle(
+			new Request("http://localhost/api/crawls", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(crawlBody),
+			}),
+		);
+		expect(createResponse.status).toBe(200);
+		const created = await createResponse.json();
+
+		await waitFor(
+			() => storage.repos.crawlRuns.getById(created.id),
+			(run) => run?.status === "completed",
+		);
+
+		const getResponse = await app.handle(
+			new Request(`http://localhost/api/crawls/${created.id}`),
+		);
+		expect(getResponse.status).toBe(200);
+
+		const listResponse = await app.handle(
+			new Request("http://localhost/api/crawls?status=completed"),
+		);
+		const listed = await listResponse.json();
+		expect(listed.crawls).toHaveLength(1);
+
+		const pages = storage.repos.pages.listForExport(created.id);
+		const pageContentResponse = await app.handle(
+			new Request(`http://localhost/api/pages/${pages[0].id}/content`),
+		);
+		expect(pageContentResponse.status).toBe(200);
+		const pageContent = await pageContentResponse.json();
+		expect(pageContent.content).toContain("Hello api contract");
+
+		const searchResponse = await app.handle(
+			new Request("http://localhost/api/search?q=contract"),
+		);
+		expect(searchResponse.status).toBe(200);
+		const search = await searchResponse.json();
+		expect(search.count).toBeGreaterThan(0);
+	});
+
+	test("resume rejects terminal crawls", async () => {
+		const { app, storage } = buildApp({
+			fetch: async () =>
+				new Response("<html><body><main>done</main></body></html>", {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				}),
+		});
+
+		const createResponse = await app.handle(
+			new Request("http://localhost/api/crawls", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(crawlBody),
+			}),
+		);
+		const created = await createResponse.json();
+
+		await waitFor(
+			() => storage.repos.crawlRuns.getById(created.id),
+			(run) => run?.status === "completed",
+		);
+
+		const resumeResponse = await app.handle(
+			new Request(`http://localhost/api/crawls/${created.id}/resume`, {
+				method: "POST",
+			}),
+		);
+
+		expect(resumeResponse.status).toBe(409);
+	});
+
+	test("sse delivers ordered events and disconnect does not stop the crawl", async () => {
+		let releaseFetch!: () => void;
+		const { app, storage } = buildApp({
+			fetch: () =>
+				new Promise<Response>((resolve) => {
+					releaseFetch = () =>
+						resolve(
+							new Response("<html><body><main>stream</main></body></html>", {
+								status: 200,
+								headers: { "content-type": "text/html" },
+							}),
+						);
+				}),
+		});
+
+		const createResponse = await app.handle(
+			new Request("http://localhost/api/crawls", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ ...crawlBody, maxPages: 1 }),
+			}),
+		);
+		const created = await createResponse.json();
+
+		const sseResponse = await app.handle(
+			new Request(`http://localhost/api/crawls/${created.id}/events`),
+		);
+		const reader = sseResponse.body?.getReader();
+		expect(reader).toBeTruthy();
+		if (!reader) {
+			throw new Error("Expected SSE reader to be available");
+		}
+
+		releaseFetch();
+		const firstChunk = await reader.read();
+		expect(new TextDecoder().decode(firstChunk.value)).toContain(
+			"event: crawl.started",
+		);
+		await reader.cancel();
+
+		const completed = await waitFor(
+			() => storage.repos.crawlRuns.getById(created.id),
+			(run) => run?.status === "completed",
+		);
+		expect(completed?.status).toBe("completed");
+	});
+});
