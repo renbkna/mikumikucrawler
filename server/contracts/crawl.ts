@@ -94,7 +94,7 @@ export const CrawlListQuerySchema = t.Object({
 	status: t.Optional(CrawlStatusSchema),
 	from: t.Optional(t.String({ format: "date-time" })),
 	to: t.Optional(t.String({ format: "date-time" })),
-	limit: t.Optional(t.Numeric({ minimum: 1, maximum: 100 })),
+	limit: t.Optional(t.Numeric({ minimum: 1, maximum: 100, multipleOf: 1 })),
 });
 
 export const CrawlListResponseSchema = t.Object({

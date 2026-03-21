@@ -92,4 +92,60 @@ describe("security contract", () => {
 		).rejects.toThrow("Private or reserved IP address");
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
+
+	test("fails fast on redirect loops instead of following forever", async () => {
+		const resolver: Resolver = {
+			resolveHost: async () => ["93.184.216.34"],
+			assertPublicHostname: async () => {},
+		};
+		const fetchMock = mock(
+			async () =>
+				new Response(null, {
+					status: 302,
+					headers: {
+						location: "https://example.com/start",
+					},
+				}),
+		);
+		const httpClient = new PinnedHttpClient(
+			resolver,
+			fetchMock as unknown as typeof fetch,
+		);
+
+		await expect(
+			httpClient.fetch({
+				url: "https://example.com/start",
+			}),
+		).rejects.toThrow("Redirect loop detected");
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	test("fails after the maximum redirect hop count", async () => {
+		const resolver: Resolver = {
+			resolveHost: async () => ["93.184.216.34"],
+			assertPublicHostname: async () => {},
+		};
+		const fetchMock = mock(async (url: string) => {
+			const current = new URL(url);
+			const currentHop = Number.parseInt(current.pathname.slice(1) || "0", 10);
+			return new Response(null, {
+				status: 302,
+				headers: {
+					location: `https://example.com/${currentHop + 1}`,
+				},
+			});
+		});
+		const httpClient = new PinnedHttpClient(
+			resolver,
+			fetchMock as unknown as typeof fetch,
+		);
+
+		await expect(
+			httpClient.fetch({
+				url: "https://example.com/0",
+			}),
+		).rejects.toThrow("Too many redirects");
+		expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
+		expect(fetchMock.mock.calls.length).toBeLessThan(20);
+	});
 });

@@ -6,6 +6,7 @@ import { LRUCacheWithTTL } from "../utils/lruCache.js";
 
 const RESOLUTION_TTL_MS = 5 * 60 * 1000;
 const RESOLUTION_CACHE_MAX_ENTRIES = 512;
+const MAX_REDIRECT_HOPS = 10;
 
 export interface Resolver {
 	resolveHost(hostname: string): Promise<string[]>;
@@ -92,35 +93,53 @@ export class PinnedHttpClient implements HttpClient {
 	) {}
 
 	async fetch(request: HttpClientRequest): Promise<Response> {
-		const url = new URL(request.url);
-		const addresses = await this.resolver.resolveHost(url.hostname);
-		const pinnedUrl = new URL(request.url);
-		const selectedAddress = addresses[0];
-		const isIpv6 = selectedAddress.includes(":");
-		pinnedUrl.hostname = isIpv6 ? `[${selectedAddress}]` : selectedAddress;
+		const seenUrls = new Set<string>();
+		let currentUrl = request.url;
+		let redirectCount = 0;
 
-		const init: RequestInit & { tls?: { serverName?: string } } = {
-			headers: {
-				...request.headers,
-				Host: url.port ? `${url.hostname}:${url.port}` : url.hostname,
-			},
-			redirect: "manual",
-			signal: request.signal,
-		};
+		for (;;) {
+			if (seenUrls.has(currentUrl)) {
+				throw new Error(`Redirect loop detected for ${currentUrl}`);
+			}
+			seenUrls.add(currentUrl);
 
-		if (url.protocol === "https:") {
-			init.tls = {
-				serverName: url.hostname,
+			const url = new URL(currentUrl);
+			const addresses = await this.resolver.resolveHost(url.hostname);
+			const pinnedUrl = new URL(currentUrl);
+			const selectedAddress = addresses[0];
+			const isIpv6 = selectedAddress.includes(":");
+			pinnedUrl.hostname = isIpv6 ? `[${selectedAddress}]` : selectedAddress;
+
+			const init: RequestInit & { tls?: { serverName?: string } } = {
+				headers: {
+					...request.headers,
+					Host: url.port ? `${url.hostname}:${url.port}` : url.hostname,
+				},
+				redirect: "manual",
+				signal: request.signal,
 			};
-		}
 
-		const response = await this.fetchFn(pinnedUrl.toString(), init);
+			if (url.protocol === "https:") {
+				init.tls = {
+					serverName: url.hostname,
+				};
+			}
 
-		if (response.status >= 300 && response.status < 400) {
+			const response = await this.fetchFn(pinnedUrl.toString(), init);
+			if (response.status < 300 || response.status >= 400) {
+				return response;
+			}
+
 			const location = response.headers.get("location");
-			if (!location) return response;
+			if (!location) {
+				return response;
+			}
 
-			const redirectUrl = new URL(location, request.url);
+			if (redirectCount >= MAX_REDIRECT_HOPS) {
+				throw new Error(`Too many redirects for ${request.url}`);
+			}
+
+			const redirectUrl = new URL(location, currentUrl);
 			if (
 				redirectUrl.protocol !== "http:" &&
 				redirectUrl.protocol !== "https:"
@@ -131,13 +150,9 @@ export class PinnedHttpClient implements HttpClient {
 			}
 
 			await this.resolver.assertPublicHostname(redirectUrl.hostname);
-			return this.fetch({
-				...request,
-				url: redirectUrl.toString(),
-			});
+			currentUrl = redirectUrl.toString();
+			redirectCount += 1;
 		}
-
-		return response;
 	}
 }
 
