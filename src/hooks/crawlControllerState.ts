@@ -20,6 +20,8 @@ export interface CommandStatus {
 	error: string | null;
 }
 
+export type CommandKind = CommandStatus["kind"];
+
 export interface InterruptedSessionsState {
 	items: InterruptedSessionSummary[];
 	isLoading: boolean;
@@ -57,6 +59,26 @@ export type ControllerEffect =
 export interface ControllerStateTransition {
 	state: CrawlControllerState;
 	effects: ControllerEffect[];
+}
+
+function createIdleCommandStatus(): CommandStatus {
+	return {
+		kind: "none",
+		status: "idle",
+		error: null,
+	};
+}
+
+function createCommandStatus(
+	kind: CommandKind,
+	status: CommandStatus["status"],
+	error: string | null = null,
+): CommandStatus {
+	return {
+		kind,
+		status,
+		error,
+	};
 }
 
 const INITIAL_STATS: Stats = {
@@ -105,11 +127,7 @@ export function createInitialCrawlControllerState(): CrawlControllerState {
 			deletingId: null,
 		},
 		lastSequenceByCrawlId: {},
-		lastCommand: {
-			kind: "none",
-			status: "idle",
-			error: null,
-		},
+		lastCommand: createIdleCommandStatus(),
 	};
 }
 
@@ -207,20 +225,6 @@ function computeProgress(
 	return totalWork > 0 ? Math.min((scanned / effectiveTotal) * 100, 100) : 0;
 }
 
-export function normalizeAndValidateUrl(
-	url: string,
-): { url: string } | { error: string } {
-	try {
-		let normalizedUrl = url;
-		if (!/^https?:\/\//i.test(url)) {
-			normalizedUrl = `http://${url}`;
-		}
-		return { url: new URL(normalizedUrl).toString() };
-	} catch {
-		return { error: "Please enter a valid URL" };
-	}
-}
-
 export type CrawlControllerAction =
 	| { type: "targetChanged"; target: string }
 	| { type: "crawlOptionsChanged"; crawlOptions: CrawlOptions }
@@ -229,8 +233,9 @@ export type CrawlControllerAction =
 	| { type: "logAppended"; message: string }
 	| { type: "liveStateReset" }
 	| { type: "connectionChanged"; connectionState: ConnectionState }
-	| { type: "commandStarted"; kind: CommandStatus["kind"] }
-	| { type: "commandFailed"; kind: CommandStatus["kind"]; error: string }
+	| { type: "commandStarted"; kind: CommandKind }
+	| { type: "commandSucceeded"; kind: CommandKind }
+	| { type: "commandFailed"; kind: CommandKind; error: string }
 	| { type: "crawlAccepted"; crawlId: string; kind: "start" | "resume" }
 	| { type: "sseEventReceived"; envelope: CrawlEventEnvelope }
 	| {
@@ -292,7 +297,7 @@ function applyTerminalEvent(
 		state: {
 			...state,
 			stats: nextStats,
-			connectionState: "connected",
+			connectionState: "disconnected",
 			runPhase:
 				envelope.type === "crawl.completed"
 					? "completed"
@@ -300,11 +305,7 @@ function applyTerminalEvent(
 						? "stopped"
 						: "failed",
 			progress: 100,
-			lastCommand: {
-				kind: "none",
-				status: "idle",
-				error: null,
-			},
+			lastCommand: createIdleCommandStatus(),
 		},
 		effects,
 	};
@@ -448,11 +449,7 @@ export function crawlControllerReducer(
 			return {
 				state: {
 					...state,
-					lastCommand: {
-						kind: action.kind,
-						status: "pending",
-						error: null,
-					},
+					lastCommand: createCommandStatus(action.kind, "pending"),
 					runPhase:
 						action.kind === "start" || action.kind === "resume"
 							? "starting"
@@ -462,15 +459,23 @@ export function crawlControllerReducer(
 				},
 				effects: [],
 			};
+		case "commandSucceeded":
+			return {
+				state: {
+					...state,
+					lastCommand: createCommandStatus(action.kind, "success"),
+					runPhase:
+						action.kind === "stop" && state.activeCrawlId
+							? "stopping"
+							: state.runPhase,
+				},
+				effects: [],
+			};
 		case "commandFailed":
 			return {
 				state: {
 					...state,
-					lastCommand: {
-						kind: action.kind,
-						status: "error",
-						error: action.error,
-					},
+					lastCommand: createCommandStatus(action.kind, "error", action.error),
 					runPhase:
 						action.kind === "start" || action.kind === "resume"
 							? "idle"
@@ -493,11 +498,7 @@ export function crawlControllerReducer(
 					activeCrawlId: action.crawlId,
 					runPhase: "starting",
 					connectionState: "connecting",
-					lastCommand: {
-						kind: action.kind,
-						status: "success",
-						error: null,
-					},
+					lastCommand: createCommandStatus(action.kind, "success"),
 				},
 				effects: [],
 			};

@@ -106,6 +106,7 @@ describe("crawlControllerReducer", () => {
 		const transition = applyEvent(initial, completedEnvelope);
 
 		expect(transition.state.runPhase).toBe("completed");
+		expect(transition.state.connectionState).toBe("disconnected");
 		expect(transition.state.progress).toBe(100);
 		expect(transition.state.lastCommand).toEqual({
 			kind: "none",
@@ -148,6 +149,27 @@ describe("crawlControllerReducer", () => {
 				message: "Stop failed",
 			},
 		]);
+	});
+
+	test("records successful non-terminal commands without leaving them pending", () => {
+		const initial = reduce(createInitialCrawlControllerState(), {
+			type: "crawlAccepted",
+			crawlId: "crawl-1",
+			kind: "start",
+		});
+
+		const transition = crawlControllerReducer(initial, {
+			type: "commandSucceeded",
+			kind: "stop",
+		});
+
+		expect(transition.state.runPhase).toBe("stopping");
+		expect(transition.state.lastCommand).toEqual({
+			kind: "stop",
+			status: "success",
+			error: null,
+		});
+		expect(transition.effects).toEqual([]);
 	});
 
 	test("caps logs and emits the static fallback warning only once", () => {

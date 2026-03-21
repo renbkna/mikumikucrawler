@@ -18,19 +18,10 @@ import {
 	useState,
 } from "react";
 import { Virtuoso } from "react-virtuoso";
+import { getApiErrorMessage } from "../api/errors";
 import { api } from "../api/client";
 import type { CrawledPage } from "../types";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
-
-function getPageContentErrorMessage(errorValue: unknown): string {
-	if (!errorValue || typeof errorValue !== "object") {
-		return "Failed to load";
-	}
-
-	return "error" in errorValue && typeof errorValue.error === "string"
-		? errorValue.error
-		: "Failed to load";
-}
 
 const PageLimitFooter = memo(function PageLimitFooter({
 	pageLimit,
@@ -97,7 +88,7 @@ const CrawledPageCard = memo(function CrawledPageCard({
 				.content.get({ fetch: { signal: AbortSignal.timeout(15_000) } });
 
 			if (error) {
-				throw new Error(getPageContentErrorMessage(error.value));
+				throw new Error(getApiErrorMessage(error.value, "Failed to load"));
 			}
 
 			const response = data as PageContentResponse | null;

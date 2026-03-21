@@ -1,5 +1,6 @@
 import { treaty } from "@elysiajs/eden";
 import type { App } from "../../server/app";
+import { getApiErrorMessage } from "./errors";
 
 const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
 
@@ -11,22 +12,6 @@ export function getBackendUrl(): string {
 }
 
 export type CrawlExportFormat = "json" | "csv";
-
-function getErrorMessageFromResponseBody(body: unknown): string {
-	if (!body || typeof body !== "object") {
-		return "Request failed";
-	}
-
-	if ("error" in body && typeof body.error === "string") {
-		return body.error;
-	}
-
-	if ("message" in body && typeof body.message === "string") {
-		return body.message;
-	}
-
-	return "Request failed";
-}
 
 export async function downloadCrawlExport(
 	crawlId: string,
@@ -41,7 +26,7 @@ export async function downloadCrawlExport(
 		try {
 			body = await response.json();
 		} catch {}
-		throw new Error(getErrorMessageFromResponseBody(body));
+		throw new Error(getApiErrorMessage(body));
 	}
 
 	const contentDisposition = response.headers.get("content-disposition");

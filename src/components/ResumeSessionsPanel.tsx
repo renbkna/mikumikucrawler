@@ -1,7 +1,7 @@
 import { History, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect } from "react";
 import type { InterruptedSessionSummary } from "../api/crawls";
-import { useFocusTrap } from "../hooks";
+import { useDialogModal } from "../hooks";
 import { HeartIcon, SparkleIcon } from "./KawaiiIcons";
 
 export type SessionSummary = InterruptedSessionSummary;
@@ -58,11 +58,11 @@ export function ResumeSessionsPanel({
 	onClose,
 	onResume,
 }: Readonly<ResumeSessionsPanelProps>) {
-	const dialogRef = useRef<HTMLDialogElement>(null);
-	const { modalRef, initialFocusRef } = useFocusTrap<HTMLDivElement>({
-		isOpen,
-		onClose,
-	});
+	const { dialogRef, modalRef, initialFocusRef } =
+		useDialogModal<HTMLDivElement>({
+			isOpen,
+			onClose,
+		});
 
 	// Fetch whenever the panel opens
 	useEffect(() => {
@@ -70,17 +70,6 @@ export function ResumeSessionsPanel({
 			onRefresh();
 		}
 	}, [isOpen, onRefresh]);
-
-	// Keep the native <dialog> element in sync with the isOpen prop
-	useEffect(() => {
-		const dialog = dialogRef.current;
-		if (!dialog) return;
-		if (isOpen && !dialog.open) {
-			dialog.showModal();
-		} else if (!isOpen && dialog.open) {
-			dialog.close();
-		}
-	}, [isOpen]);
 
 	// ── Event handlers ─────────────────────────────────────────────────────────
 

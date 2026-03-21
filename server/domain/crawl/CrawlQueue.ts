@@ -1,6 +1,6 @@
 import type { Logger } from "../../config/logging.js";
 import type { CrawlOptions } from "../../contracts/crawl.js";
-import { normalizeUrl } from "../../utils/helpers.js";
+import { normalizeHttpUrl } from "../../../shared/url.js";
 import type { CrawlState } from "./CrawlState.js";
 
 export interface QueueItem {
@@ -49,7 +49,7 @@ export class CrawlQueue {
 	enqueue(
 		item: Omit<QueueItem, "domain"> & { url: string; domain?: string },
 	): boolean {
-		const normalized = normalizeUrl(item.url);
+		const normalized = normalizeHttpUrl(item.url);
 		if ("error" in normalized || !normalized.url) {
 			return false;
 		}

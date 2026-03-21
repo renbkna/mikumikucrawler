@@ -18,13 +18,14 @@ import {
 	stopCrawl as stopCrawlRequest,
 	subscribeToCrawlEvents,
 } from "../api/crawls";
+import { normalizeHttpUrl } from "../../shared/url";
 import type { Toast } from "../types";
 import {
 	type CrawlControllerAction,
+	type CommandKind,
 	type CrawlControllerState,
 	crawlControllerReducer,
 	createInitialCrawlControllerState,
-	normalizeAndValidateUrl,
 } from "./crawlControllerState";
 
 interface UseCrawlControllerOptions {
@@ -64,6 +65,28 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 		typeof subscribeToCrawlEvents
 	> | null>(null);
 
+	const executeCommand = useCallback(
+		async <T>(
+			kind: CommandKind,
+			request: () => Promise<
+				{ ok: true; data: T } | { ok: false; error: string }
+			>,
+			onSuccess?: (data: T) => Promise<void> | void,
+		) => {
+			dispatch({ type: "commandStarted", kind });
+			const result = await request();
+			if (!result.ok) {
+				dispatch({ type: "commandFailed", kind, error: result.error });
+				return result;
+			}
+
+			dispatch({ type: "commandSucceeded", kind });
+			await onSuccess?.(result.data);
+			return result;
+		},
+		[dispatch],
+	);
+
 	const closeSubscription = useEffectEvent(() => {
 		subscriptionRef.current?.close();
 		subscriptionRef.current = null;
@@ -80,7 +103,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 			envelope.type === "crawl.stopped"
 		) {
 			closeSubscription();
-			void refreshInterruptedSessions();
+			void refreshInterruptedSessions(false);
 		}
 	});
 
@@ -99,25 +122,41 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 		});
 	});
 
-	const refreshInterruptedSessions = useCallback(async () => {
-		dispatch({ type: "interruptedSessionsLoading" });
-		const result = await listInterruptedCrawls();
-		if (!result.ok) {
-			dispatch({
-				type: "interruptedSessionsFailed",
-				error: result.error,
-			});
-			return;
-		}
+	const refreshInterruptedSessions = useCallback(
+		async (trackCommand = true) => {
+			if (trackCommand) {
+				dispatch({ type: "commandStarted", kind: "refresh" });
+			}
+			dispatch({ type: "interruptedSessionsLoading" });
+			const result = await listInterruptedCrawls();
+			if (!result.ok) {
+				dispatch({
+					type: "interruptedSessionsFailed",
+					error: result.error,
+				});
+				if (trackCommand) {
+					dispatch({
+						type: "commandFailed",
+						kind: "refresh",
+						error: result.error,
+					});
+				}
+				return;
+			}
 
-		dispatch({
-			type: "interruptedSessionsLoaded",
-			sessions: result.data,
-		});
-	}, [dispatch]);
+			dispatch({
+				type: "interruptedSessionsLoaded",
+				sessions: result.data,
+			});
+			if (trackCommand) {
+				dispatch({ type: "commandSucceeded", kind: "refresh" });
+			}
+		},
+		[dispatch],
+	);
 
 	useEffect(() => {
-		void refreshInterruptedSessions();
+		void refreshInterruptedSessions(false);
 	}, [refreshInterruptedSessions]);
 
 	useEffect(() => {
@@ -153,7 +192,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				return false;
 			}
 
-			const validationResult = normalizeAndValidateUrl(state.target);
+			const validationResult = normalizeHttpUrl(state.target);
 			if ("error" in validationResult) {
 				addToast("error", validationResult.error);
 				return false;
@@ -198,13 +237,10 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 
 	const stopCrawl = useCallback(async () => {
 		if (!state.activeCrawlId) return;
+		const crawlId = state.activeCrawlId;
 
-		dispatch({ type: "commandStarted", kind: "stop" });
-		const result = await stopCrawlRequest(state.activeCrawlId);
-		if (!result.ok) {
-			dispatch({ type: "commandFailed", kind: "stop", error: result.error });
-		}
-	}, [dispatch, state.activeCrawlId]);
+		await executeCommand("stop", () => stopCrawlRequest(crawlId));
+	}, [executeCommand, state.activeCrawlId]);
 
 	const resumeCrawl = useCallback(
 		async (sessionId: string, sessionTarget: string) => {
@@ -248,45 +284,39 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				addToast("error", "Unsupported export format");
 				return;
 			}
+			const crawlId = state.activeCrawlId;
 
-			dispatch({ type: "commandStarted", kind: "export" });
-			const result = await exportCrawl(
-				state.activeCrawlId,
-				format as CrawlExportFormat,
-			);
-			if (!result.ok) {
-				dispatch({
-					type: "commandFailed",
-					kind: "export",
-					error: result.error,
-				});
-				return;
-			}
+			await executeCommand(
+				"export",
+				() => exportCrawl(crawlId, format as CrawlExportFormat),
+				({ blob, filename }) => {
+					const url = URL.createObjectURL(blob);
+					const anchor = document.createElement("a");
+					anchor.href = url;
+					anchor.download = filename;
+					document.body.appendChild(anchor);
+					anchor.click();
+					setTimeout(() => {
+						anchor.remove();
+						URL.revokeObjectURL(url);
+					}, 100);
 
-			const { blob, filename } = result.data;
-			const url = URL.createObjectURL(blob);
-			const anchor = document.createElement("a");
-			anchor.href = url;
-			anchor.download = filename;
-			document.body.appendChild(anchor);
-			anchor.click();
-			setTimeout(() => {
-				anchor.remove();
-				URL.revokeObjectURL(url);
-			}, 100);
-
-			addToast(
-				"success",
-				`Data exported successfully as ${format.toUpperCase()}`,
+					addToast(
+						"success",
+						`Data exported successfully as ${format.toUpperCase()}`,
+					);
+				},
 			);
 		},
-		[addToast, dispatch, state.activeCrawlId],
+		[addToast, executeCommand, state.activeCrawlId],
 	);
 
 	const deleteInterruptedSession = useCallback(
 		async (sessionId: string) => {
 			dispatch({ type: "interruptedSessionDeleting", sessionId });
-			const result = await deleteCrawl(sessionId);
+			const result = await executeCommand("delete", () =>
+				deleteCrawl(sessionId),
+			);
 			if (!result.ok) {
 				dispatch({
 					type: "interruptedSessionDeleteFailed",
@@ -298,7 +328,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 			dispatch({ type: "interruptedSessionDeleted", sessionId });
 			return true;
 		},
-		[dispatch],
+		[dispatch, executeCommand],
 	);
 
 	const displayedPages = useMemo(() => {
@@ -340,7 +370,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 		interruptedSessionsLoading: state.interruptedSessions.isLoading,
 		interruptedSessionsError: state.interruptedSessions.error,
 		deletingInterruptedSessionId: state.interruptedSessions.deletingId,
-		refreshInterruptedSessions,
+		refreshInterruptedSessions: () => refreshInterruptedSessions(true),
 		deleteInterruptedSession,
 		startCrawl,
 		stopCrawl,

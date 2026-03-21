@@ -109,14 +109,13 @@ export class PagePipeline {
 			}
 
 			if (this.options.respectRobots) {
-				const allowed = await this.robotsService.isAllowed(link.url);
-				if (!allowed) {
+				const linkPolicy = await this.robotsService.evaluate(link.url);
+				if (!linkPolicy.allowed) {
 					continue;
 				}
 
-				const crawlDelay = await this.robotsService.getCrawlDelay(link.url);
-				if (crawlDelay) {
-					this.state.setDomainDelay(new URL(link.url).hostname, crawlDelay);
+				if (linkPolicy.crawlDelayMs !== undefined) {
+					this.state.setDomainDelay(linkPolicy.domain, linkPolicy.crawlDelayMs);
 				}
 			}
 

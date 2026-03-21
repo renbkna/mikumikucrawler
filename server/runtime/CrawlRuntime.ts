@@ -238,20 +238,17 @@ export class CrawlRuntime {
 		}
 
 		if (this.deps.options.respectRobots) {
-			const allowed = await this.robotsService.isAllowed(
+			const targetPolicy = await this.robotsService.evaluate(
 				this.deps.options.target,
 			);
-			if (!allowed) {
+			if (!targetPolicy.allowed) {
 				throw new Error("Target URL is disallowed by robots.txt");
 			}
 
-			const crawlDelay = await this.robotsService.getCrawlDelay(
-				this.deps.options.target,
-			);
-			if (crawlDelay) {
+			if (targetPolicy.crawlDelayMs !== undefined) {
 				this.state.setDomainDelay(
-					new URL(this.deps.options.target).hostname,
-					crawlDelay,
+					targetPolicy.domain,
+					targetPolicy.crawlDelayMs,
 				);
 			}
 		}

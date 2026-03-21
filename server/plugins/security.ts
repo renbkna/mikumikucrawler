@@ -2,8 +2,10 @@ import { lookup } from "node:dns/promises";
 import net from "node:net";
 import { Elysia } from "elysia";
 import { isInvalidIpAddress } from "../utils/ipValidation.js";
+import { LRUCacheWithTTL } from "../utils/lruCache.js";
 
 const RESOLUTION_TTL_MS = 5 * 60 * 1000;
+const RESOLUTION_CACHE_MAX_ENTRIES = 512;
 
 export interface Resolver {
 	resolveHost(hostname: string): Promise<string[]>;
@@ -21,13 +23,11 @@ export interface HttpClient {
 	fetch(request: HttpClientRequest): Promise<Response>;
 }
 
-interface CacheEntry {
-	addresses: string[];
-	expiresAt: number;
-}
-
 export class DefaultResolver implements Resolver {
-	private readonly cache = new Map<string, CacheEntry>();
+	private readonly cache = new LRUCacheWithTTL<string, string[]>(
+		RESOLUTION_CACHE_MAX_ENTRIES,
+		RESOLUTION_TTL_MS,
+	);
 
 	constructor(private readonly lookupFn: typeof lookup = lookup) {}
 
@@ -59,8 +59,8 @@ export class DefaultResolver implements Resolver {
 		}
 
 		const cached = this.cache.get(normalizedHost);
-		if (cached && cached.expiresAt > Date.now()) {
-			return cached.addresses;
+		if (cached) {
+			return cached;
 		}
 
 		const records = await this.lookupFn(normalizedHost, {
@@ -79,10 +79,7 @@ export class DefaultResolver implements Resolver {
 			);
 		}
 
-		this.cache.set(normalizedHost, {
-			addresses,
-			expiresAt: Date.now() + RESOLUTION_TTL_MS,
-		});
+		this.cache.set(normalizedHost, addresses);
 
 		return addresses;
 	}

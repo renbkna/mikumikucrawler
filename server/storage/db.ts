@@ -8,7 +8,6 @@ import { createCrawlQueueRepo } from "./repos/crawlQueueRepo.js";
 import { createCrawlRunRepo } from "./repos/crawlRunRepo.js";
 import { createPageRepo } from "./repos/pageRepo.js";
 import { createSearchRepo } from "./repos/searchRepo.js";
-import { createStatsRepo } from "./repos/statsRepo.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,7 +18,6 @@ export interface StorageRepos {
 	crawlQueue: ReturnType<typeof createCrawlQueueRepo>;
 	pages: ReturnType<typeof createPageRepo>;
 	search: ReturnType<typeof createSearchRepo>;
-	stats: ReturnType<typeof createStatsRepo>;
 }
 
 export interface Storage {
@@ -91,7 +89,6 @@ export function createStorage(databasePath = config.dbPath): Storage {
 			crawlQueue: createCrawlQueueRepo(db),
 			pages: createPageRepo(db),
 			search: createSearchRepo(db),
-			stats: createStatsRepo(db),
 		},
 	};
 }

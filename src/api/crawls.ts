@@ -7,6 +7,7 @@ import {
 	downloadCrawlExport,
 	getBackendUrl,
 } from "./client";
+import { getApiErrorMessage } from "./errors";
 import { parseCrawlEventEnvelope } from "./crawlEvents";
 
 export type { CrawlExportFormat } from "./client";
@@ -32,22 +33,6 @@ export interface InterruptedSessionSummary {
 	updatedAt: string;
 }
 
-function getTreatyErrorMessage(errorValue: unknown): string {
-	if (!errorValue || typeof errorValue !== "object") {
-		return "Request failed";
-	}
-
-	if ("error" in errorValue && typeof errorValue.error === "string") {
-		return errorValue.error;
-	}
-
-	if ("message" in errorValue && typeof errorValue.message === "string") {
-		return errorValue.message;
-	}
-
-	return "Request failed";
-}
-
 function toInterruptedSessionSummary(
 	crawl: CrawlSummary,
 ): InterruptedSessionSummary {
@@ -66,7 +51,7 @@ export async function createCrawl(
 ): Promise<ApiResult<CrawlSummary>> {
 	const response = await api.api.crawls.post(options);
 	if (response.error || !response.data) {
-		return { ok: false, error: getTreatyErrorMessage(response.error?.value) };
+		return { ok: false, error: getApiErrorMessage(response.error?.value) };
 	}
 	return { ok: true, data: response.data };
 }
@@ -76,7 +61,7 @@ export async function stopCrawl(
 ): Promise<ApiResult<CrawlSummary>> {
 	const response = await api.api.crawls({ id: crawlId }).stop.post();
 	if (response.error || !response.data) {
-		return { ok: false, error: getTreatyErrorMessage(response.error?.value) };
+		return { ok: false, error: getApiErrorMessage(response.error?.value) };
 	}
 	return { ok: true, data: response.data };
 }
@@ -86,7 +71,7 @@ export async function resumeCrawl(
 ): Promise<ApiResult<CrawlSummary>> {
 	const response = await api.api.crawls({ id: crawlId }).resume.post();
 	if (response.error || !response.data) {
-		return { ok: false, error: getTreatyErrorMessage(response.error?.value) };
+		return { ok: false, error: getApiErrorMessage(response.error?.value) };
 	}
 	return { ok: true, data: response.data };
 }
@@ -99,7 +84,7 @@ export async function listInterruptedCrawls(): Promise<
 	});
 
 	if (response.error || !response.data) {
-		return { ok: false, error: getTreatyErrorMessage(response.error?.value) };
+		return { ok: false, error: getApiErrorMessage(response.error?.value) };
 	}
 
 	return {
@@ -113,7 +98,7 @@ export async function deleteCrawl(
 ): Promise<ApiResult<{ deleted: true }>> {
 	const response = await api.api.crawls({ id: crawlId }).delete();
 	if (response.error) {
-		return { ok: false, error: getTreatyErrorMessage(response.error.value) };
+		return { ok: false, error: getApiErrorMessage(response.error.value) };
 	}
 	return { ok: true, data: { deleted: true } };
 }

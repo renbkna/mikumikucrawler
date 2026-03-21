@@ -1,8 +1,6 @@
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cors } from "@elysiajs/cors";
-import { staticPlugin } from "@elysiajs/static";
 import { Elysia } from "elysia";
 import { rateLimit } from "elysia-rate-limit";
 import { crawlsApi } from "./api/crawls.js";
@@ -34,8 +32,6 @@ import { hashContent } from "./utils/hashUtils.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const distPath = path.join(__dirname, "..", "dist");
-const distAssetsPath = path.join(distPath, "assets");
-const hasDistAssets = existsSync(distAssetsPath);
 
 export const logger = await setupLogging();
 export const storage = createStorage();
@@ -84,11 +80,6 @@ export const app = new Elysia()
 	.use(pagesApi(storage.repos))
 	.use(searchApi(storage.repos))
 	.use(healthApi(runtimeRegistry))
-	.use(
-		hasDistAssets
-			? staticPlugin({ assets: distAssetsPath, prefix: "/assets" })
-			: new Elysia(),
-	)
 	.onError(({ code, error, set }) => {
 		if (code === "NOT_FOUND") {
 			set.status = 404;

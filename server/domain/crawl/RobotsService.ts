@@ -1,21 +1,24 @@
 import { config } from "../../config/env.js";
 import type { Logger } from "../../config/logging.js";
-import { REQUEST_CONSTANTS } from "../../constants.js";
+import { MEMORY_CONSTANTS, REQUEST_CONSTANTS } from "../../constants.js";
+import { LRUCacheWithTTL } from "../../utils/lruCache.js";
 import type { HttpClient } from "../../plugins/security.js";
 import {
 	NativeRobotsParser,
 	type RobotsResult,
 } from "../../utils/robotsParser.js";
 
-interface CachedRobots {
-	rules: RobotsResult | null;
-	expiresAt: number;
+export interface RobotsPolicy {
+	allowed: boolean;
+	crawlDelayMs?: number;
+	domain: string;
 }
 
-const ROBOTS_CACHE_TTL_MS = 30 * 60 * 1000;
-
 export class RobotsService {
-	private readonly cache = new Map<string, CachedRobots>();
+	private readonly cache = new LRUCacheWithTTL<string, RobotsResult | null>(
+		MEMORY_CONSTANTS.ROBOTS_CACHE_MAX_SIZE,
+		MEMORY_CONSTANTS.ROBOTS_CACHE_TTL_MS,
+	);
 
 	constructor(
 		private readonly httpClient: HttpClient,
@@ -26,8 +29,8 @@ export class RobotsService {
 		domain: string,
 	): Promise<RobotsResult | null> {
 		const cached = this.cache.get(domain);
-		if (cached && cached.expiresAt > Date.now()) {
-			return cached.rules;
+		if (cached !== undefined) {
+			return cached;
 		}
 
 		for (const protocol of ["https", "http"] as const) {
@@ -46,10 +49,7 @@ export class RobotsService {
 
 				const text = await response.text();
 				const rules = new NativeRobotsParser(text);
-				this.cache.set(domain, {
-					rules,
-					expiresAt: Date.now() + ROBOTS_CACHE_TTL_MS,
-				});
+				this.cache.set(domain, rules);
 				return rules;
 			} catch (error) {
 				this.logger.debug(
@@ -58,23 +58,27 @@ export class RobotsService {
 			}
 		}
 
-		this.cache.set(domain, {
-			rules: null,
-			expiresAt: Date.now() + ROBOTS_CACHE_TTL_MS,
-		});
+		this.cache.set(domain, null);
 		return null;
 	}
 
-	async isAllowed(url: string): Promise<boolean> {
-		const domain = new URL(url).hostname;
-		const rules = await this.fetchRulesForDomain(domain);
-		return rules ? rules.isAllowed(url, config.userAgent) : true;
-	}
-
-	async getCrawlDelay(url: string): Promise<number | undefined> {
+	async evaluate(url: string): Promise<RobotsPolicy> {
 		const domain = new URL(url).hostname;
 		const rules = await this.fetchRulesForDomain(domain);
 		const crawlDelaySeconds = rules?.getCrawlDelay(config.userAgent);
-		return crawlDelaySeconds ? crawlDelaySeconds * 1000 : undefined;
+
+		return {
+			domain,
+			allowed: rules ? rules.isAllowed(url, config.userAgent) : true,
+			crawlDelayMs: crawlDelaySeconds ? crawlDelaySeconds * 1000 : undefined,
+		};
+	}
+
+	async isAllowed(url: string): Promise<boolean> {
+		return (await this.evaluate(url)).allowed;
+	}
+
+	async getCrawlDelay(url: string): Promise<number | undefined> {
+		return (await this.evaluate(url)).crawlDelayMs;
 	}
 }

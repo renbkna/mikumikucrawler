@@ -1,12 +1,8 @@
 import { Coffee, Database, TriangleAlert } from "lucide-react";
-import { useEffect, useRef } from "react";
-import { useFocusTrap } from "../hooks";
+import { CRAWL_OPTION_BOUNDS, isCrawlMethod } from "../../shared/crawl.js";
+import { useDialogModal } from "../hooks";
 import type { CrawlOptions } from "../types";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
-
-function isCrawlMethod(value: string): value is CrawlOptions["crawlMethod"] {
-	return value === "links" || value === "media" || value === "full";
-}
 
 interface ConfigurationViewProps {
 	isOpen: boolean;
@@ -23,22 +19,11 @@ export function ConfigurationView({
 	onOptionsChange,
 	onSave,
 }: Readonly<ConfigurationViewProps>) {
-	const dialogRef = useRef<HTMLDialogElement>(null);
-	const { modalRef, initialFocusRef } = useFocusTrap<HTMLDivElement>({
-		isOpen,
-		onClose,
-	});
-
-	useEffect(() => {
-		const dialog = dialogRef.current;
-		if (!dialog) return;
-
-		if (isOpen && !dialog.open) {
-			dialog.showModal();
-		} else if (!isOpen && dialog.open) {
-			dialog.close();
-		}
-	}, [isOpen]);
+	const { dialogRef, modalRef, initialFocusRef } =
+		useDialogModal<HTMLDivElement>({
+			isOpen,
+			onClose,
+		});
 
 	if (!isOpen) return null;
 
@@ -150,19 +135,24 @@ export function ConfigurationView({
 									value={options.crawlDepth}
 									onChange={(e) => {
 										const value = Math.min(
-											10,
-											Math.max(1, Number(e.target.value) || 1),
+											CRAWL_OPTION_BOUNDS.crawlDepth.max,
+											Math.max(
+												CRAWL_OPTION_BOUNDS.crawlDepth.min,
+												Number(e.target.value) ||
+													CRAWL_OPTION_BOUNDS.crawlDepth.min,
+											),
 										);
 										onOptionsChange({ ...options, crawlDepth: value });
 									}}
 									className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
-									min="1"
-									max="10"
+									min={CRAWL_OPTION_BOUNDS.crawlDepth.min}
+									max={CRAWL_OPTION_BOUNDS.crawlDepth.max}
 								/>
 								<p className="mt-2 text-xs text-miku-text/50 font-medium">
-									How many link-hops deep to crawl from the start URL (1–10)
+									How many link-hops deep to crawl from the start URL
+									{` (${CRAWL_OPTION_BOUNDS.crawlDepth.min}-${CRAWL_OPTION_BOUNDS.crawlDepth.max})`}
 								</p>
-								{options.crawlDepth > 5 && (
+								{options.crawlDepth >= CRAWL_OPTION_BOUNDS.crawlDepth.max && (
 									<p className="mt-1.5 flex items-center gap-1.5 text-xs font-bold text-amber-600">
 										<TriangleAlert className="w-3.5 h-3.5 shrink-0" />
 										Deep crawls may take a while ✨
@@ -185,14 +175,18 @@ export function ConfigurationView({
 										value={options.maxPages}
 										onChange={(e) => {
 											const value = Math.min(
-												200,
-												Math.max(1, Number(e.target.value) || 1),
+												CRAWL_OPTION_BOUNDS.maxPages.max,
+												Math.max(
+													CRAWL_OPTION_BOUNDS.maxPages.min,
+													Number(e.target.value) ||
+														CRAWL_OPTION_BOUNDS.maxPages.min,
+												),
 											);
 											onOptionsChange({ ...options, maxPages: value });
 										}}
 										className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
-										min="1"
-										max="200"
+										min={CRAWL_OPTION_BOUNDS.maxPages.min}
+										max={CRAWL_OPTION_BOUNDS.maxPages.max}
 									/>
 									<p className="mt-2 text-xs text-miku-text/50 font-medium">
 										Total pages to crawl across all domains
@@ -212,8 +206,12 @@ export function ConfigurationView({
 										value={options.maxPagesPerDomain}
 										onChange={(e) => {
 											const value = Math.min(
-												200,
-												Math.max(0, Number(e.target.value) || 0),
+												CRAWL_OPTION_BOUNDS.maxPagesPerDomain.max,
+												Math.max(
+													CRAWL_OPTION_BOUNDS.maxPagesPerDomain.min,
+													Number(e.target.value) ||
+														CRAWL_OPTION_BOUNDS.maxPagesPerDomain.min,
+												),
 											);
 											onOptionsChange({
 												...options,
@@ -221,8 +219,8 @@ export function ConfigurationView({
 											});
 										}}
 										className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
-										min="0"
-										max="200"
+										min={CRAWL_OPTION_BOUNDS.maxPagesPerDomain.min}
+										max={CRAWL_OPTION_BOUNDS.maxPagesPerDomain.max}
 									/>
 									<p className="mt-2 text-xs text-miku-text/50 font-medium">
 										Pages per domain (0 = unlimited)
@@ -247,9 +245,9 @@ export function ConfigurationView({
 									id="config-crawl-delay"
 									type="range"
 									value={options.crawlDelay}
-									min="250"
-									max="10000"
-									step="250"
+									min={CRAWL_OPTION_BOUNDS.crawlDelay.min}
+									max={CRAWL_OPTION_BOUNDS.crawlDelay.max}
+									step={CRAWL_OPTION_BOUNDS.crawlDelay.step}
 									onChange={(e) =>
 										onOptionsChange({
 											...options,
@@ -282,8 +280,12 @@ export function ConfigurationView({
 										value={options.maxConcurrentRequests}
 										onChange={(e) => {
 											const value = Math.min(
-												10,
-												Math.max(1, Number(e.target.value) || 1),
+												CRAWL_OPTION_BOUNDS.maxConcurrentRequests.max,
+												Math.max(
+													CRAWL_OPTION_BOUNDS.maxConcurrentRequests.min,
+													Number(e.target.value) ||
+														CRAWL_OPTION_BOUNDS.maxConcurrentRequests.min,
+												),
 											);
 											onOptionsChange({
 												...options,
@@ -291,8 +293,8 @@ export function ConfigurationView({
 											});
 										}}
 										className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
-										min="1"
-										max="10"
+										min={CRAWL_OPTION_BOUNDS.maxConcurrentRequests.min}
+										max={CRAWL_OPTION_BOUNDS.maxConcurrentRequests.max}
 									/>
 									<p className="mt-2 text-xs text-miku-text/50 font-medium">
 										Higher values crawl faster but may overload servers
@@ -312,14 +314,18 @@ export function ConfigurationView({
 										value={options.retryLimit}
 										onChange={(e) => {
 											const value = Math.min(
-												5,
-												Math.max(0, Number(e.target.value) || 0),
+												CRAWL_OPTION_BOUNDS.retryLimit.max,
+												Math.max(
+													CRAWL_OPTION_BOUNDS.retryLimit.min,
+													Number(e.target.value) ||
+														CRAWL_OPTION_BOUNDS.retryLimit.min,
+												),
 											);
 											onOptionsChange({ ...options, retryLimit: value });
 										}}
 										className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
-										min="0"
-										max="5"
+										min={CRAWL_OPTION_BOUNDS.retryLimit.min}
+										max={CRAWL_OPTION_BOUNDS.retryLimit.max}
 									/>
 									<p className="mt-2 text-xs text-miku-text/50 font-medium">
 										How many times to retry failed requests
