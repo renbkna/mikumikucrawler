@@ -1,4 +1,5 @@
 import type {
+	CrawlerSocket,
 	CrawlStats,
 	QueueStats,
 	SanitizedCrawlOptions,
@@ -214,5 +215,16 @@ export class CrawlState {
 			visitedCacheSize: this.visited.size,
 			domainDelaysSize: this.domainDelays.size,
 		};
+	}
+
+	emitStats(
+		socket: CrawlerSocket,
+		extra?: Record<string, unknown>,
+	): void {
+		socket.emit("stats", { ...this.stats, ...extra });
+	}
+
+	emitLog(socket: CrawlerSocket, message: string): void {
+		this.emitStats(socket, { log: message });
 	}
 }

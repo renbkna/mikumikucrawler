@@ -1,10 +1,14 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import {
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { CrawlerError } from "../../errors.js";
+
+// Re-import real module to undo any mock.module from other test files
+// (sitemapParser.test.ts uses mock.module("../secureFetch.js", ...) which persists)
+const {
 	clearResolutionCache,
 	getCacheStats,
 	resolveUrlSecurely,
 	secureFetch,
-} from "../secureFetch.js";
+} = await import("../secureFetch.js");
 
 /**
  * CONTRACT: secureFetch
@@ -54,109 +58,89 @@ import {
  */
 
 describe("secureFetch CONTRACT", () => {
-	const originalFetch = global.fetch;
-
 	beforeEach(() => {
 		clearResolutionCache();
 	});
 
-	afterEach(() => {
-		global.fetch = originalFetch;
-	});
-
 	describe("INVARIANT: SSRF Protection at DNS Resolution", () => {
+		const expectSSRFBlock = async (url: string) => {
+			try {
+				await resolveUrlSecurely(url);
+				throw new Error("Expected SSRF block");
+			} catch (err) {
+				expect(CrawlerError.isSSRF(err)).toBe(true);
+			}
+		};
+
 		test("blocks localhost", async () => {
-			await expect(resolveUrlSecurely("http://localhost/test")).rejects.toThrow(
-				"Target host is not allowed",
-			);
+			await expectSSRFBlock("http://localhost/test");
 		});
 
 		test("blocks 127.0.0.1 (loopback)", async () => {
-			await expect(resolveUrlSecurely("http://127.0.0.1/test")).rejects.toThrow(
-				"Target host is not allowed",
-			);
+			await expectSSRFBlock("http://127.0.0.1/test");
 		});
 
 		test("blocks 127.0.0.2 (loopback range)", async () => {
-			await expect(resolveUrlSecurely("http://127.0.0.2/test")).rejects.toThrow(
-				"Target host is not allowed",
-			);
+			await expectSSRFBlock("http://127.0.0.2/test");
 		});
 
 		test("blocks 10.0.0.1 (private class A)", async () => {
-			await expect(resolveUrlSecurely("http://10.0.0.1/test")).rejects.toThrow(
-				"Target host is not allowed",
-			);
+			await expectSSRFBlock("http://10.0.0.1/test");
 		});
 
 		test("blocks 172.16.0.1 (private class B)", async () => {
-			await expect(
-				resolveUrlSecurely("http://172.16.0.1/test"),
-			).rejects.toThrow("Target host is not allowed");
+			await expectSSRFBlock("http://172.16.0.1/test");
 		});
 
 		test("blocks 192.168.1.1 (private class C)", async () => {
-			await expect(
-				resolveUrlSecurely("http://192.168.1.1/test"),
-			).rejects.toThrow("Target host is not allowed");
+			await expectSSRFBlock("http://192.168.1.1/test");
 		});
 
 		test("blocks 0.0.0.0", async () => {
-			await expect(resolveUrlSecurely("http://0.0.0.0/test")).rejects.toThrow(
-				"Target host is not allowed",
-			);
+			await expectSSRFBlock("http://0.0.0.0/test");
 		});
 
 		test("blocks 169.254.169.254 (AWS metadata)", async () => {
-			await expect(
-				resolveUrlSecurely("http://169.254.169.254/latest/meta-data/"),
-			).rejects.toThrow("Target host is not allowed");
+			await expectSSRFBlock("http://169.254.169.254/latest/meta-data/");
 		});
 
 		test("blocks [::1] (IPv6 loopback)", async () => {
-			await expect(resolveUrlSecurely("http://[::1]/test")).rejects.toThrow(
-				"Target host is not allowed",
-			);
+			await expectSSRFBlock("http://[::1]/test");
 		});
 
 		test("blocks [fc00::1] (IPv6 unique local)", async () => {
-			await expect(resolveUrlSecurely("http://[fc00::1]/test")).rejects.toThrow(
-				"Target host is not allowed",
-			);
+			await expectSSRFBlock("http://[fc00::1]/test");
 		});
 
 		test("blocks [fe80::1] (IPv6 link-local)", async () => {
-			await expect(resolveUrlSecurely("http://[fe80::1]/test")).rejects.toThrow(
-				"Target host is not allowed",
-			);
+			await expectSSRFBlock("http://[fe80::1]/test");
 		});
 
 		test("blocks IPv4-mapped IPv6 addresses that resolve to private", async () => {
-			await expect(
-				resolveUrlSecurely("http://[::ffff:192.168.1.1]/test"),
-			).rejects.toThrow("Target host is not allowed");
+			await expectSSRFBlock("http://[::ffff:192.168.1.1]/test");
 		});
 	});
 
 	describe("INVARIANT: Valid Public Addresses Allowed", () => {
 		test("allows public IPv4 addresses", async () => {
 			const result = await resolveUrlSecurely("http://93.184.216.34/test");
-			expect(result.url).toBe("http://93.184.216.34/test");
+			expect(result.ip).toBe("93.184.216.34");
 		});
 
 		test("allows public hostnames (via DNS)", async () => {
-			global.fetch = originalFetch;
-
 			const result = await resolveUrlSecurely("https://example.com/test");
-			expect(result.resolvedHost).toBe("example.com");
+			expect(result.hostname).toBe("example.com");
 		});
 	});
 
 	describe("INVARIANT: DNS Resolution", () => {
 		test("handles DNS resolution failure", async () => {
-			await expect(
-				resolveUrlSecurely("http://nonexistent.invalid.domain/test"),
-			).rejects.toThrow();
+			try {
+				await resolveUrlSecurely("http://nonexistent.invalid.domain/test");
+				throw new Error("Expected DNS failure");
+			} catch (err) {
+				expect(err).toBeInstanceOf(CrawlerError);
+			}
 		});
 
 		test("caches DNS resolution", async () => {
@@ -215,12 +199,13 @@ describe("secureFetch CONTRACT", () => {
 	describe("INVARIANT: Fetch Delegation", () => {
 		test("performs fetch after validation", async () => {
 			const mockResponse = new Response("OK", { status: 200 });
-			global.fetch = mock(() =>
+			const fetchMock = mock(() =>
 				Promise.resolve(mockResponse),
 			) as unknown as typeof fetch;
 
 			const response = await secureFetch({
 				url: "https://example.com/test",
+				fetchFn: fetchMock,
 			});
 
 			expect(response.status).toBe(200);
@@ -231,11 +216,11 @@ describe("secureFetch CONTRACT", () => {
 			const fetchMock = mock(() =>
 				Promise.resolve(mockResponse),
 			) as unknown as typeof fetch;
-			global.fetch = fetchMock;
 
 			await secureFetch({
 				url: "https://example.com/test",
 				headers: { "X-Custom": "value" },
+				fetchFn: fetchMock,
 			});
 
 			expect(fetchMock).toHaveBeenCalled();
@@ -254,24 +239,21 @@ describe("secureFetch CONTRACT", () => {
 		});
 
 		test("delegates redirect handling to fetch", async () => {
-			// INVARIANT: secureFetch does NOT manually handle redirects
-			// It passes the redirect option to fetch and returns the result
 			const redirectResponse = new Response(null, {
 				status: 302,
 				headers: { location: "https://example.com/redirected" },
 			});
 
-			global.fetch = mock(() =>
+			const fetchMock = mock(() =>
 				Promise.resolve(redirectResponse),
 			) as unknown as typeof fetch;
 
 			const response = await secureFetch({
 				url: "https://example.com/initial",
 				redirect: "follow",
+				fetchFn: fetchMock,
 			});
 
-			// When redirect: "follow", fetch handles it internally
-			// We just return what fetch gives us
 			expect(response.status).toBe(302);
 		});
 
@@ -281,16 +263,16 @@ describe("secureFetch CONTRACT", () => {
 				headers: { location: "https://example.com/redirected" },
 			});
 
-			global.fetch = mock(() =>
+			const fetchMock = mock(() =>
 				Promise.resolve(redirectResponse),
 			) as unknown as typeof fetch;
 
 			const response = await secureFetch({
 				url: "https://example.com/initial",
 				redirect: "manual",
+				fetchFn: fetchMock,
 			});
 
-			// redirect: "manual" means fetch returns the 302 as-is
 			expect(response.status).toBe(302);
 			expect(response.headers.get("location")).toBe(
 				"https://example.com/redirected",
@@ -300,28 +282,22 @@ describe("secureFetch CONTRACT", () => {
 
 	describe("EDGE CASE: Redirect Behavior (Delegated to Fetch)", () => {
 		test("NOTE: Redirect validation is NOT implemented", async () => {
-			// INVARIANT: secureFetch validates the INITIAL URL only
-			// Redirect targets are NOT validated by secureFetch
-			// This is a known limitation - redirects are delegated to fetch
-
 			const redirectResponse = new Response(null, {
 				status: 302,
-				headers: { location: "http://192.168.1.1/admin" }, // Private IP
+				headers: { location: "http://192.168.1.1/admin" },
 			});
 
-			global.fetch = mock(() =>
+			const fetchMock = mock(() =>
 				Promise.resolve(redirectResponse),
 			) as unknown as typeof fetch;
 
-			// This will NOT throw - secureFetch doesn't validate redirect targets
 			const response = await secureFetch({
 				url: "https://example.com/initial",
-				redirect: "manual", // manual returns the redirect as-is
+				redirect: "manual",
+				fetchFn: fetchMock,
 			});
 
 			expect(response.status).toBe(302);
-			// Note: The Location header points to a private IP, but secureFetch
-			// does not validate redirect targets in the current implementation
 		});
 
 		test("handles various redirect status codes", async () => {
@@ -335,13 +311,14 @@ describe("secureFetch CONTRACT", () => {
 					headers: { location: "https://example.com/redirected" },
 				});
 
-				global.fetch = mock(() =>
+				const fetchMock = mock(() =>
 					Promise.resolve(redirectResponse),
 				) as unknown as typeof fetch;
 
 				const response = await secureFetch({
 					url: "https://example.com/initial",
 					redirect: "manual",
+					fetchFn: fetchMock,
 				});
 
 				expect(response.status).toBe(code);
@@ -354,13 +331,14 @@ describe("secureFetch CONTRACT", () => {
 				headers: { location: "/relative/path" },
 			});
 
-			global.fetch = mock(() =>
+			const fetchMock = mock(() =>
 				Promise.resolve(redirectResponse),
 			) as unknown as typeof fetch;
 
 			const response = await secureFetch({
 				url: "https://example.com/initial",
 				redirect: "manual",
+				fetchFn: fetchMock,
 			});
 
 			expect(response.status).toBe(302);
@@ -373,13 +351,14 @@ describe("secureFetch CONTRACT", () => {
 				headers: {},
 			});
 
-			global.fetch = mock(() =>
+			const fetchMock = mock(() =>
 				Promise.resolve(redirectResponse),
 			) as unknown as typeof fetch;
 
 			const response = await secureFetch({
 				url: "https://example.com/initial",
 				redirect: "manual",
+				fetchFn: fetchMock,
 			});
 
 			expect(response.status).toBe(302);
@@ -393,22 +372,28 @@ describe("secureFetch CONTRACT", () => {
 				// NOTE: `http:///test` is parsed by URL constructor as `http://test/`
 				// where "test" is the hostname. This is not actually an empty hostname case.
 				// The test verifies that such URLs are handled (rejected due to DNS failure).
-				await expect(resolveUrlSecurely("http:///test")).rejects.toThrow(
-					"Unable to resolve target hostname",
-				);
+				try {
+					await resolveUrlSecurely("http:///test");
+					throw new Error("Expected failure");
+				} catch (err) {
+					expect(err).toBeInstanceOf(CrawlerError);
+				}
 			},
 			{ timeout: 10000 },
 		);
 
 		test("handles hostname with port", async () => {
 			const result = await resolveUrlSecurely("https://example.com:8080/test");
-			expect(result.resolvedHost).toBe("example.com");
+			expect(result.hostname).toBe("example.com");
 		});
 
 		test("handles IPv6 hostname format", async () => {
-			await expect(
-				resolveUrlSecurely("http://[::1]:8080/test"),
-			).rejects.toThrow("Target host is not allowed");
+			try {
+				await resolveUrlSecurely("http://[::1]:8080/test");
+				throw new Error("Expected SSRF block");
+			} catch (err) {
+				expect(CrawlerError.isSSRF(err)).toBe(true);
+			}
 		});
 
 		test("validates each time when cache expires", async () => {

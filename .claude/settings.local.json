@@ -15,7 +15,8 @@
       "Bash(xxd /home/ren/Projects/Website/mikumikucrawler/server/routes/apiRoutes.ts)",
       "Bash(bun)",
       "Bash(bun run:*)",
-      "Bash(bun install:*)"
+      "Bash(bun install:*)",
+      "Bash(find /home/ren/Projects/Website/mikumikucrawler/server -type f -name *.ts -o -name *.js)"
     ]
   }
 }

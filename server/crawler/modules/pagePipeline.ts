@@ -1,5 +1,4 @@
 import type { Database } from "bun:sqlite";
-import sanitizeHtml from "sanitize-html";
 import { config } from "../../config/env.js";
 import type { Logger } from "../../config/logging.js";
 import {
@@ -7,10 +6,17 @@ import {
 	RETRY_CONSTANTS,
 	SOFT_404_CONSTANTS,
 } from "../../constants.js";
+import {
+	createPageStatements,
+	getCachedLinksByPageUrl,
+	updatePageTimestamp,
+	updateSessionStats,
+} from "../../data/queries.js";
 import { ContentProcessor } from "../../processors/ContentProcessor.js";
 import type {
 	CrawlerSocket,
 	ExtractedLink,
+	FetchResult,
 	ProcessedContent,
 	ProcessedPageData,
 	QueueItem,
@@ -21,7 +27,6 @@ import {
 	getRobotsRules,
 	normalizeUrl,
 } from "../../utils/helpers.js";
-import { updateSessionStats } from "../../utils/sessionPersistence.js";
 import type { DynamicRenderer } from "../dynamicRenderer.js";
 import type { CrawlQueue } from "./crawlQueue.js";
 import type { CrawlState } from "./crawlState.js";
@@ -123,7 +128,7 @@ function isSoft404(
 
 const MEDIA_CONTENT_REGEX = /image|video|audio|application\/(pdf|zip)/i;
 
-interface PagePipelineParams {
+interface PipelineContext {
 	options: SanitizedCrawlOptions;
 	state: CrawlState;
 	logger: Logger;
@@ -164,9 +169,10 @@ interface PageRecord {
  */
 function runPreChecks(
 	item: QueueItem,
-	state: CrawlState,
-	logger: Logger,
+	ctx: PipelineContext,
 ): { shouldProcess: boolean; reason?: string } {
+	const { state, logger } = ctx;
+
 	if (!state.canProcessMore()) {
 		return { shouldProcess: false, reason: "Page limit reached" };
 	}
@@ -212,12 +218,15 @@ function runPreChecks(
  */
 async function executeFetch(
 	item: QueueItem,
-	dynamicRenderer: DynamicRenderer,
-	logger: Logger,
-	db: Database,
-): Promise<Awaited<ReturnType<typeof fetchContent>>> {
-	logger.info(`Fetching: ${item.url}`);
-	return fetchContent({ item, dynamicRenderer, logger, db });
+	ctx: PipelineContext,
+): Promise<FetchResult> {
+	ctx.logger.info(`Fetching: ${item.url}`);
+	return fetchContent({
+		item,
+		dynamicRenderer: ctx.dynamicRenderer,
+		logger: ctx.logger,
+		db: ctx.db,
+	});
 }
 
 /**
@@ -239,68 +248,77 @@ async function executeFetch(
  * - Permanent failure (404/410/501): No retry
  * - Blocked (403): Records failure, increases domain delay
  */
-async function handleFetchResponse(
-	fetchResult: Awaited<ReturnType<typeof fetchContent>>,
+function handleNonSuccessResponse(
+	fetchResult: Exclude<FetchResult, { type: "success" }>,
 	item: QueueItem,
-	state: CrawlState,
-	queue: CrawlQueue,
-	db: Database,
-	logger: Logger,
-	socket: CrawlerSocket,
-	options: SanitizedCrawlOptions,
-): Promise<{ handled: boolean; shouldContinue: boolean }> {
-	// Handle 304 Not Modified
-	if (fetchResult.unchanged) {
-		state.markVisited(item.url);
-		state.recordSuccess(0);
-		db.query(
-			"UPDATE pages SET crawled_at = CURRENT_TIMESTAMP WHERE url = ?",
-		).run(item.url);
-		const unchangedLog = `[Crawler] Unchanged: ${item.url} (304)`;
-		logger.info(unchangedLog);
-		socket.emit("stats", { ...state.stats, log: unchangedLog });
+	ctx: PipelineContext,
+): void {
+	const { state, queue, db, logger, socket, options } = ctx;
 
-		// Enqueue cached links for re-crawl if depth allows
-		if (item.depth < options.crawlDepth) {
-			const cachedLinks = db
-				.query(
-					"SELECT target_url FROM links l JOIN pages p ON l.source_id = p.id WHERE p.url = ?",
-				)
-				.all(item.url) as { target_url: string }[];
+	switch (fetchResult.type) {
+		case "unchanged": {
+			state.markVisited(item.url);
+			state.recordSuccess(0);
+			updatePageTimestamp(db, item.url);
+			const unchangedLog = `[Crawler] Unchanged: ${item.url} (304)`;
+			logger.info(unchangedLog);
+			state.emitLog(socket, unchangedLog);
 
-			for (const { target_url } of cachedLinks) {
-				if (!state.hasVisited(target_url)) {
-					queue.enqueue({
-						url: target_url,
-						depth: item.depth + 1,
-						retries: 0,
-						parentUrl: item.url,
-					});
+			if (item.depth < options.crawlDepth) {
+				const cachedLinks = getCachedLinksByPageUrl(db, item.url);
+				for (const targetUrl of cachedLinks) {
+					if (!state.hasVisited(targetUrl)) {
+						queue.enqueue({
+							url: targetUrl,
+							depth: item.depth + 1,
+							retries: 0,
+							parentUrl: item.url,
+						});
+					}
 				}
 			}
+			return;
 		}
-		return { handled: true, shouldContinue: false };
-	}
 
-	// Handle rate limiting
-	if (fetchResult.rateLimited) {
-		state.adaptDomainDelay(
-			item.domain,
-			fetchResult.statusCode,
-			fetchResult.retryAfterMs,
-		);
-		const retryDelay = fetchResult.retryAfterMs ?? RETRY_CONSTANTS.MAX_DELAY;
-		const rateLimitLog = `[Crawler] Rate-limited: ${item.url} — retrying in ${Math.round(retryDelay / 1000)}s`;
-		logger.warn(rateLimitLog);
-		socket.emit("stats", { ...state.stats, log: rateLimitLog });
+		case "rateLimited": {
+			state.adaptDomainDelay(
+				item.domain,
+				fetchResult.statusCode,
+				fetchResult.retryAfterMs,
+			);
+			const retryDelay = fetchResult.retryAfterMs ?? RETRY_CONSTANTS.MAX_DELAY;
+			const rateLimitLog = `[Crawler] Rate-limited: ${item.url} — retrying in ${Math.round(retryDelay / 1000)}s`;
+			logger.warn(rateLimitLog);
+			state.emitLog(socket, rateLimitLog);
 
-		if (item.retries < options.retryLimit && state.isActive) {
-			queue.scheduleRetry({ ...item, retries: item.retries + 1 }, retryDelay);
+			if (item.retries < options.retryLimit && state.isActive) {
+				queue.scheduleRetry(
+					{ ...item, retries: item.retries + 1 },
+					retryDelay,
+				);
+			}
+			return;
 		}
-		return { handled: true, shouldContinue: false };
-	}
 
-	return { handled: false, shouldContinue: true };
+		case "permanentFailure": {
+			state.markVisited(item.url);
+			state.recordFailure();
+			const failLog = `[Crawler] Permanent failure: ${item.url} (${fetchResult.statusCode})`;
+			logger.info(failLog);
+			state.emitLog(socket, failLog);
+			return;
+		}
+
+		case "blocked": {
+			state.markVisited(item.url);
+			state.recordFailure();
+			state.adaptDomainDelay(item.domain, fetchResult.statusCode);
+			const blockedLog = `[Crawler] Blocked: ${item.url} (${fetchResult.statusCode})`;
+			logger.info(blockedLog);
+			state.emitLog(socket, blockedLog);
+			return;
+		}
+	}
 }
 
 /**
@@ -327,23 +345,12 @@ async function processFetchedContent(
 	contentProcessor: ContentProcessor,
 	logger: Logger,
 ): Promise<ProcessedContent> {
-	// Sanitize HTML content
-	const sanitizedContent = contentType.includes("text/html")
-		? sanitizeHtml(content, {
-				allowedTags: sanitizeHtml.defaults.allowedTags.concat(["img"]),
-				allowedAttributes: {
-					...sanitizeHtml.defaults.allowedAttributes,
-					div: ["class", "id"],
-					span: ["class", "id"],
-					p: ["class", "id"],
-					img: ["class", "id", "src", "alt", "title", "width", "height"],
-				},
-			})
-		: content;
-
+	// Pass raw content to ContentProcessor — extraction needs the full DOM
+	// (video, audio, nav, etc). Sanitization is a display concern handled by
+	// the frontend (DOMPurify), not an analysis concern.
 	try {
 		return await contentProcessor.processContent(
-			sanitizedContent,
+			content,
 			url,
 			contentType,
 		);
@@ -426,22 +433,6 @@ function runQualityGate(
  * - Transaction failure: Logs error, returns null
  * - Invalid JSON in structured data: Handled by JSON.stringify
  */
-interface SaveResultParams {
-	item: QueueItem;
-	domain: string;
-	sanitizedContent: string;
-	contentType: string;
-	statusCode: number;
-	contentLength: number;
-	title: string;
-	description: string;
-	isDynamic: boolean;
-	lastModified: string | null;
-	etag: string | null;
-	processedContent: ProcessedContent;
-	links: ExtractedLink[];
-	contentOnly: boolean;
-}
 
 /**
  * PHASE 9: Enqueue Links
@@ -464,14 +455,11 @@ interface SaveResultParams {
 async function enqueueDiscoveredLinks(
 	links: ExtractedLink[],
 	item: QueueItem,
-	state: CrawlState,
-	queue: CrawlQueue,
-	options: SanitizedCrawlOptions,
-	targetDomain: string,
 	domain: string,
-	db: Database,
-	logger: Logger,
+	ctx: PipelineContext,
 ): Promise<void> {
+	const { state, queue, options } = ctx;
+
 	if (!links.length || item.depth >= options.crawlDepth) {
 		return;
 	}
@@ -495,17 +483,7 @@ async function enqueueDiscoveredLinks(
 		return;
 	}
 
-	await processLinkBatch({
-		links: filteredLinks,
-		item,
-		domain,
-		targetDomain,
-		options,
-		state,
-		db,
-		logger,
-		queue,
-	});
+	await processLinkBatch(filteredLinks, item, domain, ctx);
 }
 
 /**
@@ -594,7 +572,7 @@ function buildEnhancedLog(
  * Creates a configured pipeline function for processing crawl items.
  *
  * Contract:
- * - Input: PagePipelineParams
+ * - Input: PipelineContext
  * - Output: Function (QueueItem) => Promise<void>
  * - Invariants:
  *   - Pipeline handles all errors internally (never throws to caller)
@@ -612,130 +590,34 @@ function buildEnhancedLog(
  * 8. Emission (WebSocket notify)
  * 9. Link enqueue (discover new URLs)
  */
-export function createPagePipeline({
-	options,
-	state,
-	logger,
-	socket,
-	db,
-	dynamicRenderer,
-	queue,
-	targetDomain,
-	sessionId,
-}: PagePipelineParams): (item: QueueItem) => Promise<void> {
+export function createPagePipeline(
+	ctx: PipelineContext,
+): (item: QueueItem) => Promise<void> {
+	const { options, state, logger, socket, db, sessionId } = ctx;
 	const contentProcessor = new ContentProcessor(logger);
 	let lastStatsEmitTime = 0;
 	const STATS_THROTTLE_MS = 250;
 
-	const insertPageQuery = db.prepare(
-		`INSERT INTO pages
-		(url, domain, content_type, status_code, data_length, title, description, content, is_dynamic, last_modified, etag,
-		 main_content, word_count, reading_time, language, keywords, quality_score, structured_data,
-		 media_count, internal_links_count, external_links_count)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(url) DO UPDATE SET
-		  domain = excluded.domain,
-		  content_type = excluded.content_type,
-		  status_code = excluded.status_code,
-		  data_length = excluded.data_length,
-		  title = excluded.title,
-		  description = excluded.description,
-		  content = excluded.content,
-		  is_dynamic = excluded.is_dynamic,
-		  last_modified = excluded.last_modified,
-		  etag = excluded.etag,
-		  main_content = excluded.main_content,
-		  word_count = excluded.word_count,
-		  reading_time = excluded.reading_time,
-		  language = excluded.language,
-		  keywords = excluded.keywords,
-		  quality_score = excluded.quality_score,
-		  structured_data = excluded.structured_data,
-		  media_count = excluded.media_count,
-		  internal_links_count = excluded.internal_links_count,
-		  external_links_count = excluded.external_links_count,
-		  crawled_at = CURRENT_TIMESTAMP
-		RETURNING id`,
-	);
-	const insertLinkQuery = db.prepare(
-		"INSERT OR IGNORE INTO links (source_id, target_url, text) VALUES (?, ?, ?)",
-	);
-
-	const saveTransaction = db.transaction(
-		(p: SaveResultParams): number | null => {
-			const enhancedData = {
-				mainContent: p.processedContent.extractedData?.mainContent ?? "",
-				wordCount: p.processedContent.analysis?.wordCount ?? 0,
-				readingTime: p.processedContent.analysis?.readingTime ?? 0,
-				language: p.processedContent.analysis?.language ?? "unknown",
-				keywords: JSON.stringify(p.processedContent.analysis?.keywords ?? []),
-				qualityScore: p.processedContent.analysis?.quality?.score ?? 0,
-				structuredData: JSON.stringify(p.processedContent.extractedData ?? {}),
-				mediaCount: p.processedContent.media?.length ?? 0,
-				internalLinksCount:
-					p.processedContent.links?.filter(
-						(link: ExtractedLink) => link.isInternal,
-					)?.length ?? 0,
-				externalLinksCount:
-					p.processedContent.links?.filter(
-						(link: ExtractedLink) => !link.isInternal,
-					)?.length ?? 0,
-			};
-
-			const row = insertPageQuery.get(
-				p.item.url,
-				p.domain,
-				p.contentType,
-				p.statusCode,
-				p.contentLength,
-				p.title,
-				p.description,
-				p.contentOnly ? null : p.sanitizedContent,
-				p.isDynamic ? 1 : 0,
-				p.lastModified,
-				p.etag,
-				enhancedData.mainContent,
-				enhancedData.wordCount,
-				enhancedData.readingTime,
-				enhancedData.language,
-				enhancedData.keywords,
-				enhancedData.qualityScore,
-				enhancedData.structuredData,
-				enhancedData.mediaCount,
-				enhancedData.internalLinksCount,
-				enhancedData.externalLinksCount,
-			) as { id: number } | undefined;
-
-			const pageId = row?.id ?? null;
-
-			if (pageId && p.links.length > 0) {
-				for (const link of p.links) {
-					insertLinkQuery.run(pageId, link.url, link.text ?? "");
-				}
-			}
-
-			return pageId;
-		},
-	);
+	const { saveTransaction } = createPageStatements(db);
 
 	return async function processItem(item: QueueItem): Promise<void> {
 		// Phase 1: Pre-checks
-		const preCheck = runPreChecks(item, state, logger);
+		const preCheck = runPreChecks(item, ctx);
 		if (!preCheck.shouldProcess) {
 			return;
 		}
 
 		// Phase 2: Fetch
-		let fetchResult: Awaited<ReturnType<typeof fetchContent>> | undefined;
+		let fetchResult: FetchResult;
 		try {
-			fetchResult = await executeFetch(item, dynamicRenderer, logger, db);
+			fetchResult = await executeFetch(item, ctx);
 		} catch (error) {
 			state.recordFailure();
 			logger.error(`Error fetching ${item.url}: ${getErrorMessage(error)}`);
-			socket.emit("stats", {
-				...state.stats,
-				log: `[Crawler] Error fetching ${item.url}: ${getErrorMessage(error)}`,
-			});
+			state.emitLog(
+				socket,
+				`[Crawler] Error fetching ${item.url}: ${getErrorMessage(error)}`,
+			);
 
 			if (item.retries < options.retryLimit && state.isActive) {
 				const retries = item.retries + 1;
@@ -746,27 +628,18 @@ export function createPagePipeline({
 				logger.info(
 					`Retrying ${item.url} in ${backoffDelay}ms (attempt ${retries}/${options.retryLimit})`,
 				);
-				queue.scheduleRetry({ ...item, retries }, backoffDelay);
+				ctx.queue.scheduleRetry({ ...item, retries }, backoffDelay);
 			}
 			return;
 		}
 
-		// Phase 3: Handle Fetch Response
-		const responseHandled = await handleFetchResponse(
-			fetchResult,
-			item,
-			state,
-			queue,
-			db,
-			logger,
-			socket,
-			options,
-		);
-		if (responseHandled.handled || !responseHandled.shouldContinue) {
+		// Phase 3: Handle non-success responses (304, rate limit, 4xx)
+		if (fetchResult.type !== "success") {
+			handleNonSuccessResponse(fetchResult, item, ctx);
 			return;
 		}
 
-		// Extract fetch result fields
+		// TypeScript narrows fetchResult to FetchSuccess from here
 		const {
 			content,
 			statusCode,
@@ -853,20 +726,10 @@ export function createPagePipeline({
 		if (robotsDirectives.noindex) {
 			const noindexLog = `[Robots] noindex: ${item.url} — skipping storage`;
 			logger.info(noindexLog);
-			socket.emit("stats", { ...state.stats, log: noindexLog });
+			state.emitLog(socket, noindexLog);
 			state.recordSkip();
 			if (!robotsDirectives.nofollow) {
-				await enqueueDiscoveredLinks(
-					links,
-					item,
-					state,
-					queue,
-					options,
-					targetDomain,
-					domain,
-					db,
-					logger,
-				);
+				await enqueueDiscoveredLinks(links, item, domain, ctx);
 			}
 			return;
 		}
@@ -875,7 +738,7 @@ export function createPagePipeline({
 		if (!qualityCheck.passed) {
 			const qualityLog = `[Crawler] ${qualityCheck.reason}: ${item.url} — skipping storage`;
 			logger.info(qualityLog);
-			socket.emit("stats", { ...state.stats, log: qualityLog });
+			state.emitLog(socket, qualityLog);
 			state.recordSkip();
 			return;
 		}
@@ -902,9 +765,9 @@ export function createPagePipeline({
 		let pageId: number | null = null;
 		try {
 			pageId = saveTransaction({
-				item,
+				url: item.url,
 				domain,
-				sanitizedContent: content,
+				content: options.contentOnly ? null : content,
 				contentType,
 				statusCode,
 				contentLength,
@@ -915,7 +778,6 @@ export function createPagePipeline({
 				etag,
 				processedContent,
 				links,
-				contentOnly: options.contentOnly,
 			});
 		} catch (error) {
 			logger.error(
@@ -979,15 +841,13 @@ export function createPagePipeline({
 			},
 		};
 
-		// Always emit page data — this is the primary crawl output
 		socket.emit("pageContent", pageRecord);
 
 		// Throttle stats to avoid flooding
 		const emitNow = Date.now();
 		if (emitNow - lastStatsEmitTime >= STATS_THROTTLE_MS) {
 			lastStatsEmitTime = emitNow;
-			socket.emit("stats", {
-				...state.stats,
+			state.emitStats(socket, {
 				log: `[Crawler] Crawled ${item.url}`,
 				lastProcessed: {
 					url: item.url,
@@ -1005,62 +865,20 @@ export function createPagePipeline({
 
 		// Phase 9: Enqueue Links
 		if (!robotsDirectives.nofollow) {
-			await enqueueDiscoveredLinks(
-				links,
-				item,
-				state,
-				queue,
-				options,
-				targetDomain,
-				domain,
-				db,
-				logger,
-			);
+			await enqueueDiscoveredLinks(links, item, domain, ctx);
 		} else {
 			logger.debug(`[Robots] nofollow: ${item.url} — not enqueueing links`);
 		}
 	};
 }
 
-interface ProcessLinkBatchOptions {
-	links: ExtractedLink[];
-	item: QueueItem;
-	domain: string;
-	targetDomain: string;
-	options: SanitizedCrawlOptions;
-	state: CrawlState;
-	db: Database;
-	logger: Logger;
-	queue: CrawlQueue;
-}
-
-/**
- * Processes a batch of links with concurrency control.
- *
- * Contract:
- * - Input: ProcessLinkBatchOptions
- * - Output: Promise<void>
- * - Invariants:
- *   - Max 5 concurrent link processors
- *   - Each link checked against robots.txt if external
- *   - Invalid URLs silently skipped
- *
- * Edge cases:
- * - robots.txt fetch fails: Link skipped (conservative)
- * - URL parsing fails: Link skipped, debug logged
- * - Session stopped: Remaining links abandoned
- */
-async function processLinkBatch({
-	links,
-	item,
-	domain,
-	targetDomain,
-	options,
-	state,
-	db,
-	logger,
-	queue,
-}: ProcessLinkBatchOptions): Promise<void> {
+async function processLinkBatch(
+	links: ExtractedLink[],
+	item: QueueItem,
+	domain: string,
+	ctx: PipelineContext,
+): Promise<void> {
+	const { state, queue, db, logger, options, targetDomain } = ctx;
 	const CONCURRENCY = BATCH_CONSTANTS.LINK_BATCH_CONCURRENCY;
 
 	const processSingleLink = async (link: ExtractedLink): Promise<void> => {

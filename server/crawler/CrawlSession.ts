@@ -1,6 +1,15 @@
 import type { Database } from "bun:sqlite";
 import { config } from "../config/env.js";
 import type { Logger } from "../config/logging.js";
+import {
+	getAllPageUrls,
+	loadPendingQueueItems,
+	loadSession,
+	saveSession,
+	setDomainAllowed,
+	updateSessionSocketId,
+	updateSessionStatus,
+} from "../data/queries.js";
 import type {
 	CrawlerSocket,
 	QueueItem,
@@ -8,12 +17,6 @@ import type {
 } from "../types.js";
 import { getErrorMessage, getRobotsRules } from "../utils/helpers.js";
 import { RequestCoalescer } from "../utils/requestCoalescer.js";
-import {
-	loadPendingQueueItems,
-	loadSession,
-	saveSession,
-	updateSessionStatus,
-} from "../utils/sessionPersistence.js";
 import { fetchSitemap } from "../utils/sitemapParser.js";
 import { DynamicRenderer } from "./dynamicRenderer.js";
 import { CrawlQueue } from "./modules/crawlQueue.js";
@@ -116,10 +119,7 @@ export class CrawlSession {
 		try {
 			const initResult = await this.dynamicRenderer.initialize();
 			if (!initResult.dynamicEnabled && initResult.fallbackLog) {
-				this.socket.emit("stats", {
-					...this.state.stats,
-					log: initResult.fallbackLog,
-				});
+				this.state.emitLog(this.socket, initResult.fallbackLog);
 			}
 
 			if (!this.isResumed && this.options.respectRobots && this.targetDomain) {
@@ -134,19 +134,15 @@ export class CrawlSession {
 						robots &&
 						!robots.isAllowed(this.options.target, config.userAgent)
 					) {
-						this.socket.emit("stats", {
-							...this.state.stats,
-							log: `[Crawler] Robots.txt disallows crawling this target; stopping.`,
-						});
+						this.state.emitLog(
+							this.socket,
+							`[Crawler] Robots.txt disallows crawling this target; stopping.`,
+						);
 						this.logger.warn(
 							`Robots.txt disallows crawling ${this.options.target}`,
 						);
 
-						this.db
-							.query(
-								"INSERT OR REPLACE INTO domain_settings (domain, allowed) VALUES (?, 0)",
-							)
-							.run(this.targetDomain);
+						setDomainAllowed(this.db, this.targetDomain, false);
 
 						await this.stop();
 						return;
@@ -176,10 +172,10 @@ export class CrawlSession {
 						this.logger,
 					);
 					if (sitemapEntries.length > 0) {
-						this.socket.emit("stats", {
-							...this.state.stats,
-							log: `[Sitemap] Found ${sitemapEntries.length} URLs`,
-						});
+						this.state.emitLog(
+							this.socket,
+							`[Sitemap] Found ${sitemapEntries.length} URLs`,
+						);
 						for (const entry of sitemapEntries) {
 							this.queue.enqueue({ url: entry.url, depth: 0, retries: 0 });
 						}
@@ -187,11 +183,9 @@ export class CrawlSession {
 				}
 				this.queue.enqueue({ url: this.options.target, depth: 0, retries: 0 });
 			} else {
-				const alreadyCrawled = this.db.query("SELECT url FROM pages").all() as {
-					url: string;
-				}[];
-				for (const row of alreadyCrawled) {
-					this.state.markVisited(row.url);
+				const alreadyCrawled = getAllPageUrls(this.db);
+				for (const url of alreadyCrawled) {
+					this.state.markVisited(url);
 				}
 				this.logger.info(
 					`[Resume] Pre-seeded ${alreadyCrawled.length} visited URLs from DB`,
@@ -201,10 +195,10 @@ export class CrawlSession {
 				this.logger.info(
 					`[Resume] Seeding ${pendingItems.length} pending URLs`,
 				);
-				this.socket.emit("stats", {
-					...this.state.stats,
-					log: `[Resume] Continuing with ${pendingItems.length} pending URLs`,
-				});
+				this.state.emitLog(
+					this.socket,
+					`[Resume] Continuing with ${pendingItems.length} pending URLs`,
+				);
 				for (const pending of pendingItems) {
 					this.queue.enqueue(pending);
 				}
@@ -215,10 +209,10 @@ export class CrawlSession {
 		} catch (err) {
 			const message = getErrorMessage(err);
 			this.logger.error(`Error starting crawl: ${message}`);
-			this.socket.emit("stats", {
-				...this.state.stats,
-				log: `[Crawler] Error starting crawler: ${message}`,
-			});
+			this.state.emitLog(
+				this.socket,
+				`[Crawler] Error starting crawler: ${message}`,
+			);
 			await this.stop();
 		}
 	}
@@ -287,9 +281,7 @@ export class CrawlSession {
 			sessionId,
 			true,
 		);
-		db.query(
-			"UPDATE crawl_sessions SET socket_id = ?, status = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-		).run(socket.id, sessionId);
+		updateSessionSocketId(db, socket.id, sessionId);
 
 		return session;
 	}

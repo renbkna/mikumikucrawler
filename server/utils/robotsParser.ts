@@ -1,6 +1,8 @@
+import type { Database } from "bun:sqlite";
 import { config } from "../config/env.js";
 import { MEMORY_CONSTANTS, REQUEST_CONSTANTS } from "../constants.js";
-import type { DatabaseLike, LoggerLike } from "../types.js";
+import { getDomainRobotsTxt, upsertDomainRobotsTxt } from "../data/queries.js";
+import type { LoggerLike } from "../types.js";
 import { getErrorMessage } from "./helpers.js";
 import { LRUCacheWithTTL } from "./lruCache.js";
 import { secureFetch } from "./secureFetch.js";
@@ -224,7 +226,7 @@ interface RobotsOptions {
  */
 export async function getRobotsRules(
 	domain: string,
-	db: DatabaseLike,
+	db: Database,
 	logger: LoggerLike,
 	{ allowOnFailure = true }: RobotsOptions = {},
 ): Promise<RobotsResult | null> {
@@ -233,12 +235,10 @@ export async function getRobotsRules(
 	}
 
 	try {
-		const domainSettings = db
-			.query("SELECT robots_txt FROM domain_settings WHERE domain = ?")
-			.get(domain) as { robots_txt?: string } | undefined;
+		const cachedRobotsTxt = getDomainRobotsTxt(db, domain);
 
-		if (domainSettings?.robots_txt) {
-			const robots = new NativeRobotsParser(domainSettings.robots_txt);
+		if (cachedRobotsTxt) {
+			const robots = new NativeRobotsParser(cachedRobotsTxt);
 			robotsCache.set(domain, robots);
 			return robots;
 		}
@@ -278,9 +278,7 @@ export async function getRobotsRules(
 
 		const robots = new NativeRobotsParser(robotsTxt);
 
-		db.query(
-			"INSERT OR REPLACE INTO domain_settings (domain, robots_txt) VALUES (?, ?)",
-		).run(domain, robotsTxt);
+		upsertDomainRobotsTxt(db, domain, robotsTxt);
 
 		robotsCache.set(domain, robots);
 		return robots;

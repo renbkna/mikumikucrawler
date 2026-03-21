@@ -95,9 +95,8 @@ describe("fetchContent", () => {
 		});
 
 		// INVARIANT: 404 returns permanentFailure instead of throwing
-		expect(result.permanentFailure).toBe(true);
+		expect(result.type).toBe("permanentFailure");
 		expect(result.statusCode).toBe(404);
-		expect(result.content).toBe("");
 	});
 
 	test("returns blocked for 403 responses", async () => {
@@ -124,7 +123,7 @@ describe("fetchContent", () => {
 		});
 
 		// INVARIANT: 403 returns blocked flag
-		expect(result.blocked).toBe(true);
+		expect(result.type).toBe("blocked");
 		expect(result.statusCode).toBe(403);
 	});
 
