@@ -51,4 +51,46 @@ describe("fetch service contract", () => {
 		});
 		expect(httpFetch).not.toHaveBeenCalled();
 	});
+
+	test("maps browser-rendered 403 responses to blocked instead of success", async () => {
+		const service = new FetchService(
+			{
+				getHeaders: () => null,
+			} as never,
+			{
+				fetch: mock(async () => new Response("should not be called")),
+			},
+			{
+				isEnabled: () => true,
+				render: async () => ({
+					type: "success",
+					result: {
+						isDynamic: true,
+						content: "<html>blocked</html>",
+						statusCode: 403,
+						contentType: "text/html",
+						contentLength: 20,
+						title: "Blocked",
+						description: "",
+						lastModified: undefined,
+						xRobotsTag: null,
+					},
+				}),
+			} as never,
+			createLogger(),
+		);
+
+		const result = await service.fetch("crawl-1", {
+			url: "https://example.com/blocked",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(result).toEqual({
+			type: "blocked",
+			statusCode: 403,
+			reason: "Access blocked for https://example.com/blocked",
+		});
+	});
 });

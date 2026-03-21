@@ -1,6 +1,6 @@
-// NOTE: puppeteer is imported dynamically inside launchBrowser() so that merely
-// importing this module (e.g. in tests) does NOT spin up Chromium.
-import type { Browser, Page } from "puppeteer";
+import type { Session } from "crawlee";
+import { BrowserPool, PlaywrightPlugin, SessionPool } from "crawlee";
+import { chromium, type Page } from "playwright";
 import { config } from "../config/env.js";
 import type { Logger } from "../config/logging.js";
 import {
@@ -9,6 +9,7 @@ import {
 	SITE_COOKIES,
 	SITE_SELECTORS,
 } from "../constants.js";
+import type { Resolver } from "../plugins/security.js";
 import type {
 	DynamicRenderAttempt,
 	QueueItem,
@@ -33,128 +34,99 @@ interface ConsentBypassResult {
 	clicked: boolean;
 }
 
-/**
- * Handles dynamic page rendering using Puppeteer to support SPA and JS-heavy sites.
- *
- * Uses Ghostery's adblocker to block:
- * - Ads (reduces page weight)
- * - Cookie consent banners (EasyList Cookie List)
- * - Tracking scripts
- *
- * This is more robust than manual consent handling and is maintained by the community.
- */
-/**
- * Checks if an error is a recoverable Puppeteer error that should trigger static fallback.
- * Uses error.name (Puppeteer's TimeoutError, ProtocolError) as the primary check,
- * with message matching only for edge cases that don't use typed error classes.
- */
+interface ReadinessSnapshot {
+	bodyLength: number;
+	hasPrimaryCandidate: boolean;
+	title: string;
+}
+
+interface BrowserCookie {
+	name: string;
+	value: string;
+	domain?: string;
+	path?: string;
+	expires?: number;
+	httpOnly?: boolean;
+	secure?: boolean;
+	sameSite?: "Lax" | "None" | "Strict";
+}
+
 function isRecoverableBrowserError(err: unknown): boolean {
 	if (!(err instanceof Error)) return false;
-	// Puppeteer typed errors: TimeoutError, ProtocolError (includes TargetCloseError)
-	if (err.name === "TimeoutError" || err.name === "ProtocolError") return true;
-	// Fallback for frame/context errors not covered by typed classes
-	const msg = err.message;
+	if (err.name === "TimeoutError") return true;
+
+	const message = err.message;
 	return (
-		msg.includes("detached Frame") ||
-		msg.includes("Execution context was destroyed")
+		message.includes("Target page, context or browser has been closed") ||
+		message.includes("Navigation failed because page crashed") ||
+		message.includes("net::ERR_ABORTED") ||
+		message.includes("Execution context was destroyed")
+	);
+}
+
+function normalizeCookieSameSite(
+	value: string | undefined,
+): BrowserCookie["sameSite"] {
+	if (value === "Lax" || value === "None" || value === "Strict") {
+		return value;
+	}
+	return "Lax";
+}
+
+function shouldSkipSecurityValidation(url: string): boolean {
+	return (
+		url.startsWith("data:") ||
+		url.startsWith("blob:") ||
+		url.startsWith("about:")
 	);
 }
 
 export class DynamicRenderer {
 	private static readonly instances = new Set<DynamicRenderer>();
 	private static handlersRegistered = false;
-	private static blockerPromise: Promise<InstanceType<
-		typeof import("@ghostery/adblocker-puppeteer").PuppeteerBlocker
-	> | null> | null = null;
 
 	private readonly options: SanitizedCrawlOptions;
 	private readonly logger: Logger;
-	private browser: Browser | null;
-	private browserPid: number | null;
-	private pageCount: number;
+	private readonly resolver: Resolver;
+	private browserPool: BrowserPool | null;
+	private sessionPool: SessionPool | null;
 	private enabled: boolean;
 
-	/**
-	 * Lazily initializes the adblocker with EasyList filter lists.
-	 * Shared across all instances to avoid re-downloading filter lists.
-	 */
-	private static async getBlocker(): Promise<InstanceType<
-		typeof import("@ghostery/adblocker-puppeteer").PuppeteerBlocker
-	> | null> {
-		if (!DynamicRenderer.blockerPromise) {
-			DynamicRenderer.blockerPromise = (async () => {
-				try {
-					const { PuppeteerBlocker } = await import(
-						"@ghostery/adblocker-puppeteer"
-					);
-
-					const result = await withTimeoutFallback(
-						PuppeteerBlocker.fromLists(globalThis.fetch, [
-							"https://easylist.to/easylist/easylist.txt",
-							"https://easylist.to/easylist/easylist_cookie.txt",
-							"https://easylist.to/easylist/easylist_annoyance.txt",
-						]),
-						15000,
-						null,
-					);
-					return result;
-				} catch {
-					return null;
-				}
-			})();
-		}
-		return DynamicRenderer.blockerPromise;
-	}
-
-	/**
-	 * Registers process-level cleanup handlers once for all instances.
-	 * Uses a static Set to track active renderers and clean them all on exit.
-	 */
 	private static registerGlobalHandlers(): void {
 		if (DynamicRenderer.handlersRegistered) return;
 
 		const exitHandler = (): void => {
-			// Sync-only cleanup on exit — best effort.
-			// SIGINT/SIGTERM are handled by server.ts gracefulShutdown which calls
-			// session.stop() → dynamicRenderer.close() for every active session.
-			// Uncaught exceptions crash fast — the OS reclaims child processes.
 			for (const instance of DynamicRenderer.instances) {
-				if (instance.browser) {
-					instance.browser.close().catch(() => {});
+				if (instance.browserPool) {
+					instance.browserPool.closeAllBrowsers().catch(() => {});
 				}
 			}
 		};
 
 		process.on("exit", exitHandler);
-
 		DynamicRenderer.handlersRegistered = true;
 	}
 
-	constructor(options: SanitizedCrawlOptions, logger: Logger) {
+	constructor(
+		options: SanitizedCrawlOptions,
+		logger: Logger,
+		resolver: Resolver,
+	) {
 		this.options = options;
 		this.logger = logger;
-		this.browser = null;
-		this.browserPid = null;
-		this.pageCount = 0;
+		this.resolver = resolver;
+		this.browserPool = null;
+		this.sessionPool = null;
 		this.enabled = options.dynamic !== false;
 
-		// Register instance for cleanup tracking
 		DynamicRenderer.instances.add(this);
 		DynamicRenderer.registerGlobalHandlers();
 	}
 
-	/**
-	 * Checks if the dynamic renderer is currently enabled.
-	 */
 	isEnabled(): boolean {
 		return Boolean(this.enabled && this.options.dynamic !== false);
 	}
 
-	/**
-	 * Disables the dynamic renderer for the rest of the session.
-	 *
-	 * @param reason - Optional explanation for disabling.
-	 */
 	disableDynamic(reason?: string): void {
 		this.enabled = false;
 		if (reason) {
@@ -162,9 +134,6 @@ export class DynamicRenderer {
 		}
 	}
 
-	/**
-	 * Validates memory constraints and attempts to launch the browser instance.
-	 */
 	async initialize(): Promise<InitializeResult> {
 		if (!this.isEnabled()) {
 			return { dynamicEnabled: false };
@@ -176,7 +145,7 @@ export class DynamicRenderer {
 			(config.isRender && memoryStatus.heapUsed > 50);
 
 		if (constrainedEnvironment) {
-			this.disableDynamic("Skipping Puppeteer due to constrained memory");
+			this.disableDynamic("Skipping Playwright due to constrained memory");
 			return {
 				dynamicEnabled: false,
 				fallbackLog:
@@ -189,7 +158,7 @@ export class DynamicRenderer {
 			return { dynamicEnabled: this.isEnabled() };
 		} catch (err) {
 			this.disableDynamic(
-				`Failed to launch Puppeteer: ${getErrorMessage(err)}`,
+				`Failed to launch Playwright: ${getErrorMessage(err)}`,
 			);
 			return {
 				dynamicEnabled: false,
@@ -199,98 +168,149 @@ export class DynamicRenderer {
 		}
 	}
 
-	/**
-	 * Launches a new Chromium instance via Puppeteer with optimized flags.
-	 */
+	private async createSessionPool(): Promise<SessionPool> {
+		if (this.sessionPool) {
+			return this.sessionPool;
+		}
+
+		this.sessionPool = await SessionPool.open({
+			maxPoolSize: Math.max(this.options.maxConcurrentRequests * 4, 8),
+			sessionOptions: {
+				maxAgeSecs: 30 * 60,
+				maxUsageCount: 20,
+			},
+			persistenceOptions: { enable: false },
+		});
+		return this.sessionPool;
+	}
+
 	async launchBrowser(): Promise<void> {
 		if (!this.isEnabled()) {
 			return;
 		}
 
-		this.logger.info("Launching Puppeteer (Chromium)...");
-
-		// Dynamic import keeps Chromium out of the module graph at test/import time.
-		// Puppeteer is only loaded when a crawl session actually needs the browser.
-		const { default: puppeteer } = await import("puppeteer");
-		const executablePath = config.puppeteer.executablePath;
-
-		this.browser = await puppeteer.launch({
-			headless: true,
-			executablePath,
-			timeout: DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.COMPLEX_NAVIGATION,
-			args: [
-				"--no-sandbox",
-				"--disable-setuid-sandbox",
-				"--disable-dev-shm-usage",
-				"--disable-gpu",
-				"--disable-blink-features=AutomationControlled",
-				"--disable-extensions",
-				"--disable-background-networking",
-			],
-		});
-
-		// Capture browser process PID for force-kill capability
-		const process = this.browser.process();
-		this.browserPid = process?.pid ?? null;
-		if (this.browserPid) {
-			this.logger.debug(`Browser PID: ${this.browserPid}`);
-		}
-
-		this.pageCount = 0;
-		this.enabled = true;
-		this.logger.info("Puppeteer launched successfully");
-	}
-
-	/**
-	 * Re-launches the browser if the page count exceeds the recycling threshold.
-	 */
-	async recycleIfNeeded(): Promise<void> {
-		if (!this.browser) return;
-
-		const recycleThreshold = config.isRender
-			? DYNAMIC_RENDERER_CONSTANTS.RECYCLE_THRESHOLD.RENDER_ENV
-			: DYNAMIC_RENDERER_CONSTANTS.RECYCLE_THRESHOLD.DEFAULT;
-		if (this.pageCount <= recycleThreshold) {
+		if (this.browserPool) {
 			return;
 		}
 
-		this.logger.info("Recycling browser to prevent memory leaks");
-		try {
-			await withTimeout(this.browser.close(), 10000, "Browser close");
-			await this.launchBrowser();
-		} catch (err) {
-			this.logger.warn(`Error recycling browser: ${getErrorMessage(err)}`);
-		}
+		this.logger.info("Launching Playwright (Chromium)...");
+		await this.createSessionPool();
+
+		const executablePath = config.browser.executablePath;
+
+		this.browserPool = new BrowserPool({
+			browserPlugins: [
+				new PlaywrightPlugin(chromium, {
+					useIncognitoPages: true,
+					launchOptions: {
+						headless: true,
+						executablePath,
+						args: [
+							"--no-sandbox",
+							"--disable-setuid-sandbox",
+							"--disable-dev-shm-usage",
+							"--disable-gpu",
+							"--disable-blink-features=AutomationControlled",
+							"--disable-extensions",
+							"--disable-background-networking",
+						],
+					},
+				}),
+			],
+			maxOpenPagesPerBrowser: Math.max(this.options.maxConcurrentRequests, 1),
+			retireBrowserAfterPageCount: config.isRender
+				? DYNAMIC_RENDERER_CONSTANTS.RECYCLE_THRESHOLD.RENDER_ENV
+				: DYNAMIC_RENDERER_CONSTANTS.RECYCLE_THRESHOLD.DEFAULT,
+			closeInactiveBrowserAfterMillis: 30_000,
+			operationTimeoutMillis:
+				DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.COMPLEX_NAVIGATION,
+		});
+
+		const warmupPage = (await this.browserPool.newPage()) as Page;
+		await warmupPage.close();
+		this.logger.info("Playwright launched successfully");
 	}
 
-	/**
-	 * Safely extracts page content, title, and description in a single evaluate call.
-	 * This minimizes race conditions where the frame could detach between operations.
-	 */
+	private async configurePage(
+		page: Page,
+		url: string,
+		session: Session,
+	): Promise<void> {
+		await page.setViewportSize(DYNAMIC_RENDERER_CONSTANTS.VIEWPORT);
+		await page.setDefaultTimeout(
+			DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.STANDARD_NAVIGATION,
+		);
+		await page.setDefaultNavigationTimeout(
+			DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.STANDARD_NAVIGATION,
+		);
+		await page.setExtraHTTPHeaders({
+			Accept: FETCH_HEADERS.Accept,
+			"Accept-Language": FETCH_HEADERS["Accept-Language"],
+			"Accept-Encoding": FETCH_HEADERS["Accept-Encoding"],
+			"User-Agent": FETCH_HEADERS["User-Agent"],
+			DNT: "1",
+		});
+
+		await page.route("**/*", async (route) => {
+			const requestUrl = route.request().url();
+			if (!shouldSkipSecurityValidation(requestUrl)) {
+				try {
+					const parsed = new URL(requestUrl);
+					if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+						await route.abort();
+						return;
+					}
+					await this.resolver.assertPublicHostname(parsed.hostname);
+				} catch {
+					await route.abort();
+					return;
+				}
+			}
+
+			if (
+				["image", "stylesheet", "font", "media"].includes(
+					route.request().resourceType(),
+				)
+			) {
+				await route.abort();
+				return;
+			}
+
+			await route.continue();
+		});
+
+		page.on("dialog", (dialog) => {
+			dialog.dismiss().catch((err) => {
+				this.logger.debug(`Failed to dismiss dialog: ${getErrorMessage(err)}`);
+			});
+		});
+
+		await this.setCookiesForPage(page, url, session);
+	}
+
 	private async safeExtractContent(
 		page: Page,
 	): Promise<{ content: string; title: string; description: string } | null> {
-		const EXTRACTION_TIMEOUT_MS = 10000; // 10 second timeout for content extraction
+		const EXTRACTION_TIMEOUT_MS = 10_000;
 
 		try {
-			// Check if page is still usable
 			if (page.isClosed()) {
 				return null;
 			}
 
-			// Get content with timeout - page.content() can hang on complex pages
 			const content = await withTimeout(
 				page.content(),
 				EXTRACTION_TIMEOUT_MS,
 				"Content extraction",
 			);
 
-			// Extract title and description with timeout - evaluate can hang on JS-heavy pages
 			const metadata = await withTimeout(
 				page.evaluate(() => {
 					const title = document.title || "";
-					const descMeta = document.querySelector('meta[name="description"]');
-					const description = descMeta?.getAttribute("content") || "";
+					const description =
+						document
+							.querySelector('meta[name="description"]')
+							?.getAttribute("content") || "";
 					return { title, description };
 				}),
 				EXTRACTION_TIMEOUT_MS,
@@ -309,104 +329,51 @@ export class DynamicRenderer {
 				);
 				return null;
 			}
+
 			throw err;
 		}
 	}
 
-	/** Navigates to a URL, waits for content to stabilize, and returns the rendered HTML. */
 	async render(item: QueueItem): Promise<DynamicRenderAttempt> {
 		if (!this.isEnabled()) {
 			return null;
 		}
 
-		if (!this.browser) {
+		if (!this.browserPool) {
 			try {
 				await this.launchBrowser();
 			} catch (err) {
 				this.disableDynamic(
-					`Failed to relaunch Puppeteer: ${getErrorMessage(err)}`,
+					`Failed to relaunch Playwright: ${getErrorMessage(err)}`,
 				);
 				return null;
 			}
 		}
 
-		await this.recycleIfNeeded();
+		if (!this.browserPool || !this.sessionPool) {
+			return null;
+		}
 
-		if (!this.browser) return null;
-
-		const page = await this.browser.newPage();
-		this.pageCount++;
-
-		// Set default timeout for all page operations - root cause fix for hanging
-		// This ensures any Puppeteer operation will timeout rather than hang indefinitely
-		const pageTimeout = DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.STANDARD_NAVIGATION;
-		page.setDefaultTimeout(pageTimeout);
-		page.setDefaultNavigationTimeout(pageTimeout);
-
+		const session = await this.sessionPool.getSession();
+		const page = (await this.browserPool.newPage()) as Page;
 		let navigationOccurred = false;
 		const navigationHandler = () => {
 			navigationOccurred = true;
 		};
 
 		try {
-			await page.setUserAgent(FETCH_HEADERS["User-Agent"]);
-			await page.setViewport(DYNAMIC_RENDERER_CONSTANTS.VIEWPORT);
-			await page.setExtraHTTPHeaders({
-				Accept: FETCH_HEADERS.Accept,
-				"Accept-Language": FETCH_HEADERS["Accept-Language"],
-				DNT: "1",
-			});
-
-			// Set up request interception to block non-essential resources
-			// This significantly reduces bandwidth and speeds up page loads
-			await page.setRequestInterception(true);
-			const blocker = await DynamicRenderer.getBlocker();
-
-			page.on("request", (req) => {
-				// Check if already handled (cooperative intercept mode)
-				if (req.isInterceptResolutionHandled()) return;
-
-				// Check adblocker for ads, trackers, cookie banners (if available)
-				if (blocker) {
-					const result = blocker.match({
-						type: req.resourceType(),
-						url: req.url(),
-					} as unknown as Parameters<typeof blocker.match>[0]);
-					if (result.match) {
-						req.abort();
-						return;
-					}
-				}
-
-				// Block non-essential resources for bandwidth optimization
-				const blocked = ["image", "stylesheet", "font", "media"];
-				if (blocked.includes(req.resourceType())) {
-					req.abort();
-				} else {
-					req.continue();
-				}
-			});
-
-			page.on("dialog", (dialog) => {
-				dialog.dismiss().catch((err) => {
-					this.logger.debug(
-						`Failed to dismiss dialog: ${getErrorMessage(err)}`,
-					);
-				});
-			});
+			await this.resolver.assertPublicHostname(new URL(item.url).hostname);
+			await this.configurePage(page, item.url, session);
 
 			const isComplex = DYNAMIC_RENDERER_CONSTANTS.COMPLEX_JS_SITES.some(
 				(site) => item.url.includes(site),
 			);
-			const waitUntil = "domcontentloaded";
 			const navigationTimeout = isComplex
 				? DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.COMPLEX_NAVIGATION
 				: DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.STANDARD_NAVIGATION;
 
-			await this.setCookiesForPage(page, item.url);
-
 			const response = await page.goto(item.url, {
-				waitUntil,
+				waitUntil: "domcontentloaded",
 				timeout: navigationTimeout,
 			});
 
@@ -420,34 +387,32 @@ export class DynamicRenderer {
 			const lastModified = headers["last-modified"];
 			const xRobotsTag = headers["x-robots-tag"] ?? null;
 
-			// Handle consent modals BEFORE tracking navigation.
-			// Consent bypass may trigger a navigation which is expected and desired.
-			// We track this to avoid incorrectly aborting on consent-triggered navigations.
+			if (statusCode >= 400) {
+				session.retireOnBlockedStatusCodes(statusCode);
+			}
+
 			const consentBypass = await this.handleConsentModals(page, item.url);
 			if (
 				consentBypass.detected &&
 				!consentBypass.clicked &&
 				requiresStrictConsentBypass(item.url)
 			) {
+				session.retire();
 				page.off("framenavigated", navigationHandler);
 				await this.closePageSafely(page);
 				return {
 					type: "consentBlocked",
 					message: `Consent wall could not be bypassed for ${item.url}`,
-					statusCode:
-						response && response.status() >= 400 ? response.status() : 403,
+					statusCode: statusCode >= 400 ? statusCode : 403,
 				};
 			}
 
-			// Now start tracking navigation for unexpected SPA route changes
 			page.on("framenavigated", navigationHandler);
 
 			if (isComplex) {
 				await this.waitForComplexContent(page, item.url);
 			}
 
-			// Only abort on unexpected navigation (not consent-triggered)
-			// Reset navigationOccurred after consent since any prior navigation was expected
 			if (consentBypass.clicked) {
 				navigationOccurred = false;
 			}
@@ -457,6 +422,7 @@ export class DynamicRenderer {
 					`Unexpected navigation during rendering of ${item.url}, falling back to static`,
 				);
 				page.off("framenavigated", navigationHandler);
+				session.markBad();
 				await this.closePageSafely(page);
 				return null;
 			}
@@ -464,30 +430,13 @@ export class DynamicRenderer {
 			const extracted = await this.safeExtractContent(page);
 			if (!extracted || navigationOccurred) {
 				page.off("framenavigated", navigationHandler);
+				session.markBad();
 				await this.closePageSafely(page);
 				return null;
 			}
 
-			const { content, title, description } = extracted;
-
-			if (this.options.screenshots) {
-				try {
-					const safeHostname = new URL(item.url).hostname.replaceAll(
-						/[^a-zA-Z0-9.-]/g,
-						"_",
-					);
-					await page.screenshot({
-						path: `./data/screenshots/${safeHostname}_${Date.now()}.jpeg`,
-						fullPage: false,
-						type: "jpeg",
-						quality: 70,
-					});
-				} catch (error_) {
-					this.logger.debug(
-						`Screenshot capture failed for ${item.url}: ${getErrorMessage(error_)}`,
-					);
-				}
-			}
+			await this.persistSessionCookies(session, page, item.url);
+			session.markGood();
 
 			page.off("framenavigated", navigationHandler);
 			await page.close();
@@ -496,18 +445,20 @@ export class DynamicRenderer {
 				type: "success",
 				result: {
 					isDynamic: true,
-					content,
+					content: extracted.content,
 					statusCode,
 					contentType,
-					contentLength,
-					title,
-					description: description || "",
+					contentLength:
+						contentLength || Buffer.byteLength(extracted.content, "utf8"),
+					title: extracted.title,
+					description: extracted.description || "",
 					lastModified,
 					xRobotsTag,
 				},
 			};
 		} catch (err) {
 			page.off("framenavigated", navigationHandler);
+			session.markBad();
 			await this.closePageSafely(page);
 
 			if (isRecoverableBrowserError(err)) {
@@ -517,7 +468,6 @@ export class DynamicRenderer {
 				return null;
 			}
 
-			// Unknown errors - log and fallback instead of crashing
 			this.logger.warn(
 				`Unexpected error during dynamic rendering of ${item.url}: ${getErrorMessage(err)}`,
 			);
@@ -525,17 +475,6 @@ export class DynamicRenderer {
 		}
 	}
 
-	/**
-	 * Attempts to detect and click "Accept" buttons on consent walls (Google/YouTube/GDPR).
-	 * This allows the crawler to access the actual content behind the "Before you continue" screens.
-	 *
-	 * NOTE: page.evaluate() has no built-in timeout. On JS-heavy pages (YouTube SPA), Chrome's V8
-	 * may be busy executing framework init code, causing CDP commands to hang indefinitely.
-	 * All evaluate() calls are wrapped in Promise.race() with a timeout.
-	 * textContent is used instead of innerText to avoid expensive layout reflow.
-	 *
-	 * @returns true if consent was clicked and navigation may occur, false otherwise
-	 */
 	async handleConsentModals(
 		page: Page,
 		url: string,
@@ -546,9 +485,7 @@ export class DynamicRenderer {
 
 		try {
 			const bodyText = await withTimeoutFallback(
-				page.evaluate(() => {
-					return document.body?.textContent ?? "";
-				}),
+				page.evaluate(() => document.body?.textContent ?? ""),
 				EVAL_TIMEOUT_MS,
 				"",
 			);
@@ -669,6 +606,7 @@ export class DynamicRenderer {
 					EVAL_TIMEOUT_MS,
 					false,
 				);
+
 				if (clicked) break;
 			}
 
@@ -683,8 +621,7 @@ export class DynamicRenderer {
 
 			try {
 				await withTimeoutFallback(
-					page.waitForNavigation({
-						waitUntil: "domcontentloaded",
+					page.waitForLoadState("domcontentloaded", {
 						timeout: NAV_TIMEOUT_MS,
 					}),
 					NAV_TIMEOUT_MS,
@@ -706,87 +643,141 @@ export class DynamicRenderer {
 		}
 	}
 
-	/**
-	 * Waits for specific elements on well-known complex JS sites to ensure content is loaded.
-	 * Selectors are configured in SITE_SELECTORS constant for easy maintenance.
-	 */
 	async waitForComplexContent(page: Page, url: string): Promise<void> {
-		try {
-			const additionalWaitTime =
-				DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.ADDITIONAL_WAIT;
+		const additionalWaitTime =
+			DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.ADDITIONAL_WAIT;
+		const selectorToWait = Object.entries(SITE_SELECTORS).find(([pattern]) =>
+			url.includes(pattern),
+		)?.[1];
 
-			// Find matching selector from configuration
-			const selectorToWait = Object.entries(SITE_SELECTORS).find(([pattern]) =>
-				url.includes(pattern),
-			)?.[1];
-
-			if (selectorToWait) {
+		let selectorMatched = false;
+		if (selectorToWait) {
+			try {
 				await page.waitForSelector(selectorToWait, {
 					timeout: DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.SELECTOR_WAIT,
 				});
+				selectorMatched = true;
 				this.logger.debug(`Waited for selector: ${selectorToWait} on ${url}`);
+			} catch (error_) {
+				this.logger.debug(
+					`Preferred selector not found for ${url}: ${getErrorMessage(error_)}`,
+				);
 			}
+		}
 
-			await Bun.sleep(additionalWaitTime);
-		} catch (error_) {
+		const readiness = await withTimeoutFallback<ReadinessSnapshot>(
+			page.evaluate(() => {
+				const bodyText = (document.body?.innerText ?? "")
+					.replace(/\s+/g, " ")
+					.trim();
+				const hasPrimaryCandidate = Boolean(
+					document.querySelector(
+						"main, article, [role='main'], shreddit-post, [data-testid='post-container'], ytd-watch-flexy, ytd-page-manager",
+					),
+				);
+				return {
+					bodyLength: bodyText.length,
+					hasPrimaryCandidate,
+					title: document.title || "",
+				};
+			}),
+			DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.SELECTOR_WAIT,
+			{
+				bodyLength: 0,
+				hasPrimaryCandidate: false,
+				title: "",
+			},
+		);
+
+		if (
+			!selectorMatched &&
+			!readiness.hasPrimaryCandidate &&
+			readiness.bodyLength < 300
+		) {
 			this.logger.warn(
-				`Complex site selector wait failed for ${url}: ${getErrorMessage(error_)}`,
+				`Complex site readiness weak for ${url}: selector missing and content not yet meaningful`,
 			);
 		}
+
+		await Bun.sleep(additionalWaitTime);
 	}
 
-	/**
-	 * Sets necessary cookies (e.g., for age verification) to bypass interstitial pages.
-	 * Cookies are configured in SITE_COOKIES constant for easy maintenance.
-	 *
-	 * Uses tldts to correctly extract the root domain for any URL, handling
-	 * public suffixes like .co.uk, .com.au, .co.jp, etc.
-	 */
-	async setCookiesForPage(page: Page, url: string): Promise<void> {
+	private async setCookiesForPage(
+		page: Page,
+		url: string,
+		session: Session,
+	): Promise<void> {
 		try {
-			// Find matching cookies from configuration
+			const sessionCookies = session.getCookies(url).map((cookie) => ({
+				name: cookie.name,
+				value: cookie.value,
+				domain: cookie.domain,
+				path: cookie.path ?? "/",
+				expires: cookie.expires,
+				httpOnly: cookie.httpOnly,
+				secure: cookie.secure,
+				sameSite: normalizeCookieSameSite(cookie.sameSite),
+			}));
+
 			const siteCookies = Object.entries(SITE_COOKIES).find(([pattern]) =>
 				url.includes(pattern),
 			)?.[1];
 
-			if (!siteCookies || siteCookies.length === 0) {
+			let configuredCookies: BrowserCookie[] = [];
+			if (siteCookies?.length) {
+				const { parse } = await import("tldts");
+				const parsed = parse(url);
+				if (parsed.domain) {
+					configuredCookies = siteCookies.map((cookie) => ({
+						name: cookie.name,
+						value: cookie.value,
+						domain: `.${parsed.domain}`,
+						path: "/",
+						httpOnly: false,
+						secure: true,
+						sameSite: "Lax",
+					}));
+				}
+			}
+
+			const cookiesToSet = [...configuredCookies, ...sessionCookies];
+			if (cookiesToSet.length === 0) {
 				return;
 			}
 
-			// Use tldts for robust domain parsing that handles all public suffixes
-			const { parse } = await import("tldts");
-			const parsed = parse(url);
-
-			if (!parsed.domain) {
-				this.logger.debug(`Could not parse domain from ${url}`);
-				return;
-			}
-
-			// Set cookies on the root domain (e.g., .youtube.com) so they work
-			// across all subdomains (www, m, music, etc.)
-			const cookieDomain = `.${parsed.domain}`;
-
-			const cookiesToSet = siteCookies.map((cookie) => ({
-				...cookie,
-				domain: cookieDomain,
-				path: "/",
-			}));
-			await withTimeout(
-				page.setCookie(...cookiesToSet),
-				5000,
-				"Cookie setting",
-			);
-			this.logger.debug(
-				`Set ${cookiesToSet.length} cookies for ${cookieDomain}`,
-			);
+			await page.context().addCookies(cookiesToSet);
 		} catch (error_) {
 			this.logger.debug(`Cookie setting failed: ${getErrorMessage(error_)}`);
 		}
 	}
 
-	/**
-	 * Attempts to close a page instance safely without throwing on already-closed targets.
-	 */
+	private async persistSessionCookies(
+		session: Session,
+		page: Page,
+		url: string,
+	): Promise<void> {
+		try {
+			const cookies = await page.context().cookies([url]);
+			session.setCookies(
+				cookies.map((cookie) => ({
+					name: cookie.name,
+					value: cookie.value,
+					domain: cookie.domain,
+					path: cookie.path,
+					expires: cookie.expires,
+					httpOnly: cookie.httpOnly,
+					secure: cookie.secure,
+					sameSite: cookie.sameSite,
+				})),
+				url,
+			);
+		} catch (error_) {
+			this.logger.debug(
+				`Session cookie persistence failed: ${getErrorMessage(error_)}`,
+			);
+		}
+	}
+
 	async closePageSafely(page: Page): Promise<void> {
 		try {
 			if (!page.isClosed()) {
@@ -794,55 +785,32 @@ export class DynamicRenderer {
 			}
 		} catch (error_) {
 			const message = getErrorMessage(error_);
-			// Targets might be closed asynchronously during cleanup
 			if (
-				!message.includes("Target closed") &&
-				!message.includes("No target with given id")
+				!message.includes("Target page, context or browser has been closed") &&
+				!message.includes("Page closed")
 			) {
 				this.logger.debug(`Error closing page: ${message}`);
 			}
 		}
 	}
 
-	/**
-	 * Closes the browser and removes this instance from cleanup tracking.
-	 * If browser.close() hangs, falls back to force-killing the process.
-	 */
 	async close(): Promise<void> {
-		// Remove from instance tracking
 		DynamicRenderer.instances.delete(this);
 
-		if (!this.browser) return;
-
 		try {
-			// Try graceful close with timeout
-			const closePromise = this.browser.close();
-			const timeoutPromise = Bun.sleep(5000).then(() => {
-				throw new Error("Browser close timeout");
-			});
-			await Promise.race([closePromise, timeoutPromise]);
-			this.logger.info("Puppeteer closed.");
-		} catch (err) {
-			const message = getErrorMessage(err);
-			this.logger.warn(`Browser close failed: ${message}`);
-
-			// Force-kill browser process if we have the PID
-			if (this.browserPid) {
-				try {
-					process.kill(this.browserPid, "SIGKILL");
-					this.logger.info(
-						`Force-killed browser process (PID: ${this.browserPid})`,
-					);
-				} catch (killErr) {
-					this.logger.debug(
-						`Failed to kill browser process: ${getErrorMessage(killErr)}`,
-					);
-				}
+			if (this.browserPool) {
+				await this.browserPool.closeAllBrowsers();
+				this.logger.info("Playwright closed.");
 			}
+		} catch (err) {
+			this.logger.warn(`Browser close failed: ${getErrorMessage(err)}`);
 		} finally {
-			this.browser = null;
-			this.browserPid = null;
-			this.pageCount = 0;
+			this.browserPool = null;
+		}
+
+		if (this.sessionPool) {
+			await this.sessionPool.teardown().catch(() => {});
+			this.sessionPool = null;
 		}
 	}
 }

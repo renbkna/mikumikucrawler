@@ -45,8 +45,9 @@ export const config = {
 	isRender,
 	// Memory threshold in MB for low memory detection (default: 350MB for Render, 600MB otherwise)
 	memoryThreshold,
-	puppeteer: {
+	browser: {
 		executablePath:
+			process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ||
 			process.env.PUPPETEER_EXECUTABLE_PATH ||
 			process.env.CHROME_BIN ||
 			undefined,
