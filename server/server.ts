@@ -21,7 +21,7 @@ const instance = app.listen(config.port, (server) => {
 async function gracefulShutdown(signal: string): Promise<void> {
 	logger.info(`${signal} received, shutting down gracefully`);
 	await crawlManager.shutdownAll();
-	instance.stop();
+	await instance.stop();
 	storage.db.close();
 	logger.close();
 	process.exit(0);

@@ -59,7 +59,7 @@ export class CrawlManager {
 			options,
 		);
 		const runtime = this.createRuntime(crawlId, options);
-		runtime.start();
+		void runtime.start();
 		return record;
 	}
 
@@ -84,7 +84,7 @@ export class CrawlManager {
 			initialSequence: record.eventSequence,
 			initialCounters: record.counters,
 		});
-		runtime.start();
+		void runtime.start();
 		return this.deps.repos.crawlRuns.getById(crawlId);
 	}
 

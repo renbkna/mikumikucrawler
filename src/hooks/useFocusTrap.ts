@@ -9,11 +9,11 @@ export function useFocusTrap<T extends HTMLElement>(
 	options: UseFocusTrapOptions,
 ): {
 	modalRef: RefObject<T | null>;
-	initialFocusRef: RefObject<HTMLElement | null>;
+	initialFocusRef: RefObject<HTMLButtonElement | null>;
 } {
 	const { isOpen, onClose } = options;
 	const modalRef = useRef<T | null>(null);
-	const initialFocusRef = useRef<HTMLElement | null>(null);
+	const initialFocusRef = useRef<HTMLButtonElement | null>(null);
 
 	useEffect(() => {
 		if (!isOpen) return;

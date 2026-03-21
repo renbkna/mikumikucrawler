@@ -90,7 +90,7 @@ const LogItem = memo(function LogItem({
 interface LogsSectionProps {
 	logs: string[];
 	clearLogs: () => void;
-	logContainerRef: RefObject<HTMLDivElement>;
+	logContainerRef: RefObject<HTMLDivElement | null>;
 }
 
 export const LogsSection = memo(function LogsSection({
@@ -113,7 +113,7 @@ export const LogsSection = memo(function LogsSection({
 	}, [parsedLogs, filterLevel]);
 
 	const handleCopy = useCallback((text: string) => {
-		navigator.clipboard.writeText(text);
+		void navigator.clipboard.writeText(text);
 		const index = Date.now();
 		setCopiedIndex(index);
 		setTimeout(
