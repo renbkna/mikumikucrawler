@@ -332,6 +332,7 @@ Rules:
 
 - unique key on `(crawl_id, url)`
 - queue restoration is always scoped by `crawl_id`
+- resume restores pending and retryable work from `crawl_queue WHERE crawl_id = ?`
 
 ### `pages`
 
@@ -353,7 +354,8 @@ Required columns:
 Rules:
 
 - page history is run-scoped
-- resume restores visited URLs from `pages WHERE crawl_id = ?`
+- `pages` stores crawl results and HTTP validators; it is not the source of truth for resume dedupe
+- resume restores terminal URL outcomes from `crawl_terminal_urls WHERE crawl_id = ?`
 
 ### `page_links`
 
