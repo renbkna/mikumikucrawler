@@ -73,7 +73,7 @@ export const PDF_CONSTANTS = {
 	PROCESSING_TIMEOUT_MS: 30000,
 } as const;
 
-/** WebSocket rate limiting configuration */
+/** Request throttling configuration */
 export const WEBSOCKET_RATE_LIMIT = {
 	/** Maximum messages per minute per socket */
 	MAX_MESSAGES_PER_MINUTE: 100,
