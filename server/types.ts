@@ -9,7 +9,6 @@ import type {
 	ProcessingError,
 	Stats,
 } from "../src/types/shared.js";
-import type { ServerToClientEvents } from "../src/types/socket.js";
 import type { Logger } from "./config/logging.js";
 
 // Re-export shared types
@@ -131,10 +130,7 @@ export interface CrawlStats extends Stats {
 export type DatabaseInstance = Database;
 export interface CrawlerSocket {
 	id: string;
-	emit<K extends keyof ServerToClientEvents>(
-		event: K,
-		...args: Parameters<ServerToClientEvents[K]>
-	): void;
+	emit(event: string, data?: unknown): void;
 }
 export type SocketInstance = CrawlerSocket;
 export type LoggerInstance = Logger;

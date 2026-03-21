@@ -1,0 +1,341 @@
+import type { Logger } from "../config/logging.js";
+import { CRAWL_QUEUE_CONSTANTS } from "../constants.js";
+import type { CrawlCounters, CrawlOptions } from "../contracts/crawl.js";
+import { CrawlQueue } from "../domain/crawl/CrawlQueue.js";
+import { CrawlState } from "../domain/crawl/CrawlState.js";
+import { DynamicRenderer } from "../domain/crawl/DynamicRenderer.js";
+import { FetchService } from "../domain/crawl/FetchService.js";
+import { PagePipeline } from "../domain/crawl/PagePipeline.js";
+import { RobotsService } from "../domain/crawl/RobotsService.js";
+import type { HttpClient, Resolver } from "../plugins/security.js";
+import type { StorageRepos } from "../storage/db.js";
+import { withTimeout } from "../utils/timeout.js";
+import type { EventStream } from "./EventStream.js";
+
+interface CrawlRuntimeDependencies {
+	crawlId: string;
+	options: CrawlOptions;
+	logger: Logger;
+	repos: StorageRepos;
+	eventStream: EventStream;
+	resolver: Resolver;
+	httpClient: HttpClient;
+	initialSequence?: number;
+	initialCounters?: CrawlCounters;
+	resume: boolean;
+	onSettled: () => void;
+}
+
+const sleep = (ms: number) => Bun.sleep(ms);
+
+export class CrawlRuntime {
+	private readonly state: CrawlState;
+	private readonly queue: CrawlQueue;
+	private readonly dynamicRenderer: DynamicRenderer;
+	private readonly fetchService: FetchService;
+	private readonly robotsService: RobotsService;
+	private readonly pipeline: PagePipeline;
+	private readonly activeTasks = new Map<string, Promise<void>>();
+	private runPromise: Promise<void> | null = null;
+	private interrupted = false;
+
+	constructor(private readonly deps: CrawlRuntimeDependencies) {
+		this.state = new CrawlState(deps.options, deps.initialCounters);
+		this.dynamicRenderer = new DynamicRenderer(deps.options, deps.logger);
+		this.fetchService = new FetchService(
+			deps.repos.pages,
+			deps.httpClient,
+			this.dynamicRenderer,
+			deps.logger,
+		);
+		this.robotsService = new RobotsService(deps.httpClient, deps.logger);
+		this.queue = new CrawlQueue(deps.options, this.state, deps.logger, {
+			enqueueMany: (items) =>
+				deps.repos.crawlQueue.enqueueMany(deps.crawlId, items),
+			remove: (url) => deps.repos.crawlQueue.remove(deps.crawlId, url),
+			clear: () => deps.repos.crawlQueue.clear(deps.crawlId),
+		});
+		this.pipeline = new PagePipeline(
+			deps.crawlId,
+			deps.options,
+			this.state,
+			this.queue,
+			deps.repos.pages,
+			this.fetchService,
+			this.robotsService,
+			{
+				log: (message) =>
+					this.publish("crawl.log", {
+						message,
+					}),
+				page: (payload) => this.publish("crawl.page", payload),
+			},
+			deps.logger,
+		);
+
+		if (deps.initialSequence) {
+			deps.eventStream.initialize(deps.crawlId, deps.initialSequence);
+		}
+	}
+
+	private publish(
+		type: Parameters<EventStream["publish"]>[1],
+		payload: Record<string, unknown>,
+	) {
+		const event = this.deps.eventStream.publish(
+			this.deps.crawlId,
+			type,
+			payload,
+		);
+		this.deps.repos.crawlRuns.setEventSequence(
+			this.deps.crawlId,
+			event.sequence,
+		);
+		return event;
+	}
+
+	private persistProgress(status?: "starting" | "running" | "stopping") {
+		if (status === "starting") {
+			this.deps.repos.crawlRuns.markStarting(
+				this.deps.crawlId,
+				this.state.counters,
+			);
+			return;
+		}
+
+		if (status === "running") {
+			this.deps.repos.crawlRuns.markRunning(
+				this.deps.crawlId,
+				this.state.counters,
+			);
+			return;
+		}
+
+		if (status === "stopping") {
+			this.deps.repos.crawlRuns.markStopping(
+				this.deps.crawlId,
+				this.state.counters,
+				this.state.stopReason,
+			);
+			return;
+		}
+
+		this.deps.repos.crawlRuns.updateProgress(
+			this.deps.crawlId,
+			this.state.counters,
+		);
+	}
+
+	private emitProgress() {
+		this.publish(
+			"crawl.progress",
+			this.state.buildProgress({
+				activeRequests: this.queue.activeCount,
+				queueLength: this.queue.pendingCount,
+			}),
+		);
+		this.persistProgress();
+	}
+
+	private async seedInitialQueue(): Promise<void> {
+		if (this.deps.resume) {
+			const visitedUrls = this.deps.repos.pages.getVisitedUrls(
+				this.deps.crawlId,
+			);
+			this.state.restoreVisited(visitedUrls);
+			const pending = this.deps.repos.crawlQueue.listPending(this.deps.crawlId);
+			this.queue.restore(pending);
+			return;
+		}
+
+		this.queue.enqueue({
+			url: this.deps.options.target,
+			depth: 0,
+			retries: 0,
+		});
+	}
+
+	start(): Promise<void> {
+		this.runPromise ??= this.run();
+		return this.runPromise;
+	}
+
+	waitUntilSettled(): Promise<void> {
+		return this.runPromise ?? Promise.resolve();
+	}
+
+	requestStop(reason = "Stop requested"): void {
+		this.state.requestStop(reason);
+		this.persistProgress("stopping");
+	}
+
+	async interrupt(reason = "Runtime interrupted"): Promise<void> {
+		this.interrupted = true;
+		this.state.requestStop(reason);
+		this.queue.clearRetryTimers();
+		this.deps.repos.crawlRuns.markInterrupted(
+			this.deps.crawlId,
+			this.state.counters,
+			reason,
+		);
+		await this.dynamicRenderer.close();
+	}
+
+	private async launchWork(
+		item: Parameters<PagePipeline["process"]>[0],
+	): Promise<void> {
+		const task = withTimeout(
+			this.pipeline.process(item),
+			CRAWL_QUEUE_CONSTANTS.ITEM_PROCESSING_TIMEOUT_MS,
+			`Processing ${item.url}`,
+		)
+			.catch((error) => {
+				this.deps.logger.error(
+					`[Runtime] Failed to process ${item.url}: ${error instanceof Error ? error.message : String(error)}`,
+				);
+				this.state.recordTerminal(item.url, "failure");
+				this.publish("crawl.log", {
+					message: `[Crawler] Failure: ${item.url}`,
+				});
+			})
+			.finally(() => {
+				if (this.interrupted) {
+					this.queue.markInterrupted(item);
+				} else {
+					this.queue.markDone(item);
+				}
+
+				this.activeTasks.delete(item.url);
+				this.emitProgress();
+			});
+
+		this.activeTasks.set(item.url, task);
+	}
+
+	private async initializeRuntime(): Promise<void> {
+		this.persistProgress("starting");
+		await this.deps.resolver.assertPublicHostname(
+			new URL(this.deps.options.target).hostname,
+		);
+		const initResult = await this.dynamicRenderer.initialize();
+		if (!initResult.dynamicEnabled && initResult.fallbackLog) {
+			this.publish("crawl.log", { message: initResult.fallbackLog });
+		}
+
+		if (this.deps.options.respectRobots) {
+			const allowed = await this.robotsService.isAllowed(
+				this.deps.options.target,
+			);
+			if (!allowed) {
+				throw new Error("Target URL is disallowed by robots.txt");
+			}
+
+			const crawlDelay = await this.robotsService.getCrawlDelay(
+				this.deps.options.target,
+			);
+			if (crawlDelay) {
+				this.state.setDomainDelay(
+					new URL(this.deps.options.target).hostname,
+					crawlDelay,
+				);
+			}
+		}
+
+		await this.seedInitialQueue();
+		this.persistProgress("running");
+		this.publish("crawl.started", {
+			target: this.deps.options.target,
+			resume: this.deps.resume,
+		});
+		this.emitProgress();
+	}
+
+	private async run(): Promise<void> {
+		try {
+			await this.initializeRuntime();
+
+			while (
+				(!this.state.isStopRequested && this.queue.pendingCount > 0) ||
+				this.queue.activeCount > 0
+			) {
+				while (
+					!this.state.isStopRequested &&
+					this.queue.activeCount < this.deps.options.maxConcurrentRequests
+				) {
+					const { item, waitMs } = this.queue.nextReady();
+					if (!item) {
+						if (waitMs > 0) {
+							await sleep(waitMs);
+						}
+						break;
+					}
+
+					await this.launchWork(item);
+				}
+
+				if (this.activeTasks.size === 0) {
+					if (this.state.isStopRequested || this.queue.pendingCount === 0) {
+						break;
+					}
+					await sleep(CRAWL_QUEUE_CONSTANTS.DEFAULT_SLEEP_MS);
+					continue;
+				}
+
+				await Promise.race(this.activeTasks.values());
+			}
+
+			await Promise.allSettled(this.activeTasks.values());
+			this.queue.clearRetryTimers();
+
+			if (this.interrupted) {
+				this.deps.repos.crawlRuns.markInterrupted(
+					this.deps.crawlId,
+					this.state.counters,
+					this.state.stopReason ?? "Process shutdown",
+				);
+				return;
+			}
+
+			this.queue.clearPending();
+			this.queue.clearPersisted();
+			await this.dynamicRenderer.close();
+
+			if (this.state.stopReason && this.state.isStopRequested) {
+				this.deps.repos.crawlRuns.markStopped(
+					this.deps.crawlId,
+					this.state.counters,
+					this.state.stopReason,
+				);
+				this.publish("crawl.stopped", {
+					stopReason: this.state.stopReason,
+					counters: this.state.counters,
+				});
+				return;
+			}
+
+			this.deps.repos.crawlRuns.markCompleted(
+				this.deps.crawlId,
+				this.state.counters,
+				null,
+			);
+			this.publish("crawl.completed", {
+				counters: this.state.counters,
+			});
+		} catch (error) {
+			this.queue.clearRetryTimers();
+			await this.dynamicRenderer.close();
+			const message = error instanceof Error ? error.message : String(error);
+			this.deps.repos.crawlRuns.markFailed(
+				this.deps.crawlId,
+				this.state.counters,
+				message,
+			);
+			this.publish("crawl.failed", {
+				error: message,
+				counters: this.state.counters,
+			});
+		} finally {
+			this.deps.onSettled();
+		}
+	}
+}
