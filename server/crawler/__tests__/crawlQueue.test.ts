@@ -54,7 +54,6 @@ describe("CrawlQueue", () => {
 			state,
 			logger,
 			socket,
-			processItem,
 		});
 
 		// Initial activeCount should be 0
@@ -65,7 +64,7 @@ describe("CrawlQueue", () => {
 		queue.enqueue({ url: "https://example.com/2", depth: 0, retries: 0 });
 
 		// Start processing and wait briefly
-		const startPromise = queue.start();
+		const startPromise = queue.start(processItem);
 
 		// Allow some processing time
 		await new Promise((resolve) => setTimeout(resolve, 50));
@@ -91,7 +90,6 @@ describe("CrawlQueue", () => {
 			state,
 			logger,
 			socket,
-			processItem: mock(async () => {}),
 		});
 
 		// Mark URL as visited
@@ -124,7 +122,6 @@ describe("CrawlQueue", () => {
 			state,
 			logger,
 			socket,
-			processItem,
 		});
 
 		// Enqueue the same URL twice
@@ -132,7 +129,7 @@ describe("CrawlQueue", () => {
 		queue.enqueue({ url: "https://example.com/dup", depth: 0, retries: 0 });
 
 		// Start processing
-		const startPromise = queue.start();
+		const startPromise = queue.start(processItem);
 
 		// Wait for processing to happen
 		await new Promise((resolve) => setTimeout(resolve, 50));
@@ -161,13 +158,12 @@ describe("CrawlQueue", () => {
 			state,
 			logger,
 			socket,
-			processItem,
 		});
 
 		// Enqueue first time
 		queue.enqueue({ url: "https://example.com/active", depth: 0, retries: 0 });
 
-		const startPromise = queue.start();
+		const startPromise = queue.start(processItem);
 
 		// Wait for it to become active
 		await new Promise((resolve) => setTimeout(resolve, 20));
@@ -195,7 +191,6 @@ describe("CrawlQueue", () => {
 			state,
 			logger,
 			socket,
-			processItem: mock(async () => {}),
 		});
 
 		const item = {
@@ -226,7 +221,6 @@ describe("CrawlQueue", () => {
 			state,
 			logger,
 			socket,
-			processItem: mock(async () => {}),
 		});
 
 		// Schedule multiple retries

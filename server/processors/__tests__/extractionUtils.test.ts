@@ -173,7 +173,7 @@ describe("extractStructuredData CONTRACT", () => {
 		expect(data.twitterCards.title).toBe("Twitter Title");
 	});
 
-	test("extracts Microdata", () => {
+	test("extracts Microdata with correct values", () => {
 		const html = `
 			<div itemscope itemtype="https://schema.org/Person">
 				<span itemprop="name">John Doe</span>
@@ -183,8 +183,15 @@ describe("extractStructuredData CONTRACT", () => {
 		const $ = cheerio.load(html);
 		const data = extractStructuredData($);
 
-		// INVARIANT: Microdata extracted
-		expect(Object.keys(data.microdata).length).toBeGreaterThan(0);
+		// INVARIANT: Microdata extracted with correct itemType key and property values
+		const personItems = data.microdata["https://schema.org/Person"] as Record<
+			string,
+			string
+		>[];
+		expect(personItems).toBeDefined();
+		expect(personItems.length).toBe(1);
+		expect(personItems[0].name).toBe("John Doe");
+		expect(personItems[0].jobTitle).toBe("Developer");
 	});
 
 	test("handles empty HTML", () => {
@@ -496,8 +503,11 @@ describe("processLinks CONTRACT", () => {
 		const $ = cheerio.load(html);
 		const links = processLinks($, "https://example.com/page");
 
-		// INVARIANT: Anchors included with full URL
-		expect(links[0].url).toContain("#section");
+		// INVARIANT: URL normalization strips fragments
+		// This is intentional - fragments are not included in normalized URLs
+		// The link is still extracted, just without the fragment
+		expect(links.length).toBe(1);
+		expect(links[0].url).toBe("https://example.com/page");
 	});
 
 	test("handles query strings", () => {
@@ -509,14 +519,13 @@ describe("processLinks CONTRACT", () => {
 		expect(links[0].url).toContain("?foo=bar");
 	});
 
-	test("handles javascript: URLs gracefully", () => {
+	test("skips javascript: URLs", () => {
 		const html = '<a href="javascript:void(0)">JS</a>';
 		const $ = cheerio.load(html);
 		const links = processLinks($, "https://example.com");
 
-		// INVARIANT: javascript: URLs skipped or handled
-		// These are typically skipped due to URL constructor throwing
-		expect(links).toBeDefined();
+		// INVARIANT: javascript: URLs are skipped (normalizeUrl rejects non-http/https schemes)
+		expect(links.length).toBe(0);
 	});
 
 	test("handles malformed URLs gracefully", () => {

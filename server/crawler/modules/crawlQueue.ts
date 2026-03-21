@@ -6,11 +6,12 @@ import type {
 	QueueItem,
 	SanitizedCrawlOptions,
 } from "../../types.js";
-import { getErrorMessage } from "../../utils/helpers.js";
+import { getErrorMessage, normalizeUrl } from "../../utils/helpers.js";
 import {
 	removeQueueItem,
 	saveQueueItemBatch,
 } from "../../utils/sessionPersistence.js";
+import { withTimeout } from "../../utils/timeout.js";
 import type { CrawlState } from "./crawlState.js";
 
 const sleep = (ms: number): Promise<void> => Bun.sleep(ms);
@@ -20,7 +21,6 @@ interface CrawlQueueOptions {
 	state: CrawlState;
 	logger: Logger;
 	socket: CrawlerSocket;
-	processItem: (item: QueueItem) => Promise<void>;
 	onIdle?: () => Promise<void>;
 	/** Optional session ID for persisting queue state to DB for resume support */
 	sessionId?: string;
@@ -34,10 +34,11 @@ export class CrawlQueue {
 	private readonly state: CrawlState;
 	private readonly logger: Logger;
 	private readonly socket: CrawlerSocket;
-	public processItem: (item: QueueItem) => Promise<void>;
+	private _processItem!: (item: QueueItem) => Promise<void>;
 	private readonly onIdle: () => Promise<void>;
-	private readonly queue: QueueItem[];
-	private queueHead = 0;
+	private drainQueue: QueueItem[];
+	private fillQueue: QueueItem[];
+	private drainHead = 0;
 	private readonly activeItems: Set<string>;
 	private readonly queuedUrls: Set<string>;
 	private readonly retryTimers: Set<ReturnType<typeof setTimeout>>;
@@ -56,7 +57,6 @@ export class CrawlQueue {
 		state,
 		logger,
 		socket,
-		processItem,
 		onIdle = async () => {},
 		sessionId,
 		db,
@@ -65,12 +65,12 @@ export class CrawlQueue {
 		this.state = state;
 		this.logger = logger;
 		this.socket = socket;
-		this.processItem = processItem;
 		this.onIdle = onIdle;
 		this.sessionId = sessionId;
 		this.db = db;
 
-		this.queue = [];
+		this.drainQueue = [];
+		this.fillQueue = [];
 		this.activeItems = new Set();
 		this.queuedUrls = new Set();
 		this.retryTimers = new Set();
@@ -81,20 +81,38 @@ export class CrawlQueue {
 		return this.activeItems.size;
 	}
 
+	private get pendingCount(): number {
+		return this.drainQueue.length - this.drainHead + this.fillQueue.length;
+	}
+
+	private dequeue(): QueueItem | undefined {
+		if (this.drainHead >= this.drainQueue.length) {
+			if (this.fillQueue.length === 0) return undefined;
+			this.drainQueue = this.fillQueue;
+			this.fillQueue = [];
+			this.drainHead = 0;
+		}
+		return this.drainQueue[this.drainHead++];
+	}
+
 	enqueue(item: Omit<QueueItem, "domain"> & { url: string }): void {
+		const normalized = normalizeUrl(item.url);
+		if ("error" in normalized || !normalized.url) return;
+		const url = normalized.url;
+
 		if (
-			this.state.hasVisited(item.url) ||
-			this.activeItems.has(item.url) ||
-			this.queuedUrls.has(item.url)
+			this.state.hasVisited(url) ||
+			this.activeItems.has(url) ||
+			this.queuedUrls.has(url)
 		) {
 			return;
 		}
 
-		const domain = new URL(item.url).hostname;
+		const domain = new URL(url).hostname;
 
-		const queueItem: QueueItem = { ...item, domain };
+		const queueItem: QueueItem = { ...item, url, domain };
 		this.queuedUrls.add(item.url);
-		this.queue.push(queueItem);
+		this.fillQueue.push(queueItem);
 
 		if (this.sessionId && this.db) {
 			this.persistBuffer.push(queueItem);
@@ -132,7 +150,8 @@ export class CrawlQueue {
 		}
 	}
 
-	start(): Promise<void> {
+	start(processItem: (item: QueueItem) => Promise<void>): Promise<void> {
+		this._processItem = processItem;
 		this.loopPromise ??= this.loop();
 		return this.loopPromise;
 	}
@@ -153,12 +172,13 @@ export class CrawlQueue {
 		const itemTimeout = CRAWL_QUEUE_CONSTANTS.ITEM_PROCESSING_TIMEOUT_MS;
 
 		while (
-			(this.queueHead < this.queue.length || this.activeCount > 0) &&
+			(this.pendingCount > 0 || this.activeCount > 0) &&
 			(this.state.isActive || this.activeCount > 0)
 		) {
-			if (!this.state.isActive && this.queueHead < this.queue.length) {
-				this.queue.length = 0;
-				this.queueHead = 0;
+			if (!this.state.isActive && this.pendingCount > 0) {
+				this.drainQueue.length = 0;
+				this.fillQueue.length = 0;
+				this.drainHead = 0;
 				this.queuedUrls.clear();
 			}
 
@@ -177,20 +197,15 @@ export class CrawlQueue {
 				}
 			}
 
-			if (this.queueHead > CRAWL_QUEUE_CONSTANTS.QUEUE_COMPACTION_THRESHOLD) {
-				this.queue.splice(0, this.queueHead);
-				this.queueHead = 0;
-			}
-
-			const itemsAvailableNow = this.queue.length - this.queueHead;
+			const itemsAvailableNow = this.pendingCount;
 			let deferredThisPass = 0;
 
 			while (
 				this.activeCount < this.options.maxConcurrentRequests &&
-				this.queueHead < this.queue.length &&
+				this.pendingCount > 0 &&
 				this.state.isActive
 			) {
-				const item = this.queue[this.queueHead++];
+				const item = this.dequeue();
 				if (!item) break;
 				this.queuedUrls.delete(item.url);
 
@@ -207,14 +222,11 @@ export class CrawlQueue {
 								? waitTime
 								: Math.min(deferredDelay, waitTime);
 
-						this.queue.push(item);
+						this.fillQueue.push(item);
 						this.queuedUrls.add(item.url);
 
 						deferredThisPass++;
-						if (
-							deferredThisPass >= itemsAvailableNow ||
-							this.queue.length === 1
-						)
+						if (deferredThisPass >= itemsAvailableNow || this.pendingCount <= 1)
 							break;
 						continue;
 					}
@@ -225,19 +237,11 @@ export class CrawlQueue {
 					this.activeItems.add(item.url);
 
 					const task = (() => {
-						const timeoutPromise = new Promise<void>((_, reject) =>
-							setTimeout(
-								() =>
-									reject(
-										new Error(`Item processing timeout after ${itemTimeout}ms`),
-									),
-								itemTimeout,
-							),
-						);
-
-						const workPromise = Promise.resolve(this.processItem(item));
-
-						const p: Promise<void> = Promise.race([workPromise, timeoutPromise])
+						const p: Promise<void> = withTimeout(
+							Promise.resolve(this._processItem(item)),
+							itemTimeout,
+							`Item processing for ${item.url}`,
+						)
 							.catch((error: Error) => {
 								this.logger.error(
 									`Error processing ${item.url}: ${error.message}`,
@@ -273,7 +277,7 @@ export class CrawlQueue {
 			if (now - lastProgressLog > progressLogInterval) {
 				lastProgressLog = now;
 				this.logger.info(
-					`[Progress] Queue: ${this.queue.length - this.queueHead} | Active: ${this.activeCount} | Scanned: ${this.state.stats.pagesScanned} | Links: ${this.state.stats.linksFound}`,
+					`[Progress] Queue: ${this.pendingCount} | Active: ${this.activeCount} | Scanned: ${this.state.stats.pagesScanned} | Links: ${this.state.stats.linksFound}`,
 				);
 			}
 
@@ -301,11 +305,11 @@ export class CrawlQueue {
 			}
 
 			if (
-				(this.activeCount > 0 || this.queueHead < this.queue.length) &&
+				(this.activeCount > 0 || this.pendingCount > 0) &&
 				this.state.isActive
 			) {
 				const snapshot = this.state.snapshotQueueMetrics(
-					this.queue.length - this.queueHead,
+					this.pendingCount,
 					this.activeCount,
 				);
 				this.socket.emit("queueStats", snapshot);

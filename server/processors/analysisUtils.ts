@@ -277,7 +277,7 @@ const DEFAULT_STOP_WORDS = STOP_WORDS.en;
 const WORD_CLEANUP_REGEX = /[^a-z0-9]/g;
 
 /** Analyzes text to determine word count, language, sentiment, and readability. */
-export async function analyzeContent(text: string): Promise<AnalysisResult> {
+export function analyzeContent(text: string): AnalysisResult {
 	const cleanText = (text || "").toString().trim();
 	const words = cleanText.split(/\s+/).filter((w) => w.length > 0);
 	const wordCount = words.length;
@@ -339,8 +339,7 @@ export async function analyzeContent(text: string): Promise<AnalysisResult> {
 		.slice(0, 10)
 		.map(([word, count]) => ({ word, count }));
 
-	// Analyze sentiment using ML-based transformers (async)
-	const sentimentResult = await analyzeSentiment(cleanText);
+	const sentimentResult = analyzeSentiment(cleanText);
 	const sentimentLabel = sentimentResult.label;
 
 	const sentences = cleanText

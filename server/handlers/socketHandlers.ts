@@ -20,9 +20,14 @@ const ALLOWED_EXPORT_FORMATS = new Set(["json", "csv"]);
 /** Rate limiter for WebSocket messages per socket */
 class WebSocketRateLimiter {
 	private messageCounts = new Map<string, number[]>();
+	private lastCleanup = 0;
 
 	canProceed(socketId: string): boolean {
 		const now = Date.now();
+		if (now - this.lastCleanup > 60_000) {
+			this.lastCleanup = now;
+			this.cleanup();
+		}
 		const windowStart = now - WEBSOCKET_RATE_LIMIT.WINDOW_MS;
 
 		// Get or create message timestamps for this socket
@@ -136,10 +141,17 @@ export async function sanitizeOptions(
 		? (method as SanitizedCrawlOptions["crawlMethod"])
 		: "links";
 
+	const maxPagesPerDomain = clampNumber(rawOptions.maxPagesPerDomain, {
+		min: 0,
+		max: 1000,
+		fallback: 0,
+	});
+
 	return {
 		target: parsedUrl.toString(),
 		crawlDepth,
 		maxPages,
+		maxPagesPerDomain,
 		crawlDelay,
 		crawlMethod,
 		maxConcurrentRequests,
@@ -175,15 +187,12 @@ interface ExportOperation {
 /** Creates the WebSocket message handler logic for crawler interactions. */
 export function createWebSocketHandlers(
 	activeCrawls: Map<string, CrawlSession>,
-	dbPromise: Promise<Database>,
+	db: Database,
 	logger: Logger,
 ) {
 	// Root cause fix: Track active exports per socket to prevent race conditions
 	const activeExports = new Map<string, ExportOperation>();
 	const rateLimiter = new WebSocketRateLimiter();
-
-	// Periodic cleanup of rate limiter data (runs every minute)
-	setInterval(() => rateLimiter.cleanup(), 60000);
 
 	const handleMessage = async (
 		ws: {
@@ -252,7 +261,7 @@ export function createWebSocketHandlers(
 				const crawlSession = new CrawlSession(
 					socketWrapper,
 					validatedOptions,
-					dbPromise,
+					db,
 					logger,
 				);
 				activeCrawls.set(socketWrapper.id, crawlSession);
@@ -287,7 +296,6 @@ export function createWebSocketHandlers(
 					return;
 				}
 				try {
-					const db = await dbPromise;
 					const pageRecord = db
 						.query(`SELECT * FROM pages WHERE url = ?`)
 						.get(url) as
@@ -383,14 +391,6 @@ export function createWebSocketHandlers(
 				activeExports.set(socketWrapper.id, exportOp);
 
 				try {
-					const db = await dbPromise;
-					const rows = db
-						.query(
-							`SELECT id, url, domain, crawled_at, status_code,
-                                       data_length, title, description FROM pages`,
-						)
-						.all() as Record<string, unknown>[];
-
 					// Root cause fix: Include requestId in all export messages
 					socketWrapper.emit("exportStart", {
 						format: sanitizedFormat,
@@ -401,6 +401,7 @@ export function createWebSocketHandlers(
 					let chunk: string[] = [];
 					let isFirstChunk = true;
 					let rowCount = 0;
+					let lastId = 0;
 
 					if (sanitizedFormat === "json") {
 						socketWrapper.emit("exportChunk", {
@@ -431,29 +432,45 @@ export function createWebSocketHandlers(
 						return `"${stringValue}"`;
 					};
 
-					for (const rowObj of rows) {
-						rowCount++;
+					// Keyset pagination: O(1) per page vs OFFSET which is O(n)
+					while (true) {
+						const rows = db
+							.query(
+								`SELECT id, url, domain, crawled_at, status_code,
+								 data_length, title, description
+								 FROM pages WHERE id > ? ORDER BY id LIMIT ?`,
+							)
+							.all(lastId, CHUNK_SIZE) as (Record<string, unknown> & {
+							id: number;
+						})[];
 
-						if (sanitizedFormat === "csv" && isFirstChunk && rowCount === 1) {
-							const csvHeaders = Object.keys(rowObj).join(",");
-							socketWrapper.emit("exportChunk", {
-								data: `${csvHeaders}\n`,
-								requestId,
-							});
+						if (rows.length === 0) break;
+						lastId = rows[rows.length - 1].id;
+
+						for (const rowObj of rows) {
+							rowCount++;
+
+							if (sanitizedFormat === "csv" && isFirstChunk && rowCount === 1) {
+								const csvHeaders = Object.keys(rowObj).join(",");
+								socketWrapper.emit("exportChunk", {
+									data: `${csvHeaders}\n`,
+									requestId,
+								});
+							}
+
+							if (sanitizedFormat === "json") {
+								const prefix: string =
+									!isFirstChunk || chunk.length > 0 ? "," : "";
+								chunk.push(prefix + JSON.stringify(rowObj, null, 2));
+							} else {
+								const csvRow = Object.keys(rowObj)
+									.map((key) => escapeCsvCell(rowObj[key]))
+									.join(",");
+								chunk.push(csvRow);
+							}
 						}
 
-						if (sanitizedFormat === "json") {
-							const prefix: string =
-								!isFirstChunk || chunk.length > 0 ? "," : "";
-							chunk.push(prefix + JSON.stringify(rowObj, null, 2));
-						} else {
-							const csvRow = Object.keys(rowObj)
-								.map((key) => escapeCsvCell(rowObj[key]))
-								.join(",");
-							chunk.push(csvRow);
-						}
-
-						if (chunk.length >= CHUNK_SIZE) {
+						if (chunk.length > 0) {
 							const data =
 								sanitizedFormat === "json"
 									? chunk.join("")
@@ -461,16 +478,10 @@ export function createWebSocketHandlers(
 							socketWrapper.emit("exportChunk", { data, requestId });
 							chunk = [];
 							isFirstChunk = false;
-							await new Promise((resolve) => setImmediate(resolve));
 						}
-					}
 
-					if (chunk.length > 0) {
-						const data =
-							sanitizedFormat === "json"
-								? chunk.join("")
-								: `${chunk.join("\n")}\n`;
-						socketWrapper.emit("exportChunk", { data, requestId });
+						if (rows.length < CHUNK_SIZE) break;
+						await new Promise((resolve) => setImmediate(resolve));
 					}
 
 					if (sanitizedFormat === "json") {

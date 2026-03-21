@@ -90,7 +90,6 @@ export class CrawlSession {
 			state: this.state,
 			logger: this.logger,
 			socket: this.socket,
-			processItem: async () => {},
 			onIdle: async () => {
 				await this.stop();
 			},
@@ -109,13 +108,6 @@ export class CrawlSession {
 			targetDomain: this.targetDomain,
 			sessionId: this.sessionId,
 		});
-
-		// Use per-session request coalescing to prevent duplicate simultaneous
-		// fetches of the same URL within this session. Unlike a global coalescer,
-		// this does NOT share results across different user sessions.
-		this.queue.processItem = async (item: QueueItem) => {
-			await this.coalescer.coalesce(item.url, () => this.pipeline(item));
-		};
 	}
 
 	async start(): Promise<void> {
@@ -217,7 +209,9 @@ export class CrawlSession {
 					this.queue.enqueue(pending);
 				}
 			}
-			this.queue.start();
+			this.queue.start(async (item: QueueItem) => {
+				await this.coalescer.coalesce(item.url, () => this.pipeline(item));
+			});
 		} catch (err) {
 			const message = getErrorMessage(err);
 			this.logger.error(`Error starting crawl: ${message}`);

@@ -313,7 +313,7 @@ export function createApiRoutes(
 			"/sessions/:id",
 			({ params: { id }, set }) => {
 				try {
-					// The FK ON DELETE CASCADE in queue_items handles child cleanup
+					db.query("DELETE FROM queue_items WHERE session_id = ?").run(id);
 					db.query("DELETE FROM crawl_sessions WHERE id = ?").run(id);
 					return { status: "ok" };
 				} catch (err) {

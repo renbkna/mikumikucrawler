@@ -1,5 +1,3 @@
-import { TIMEOUT_CONSTANTS } from "../constants.js";
-
 /**
  * Wraps a promise with a timeout.
  * If the promise doesn't resolve within the timeout, it rejects with a TimeoutError.
@@ -18,51 +16,13 @@ export function withTimeout<T>(
 }
 
 /**
- * Timeout wrapper for static fetch operations.
+ * Like withTimeout, but resolves with a fallback value instead of rejecting.
+ * Use for operations where a timeout is acceptable and a default is preferred over an error.
  */
-export function withFetchTimeout<T>(promise: Promise<T>): Promise<T> {
-	return withTimeout(promise, TIMEOUT_CONSTANTS.STATIC_FETCH, "HTTP request");
-}
-
-/**
- * Timeout wrapper for dynamic rendering (Puppeteer).
- */
-export function withRenderTimeout<T>(promise: Promise<T>): Promise<T> {
-	return withTimeout(
-		promise,
-		TIMEOUT_CONSTANTS.DYNAMIC_RENDER,
-		"Dynamic render",
-	);
-}
-
-/**
- * Timeout wrapper for content processing (HTML parsing).
- */
-export function withProcessingTimeout<T>(promise: Promise<T>): Promise<T> {
-	return withTimeout(
-		promise,
-		TIMEOUT_CONSTANTS.CONTENT_PROCESSING,
-		"Content processing",
-	);
-}
-
-/**
- * Timeout wrapper for database operations.
- */
-export function withDatabaseTimeout<T>(promise: Promise<T>): Promise<T> {
-	return withTimeout(
-		promise,
-		TIMEOUT_CONSTANTS.DATABASE_OPERATION,
-		"Database operation",
-	);
-}
-
-/**
- * Custom timeout error class.
- */
-export class TimeoutError extends Error {
-	constructor(operation: string, timeoutMs: number) {
-		super(`Operation "${operation}" timed out after ${timeoutMs}ms`);
-		this.name = "TimeoutError";
-	}
+export function withTimeoutFallback<T>(
+	promise: Promise<T>,
+	ms: number,
+	fallback: T,
+): Promise<T> {
+	return Promise.race([promise, Bun.sleep(ms).then(() => fallback)]);
 }

@@ -506,7 +506,7 @@ describe("CrawlState CONTRACT", () => {
 
 			const stats = state.buildFinalStats();
 
-			expect(stats.pagesScanned).toBe(5);
+			expect(stats.pagesScanned).toBe(7);
 			expect(stats.successCount).toBe(5);
 			expect(stats.failureCount).toBe(1);
 			expect(stats.skippedCount).toBe(1);
@@ -636,7 +636,7 @@ describe("CrawlState CONTRACT", () => {
 			state.addLinks(5);
 			state.addMedia(2);
 
-			expect(state.stats.pagesScanned).toBe(1);
+			expect(state.stats.pagesScanned).toBe(2);
 			expect(state.stats.linksFound).toBe(5);
 			expect(state.stats.mediaFiles).toBe(2);
 			expect(state.hasVisited("https://example.com/1")).toBe(true);

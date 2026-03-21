@@ -86,7 +86,7 @@ export function createStartupBanner(config: {
 		"",
 		"  ✨ Features:",
 		"     • Real-time WebSocket updates",
-		"     • ML-powered sentiment analysis",
+		"     • Rule-based sentiment analysis",
 		"     • Native robots.txt parsing",
 		"     • Response compression (gzip/br)",
 		"     • Parallel content processing",

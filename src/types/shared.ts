@@ -84,10 +84,10 @@ export interface Stats {
 	pagesScanned: number;
 	linksFound: number;
 	totalData: number;
-	mediaFiles?: number;
-	successCount?: number;
-	failureCount?: number;
-	skippedCount?: number;
+	mediaFiles: number;
+	successCount: number;
+	failureCount: number;
+	skippedCount: number;
 	elapsedTime?: {
 		hours: number;
 		minutes: number;

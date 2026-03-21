@@ -8,6 +8,7 @@ import type {
 	ProcessedContent,
 } from "../types.js";
 import { getErrorMessage } from "../utils/helpers.js";
+import { withTimeout } from "../utils/timeout.js";
 import {
 	analyzeContent,
 	assessContentQuality,
@@ -43,7 +44,7 @@ function safeExtract<T>(
  * Lazy-loaded PDF.js module to avoid startup overhead.
  */
 async function getPDFJS() {
-	const pdfjs = await import("pdfjs-dist");
+	const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
 	return pdfjs;
 }
 
@@ -122,13 +123,13 @@ export class ContentProcessor {
 		);
 
 		// Analyze content (word count, language, keywords, sentiment)
-		result.analysis = await analyzeContent(mainContent);
+		result.analysis = analyzeContent(mainContent);
 
 		// Optimization: Parallelize independent extractions
 		// These don't depend on each other, so run them concurrently
 		const extractionResults = {
 			structuredData: safeExtract(
-				() => extractStructuredData($),
+				() => extractStructuredData($, this.logger),
 				{
 					jsonLd: [],
 					microdata: {},
@@ -140,19 +141,19 @@ export class ContentProcessor {
 				"extract structured data",
 			),
 			media: safeExtract(
-				() => extractMediaInfo($, url),
+				() => extractMediaInfo($, url, this.logger),
 				[],
 				this.logger,
 				"extract media info",
 			),
 			links: safeExtract(
-				() => processLinks($, url),
+				() => processLinks($, url, this.logger),
 				[],
 				this.logger,
 				"process links",
 			),
 			metadata: safeExtract(
-				() => extractMetadata($) as unknown as Record<string, string>,
+				() => extractMetadata($),
 				{},
 				this.logger,
 				"extract metadata",
@@ -214,14 +215,11 @@ export class ContentProcessor {
 
 			// Load PDF document with timeout
 			const pdfjs = await getPDFJS();
-			const loadPromise = pdfjs.getDocument({ data }).promise;
-			const timeoutPromise = new Promise<never>((_, reject) =>
-				setTimeout(
-					() => reject(new Error("PDF loading timeout")),
-					PDF_CONSTANTS.PROCESSING_TIMEOUT_MS,
-				),
+			const pdfDocument = await withTimeout(
+				pdfjs.getDocument({ data }).promise,
+				PDF_CONSTANTS.PROCESSING_TIMEOUT_MS,
+				"PDF loading",
 			);
-			const pdfDocument = await Promise.race([loadPromise, timeoutPromise]);
 
 			// Check page count limit
 			if (pdfDocument.numPages > PDF_CONSTANTS.MAX_PAGES) {
@@ -280,7 +278,7 @@ export class ContentProcessor {
 			}
 
 			// Analyze the extracted text
-			result.analysis = await analyzeContent(mainContent);
+			result.analysis = analyzeContent(mainContent);
 
 			result.extractedData = { mainContent };
 			result.metadata = {

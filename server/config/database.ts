@@ -27,6 +27,7 @@ dbInstance.exec(`
 	PRAGMA temp_store = MEMORY;
 	PRAGMA mmap_size = 67108864;		-- 64MB mmap (reduced from 256MB)
 	PRAGMA busy_timeout = 5000;
+	PRAGMA foreign_keys = ON;
 `);
 
 // Initialize schema at module load time
@@ -37,6 +38,7 @@ dbInstance.exec(`
 		domain TEXT,
 		crawled_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		last_modified TEXT,
+		etag TEXT,
 		content_type TEXT,
 		status_code INTEGER,
 		data_length INTEGER,
@@ -61,7 +63,7 @@ dbInstance.exec(`
 		source_id INTEGER,
 		target_url TEXT,
 		text TEXT,
-		FOREIGN KEY (source_id) REFERENCES pages(id),
+		FOREIGN KEY (source_id) REFERENCES pages(id) ON DELETE CASCADE,
 		UNIQUE(source_id, target_url)
 	);
 
@@ -73,10 +75,34 @@ dbInstance.exec(`
 		allowed BOOLEAN DEFAULT 1
 	);
 
+	CREATE TABLE IF NOT EXISTS crawl_sessions (
+		id TEXT PRIMARY KEY,
+		socket_id TEXT,
+		target TEXT,
+		options TEXT,
+		status TEXT DEFAULT 'running',
+		stats TEXT,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS queue_items (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id TEXT,
+		url TEXT,
+		depth INTEGER DEFAULT 0,
+		retries INTEGER DEFAULT 0,
+		parent_url TEXT,
+		domain TEXT,
+		FOREIGN KEY (session_id) REFERENCES crawl_sessions(id) ON DELETE CASCADE,
+		UNIQUE(session_id, url)
+	);
+
 	CREATE INDEX IF NOT EXISTS idx_pages_domain ON pages(domain);
 	CREATE INDEX IF NOT EXISTS idx_pages_crawled_at ON pages(crawled_at);
 	CREATE INDEX IF NOT EXISTS idx_links_source ON links(source_id);
 	CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_url);
+	CREATE INDEX IF NOT EXISTS idx_queue_items_session ON queue_items(session_id);
 `);
 
 /**
@@ -94,9 +120,12 @@ export const setupDatabase = (logger?: Logger): Database => {
 		}[];
 
 		const hasMainContent = tableInfo.some((col) => col.name === "main_content");
+		const hasEtag = tableInfo.some((col) => col.name === "etag");
 
+		const columnsToAdd: string[] = [];
+		if (!hasEtag) columnsToAdd.push("etag TEXT");
 		if (!hasMainContent) {
-			const newColumns = [
+			columnsToAdd.push(
 				"main_content TEXT",
 				"word_count INTEGER",
 				"reading_time INTEGER",
@@ -107,7 +136,11 @@ export const setupDatabase = (logger?: Logger): Database => {
 				"media_count INTEGER",
 				"internal_links_count INTEGER",
 				"external_links_count INTEGER",
-			];
+			);
+		}
+
+		if (columnsToAdd.length > 0) {
+			const newColumns = columnsToAdd;
 			for (const col of newColumns) {
 				try {
 					dbInstance.exec(`ALTER TABLE pages ADD COLUMN ${col}`);

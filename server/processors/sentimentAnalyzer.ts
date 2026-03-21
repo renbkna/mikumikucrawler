@@ -188,7 +188,7 @@ const negationWords = new Set([
  * Analyzes text sentiment using fast rule-based approach.
  * No ML model needed - processes text instantly.
  */
-export async function analyzeSentiment(text: string): Promise<SentimentResult> {
+export function analyzeSentiment(text: string): SentimentResult {
 	// Skip very short texts
 	if (!text || text.length < 10) {
 		return { label: "neutral", confidence: 0.5 };
@@ -256,18 +256,4 @@ export async function analyzeSentiment(text: string): Promise<SentimentResult> {
 	}
 
 	return { label: "neutral", confidence: 0.5 };
-}
-
-/**
- * Clears any cached sentiment data (for API compatibility).
- */
-export function clearSentimentPipeline(): void {
-	// No-op for rule-based analyzer
-}
-
-/**
- * Always returns true for rule-based analyzer (for API compatibility).
- */
-export function isSentimentModelLoaded(): boolean {
-	return true; // Rule-based is always "loaded"
 }

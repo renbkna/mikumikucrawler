@@ -14,6 +14,7 @@ export class CrawlState {
 	// Root cause fix: Use LRU cache instead of unbounded Set
 	private readonly visited: LRUCache<string, boolean>;
 	private readonly domainDelays: Map<string, number>;
+	private readonly domainPageCounts: Map<string, number>;
 	private consecutiveFailures: number;
 	// Configurable threshold with explanation
 	private readonly CIRCUIT_BREAKER_THRESHOLD: number;
@@ -28,6 +29,7 @@ export class CrawlState {
 		// memory issues (each URL ~100-200 bytes = ~10MB max)
 		this.visited = new LRUCache(50000);
 		this.domainDelays = new Map();
+		this.domainPageCounts = new Map();
 		this.consecutiveFailures = 0;
 		// Threshold based on empirical data: 20 consecutive failures typically
 		// indicates a systematic issue (network, target blocking, etc.)
@@ -79,7 +81,7 @@ export class CrawlState {
 	 */
 	recordSuccess(contentLength: number): void {
 		this.stats.pagesScanned += 1;
-		this.stats.successCount = (this.stats.successCount ?? 0) + 1;
+		this.stats.successCount += 1;
 		this.consecutiveFailures = 0;
 
 		if (typeof contentLength === "number" && Number.isFinite(contentLength)) {
@@ -88,7 +90,8 @@ export class CrawlState {
 	}
 
 	recordFailure(): void {
-		this.stats.failureCount = (this.stats.failureCount ?? 0) + 1;
+		this.stats.pagesScanned += 1;
+		this.stats.failureCount += 1;
 		this.consecutiveFailures++;
 
 		if (this.consecutiveFailures >= this.CIRCUIT_BREAKER_THRESHOLD) {
@@ -99,7 +102,8 @@ export class CrawlState {
 	}
 
 	recordSkip(): void {
-		this.stats.skippedCount = (this.stats.skippedCount ?? 0) + 1;
+		this.stats.pagesScanned += 1;
+		this.stats.skippedCount += 1;
 	}
 
 	addLinks(count: number): void {
@@ -110,7 +114,38 @@ export class CrawlState {
 
 	addMedia(count: number): void {
 		if (count > 0) {
-			this.stats.mediaFiles = (this.stats.mediaFiles ?? 0) + count;
+			this.stats.mediaFiles += count;
+		}
+	}
+
+	/** Records a page crawled for a domain (used for per-domain budget tracking). */
+	recordDomainPage(domain: string): void {
+		this.domainPageCounts.set(
+			domain,
+			(this.domainPageCounts.get(domain) ?? 0) + 1,
+		);
+	}
+
+	/** Returns true if the domain has reached its per-domain page cap. */
+	isDomainBudgetExceeded(domain: string): boolean {
+		const max = this.options.maxPagesPerDomain;
+		if (!max || max <= 0) return false;
+		return (this.domainPageCounts.get(domain) ?? 0) >= max;
+	}
+
+	/**
+	 * Adjusts the domain-specific crawl delay based on server response signals.
+	 * Increases delay on 429/503 (rate limiting) using the Retry-After header when available.
+	 */
+	adaptDomainDelay(
+		domain: string,
+		statusCode: number,
+		retryAfterMs?: number,
+	): void {
+		if (statusCode === 429 || statusCode === 503) {
+			const current = this.getDomainDelay(domain);
+			const retryDelay = retryAfterMs ?? current * 2;
+			this.setDomainDelay(domain, Math.max(retryDelay, current));
 		}
 	}
 
@@ -159,7 +194,7 @@ export class CrawlState {
 			: 0;
 
 		const successRate = this.stats.pagesScanned
-			? `${(((this.stats.successCount ?? 0) / this.stats.pagesScanned) * 100).toFixed(1)}%`
+			? `${((this.stats.successCount / this.stats.pagesScanned) * 100).toFixed(1)}%`
 			: "0%";
 
 		return {

@@ -67,10 +67,11 @@ describe("fetchContent", () => {
 		expect(result.content).toBe("<html><title>Test</title></html>");
 		expect(result.statusCode).toBe(200);
 		expect(result.isDynamic).toBe(false);
-		expect(result.title).toBe("Test");
+		// Title is no longer extracted in fetcher (handled by ContentProcessor to avoid double cheerio parse)
+		expect(result.title).toBe("");
 	});
 
-	test("throws error on HTTP failure", async () => {
+	test("returns permanentFailure for 404/410/501 responses", async () => {
 		const mockResponse = new Response("Not Found", { status: 404 });
 		global.fetch = mock(() =>
 			Promise.resolve(mockResponse),
@@ -86,7 +87,64 @@ describe("fetchContent", () => {
 		const renderer = createMockRenderer(false);
 		const db = createMockDb();
 
-		// Should throw
+		const result = await fetchContent({
+			item,
+			logger,
+			dynamicRenderer: renderer,
+			db,
+		});
+
+		// INVARIANT: 404 returns permanentFailure instead of throwing
+		expect(result.permanentFailure).toBe(true);
+		expect(result.statusCode).toBe(404);
+		expect(result.content).toBe("");
+	});
+
+	test("returns blocked for 403 responses", async () => {
+		const mockResponse = new Response("Forbidden", { status: 403 });
+		global.fetch = mock(() =>
+			Promise.resolve(mockResponse),
+		) as unknown as typeof fetch;
+
+		const item = {
+			url: "https://example.com/forbidden",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		};
+		const logger = createMockLogger();
+		const renderer = createMockRenderer(false);
+		const db = createMockDb();
+
+		const result = await fetchContent({
+			item,
+			logger,
+			dynamicRenderer: renderer,
+			db,
+		});
+
+		// INVARIANT: 403 returns blocked flag
+		expect(result.blocked).toBe(true);
+		expect(result.statusCode).toBe(403);
+	});
+
+	test("throws error on other HTTP failures", async () => {
+		const mockResponse = new Response("Server Error", { status: 500 });
+		global.fetch = mock(() =>
+			Promise.resolve(mockResponse),
+		) as unknown as typeof fetch;
+
+		const item = {
+			url: "https://example.com/500",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		};
+		const logger = createMockLogger();
+		const renderer = createMockRenderer(false);
+		const db = createMockDb();
+
+		// Should throw for 500 errors
 		let error: Error | undefined;
 		try {
 			await fetchContent({ item, logger, dynamicRenderer: renderer, db });
@@ -94,7 +152,7 @@ describe("fetchContent", () => {
 			error = e instanceof Error ? e : new Error(String(e));
 		}
 		expect(error).toBeDefined();
-		expect(error?.message).toContain("HTTP error! status: 404");
+		expect(error?.message).toContain("HTTP error! status: 500");
 	});
 
 	test("respects timeout", async () => {
