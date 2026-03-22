@@ -1,6 +1,5 @@
 import { Heart, History, Music } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { SessionSummary } from "./components";
+import { useCallback, useRef, useState } from "react";
 import {
 	ActionButtons,
 	ConfigurationView,
@@ -19,13 +18,10 @@ import {
 } from "./components";
 import { MikuBanner } from "./components/MikuBanner";
 import { TheatreOverlay } from "./components/TheatreOverlay";
-import { TOAST_DEFAULTS, UI_LIMITS } from "./constants";
-import { useSocket, useToast } from "./hooks";
-import { useCrawlState } from "./hooks/useCrawlState";
-import type { CrawledPage, QueueStats, Stats } from "./types";
+import { UI_LIMITS } from "./constants";
+import { useCrawlController, useToast } from "./hooks";
 
 function App() {
-	const [isAttacking, setIsAttacking] = useState(false);
 	const [theatreStatus, setTheatreStatus] = useState<
 		"idle" | "blackout" | "counting" | "beam" | "live"
 	>("idle");
@@ -34,351 +30,77 @@ function App() {
 	const [openResumePanel, setOpenResumePanel] = useState(false);
 	const [showDetails, setShowDetails] = useState(false);
 	const [audioVol, setAudioVol] = useState(100);
-	const [interruptedSessions, setInterruptedSessions] = useState<
-		SessionSummary[]
-	>([]);
 
 	const { toasts, addToast, dismissToast } = useToast();
 
 	const {
 		target,
-		setTarget,
 		crawlOptions,
 		setCrawlOptions,
 		handleTargetChange,
 		stats,
-		setStats,
 		queueStats,
-		setQueueStats,
-		resetStats,
 		crawledPages,
-		addPage,
-		resetPages,
 		progress,
-		setProgress,
 		logs,
-		setLogs,
+		clearLogs,
 		filterText,
 		setFilterText,
 		displayedPages,
 		clearFilter,
-	} = useCrawlState();
+		isAttacking,
+		connectionState,
+		interruptedSessions,
+		interruptedSessionsLoading,
+		interruptedSessionsError,
+		deletingInterruptedSessionId,
+		refreshInterruptedSessions,
+		deleteInterruptedSession,
+		startCrawl,
+		stopCrawl,
+		resumeCrawl,
+		exportCrawl,
+	} = useCrawlController({ addToast });
 
 	const logContainerRef = useRef<HTMLDivElement>(null);
-	const maxPagesRef = useRef(crawlOptions.maxPages);
-	const fallbackToastShownRef = useRef(false);
-	const queueStatsRef = useRef<QueueStats | null>(null);
-
-	const fetchInterruptedSessions = useCallback(async () => {
-		try {
-			const res = await fetch("/api/sessions");
-			if (!res.ok) return;
-			const data = (await res.json()) as { sessions: SessionSummary[] };
-			setInterruptedSessions(data.sessions);
-		} catch {}
-	}, []);
-
-	useEffect(() => {
-		fetchInterruptedSessions();
-	}, [fetchInterruptedSessions]);
-
-	useEffect(() => {
-		maxPagesRef.current = crawlOptions.maxPages;
-	}, [crawlOptions.maxPages]);
-
-	const addLog = useCallback(
-		(msg: string) => {
-			setLogs((prev) => [msg, ...prev].slice(0, UI_LIMITS.MAX_LOGS));
-
-			const lowered = msg.toLowerCase();
-			if (
-				lowered.includes("falling back to static crawling") &&
-				!fallbackToastShownRef.current
-			) {
-				addToast(
-					"warning",
-					"Tip: Try disabling JavaScript crawling in settings for better performance",
-					TOAST_DEFAULTS.LONG_TIMEOUT,
-				);
-				fallbackToastShownRef.current = true;
-			}
-
-			const container = logContainerRef.current;
-			if (container) {
-				setTimeout(() => {
-					container.scrollTop = 0;
-				}, 10);
-			}
-		},
-		[addToast, setLogs],
-	);
-
-	const handleStatsUpdate = useCallback(
-		(newStats: Stats, log?: string) => {
-			setStats((old) => ({
-				pagesScanned: newStats.pagesScanned ?? old.pagesScanned,
-				linksFound: newStats.linksFound ?? old.linksFound,
-				totalData: newStats.totalData ?? old.totalData,
-				mediaFiles: newStats.mediaFiles,
-				successCount: newStats.successCount,
-				failureCount: newStats.failureCount,
-				skippedCount: newStats.skippedCount,
-				elapsedTime: newStats.elapsedTime ?? old.elapsedTime,
-				pagesPerSecond: newStats.pagesPerSecond ?? old.pagesPerSecond,
-				successRate: newStats.successRate ?? old.successRate,
-			}));
-
-			if (log) {
-				addLog(log);
-			}
-
-			setProgress((prev) => {
-				// Root cause fix: Calculate progress based on actual total work, not just maxPages
-				// When queue grows beyond maxPages (due to discovered links), this ensures
-				// progress is calculated correctly: scanned / (scanned + remaining + active)
-				const currentQueueStats = queueStatsRef.current;
-				const queueSize = currentQueueStats?.queueLength ?? 0;
-				const activeSize = currentQueueStats?.activeRequests ?? 0;
-				const scanned = newStats.pagesScanned || 0;
-
-				// Total work = scanned + pending in queue + currently being processed
-				const totalWork = scanned + queueSize + activeSize;
-
-				// If we haven't discovered much yet, use maxPages as minimum target
-				const minimumTarget = Math.max(maxPagesRef.current, 1);
-				const effectiveTotal = Math.max(totalWork, minimumTarget);
-
-				const newProgress =
-					totalWork > 0 ? Math.min((scanned / effectiveTotal) * 100, 100) : 0;
-
-				return Math.max(prev, newProgress);
-			});
-		},
-		[addLog, setStats, setProgress],
-	);
-
-	const handleQueueStats = useCallback(
-		(data: QueueStats) => {
-			queueStatsRef.current = data;
-			setQueueStats(data);
-		},
-		[setQueueStats],
-	);
-
-	const handlePageContent = useCallback(
-		(page: CrawledPage) => {
-			addPage(page);
-		},
-		[addPage],
-	);
-
-	const handleExportResult = useCallback(
-		(data: { data: string; format: string }) => {
-			const blob = new Blob([data.data], {
-				type: data.format === "json" ? "application/json" : "text/csv",
-			});
-			const url = URL.createObjectURL(blob);
-			const anchor = document.createElement("a");
-			anchor.href = url;
-			anchor.download = `miku-crawler-export.${data.format}`;
-			document.body.appendChild(anchor);
-			anchor.click();
-
-			setTimeout(() => {
-				anchor.remove();
-				URL.revokeObjectURL(url);
-			}, 100);
-
-			addToast(
-				"success",
-				`Data exported successfully as ${data.format.toUpperCase()}`,
-			);
-		},
-		[addToast],
-	);
-
-	const handleError = useCallback(
-		(message: string) => {
-			addToast("error", message);
-		},
-		[addToast],
-	);
-
-	const handleAttackEnd = useCallback(
-		(finalStats: Stats) => {
-			setIsAttacking(false);
-			setTheatreStatus("idle");
-			addLog("Crawl ended.");
-			setStats(finalStats);
-			setProgress(100);
-			addToast(
-				"success",
-				`Crawl completed! Scanned ${finalStats.pagesScanned} pages`,
-				TOAST_DEFAULTS.LONG_TIMEOUT,
-			);
-			fetchInterruptedSessions();
-		},
-		[addLog, addToast, setStats, setProgress, fetchInterruptedSessions],
-	);
-
-	const socketHandlers = useMemo(
-		() => ({
-			onStatsUpdate: handleStatsUpdate,
-			onQueueStats: handleQueueStats,
-			onPageContent: handlePageContent,
-			onExportResult: handleExportResult,
-			onError: handleError,
-			onAttackEnd: handleAttackEnd,
-			addToast,
-		}),
-		[
-			handleStatsUpdate,
-			handleQueueStats,
-			handlePageContent,
-			handleExportResult,
-			handleError,
-			handleAttackEnd,
-			addToast,
-		],
-	);
-
-	const { socket, connectionState, emit } = useSocket(socketHandlers);
-
-	const handleResumeSession = useCallback(
-		(sessionId: string, target: string) => {
-			if (!socket) {
-				addToast(
-					"error",
-					"Socket not connected! Please wait or refresh the page.",
-				);
-				return;
-			}
-
-			resetStats();
-			resetPages();
-			setFilterText("");
-			setProgress(0);
-			fallbackToastShownRef.current = false;
-			handleTargetChange(target);
-
-			addLog(`[Resume] Continuing crawl of ${target}…`);
-			setIsAttacking(true);
-			setTheatreStatus("live");
-
-			emit("resumeSession", { sessionId });
-			addToast("info", "Resuming interrupted crawl…");
-			setInterruptedSessions((prev) => prev.filter((s) => s.id !== sessionId));
-		},
-		[
-			socket,
-			addToast,
-			resetStats,
-			resetPages,
-			setFilterText,
-			setProgress,
-			handleTargetChange,
-			addLog,
-			emit,
-		],
-	);
-
-	const normalizeAndValidateUrl = useCallback(
-		(url: string): { url: string } | { error: string } => {
-			try {
-				let normalizedUrl = url;
-				if (!/^https?:\/\//i.test(url)) {
-					normalizedUrl = `http://${url}`;
-				}
-				new URL(normalizedUrl);
-				return { url: normalizedUrl };
-			} catch {
-				return { error: "Please enter a valid URL" };
-			}
-		},
-		[],
-	);
 
 	const startAttack = useCallback(
-		(isQuick = false) => {
-			fallbackToastShownRef.current = false;
-			if (!target.trim()) {
-				addToast("error", "Please enter a target URL!");
+		async (isQuick = false) => {
+			const started = await startCrawl(isQuick);
+			if (!started) {
 				return;
 			}
-
-			const validationResult = normalizeAndValidateUrl(target);
-			if ("error" in validationResult) {
-				addToast("error", validationResult.error);
-				return;
-			}
-
-			const normalizedTarget = validationResult.url;
-
-			if (normalizedTarget !== target) {
-				setTarget(normalizedTarget);
-				setCrawlOptions((prev) => ({ ...prev, target: normalizedTarget }));
-			}
-
-			if (!socket) {
-				addToast(
-					"error",
-					"Socket not connected! Please wait or refresh the page.",
-				);
-				return;
-			}
-
-			resetStats();
-			resetPages();
-			setFilterText("");
-			setProgress(0);
-			addLog("Initiating Miku Beam Sequence...");
-			setIsAttacking(true);
 
 			if (isQuick) {
 				setTheatreStatus("live");
-				addToast("info", "⚡ Lightning Strike! Skipping animation...");
 			} else {
 				setTheatreStatus("blackout");
 			}
-
-			emit("startAttack", { ...crawlOptions, target: normalizedTarget });
 		},
-		[
-			target,
-			socket,
-			normalizeAndValidateUrl,
-			addLog,
-			addToast,
-			emit,
-			crawlOptions,
-			resetStats,
-			resetPages,
-			setFilterText,
-			setProgress,
-			setTarget,
-			setCrawlOptions,
-		],
+		[startCrawl],
 	);
 
 	const stopAttack = useCallback(() => {
-		emit("stopAttack");
-		addLog("Stopped crawler beam.");
-		addToast("info", "Crawler stopped");
-		setIsAttacking(false);
+		void stopCrawl();
 		setTheatreStatus("idle");
-		setProgress(0);
-	}, [emit, addLog, addToast, setProgress]);
+	}, [stopCrawl]);
 
 	const handleExport = useCallback(
 		(format: string) => {
-			if (socket && crawledPages.length > 0) {
-				emit("exportData", format);
-				addToast("info", "Preparing export...");
-			} else {
-				addToast("warning", "No data to export!");
-			}
+			void exportCrawl(format);
 		},
-		[socket, crawledPages.length, emit, addToast],
+		[exportCrawl],
+	);
+
+	const handleResumeSession = useCallback(
+		(sessionId: string, resumedTarget: string) => {
+			void resumeCrawl(sessionId, resumedTarget).then((resumed: boolean) => {
+				if (resumed) {
+					setTheatreStatus("live");
+				}
+			});
+		},
+		[resumeCrawl],
 	);
 
 	const handleBeamStart = useCallback(() => {
@@ -414,7 +136,7 @@ function App() {
 				</div>
 
 				<div className="fixed top-4 right-4 z-50 space-y-2">
-					{toasts.map((toast) => (
+					{toasts.map((toast: (typeof toasts)[number]) => (
 						<ToastNotification
 							key={toast.id}
 							toast={toast}
@@ -528,10 +250,8 @@ function App() {
 							</div>
 							<LogsSection
 								logs={logs}
-								setLogs={setLogs}
-								logContainerRef={
-									logContainerRef as React.RefObject<HTMLDivElement>
-								}
+								clearLogs={clearLogs}
+								logContainerRef={logContainerRef}
 							/>
 						</section>
 						<section
@@ -627,6 +347,14 @@ function App() {
 
 			<ResumeSessionsPanel
 				isOpen={openResumePanel}
+				sessions={interruptedSessions}
+				isLoading={interruptedSessionsLoading}
+				fetchError={interruptedSessionsError}
+				deletingId={deletingInterruptedSessionId}
+				onRefresh={refreshInterruptedSessions}
+				onDelete={(sessionId) => {
+					void deleteInterruptedSession(sessionId);
+				}}
 				onClose={() => setOpenResumePanel(false)}
 				onResume={handleResumeSession}
 			/>

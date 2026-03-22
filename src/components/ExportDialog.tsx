@@ -1,6 +1,5 @@
 import { Download } from "lucide-react";
-import { useEffect, useRef } from "react";
-import { useFocusTrap } from "../hooks";
+import { useDialogModal } from "../hooks";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 
 interface ExportDialogProps {
@@ -14,22 +13,11 @@ export function ExportDialog({
 	onClose,
 	onExport,
 }: Readonly<ExportDialogProps>) {
-	const dialogRef = useRef<HTMLDialogElement>(null);
-	const { modalRef, initialFocusRef } = useFocusTrap<HTMLDivElement>({
-		isOpen,
-		onClose,
-	});
-
-	useEffect(() => {
-		const dialog = dialogRef.current;
-		if (!dialog) return;
-
-		if (isOpen && !dialog.open) {
-			dialog.showModal();
-		} else if (!isOpen && dialog.open) {
-			dialog.close();
-		}
-	}, [isOpen]);
+	const { dialogRef, modalRef, initialFocusRef } =
+		useDialogModal<HTMLDivElement>({
+			isOpen,
+			onClose,
+		});
 
 	if (!isOpen) return null;
 
@@ -63,7 +51,7 @@ export function ExportDialog({
 				<div className="space-y-3">
 					<button
 						type="button"
-						ref={initialFocusRef as React.RefObject<HTMLButtonElement>}
+						ref={initialFocusRef}
 						onClick={() => {
 							onExport("json");
 							onClose();

@@ -1,4 +1,5 @@
 import DOMPurify from "dompurify";
+import type { PageContentResponse } from "../../shared/contracts/page.js";
 import {
 	AlertCircle,
 	ChevronDown,
@@ -17,6 +18,7 @@ import {
 	useState,
 } from "react";
 import { Virtuoso } from "react-virtuoso";
+import { getApiErrorMessage } from "../api/errors";
 import { api } from "../api/client";
 import type { CrawledPage } from "../types";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
@@ -86,12 +88,10 @@ const CrawledPageCard = memo(function CrawledPageCard({
 				.content.get({ fetch: { signal: AbortSignal.timeout(15_000) } });
 
 			if (error) {
-				throw new Error(
-					(error.value as { error?: string })?.error || "Failed to load",
-				);
+				throw new Error(getApiErrorMessage(error.value, "Failed to load"));
 			}
 
-			const response = data as { status: string; content?: string } | null;
+			const response = data as PageContentResponse | null;
 			if (response?.status === "ok") {
 				// content is "" when page was crawled in metadata-only mode
 				setFetchedContent(
@@ -151,7 +151,7 @@ const CrawledPageCard = memo(function CrawledPageCard({
 						type="button"
 						onClick={(e) => {
 							setFetchedContent(null);
-							handleToggleSource(e);
+							void handleToggleSource(e);
 						}}
 						className="mt-2 px-3 py-1 bg-rose-500/20 hover:bg-rose-500/30 rounded text-xs text-rose-300 transition-colors"
 					>
@@ -232,9 +232,9 @@ const CrawledPageCard = memo(function CrawledPageCard({
 								Processing Errors
 							</div>
 							<ul className="space-y-1">
-								{processedData.errors.map((error, idx) => (
+								{processedData.errors.map((error) => (
 									<li
-										key={`${error.type}-${idx}`}
+										key={`${error.type}-${error.message}-${error.timestamp ?? "no-timestamp"}`}
 										className="text-xs text-rose-600 font-medium"
 									>
 										{error.message}

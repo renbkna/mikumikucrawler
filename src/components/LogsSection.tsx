@@ -89,13 +89,13 @@ const LogItem = memo(function LogItem({
 
 interface LogsSectionProps {
 	logs: string[];
-	setLogs: (logs: string[]) => void;
-	logContainerRef: RefObject<HTMLDivElement>;
+	clearLogs: () => void;
+	logContainerRef: RefObject<HTMLDivElement | null>;
 }
 
 export const LogsSection = memo(function LogsSection({
 	logs,
-	setLogs,
+	clearLogs,
 	logContainerRef,
 }: Readonly<LogsSectionProps>) {
 	const [filterLevel, setFilterLevel] = useState<ParsedLog["level"] | "all">(
@@ -113,7 +113,7 @@ export const LogsSection = memo(function LogsSection({
 	}, [parsedLogs, filterLevel]);
 
 	const handleCopy = useCallback((text: string) => {
-		navigator.clipboard.writeText(text);
+		void navigator.clipboard.writeText(text);
 		const index = Date.now();
 		setCopiedIndex(index);
 		setTimeout(
@@ -216,7 +216,7 @@ export const LogsSection = memo(function LogsSection({
 						{/* Clear logs button */}
 						<button
 							type="button"
-							onClick={() => setLogs([])}
+							onClick={clearLogs}
 							className="p-2 rounded-lg hover:bg-rose-50 text-miku-text/30 hover:text-rose-400 transition-colors"
 							title="Clear Logs"
 						>
