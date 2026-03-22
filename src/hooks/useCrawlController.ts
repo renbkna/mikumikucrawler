@@ -7,8 +7,8 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { CrawlSummary } from "../../server/contracts/crawl.js";
-import type { CrawlEventEnvelope } from "../../server/contracts/events.js";
+import type { CrawlSummary } from "../../shared/contracts/crawl.js";
+import type { CrawlEventEnvelope } from "../../shared/contracts/events.js";
 import type { CrawlExportFormat } from "../api/crawls";
 import {
 	createCrawl,
