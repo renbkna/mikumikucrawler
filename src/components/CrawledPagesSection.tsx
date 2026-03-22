@@ -1,5 +1,5 @@
 import DOMPurify from "dompurify";
-import type { PageContentResponse } from "../../server/contracts/page.js";
+import type { PageContentResponse } from "../../shared/contracts/page.js";
 import {
 	AlertCircle,
 	ChevronDown,

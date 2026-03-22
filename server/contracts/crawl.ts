@@ -1,19 +1,15 @@
 import { t } from "elysia";
 import { CRAWL_METHODS, CRAWL_OPTION_BOUNDS } from "../../shared/crawl.js";
+import { CrawlStatusValues } from "../../shared/contracts/crawl.js";
 import { OkResponseSchema, OptionalBoundedListLimitSchema } from "./http.js";
 
-export const CrawlStatusValues = [
-	"pending",
-	"starting",
-	"running",
-	"stopping",
-	"completed",
-	"stopped",
-	"failed",
-	"interrupted",
-] as const;
-
-export type CrawlStatus = (typeof CrawlStatusValues)[number];
+// Re-export shared types for server consumers
+export { CrawlStatusValues } from "../../shared/contracts/crawl.js";
+export type {
+	CrawlCounters,
+	CrawlStatus,
+	CrawlSummary,
+} from "../../shared/contracts/crawl.js";
 
 export const CrawlStatusSchema = t.UnionEnum([...CrawlStatusValues]);
 
@@ -73,8 +69,6 @@ export const CrawlCountersSchema = t.Object({
 	totalDataKb: t.Number({ minimum: 0 }),
 });
 
-export type CrawlCounters = typeof CrawlCountersSchema.static;
-
 export const CrawlSummarySchema = t.Object({
 	id: t.String(),
 	target: t.String(),
@@ -88,8 +82,6 @@ export const CrawlSummarySchema = t.Object({
 	stopReason: t.Nullable(t.String()),
 	resumable: t.Boolean(),
 });
-
-export type CrawlSummary = typeof CrawlSummarySchema.static;
 
 export const CrawlListQuerySchema = t.Object({
 	status: t.Optional(CrawlStatusSchema),
