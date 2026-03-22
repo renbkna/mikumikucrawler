@@ -282,21 +282,22 @@ shared/                     # Cross-boundary contracts
 ```mermaid
 graph TD
     A[🌐 Target URL] --> B[🎵 CrawlRuntime]
-    B --> C{Dynamic?}
-    C -->|Yes| D[🎭 Playwright]
-    C -->|No| E[⚡ Fetch + Cheerio]
-    D --> F[📄 PagePipeline]
-    E --> F
-    F --> G[📊 ContentProcessor]
-    G --> H[💾 SQLite]
-    H --> I[📡 EventStream]
+    B --> C[📄 PagePipeline]
+    C --> D{Dynamic?}
+    D -->|Yes| E[🎭 Playwright]
+    D -->|No| F[⚡ Fetch + Cheerio]
+    E --> G[📊 ContentProcessor]
+    F --> G
+    G --> C
+    C --> H[💾 SQLite]
+    C --> I[📡 EventStream]
     I --> J[🎨 React UI]
 ```
 
 1. **Client** creates a crawl via `POST /api/crawls`
 2. **CrawlManager** spawns a **CrawlRuntime** with its own queue and state
-3. Pages are fetched via **FetchService** (static) or **Playwright** (dynamic)
-4. **PagePipeline** processes content, extracts links, and stores results
+3. **PagePipeline** fetches each URL via **FetchService** (static) or **Playwright** (dynamic)
+4. **ContentProcessor** analyzes the page, then **PagePipeline** stores results and enqueues discovered links
 5. **EventStream** publishes sequenced SSE events to the frontend ✨
 
 ---
