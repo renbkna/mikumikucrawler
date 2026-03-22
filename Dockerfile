@@ -1,10 +1,7 @@
-# Use Node.js base image with Chrome dependencies
-FROM node:20-slim
+FROM oven/bun:latest
 
-# Install Chrome dependencies, curl, and unzip (required for Bun install)
+# Install Chrome/Playwright dependencies for headless browser
 RUN apt-get update && apt-get install -y \
-    curl \
-    unzip \
     wget \
     gnupg \
     ca-certificates \
@@ -27,17 +24,12 @@ RUN apt-get update && apt-get install -y \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Bun
-ENV BUN_INSTALL="/root/.bun"
-ENV PATH="$BUN_INSTALL/bin:$PATH"
-RUN curl -fsSL https://bun.sh/install | bash
-
 WORKDIR /app
 
 # Copy dependency files
 COPY package.json bun.lock ./
 
-# Install dependencies via Bun (this will also download Puppeteer's Chromium)
+# Install dependencies (includes Playwright browser download)
 RUN bun install
 
 COPY . .
@@ -48,7 +40,6 @@ RUN bun run build
 ENV PORT=3000
 ENV NODE_ENV=production
 
-# Expose port
 EXPOSE 3000
 
 CMD ["bun", "server/server.ts"]

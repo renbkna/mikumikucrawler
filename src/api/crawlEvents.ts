@@ -8,7 +8,7 @@ import type {
 	CrawlProgressPayload,
 	CrawlStartedPayload,
 	CrawlStoppedPayload,
-} from "../../server/contracts/events.js";
+} from "../../shared/contracts/events.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;

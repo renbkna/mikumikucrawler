@@ -1,4 +1,4 @@
-import type { CrawlEventEnvelope } from "../../server/contracts/events.js";
+import type { CrawlEventEnvelope } from "../../shared/contracts/events.js";
 import type { InterruptedSessionSummary } from "../api/crawls";
 import { CRAWLER_DEFAULTS, TOAST_DEFAULTS, UI_LIMITS } from "../constants";
 import type { CrawledPage, CrawlOptions, QueueStats, Stats } from "../types";
