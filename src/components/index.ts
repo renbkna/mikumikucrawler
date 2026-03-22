@@ -3,7 +3,6 @@ export { ConfigurationView } from "./ConfigurationView";
 export { CrawledPagesSection } from "./CrawledPagesSection";
 export { CrawlerForm } from "./CrawlerForm";
 export { ExportDialog } from "./ExportDialog";
-export { Header } from "./Header";
 export * from "./KawaiiIcons";
 export { LogsSection } from "./LogsSection";
 export { ProgressBar } from "./ProgressBar";

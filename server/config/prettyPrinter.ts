@@ -29,6 +29,26 @@ function formatBytes(bytes: number): string {
 	return `${Number.parseFloat((bytes / k ** i).toFixed(1))} ${sizes[i]}`;
 }
 
+function toLogString(value: unknown): string {
+	if (typeof value === "string") {
+		return value;
+	}
+
+	if (typeof value === "number" || typeof value === "boolean") {
+		return String(value);
+	}
+
+	if (value === null || value === undefined) {
+		return "";
+	}
+
+	try {
+		return JSON.stringify(value);
+	} catch {
+		return "[unserializable]";
+	}
+}
+
 /**
  * Creates a beautiful custom pretty printer for Pino logs.
  */
@@ -44,14 +64,18 @@ export function createPrettyPrinter(): Transform {
 				icon: "📝",
 				color: "white",
 			};
-			const msg = String(log.msg || "");
+			const msg = toLogString(log.msg);
 
 			// Format additional context if present
 			const context: string[] = [];
-			if (log.url) context.push(`🔗 ${String(log.url)}`);
-			if (log.domain) context.push(`🌐 ${String(log.domain)}`);
-			if (log.duration) context.push(`⏱️  ${log.duration}ms`);
-			if (log.count !== undefined) context.push(`📊 ${log.count}`);
+			if (log.url) context.push(`🔗 ${toLogString(log.url)}`);
+			if (log.domain) context.push(`🌐 ${toLogString(log.domain)}`);
+			if (typeof log.duration === "number") {
+				context.push(`⏱️  ${log.duration}ms`);
+			}
+			if (typeof log.count === "number") {
+				context.push(`📊 ${log.count}`);
+			}
 			if (log.size) context.push(`📦 ${formatBytes(Number(log.size))}`);
 
 			const contextStr = context.length > 0 ? ` | ${context.join(" | ")}` : "";
@@ -80,12 +104,12 @@ export function createStartupBanner(config: {
 		"╚══════════════════════════════════════════════════════════╝",
 		"",
 		`  🚀 Server:     http://localhost:${config.port}`,
-		`  📚 Swagger:    http://localhost:${config.port}/swagger`,
+		`  📚 OpenAPI:    http://localhost:${config.port}/openapi`,
 		`  🎨 Frontend:   ${config.frontendUrl}`,
 		`  🌍 Environment: ${config.env}`,
 		"",
 		"  ✨ Features:",
-		"     • Real-time WebSocket updates",
+		"     • HTTP control + SSE telemetry",
 		"     • Rule-based sentiment analysis",
 		"     • Native robots.txt parsing",
 		"     • Response compression (gzip/br)",

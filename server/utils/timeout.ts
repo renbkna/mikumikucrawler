@@ -7,9 +7,23 @@ export function withTimeout<T>(
 	ms: number,
 	operation: string,
 ): Promise<T> {
+	let settled = false;
+	const wrapped = promise.then(
+		(v) => {
+			settled = true;
+			return v;
+		},
+		(e) => {
+			settled = true;
+			throw e;
+		},
+	);
+	// Prevent unhandled rejection when the losing branch rejects after the race settles
+	wrapped.catch(() => {});
 	return Promise.race([
-		promise,
+		wrapped,
 		Bun.sleep(ms).then(() => {
+			if (settled) return undefined as never;
 			throw new Error(`Timeout: ${operation} exceeded ${ms}ms`);
 		}),
 	]);
@@ -24,5 +38,24 @@ export function withTimeoutFallback<T>(
 	ms: number,
 	fallback: T,
 ): Promise<T> {
-	return Promise.race([promise, Bun.sleep(ms).then(() => fallback)]);
+	let settled = false;
+	const wrapped = promise.then(
+		(v) => {
+			settled = true;
+			return v;
+		},
+		(e) => {
+			settled = true;
+			throw e;
+		},
+	);
+	// Prevent unhandled rejection when the losing branch rejects after the race settles
+	wrapped.catch(() => {});
+	return Promise.race([
+		wrapped,
+		Bun.sleep(ms).then(() => {
+			if (settled) return undefined as never;
+			return fallback;
+		}),
+	]);
 }

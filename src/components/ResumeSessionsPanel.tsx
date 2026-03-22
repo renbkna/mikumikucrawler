@@ -1,19 +1,19 @@
 import { History, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useFocusTrap } from "../hooks";
+import { useCallback, useEffect } from "react";
+import type { InterruptedSessionSummary } from "../api/crawls";
+import { useDialogModal } from "../hooks";
 import { HeartIcon, SparkleIcon } from "./KawaiiIcons";
 
-export interface SessionSummary {
-	id: string;
-	target: string;
-	status: string;
-	pagesScanned: number;
-	createdAt: string;
-	updatedAt: string;
-}
+export type SessionSummary = InterruptedSessionSummary;
 
 interface ResumeSessionsPanelProps {
 	isOpen: boolean;
+	sessions: SessionSummary[];
+	isLoading: boolean;
+	fetchError: string | null;
+	deletingId: string | null;
+	onRefresh: () => void;
+	onDelete: (sessionId: string) => void;
 	onClose: () => void;
 	/**
 	 * Called when the user confirms a session resume.
@@ -49,80 +49,29 @@ function shortenUrl(url: string, maxLength = 45): string {
 
 export function ResumeSessionsPanel({
 	isOpen,
+	sessions,
+	isLoading,
+	fetchError,
+	deletingId,
+	onRefresh,
+	onDelete,
 	onClose,
 	onResume,
 }: Readonly<ResumeSessionsPanelProps>) {
-	const [sessions, setSessions] = useState<SessionSummary[]>([]);
-	const [isLoading, setIsLoading] = useState(false);
-	const [deletingId, setDeletingId] = useState<string | null>(null);
-	const [fetchError, setFetchError] = useState<string | null>(null);
-
-	const dialogRef = useRef<HTMLDialogElement>(null);
-	const { modalRef, initialFocusRef } = useFocusTrap<HTMLDivElement>({
-		isOpen,
-		onClose,
-	});
-
-	// ── Data fetching ──────────────────────────────────────────────────────────
-
-	const fetchSessions = useCallback(async () => {
-		setIsLoading(true);
-		setFetchError(null);
-		try {
-			const res = await fetch("/api/sessions");
-			if (!res.ok) {
-				throw new Error(`Server responded with ${res.status}`);
-			}
-			const json = (await res.json()) as { sessions: SessionSummary[] };
-			setSessions(json.sessions);
-		} catch (err) {
-			setFetchError(
-				err instanceof Error ? err.message : "Could not load sessions.",
-			);
-		} finally {
-			setIsLoading(false);
-		}
-	}, []);
+	const { dialogRef, modalRef, initialFocusRef } =
+		useDialogModal<HTMLDivElement>({
+			isOpen,
+			onClose,
+		});
 
 	// Fetch whenever the panel opens
 	useEffect(() => {
 		if (isOpen) {
-			fetchSessions();
+			onRefresh();
 		}
-	}, [isOpen, fetchSessions]);
-
-	// Keep the native <dialog> element in sync with the isOpen prop
-	useEffect(() => {
-		const dialog = dialogRef.current;
-		if (!dialog) return;
-		if (isOpen && !dialog.open) {
-			dialog.showModal();
-		} else if (!isOpen && dialog.open) {
-			dialog.close();
-		}
-	}, [isOpen]);
+	}, [isOpen, onRefresh]);
 
 	// ── Event handlers ─────────────────────────────────────────────────────────
-
-	const handleDelete = useCallback(async (sessionId: string) => {
-		setDeletingId(sessionId);
-		try {
-			const res = await fetch(`/api/sessions/${sessionId}`, {
-				method: "DELETE",
-			});
-			if (!res.ok) {
-				throw new Error(`Server responded with ${res.status}`);
-			}
-			// Remove locally — no need to re-fetch
-			setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-		} catch {
-			// Surface a brief inline error without a full re-fetch so the list
-			// remains visible and the user can try again.
-			setFetchError("Failed to delete session. Please try again.");
-		} finally {
-			setDeletingId(null);
-		}
-	}, []);
 
 	const handleResume = useCallback(
 		(session: SessionSummary) => {
@@ -168,7 +117,7 @@ export function ResumeSessionsPanel({
 					<div className="flex items-center gap-2">
 						<button
 							type="button"
-							onClick={fetchSessions}
+							onClick={onRefresh}
 							disabled={isLoading}
 							className="p-2 rounded-full hover:bg-miku-teal/10 text-miku-text/40 hover:text-miku-teal transition-colors disabled:opacity-40"
 							aria-label="Refresh session list"
@@ -180,7 +129,7 @@ export function ResumeSessionsPanel({
 						</button>
 						<button
 							type="button"
-							ref={initialFocusRef as React.RefObject<HTMLButtonElement>}
+							ref={initialFocusRef}
 							onClick={onClose}
 							className="p-2 rounded-full hover:bg-miku-pink/10 text-miku-text/40 hover:text-miku-pink transition-colors"
 							aria-label="Close dialog"
@@ -255,7 +204,7 @@ export function ResumeSessionsPanel({
 								<div className="flex items-center gap-2 shrink-0">
 									<button
 										type="button"
-										onClick={() => handleDelete(session.id)}
+										onClick={() => onDelete(session.id)}
 										disabled={deletingId === session.id}
 										className="p-2 rounded-xl text-miku-text/30 hover:text-rose-500 hover:bg-rose-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
 										aria-label={`Delete session for ${session.target}`}
@@ -282,7 +231,8 @@ export function ResumeSessionsPanel({
 				{/* ── Footer note ────────────────────────────────────────────────── */}
 				{sessions.length > 0 && (
 					<p className="mt-4 text-xs text-miku-text/30 text-center font-medium">
-						Resuming picks up from where the previous crawl left off ✨
+						Resume continues from the saved queue and restores the saved crawl
+						settings for that session.
 					</p>
 				)}
 			</div>

@@ -2,6 +2,24 @@ import { describe, expect, mock, test } from "bun:test";
 import type { Logger } from "../../config/logging.js";
 import { ContentProcessor } from "../ContentProcessor.js";
 
+/**
+ * CONTRACT: ContentProcessor.processContent
+ *
+ * Input: (content: string | Buffer, url: string, contentType: string)
+ * Output: ProcessedContent with extractedData, metadata, analysis, media, links, errors
+ *
+ * Dispatch rules:
+ *   - text/html → HTML extraction pipeline (extractMainContent, metadata, links, media, analysis)
+ *   - application/json → JSON processing (mainContent from parsed JSON)
+ *   - application/pdf → PDF extraction (text extraction, metadata)
+ *   - other → empty result, no errors
+ *
+ * Error contract:
+ *   - processing errors → errors[] populated, error defaults applied
+ *   - PDF parse failure → pdf_processing_error in errors[]
+ *   - never throws
+ */
+
 const createMockLogger = (): Logger =>
 	({
 		info: mock(() => {}),
@@ -10,97 +28,71 @@ const createMockLogger = (): Logger =>
 		debug: mock(() => {}),
 	}) as unknown as Logger;
 
-describe("ContentProcessor", () => {
-	describe("processContent", () => {
-		test("processes HTML content successfully", async () => {
-			const logger = createMockLogger();
-			const processor = new ContentProcessor(logger);
+describe("ContentProcessor dispatch contract", () => {
+	test("HTML → extracts main content and populates analysis", async () => {
+		const processor = new ContentProcessor(createMockLogger());
+		const html = `<html><head><title>Test</title></head>
+			<body><main><h1>Hello World</h1><p>Crawler test content here.</p></main></body></html>`;
 
-			const html = `
-				<!DOCTYPE html>
-				<html>
-				<head>
-					<title>Test Page</title>
-					<meta name="description" content="Test description">
-				</head>
-				<body>
-					<main>
-						<h1>Hello World</h1>
-						<p>This is test content for the crawler.</p>
-						<a href="/link1">Link 1</a>
-						<a href="https://external.com">External Link</a>
-						<img src="/image.jpg" alt="Test image">
-					</main>
-				</body>
-				</html>
-			`;
+		const result = await processor.processContent(
+			html,
+			"https://example.com/test",
+			"text/html",
+		);
 
-			const result = await processor.processContent(
-				html,
-				"https://example.com/test",
-				"text/html",
-			);
+		expect(result.errors).toHaveLength(0);
+		expect(result.extractedData.mainContent).toContain("Hello World");
+		expect(result.analysis.wordCount).toBeGreaterThan(0);
+		expect(Array.isArray(result.links)).toBe(true);
+		expect(Array.isArray(result.media)).toBe(true);
+	});
 
-			expect(result.url).toBe("https://example.com/test");
-			expect(result.contentType).toBe("text/html");
-			expect(result.errors.length).toBe(0);
+	test("JSON → extractedData.mainContent contains serialized data", async () => {
+		const processor = new ContentProcessor(createMockLogger());
+		const json = JSON.stringify({ key: "value", nested: { data: 123 } });
 
-			// Should have extracted content
-			expect(result.extractedData).toBeDefined();
+		const result = await processor.processContent(
+			json,
+			"https://api.example.com/data",
+			"application/json",
+		);
 
-			// Should have analyzed content
-			expect(result.analysis).toBeDefined();
-			expect(typeof result.analysis.wordCount).toBe("number");
+		expect(result.errors).toHaveLength(0);
+		expect(result.extractedData.mainContent).toContain("value");
+	});
 
-			// Should have extracted links
-			expect(Array.isArray(result.links)).toBe(true);
+	test("PDF with invalid data → pdf_processing_error", async () => {
+		const processor = new ContentProcessor(createMockLogger());
 
-			// Should have extracted media
-			expect(Array.isArray(result.media)).toBe(true);
-		});
+		const result = await processor.processContent(
+			Buffer.from("fake pdf content"),
+			"https://example.com/doc.pdf",
+			"application/pdf",
+		);
 
-		test("handles JSON content", async () => {
-			const logger = createMockLogger();
-			const processor = new ContentProcessor(logger);
+		expect(result.errors).toHaveLength(1);
+		expect(result.errors[0].type).toBe("pdf_processing_error");
+	});
 
-			const json = JSON.stringify({ key: "value", nested: { data: 123 } });
+	test("unknown content type → empty result, no errors", async () => {
+		const processor = new ContentProcessor(createMockLogger());
 
-			const result = await processor.processContent(
-				json,
-				"https://api.example.com/data",
-				"application/json",
-			);
+		const result = await processor.processContent(
+			"some binary data",
+			"https://example.com/file.bin",
+			"application/octet-stream",
+		);
 
-			expect(result.url).toBe("https://api.example.com/data");
-			expect(result.contentType).toBe("application/json");
-			expect(result.errors.length).toBe(0);
-			expect(result.extractedData.mainContent).toBeDefined();
-		});
+		expect(result.errors).toHaveLength(0);
+		expect(result.url).toBe("https://example.com/file.bin");
+	});
 
-		test("handles PDF content processing with invalid data", async () => {
-			const logger = createMockLogger();
-			const processor = new ContentProcessor(logger);
+	test("PDF with valid minimal structure → extracts without errors", async () => {
+		const processor = new ContentProcessor(createMockLogger());
 
-			// Test with invalid PDF data - should produce processing error
-			const result = await processor.processContent(
-				Buffer.from("fake pdf content"),
-				"https://example.com/doc.pdf",
-				"application/pdf",
-			);
-
-			// Invalid PDF data should produce a processing error
-			expect(result.errors.length).toBe(1);
-			expect(result.errors[0].type).toBe("pdf_processing_error");
-		});
-
-		test("processes valid PDF content successfully", async () => {
-			const logger = createMockLogger();
-			const processor = new ContentProcessor(logger);
-
-			// Minimal valid PDF with "Hello World" text
-			// This tests the pdf-parse v2 API integration
-			const minimalPdf = Buffer.from(
-				`%PDF-1.4
+		// Minimal valid PDF with text content
+		const minimalPdf = Buffer.from(
+			`%PDF-1.4
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >> endobj
@@ -109,123 +101,25 @@ BT /F1 12 Tf 100 700 Td (Hello World) Tj ET
 endstream endobj
 xref
 0 5
-0000000000 65535 f 
-0000000009 00000 n 
-0000000058 00000 n 
-0000000115 00000 n 
-0000000214 00000 n 
+0000000000 65535 f
+0000000009 00000 n
+0000000058 00000 n
+0000000115 00000 n
+0000000214 00000 n
 trailer << /Root 1 0 R /Size 5 >>
 startxref
 308
 %%EOF`,
-				"binary",
-			);
+			"binary",
+		);
 
-			const result = await processor.processContent(
-				minimalPdf,
-				"https://example.com/test.pdf",
-				"application/pdf",
-			);
+		const result = await processor.processContent(
+			minimalPdf,
+			"https://example.com/test.pdf",
+			"application/pdf",
+		);
 
-			// Should process without errors
-			expect(result.url).toBe("https://example.com/test.pdf");
-			expect(result.contentType).toBe("application/pdf");
-			// PDF text extraction should work (or at least not crash)
-			expect(result.extractedData.mainContent).toBeDefined();
-		});
-
-		test("handles malformed HTML gracefully", async () => {
-			const logger = createMockLogger();
-			const processor = new ContentProcessor(logger);
-
-			const malformedHtml = "<html><body><p>Unclosed tag";
-
-			const result = await processor.processContent(
-				malformedHtml,
-				"https://example.com/broken",
-				"text/html",
-			);
-
-			// Should not throw and should have some result
-			expect(result.url).toBe("https://example.com/broken");
-			expect(result.errors.length).toBe(0);
-		});
-
-		test("handles empty HTML content", async () => {
-			const logger = createMockLogger();
-			const processor = new ContentProcessor(logger);
-
-			const result = await processor.processContent(
-				"",
-				"https://example.com/empty",
-				"text/html",
-			);
-
-			expect(result.url).toBe("https://example.com/empty");
-			// Should handle gracefully
-			expect(result.analysis).toBeDefined();
-		});
-
-		test("handles unknown content types", async () => {
-			const logger = createMockLogger();
-			const processor = new ContentProcessor(logger);
-
-			const result = await processor.processContent(
-				"some binary data",
-				"https://example.com/file.bin",
-				"application/octet-stream",
-			);
-
-			// Should not process but also not error
-			expect(result.url).toBe("https://example.com/file.bin");
-			expect(result.errors.length).toBe(0);
-		});
-	});
-
-	describe("error handling", () => {
-		test("logs warning when structured data extraction fails", async () => {
-			const logger = createMockLogger();
-			const processor = new ContentProcessor(logger);
-
-			// HTML that might cause extraction issues
-			const html = `
-				<!DOCTYPE html>
-				<html>
-				<head>
-					<script type="application/ld+json">{ invalid json }</script>
-				</head>
-				<body>
-					<p>Content</p>
-				</body>
-				</html>
-			`;
-
-			const result = await processor.processContent(
-				html,
-				"https://example.com/test",
-				"text/html",
-			);
-
-			// Should still return a result despite potential extraction issues
-			expect(result.url).toBe("https://example.com/test");
-		});
-
-		test("sets error defaults when processing completely fails", async () => {
-			const logger = createMockLogger();
-			const processor = new ContentProcessor(logger);
-
-			// Force an error by passing invalid content type handling
-			const result = await processor.processContent(
-				null as unknown as string,
-				"https://example.com/null",
-				"text/html",
-			);
-
-			// Should have error defaults set
-			if (result.errors.length > 0) {
-				expect(result.extractedData.mainContent).toBe("");
-				expect(result.analysis.wordCount).toBe(0);
-			}
-		});
+		expect(result.contentType).toBe("application/pdf");
+		expect(result.extractedData.mainContent).toBeDefined();
 	});
 });

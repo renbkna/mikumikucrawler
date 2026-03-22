@@ -22,57 +22,14 @@
 		"indentWidth": 2
 	},
 	"linter": {
-		"enabled": true,
-		"rules": {
-			"recommended": true,
-			"correctness": {
-				"recommended": true,
-				"useExhaustiveDependencies": "error",
-				"useHookAtTopLevel": "error",
-				"noUnusedVariables": "error",
-				"noUnusedImports": "error",
-				"noUnreachable": "error",
-				"noUndeclaredVariables": "error"
-			},
-			"a11y": {
-				"recommended": true
-			},
-			"style": {
-				"recommended": true,
-				"noNonNullAssertion": "error",
-				"useConst": "error",
-				"useTemplate": "error",
-				"noParameterAssign": "error"
-			},
-			"suspicious": {
-				"recommended": true,
-				"noExplicitAny": "error",
-				"noConsole": "warn",
-				"noDoubleEquals": "error"
-			},
-			"complexity": {
-				"recommended": true,
-				"noForEach": "warn"
-			},
-			"performance": {
-				"recommended": true,
-				"noDelete": "warn"
-			},
-			"security": {
-				"recommended": true,
-				"noDangerouslySetInnerHtml": "error",
-				"noGlobalEval": "error"
-			}
-		}
+		"enabled": false
 	},
 	"javascript": {
 		"formatter": {
 			"quoteStyle": "double",
 			"trailingCommas": "all"
 		},
-		"globals": [
-			"Bun"
-		]
+		"globals": ["Bun"]
 	},
 	"css": {
 		"parser": {

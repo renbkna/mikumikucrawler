@@ -16,8 +16,9 @@ export const compression = () => {
 			const acceptEncoding = request.headers.get("accept-encoding") || "";
 			const contentType = response.headers.get("content-type") || "";
 
-			// Skip compression for already compressed formats
+			// Skip compression for streaming, already compressed, or binary formats
 			if (
+				contentType.includes("text/event-stream") ||
 				contentType.includes("image/") ||
 				contentType.includes("video/") ||
 				contentType.includes("audio/") ||
