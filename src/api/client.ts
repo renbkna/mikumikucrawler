@@ -2,7 +2,7 @@ import { treaty } from "@elysiajs/eden";
 import type { App } from "../../server/app";
 import { getApiErrorMessage } from "./errors";
 
-const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
+const backendUrl = import.meta.env.VITE_BACKEND_URL || window.location.origin;
 
 /** Type-safe Eden Treaty client for the Miku Crawler API */
 export const api = treaty<App>(backendUrl);

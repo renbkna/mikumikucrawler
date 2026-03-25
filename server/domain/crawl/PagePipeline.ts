@@ -245,8 +245,6 @@ export class PagePipeline {
 					)
 				: [];
 
-		this.state.recordDiscoveredLinks(processedContent.links?.length ?? 0);
-
 		const retainedMedia =
 			this.options.saveMedia &&
 			(this.options.crawlMethod === "media" ||
@@ -297,6 +295,11 @@ export class PagePipeline {
 			links: filteredLinks,
 		});
 
+		if (!robotsDirectives.nofollow) {
+			await this.enqueueLinks(item, filteredLinks, signal);
+		}
+
+		this.state.recordDiscoveredLinks(processedContent.links?.length ?? 0);
 		this.state.recordDomainPage(item.domain);
 		this.state.recordTerminal(item.url, "success", {
 			dataKb: Math.floor(fetchResult.contentLength / 1024),
@@ -328,8 +331,5 @@ export class PagePipeline {
 		});
 
 		this.eventSink.log(`[Crawler] Crawled ${item.url}`);
-		if (!robotsDirectives.nofollow) {
-			await this.enqueueLinks(item, filteredLinks, signal);
-		}
 	}
 }

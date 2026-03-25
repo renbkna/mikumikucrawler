@@ -15,14 +15,14 @@ export function pagesApi() {
 				repos: StorageRepos;
 			};
 			const content = repos.pages.getContentById(params.id);
-			if (content === null) {
+			if (content === undefined) {
 				set.status = 404;
 				return { error: "Page not found" };
 			}
 
 			return {
 				status: "ok",
-				content,
+				content: content ?? "",
 			};
 		},
 		{
