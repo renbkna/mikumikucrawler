@@ -105,27 +105,44 @@ export class PinnedHttpClient implements HttpClient {
 
 			const url = new URL(currentUrl);
 			const addresses = await this.resolver.resolveHost(url.hostname);
-			const pinnedUrl = new URL(currentUrl);
-			const selectedAddress = addresses[0];
-			const isIpv6 = selectedAddress.includes(":");
-			pinnedUrl.hostname = isIpv6 ? `[${selectedAddress}]` : selectedAddress;
 
-			const init: RequestInit & { tls?: { serverName?: string } } = {
-				headers: {
-					...request.headers,
-					Host: url.port ? `${url.hostname}:${url.port}` : url.hostname,
-				},
-				redirect: "manual",
-				signal: request.signal,
-			};
+			let response: Response | undefined;
+			let lastError: unknown;
 
-			if (url.protocol === "https:") {
-				init.tls = {
-					serverName: url.hostname,
+			for (const address of addresses) {
+				const pinnedUrl = new URL(currentUrl);
+				const isIpv6 = address.includes(":");
+				pinnedUrl.hostname = isIpv6 ? `[${address}]` : address;
+
+				const init: RequestInit & { tls?: { serverName?: string } } = {
+					headers: {
+						...request.headers,
+						Host: url.port ? `${url.hostname}:${url.port}` : url.hostname,
+					},
+					redirect: "manual",
+					signal: request.signal,
 				};
+
+				if (url.protocol === "https:") {
+					init.tls = {
+						serverName: url.hostname,
+					};
+				}
+
+				try {
+					response = await this.fetchFn(pinnedUrl.toString(), init);
+					break;
+				} catch (error) {
+					if (request.signal?.aborted) throw error;
+					lastError = error;
+				}
 			}
 
-			const response = await this.fetchFn(pinnedUrl.toString(), init);
+			if (!response) {
+				throw lastError instanceof Error
+					? lastError
+					: new Error(String(lastError));
+			}
 			if (response.status < 300 || response.status >= 400) {
 				return response;
 			}

@@ -151,11 +151,12 @@ export function createPageRepo(db: Database) {
 				.all(crawlId) as Array<{ url: string }>;
 			return rows.map((row) => row.url);
 		},
-		getContentById(id: number): string | null {
+		getContentById(id: number): string | null | undefined {
 			const row = db
 				.query("SELECT content FROM pages WHERE id = ? LIMIT 1")
 				.get(id) as { content: string | null } | null;
-			return row ? row.content : null;
+			if (row === null) return undefined;
+			return row.content;
 		},
 		getLinksByPageUrl(crawlId: string, pageUrl: string): string[] {
 			const rows = db

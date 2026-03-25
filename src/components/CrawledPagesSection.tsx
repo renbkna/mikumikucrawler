@@ -62,18 +62,7 @@ const CrawledPageCard = memo(function CrawledPageCard({
 	const processedData = page.processedData;
 	const hasProcessedData = processedData?.analysis;
 
-	const handleToggleSource = async (e: React.MouseEvent) => {
-		e.stopPropagation();
-
-		if (showSource) {
-			setShowSource(false);
-			return;
-		}
-
-		setShowSource(true);
-
-		if (fetchedContent) return;
-
+	const fetchPageContent = async () => {
 		if (page.id === null) {
 			setFetchError("Cannot fetch content: Page ID is missing");
 			return;
@@ -106,6 +95,20 @@ const CrawledPageCard = memo(function CrawledPageCard({
 			);
 		} finally {
 			setIsLoadingContent(false);
+		}
+	};
+
+	const handleToggleSource = async (e: React.MouseEvent) => {
+		e.stopPropagation();
+
+		if (showSource) {
+			setShowSource(false);
+			return;
+		}
+
+		setShowSource(true);
+		if (!fetchedContent) {
+			await fetchPageContent();
 		}
 	};
 
@@ -150,8 +153,9 @@ const CrawledPageCard = memo(function CrawledPageCard({
 					<button
 						type="button"
 						onClick={(e) => {
+							e.stopPropagation();
 							setFetchedContent(null);
-							void handleToggleSource(e);
+							void fetchPageContent();
 						}}
 						className="mt-2 px-3 py-1 bg-rose-500/20 hover:bg-rose-500/30 rounded text-xs text-rose-300 transition-colors"
 					>
