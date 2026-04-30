@@ -1,10 +1,15 @@
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config/env.js";
-import type { CrawlOptions, CrawlStatus } from "../contracts/crawl.js";
+import type {
+	CrawlOptions,
+	CrawlStatus,
+} from "../../shared/contracts/crawl.js";
 import { createCrawlQueueRepo } from "./repos/crawlQueueRepo.js";
+import { createCrawlItemPersistence } from "./repos/crawlItemPersistence.js";
 import { createCrawlRunRepo } from "./repos/crawlRunRepo.js";
 import { createCrawlTerminalRepo } from "./repos/crawlTerminalRepo.js";
 import { createPageRepo } from "./repos/pageRepo.js";
@@ -17,6 +22,7 @@ const migrationsDirectory = path.join(__dirname, "migrations");
 export interface StorageRepos {
 	crawlRuns: ReturnType<typeof createCrawlRunRepo>;
 	crawlQueue: ReturnType<typeof createCrawlQueueRepo>;
+	crawlItems: ReturnType<typeof createCrawlItemPersistence>;
 	crawlTerminals: ReturnType<typeof createCrawlTerminalRepo>;
 	pages: ReturnType<typeof createPageRepo>;
 	search: ReturnType<typeof createSearchRepo>;
@@ -47,35 +53,77 @@ function configurePragmas(db: Database): void {
 	`);
 }
 
-export function applyMigrations(db: Database): void {
+function migrationChecksum(sql: string): string {
+	return createHash("sha256").update(sql).digest("hex");
+}
+
+export function applyMigrations(
+	db: Database,
+	migrationDirectory = migrationsDirectory,
+): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			id TEXT PRIMARY KEY,
-			applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+			applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			checksum TEXT NOT NULL
 		)
 	`);
 
-	const applied = new Set(
+	const columns = db
+		.query("PRAGMA table_info(schema_migrations)")
+		.all() as Array<{
+		name: string;
+	}>;
+	if (!columns.some((column) => column.name === "checksum")) {
+		throw new Error(
+			"schema_migrations is missing checksum; delete the database and recreate it",
+		);
+	}
+
+	const applied = new Map(
 		(
-			db.query("SELECT id FROM schema_migrations ORDER BY id").all() as Array<{
+			db
+				.query("SELECT id, checksum FROM schema_migrations ORDER BY id")
+				.all() as Array<{
 				id: string;
+				checksum: string | null;
 			}>
-		).map((row) => row.id),
+		).map((row) => {
+			if (row.checksum === null) {
+				throw new Error(
+					`Applied migration ${row.id} has no checksum; delete the database and recreate it`,
+				);
+			}
+
+			return [row.id, row.checksum] as const;
+		}),
 	);
 
 	const insertMigration = db.prepare(
-		"INSERT INTO schema_migrations (id) VALUES (?)",
+		"INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)",
 	);
 
-	for (const fileName of readdirSync(migrationsDirectory).sort()) {
-		if (!fileName.endsWith(".sql") || applied.has(fileName)) {
+	for (const fileName of readdirSync(migrationDirectory).sort()) {
+		if (!fileName.endsWith(".sql")) {
 			continue;
 		}
 
-		const sql = readFileSync(path.join(migrationsDirectory, fileName), "utf8");
+		const sql = readFileSync(path.join(migrationDirectory, fileName), "utf8");
+		const checksum = migrationChecksum(sql);
+		const appliedChecksum = applied.get(fileName);
+		if (appliedChecksum !== undefined) {
+			if (appliedChecksum !== checksum) {
+				throw new Error(
+					`Applied migration ${fileName} checksum mismatch; database was migrated with different SQL`,
+				);
+			}
+
+			continue;
+		}
+
 		db.transaction(() => {
 			db.exec(sql);
-			insertMigration.run(fileName);
+			insertMigration.run(fileName, checksum);
 		})();
 	}
 }
@@ -91,6 +139,7 @@ export function createStorage(databasePath = config.dbPath): Storage {
 		repos: {
 			crawlRuns: createCrawlRunRepo(db),
 			crawlQueue: createCrawlQueueRepo(db),
+			crawlItems: createCrawlItemPersistence(db),
 			crawlTerminals: createCrawlTerminalRepo(db),
 			pages: createPageRepo(db),
 			search: createSearchRepo(db),

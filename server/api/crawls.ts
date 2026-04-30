@@ -13,8 +13,7 @@ import {
 	StopCrawlResponseSchema,
 } from "../contracts/crawl.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
-import type { CrawlManager } from "../runtime/CrawlManager.js";
-import type { StorageRepos } from "../storage/db.js";
+import { routeServices } from "./context.js";
 import { normalizeHttpUrl } from "../../shared/url.js";
 
 const CSV_INJECTION_PREFIX = /^[=+\-@|\t]/;
@@ -35,9 +34,7 @@ export function crawlsApi() {
 				.post(
 					"/:id/stop",
 					(context) => {
-						const { crawlManager, params, set } = context as typeof context & {
-							crawlManager: CrawlManager;
-						};
+						const { crawlManager, params, set } = routeServices(context);
 						const crawl = crawlManager.stop(params.id);
 						if (!crawl) {
 							set.status = 404;
@@ -59,9 +56,7 @@ export function crawlsApi() {
 				.post(
 					"/:id/resume",
 					(context) => {
-						const { crawlManager, params, set } = context as typeof context & {
-							crawlManager: CrawlManager;
-						};
+						const { crawlManager, params, set } = routeServices(context);
 						const crawl = crawlManager.resume(params.id);
 						if (!crawlManager.get(params.id)) {
 							set.status = 404;
@@ -90,9 +85,7 @@ export function crawlsApi() {
 				.get(
 					"/:id",
 					(context) => {
-						const { crawlManager, params, set } = context as typeof context & {
-							crawlManager: CrawlManager;
-						};
+						const { crawlManager, params, set } = routeServices(context);
 						const crawl = crawlManager.get(params.id);
 						if (!crawl) {
 							set.status = 404;
@@ -114,12 +107,9 @@ export function crawlsApi() {
 				.get(
 					"/:id/export",
 					(context) => {
-						const { crawlManager, params, query, repos, set } =
-							context as typeof context & {
-								crawlManager: CrawlManager;
-								repos: StorageRepos;
-								query: typeof ExportQuerySchema.static;
-							};
+						const { crawlManager, params, query, repos, set } = routeServices<{
+							query: typeof ExportQuerySchema.static;
+						}>(context);
 						const crawl = crawlManager.get(params.id);
 						if (!crawl) {
 							set.status = 404;
@@ -184,9 +174,7 @@ export function crawlsApi() {
 				.delete(
 					"/:id",
 					(context) => {
-						const { crawlManager, params, set } = context as typeof context & {
-							crawlManager: CrawlManager;
-						};
+						const { crawlManager, params, set } = routeServices(context);
 						const deleted = crawlManager.delete(params.id);
 						if (!crawlManager.get(params.id) && !deleted) {
 							set.status = 404;
@@ -216,10 +204,9 @@ export function crawlsApi() {
 		.post(
 			"/",
 			(context) => {
-				const { body, crawlManager, set } = context as typeof context & {
+				const { body, crawlManager, set } = routeServices<{
 					body: typeof CreateCrawlBodySchema.static;
-					crawlManager: CrawlManager;
-				};
+				}>(context);
 				const normalizedTarget = normalizeHttpUrl(body.target);
 				if ("error" in normalizedTarget) {
 					set.status = 422;
@@ -246,15 +233,14 @@ export function crawlsApi() {
 		.get(
 			"/",
 			(context) => {
-				const { crawlManager, query } = context as typeof context & {
-					crawlManager: CrawlManager;
+				const { crawlManager, query } = routeServices<{
 					query: {
 						status?: CrawlStatus;
 						from?: string;
 						to?: string;
 						limit?: number;
 					};
-				};
+				}>(context);
 				return {
 					crawls: crawlManager.list({
 						status: query.status,

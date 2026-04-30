@@ -1,4 +1,7 @@
-import type { CrawlCounters, CrawlOptions } from "../../contracts/crawl.js";
+import type {
+	CrawlCounters,
+	CrawlOptions,
+} from "../../../shared/contracts/crawl.js";
 import type { QueueStats } from "../../types.js";
 import { LRUCache } from "../../utils/lruCache.js";
 

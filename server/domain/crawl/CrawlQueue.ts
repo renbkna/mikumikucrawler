@@ -1,7 +1,7 @@
 import type { Logger } from "../../config/logging.js";
-import type { CrawlOptions } from "../../contracts/crawl.js";
-import { normalizeHttpUrl } from "../../../shared/url.js";
+import type { CrawlOptions } from "../../../shared/contracts/crawl.js";
 import type { CrawlState } from "./CrawlState.js";
+import { getCrawlUrlIdentity } from "./UrlPolicy.js";
 
 export interface QueueItem {
 	url: string;
@@ -56,12 +56,12 @@ export class CrawlQueue {
 			availableAt?: number;
 		},
 	): boolean {
-		const normalized = normalizeHttpUrl(item.url);
-		if ("error" in normalized || !normalized.url) {
+		const identity = getCrawlUrlIdentity(item.url);
+		if ("error" in identity) {
 			return false;
 		}
 
-		const url = normalized.url;
+		const url = identity.canonicalUrl;
 		if (
 			this.state.hasVisited(url) ||
 			this.activeUrls.has(url) ||
@@ -74,7 +74,7 @@ export class CrawlQueue {
 			return false;
 		}
 
-		const domain = item.domain ?? new URL(url).hostname;
+		const domain = item.domain ?? identity.domainBudgetKey;
 		const queueItem: QueueItem = {
 			url,
 			domain,
@@ -147,12 +147,14 @@ export class CrawlQueue {
 		};
 	}
 
-	markDone(item: QueueItem): void {
+	markDone(item: QueueItem, options: { persist?: boolean } = {}): void {
 		this.activeUrls.delete(item.url);
 		if (this.rescheduledUrls.delete(item.url)) {
 			return;
 		}
-		this.persistence.remove(item.url);
+		if (options.persist !== false) {
+			this.persistence.remove(item.url);
+		}
 	}
 
 	markInterrupted(item: QueueItem): void {

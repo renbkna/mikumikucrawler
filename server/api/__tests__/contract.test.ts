@@ -1,20 +1,11 @@
 import { describe, expect, mock, test } from "bun:test";
-import { Elysia } from "elysia";
+import { createApp } from "../../app.js";
 import type { AppLogger } from "../../config/logging.js";
-import { handleAppError } from "../../errorHandling.js";
-import { dbPlugin } from "../../plugins/db.js";
 import type { HttpClient, Resolver } from "../../plugins/security.js";
-import { securityPlugin } from "../../plugins/security.js";
-import { servicesPlugin } from "../../plugins/services.js";
-import { loggerPlugin } from "../../plugins/logger.js";
 import { CrawlManager } from "../../runtime/CrawlManager.js";
 import { EventStream } from "../../runtime/EventStream.js";
 import { RuntimeRegistry } from "../../runtime/RuntimeRegistry.js";
 import { createInMemoryStorage } from "../../storage/db.js";
-import { crawlsApi } from "../crawls.js";
-import { pagesApi } from "../pages.js";
-import { searchApi } from "../search.js";
-import { sseApi } from "../sse.js";
 
 function createLogger(): AppLogger {
 	return {
@@ -62,29 +53,15 @@ function buildApp(httpClient: HttpClient) {
 		httpClient,
 	});
 
-	const app = new Elysia()
-		.use(loggerPlugin(logger))
-		.use(dbPlugin(storage))
-		.use(securityPlugin(resolver, httpClient))
-		.use(
-			servicesPlugin({
-				crawlManager,
-				eventStream,
-				runtimeRegistry: registry,
-			}),
-		)
-		.onError(({ code, error, logger, set }) =>
-			handleAppError({
-				code,
-				error,
-				set,
-				logger,
-			}),
-		)
-		.use(crawlsApi())
-		.use(sseApi())
-		.use(pagesApi())
-		.use(searchApi());
+	const app = createApp({
+		logger,
+		storage,
+		resolver,
+		httpClient,
+		eventStream,
+		runtimeRegistry: registry,
+		crawlManager,
+	});
 
 	return { app, crawlManager, storage };
 }
@@ -105,6 +82,21 @@ const crawlBody = {
 };
 
 describe("api contract", () => {
+	test("app factory uses injected storage", async () => {
+		const { app, storage } = buildApp({
+			fetch: async () =>
+				new Response("<html><body><main>unused</main></body></html>", {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				}),
+		});
+
+		const response = await app.handle(new Request("http://localhost/health"));
+
+		expect(response.status).toBe(200);
+		expect(storage.repos.crawlRuns.list()).toEqual([]);
+	});
+
 	test("rejects crawl methods and status filters outside the declared contract", async () => {
 		const { app } = buildApp({
 			fetch: async () =>

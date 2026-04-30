@@ -9,7 +9,7 @@ import { pagesApi } from "./api/pages.js";
 import { searchApi } from "./api/search.js";
 import { sseApi } from "./api/sse.js";
 import { config } from "./config/env.js";
-import { setupLogging } from "./config/logging.js";
+import type { AppLogger } from "./config/logging.js";
 import { createStartupBanner } from "./config/prettyPrinter.js";
 import type { ApiErrorSchema } from "./contracts/errors.js";
 import { compression } from "./middleware/compression.js";
@@ -18,7 +18,9 @@ import { loggerPlugin } from "./plugins/logger.js";
 import { openapiPlugin } from "./plugins/openapi.js";
 import {
 	DefaultResolver,
+	type HttpClient,
 	PinnedHttpClient,
+	type Resolver,
 	securityPlugin,
 } from "./plugins/security.js";
 import { servicesPlugin } from "./plugins/services.js";
@@ -28,76 +30,101 @@ import { CrawlManager } from "./runtime/CrawlManager.js";
 import { EventStream } from "./runtime/EventStream.js";
 import { RuntimeRegistry } from "./runtime/RuntimeRegistry.js";
 import { handleAppError } from "./errorHandling.js";
-import { createStorage } from "./storage/db.js";
+import { createStorage, type Storage } from "./storage/db.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const distPath = path.join(__dirname, "..", "dist");
 
-export const logger = await setupLogging();
-export const storage = createStorage();
-export const resolver = new DefaultResolver();
-export const httpClient = new PinnedHttpClient(resolver);
-export const eventStream = new EventStream();
-export const runtimeRegistry = new RuntimeRegistry();
-export const crawlManager = new CrawlManager({
-	logger,
-	repos: storage.repos,
-	eventStream,
-	registry: runtimeRegistry,
-	resolver,
-	httpClient,
-});
+export interface AppDependencies {
+	logger: AppLogger;
+	storage: Storage;
+	resolver: Resolver;
+	httpClient: HttpClient;
+	eventStream: EventStream;
+	runtimeRegistry: RuntimeRegistry;
+	crawlManager: CrawlManager;
+}
 
-export const app = new Elysia()
-	.use(loggerPlugin(logger))
-	.use(dbPlugin(storage))
-	.use(securityPlugin(resolver, httpClient))
-	.use(
-		servicesPlugin({
-			crawlManager,
-			eventStream,
-			runtimeRegistry,
-		}),
-	)
-	.use(
-		cors({
-			origin: (request) => {
-				const origin = request.headers.get("origin");
-				if (!config.isProduction && origin === "http://localhost:5173") {
-					return true;
-				}
-				return origin === config.frontendUrl;
-			},
-			credentials: true,
-		}),
-	)
-	.use(
-		rateLimit({
-			max: 100,
-			duration: 60_000,
-			skip: (request) =>
-				request.url.includes("/health") || request.url.includes("/events"),
-		}),
-	)
-	.use(compression())
-	.use(openapiPlugin())
-	.use(telemetryPlugin())
-	.use(crawlsApi())
-	.use(sseApi())
-	.use(pagesApi())
-	.use(searchApi())
-	.use(healthApi())
-	.use(spaStaticPlugin({ distPath }))
-	.onError(
-		({ code, error, logger: requestLogger, set }) =>
-			handleAppError({
-				code,
-				error,
-				set,
-				logger: requestLogger,
-			}) satisfies typeof ApiErrorSchema.static,
-	);
+export function createDefaultAppDependencies(
+	logger: AppLogger,
+): AppDependencies {
+	const storage = createStorage();
+	const resolver = new DefaultResolver();
+	const httpClient = new PinnedHttpClient(resolver);
+	const eventStream = new EventStream();
+	const runtimeRegistry = new RuntimeRegistry();
+	const crawlManager = new CrawlManager({
+		logger,
+		repos: storage.repos,
+		eventStream,
+		registry: runtimeRegistry,
+		resolver,
+		httpClient,
+	});
 
-export type App = typeof app;
+	return {
+		logger,
+		storage,
+		resolver,
+		httpClient,
+		eventStream,
+		runtimeRegistry,
+		crawlManager,
+	};
+}
+
+export function createApp(deps: AppDependencies) {
+	return new Elysia()
+		.use(loggerPlugin(deps.logger))
+		.use(dbPlugin(deps.storage.repos))
+		.use(securityPlugin(deps.resolver, deps.httpClient))
+		.use(
+			servicesPlugin({
+				crawlManager: deps.crawlManager,
+				eventStream: deps.eventStream,
+				runtimeRegistry: deps.runtimeRegistry,
+			}),
+		)
+		.use(
+			cors({
+				origin: (request) => {
+					const origin = request.headers.get("origin");
+					if (!config.isProduction && origin === "http://localhost:5173") {
+						return true;
+					}
+					return origin === config.frontendUrl;
+				},
+				credentials: true,
+			}),
+		)
+		.use(
+			rateLimit({
+				max: 100,
+				duration: 60_000,
+				skip: (request) =>
+					request.url.includes("/health") || request.url.includes("/events"),
+			}),
+		)
+		.use(compression())
+		.use(openapiPlugin())
+		.use(telemetryPlugin())
+		.use(crawlsApi())
+		.use(sseApi())
+		.use(pagesApi())
+		.use(searchApi())
+		.use(healthApi())
+		.use(spaStaticPlugin({ distPath }))
+		.onError(
+			({ code, error, logger: requestLogger, set }) =>
+				handleAppError({
+					code,
+					error,
+					set,
+					logger: requestLogger,
+				}) satisfies typeof ApiErrorSchema.static,
+		);
+}
+
+export type App = ReturnType<typeof createApp>;
 export { createStartupBanner };

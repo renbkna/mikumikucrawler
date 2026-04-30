@@ -5,16 +5,15 @@ import {
 	SearchQuerySchema,
 	SearchResponseSchema,
 } from "../contracts/search.js";
-import type { StorageRepos } from "../storage/db.js";
+import { routeServices } from "./context.js";
 
 export function searchApi() {
 	return new Elysia({ name: "search-api", prefix: "/api" }).get(
 		"/search",
 		(context) => {
-			const { query, repos } = context as typeof context & {
+			const { query, repos } = routeServices<{
 				query: typeof SearchQuerySchema.static;
-				repos: StorageRepos;
-			};
+			}>(context);
 			const escaped = query.q.replace(/"/g, '""');
 			const ftsQuery = `"${escaped}"*`;
 			const results = repos.search.search(

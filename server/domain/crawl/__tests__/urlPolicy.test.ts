@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { CrawlOptions } from "../../../contracts/crawl.js";
-import { filterDiscoveredLinks } from "../UrlPolicy.js";
+import type { CrawlOptions } from "../../../../shared/contracts/crawl.js";
+import { filterDiscoveredLinks, getCrawlUrlIdentity } from "../UrlPolicy.js";
 
 /**
  * CONTRACT: filterDiscoveredLinks
@@ -35,6 +35,44 @@ function makeOptions(overrides: Partial<CrawlOptions> = {}): CrawlOptions {
 }
 
 describe("filterDiscoveredLinks", () => {
+	test("builds one canonical identity for queue, robots, budget, and origin checks", () => {
+		const identity = getCrawlUrlIdentity(
+			"HTTPS://Example.COM:443/path/?b=2&a=1&utm_source=x#section",
+		);
+
+		expect(identity).toEqual({
+			canonicalUrl: "https://example.com/path/?a=1&b=2",
+			hostname: "example.com",
+			originKey: "https://example.com",
+			robotsKey: "https://example.com",
+			domainBudgetKey: "example.com",
+			skippedByExtension: false,
+		});
+	});
+
+	test("preserves non-default ports in origin and robots keys", () => {
+		const identity = getCrawlUrlIdentity("http://example.com:8080/page");
+
+		expect(identity).toMatchObject({
+			canonicalUrl: "http://example.com:8080/page",
+			originKey: "http://example.com:8080",
+			robotsKey: "http://example.com:8080",
+			domainBudgetKey: "example.com",
+		});
+	});
+
+	test("keeps subdomains as distinct budget keys", () => {
+		const root = getCrawlUrlIdentity("https://example.com/page");
+		const subdomain = getCrawlUrlIdentity("https://blog.example.com/page");
+
+		expect("error" in root ? root.error : root.domainBudgetKey).toBe(
+			"example.com",
+		);
+		expect(
+			"error" in subdomain ? subdomain.error : subdomain.domainBudgetKey,
+		).toBe("blog.example.com");
+	});
+
 	test("rejects non-http URLs", () => {
 		const result = filterDiscoveredLinks(
 			[
@@ -133,6 +171,16 @@ describe("filterDiscoveredLinks", () => {
 
 		expect(result[0].isInternal).toBe(true);
 		expect(result[1].isInternal).toBe(false);
+	});
+
+	test("classifies scheme changes as external when current URL is available", () => {
+		const result = filterDiscoveredLinks(
+			[{ url: "https://example.com/page", domain: "example.com" }],
+			makeOptions({ crawlMethod: "links" }),
+			"http://example.com/start",
+		);
+
+		expect(result).toEqual([]);
 	});
 
 	test("coerces nofollow to boolean", () => {

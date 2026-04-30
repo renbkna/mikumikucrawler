@@ -1,4 +1,20 @@
-import type { CrawlOptions } from "../types.js";
+import type { CrawlMethod } from "../crawl.js";
+
+export interface CrawlOptions {
+	target: string;
+	crawlMethod: CrawlMethod;
+	crawlDepth: number;
+	crawlDelay: number;
+	maxPages: number;
+	/** Maximum pages to crawl per domain. 0 means unlimited. */
+	maxPagesPerDomain: number;
+	maxConcurrentRequests: number;
+	retryLimit: number;
+	dynamic: boolean;
+	respectRobots: boolean;
+	contentOnly: boolean;
+	saveMedia: boolean;
+}
 
 export const CrawlStatusValues = [
 	"pending",

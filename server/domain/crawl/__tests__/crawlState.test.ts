@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { CrawlOptions } from "../../../contracts/crawl.js";
+import type { CrawlOptions } from "../../../../shared/contracts/crawl.js";
 import { CrawlState } from "../CrawlState.js";
 
 /**

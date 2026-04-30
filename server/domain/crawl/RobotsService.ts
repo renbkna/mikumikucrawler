@@ -7,6 +7,7 @@ import {
 	NativeRobotsParser,
 	type RobotsResult,
 } from "../../utils/robotsParser.js";
+import { getCrawlUrlIdentity } from "./UrlPolicy.js";
 
 export interface RobotsPolicy {
 	allowed: boolean;
@@ -25,52 +26,51 @@ export class RobotsService {
 		private readonly logger: Logger,
 	) {}
 
-	private async fetchRulesForDomain(
-		domain: string,
+	private async fetchRulesForOrigin(
+		originKey: string,
 	): Promise<RobotsResult | null> {
-		const cached = this.cache.get(domain);
+		const cached = this.cache.get(originKey);
 		if (cached !== undefined) {
 			return cached;
 		}
 
-		for (const protocol of ["https", "http"] as const) {
-			try {
-				const response = await this.httpClient.fetch({
-					url: `${protocol}://${domain}/robots.txt`,
-					headers: { "User-Agent": config.userAgent },
-					signal: AbortSignal.timeout(
-						REQUEST_CONSTANTS.ROBOTS_FETCH_TIMEOUT_MS,
-					),
-				});
+		try {
+			const response = await this.httpClient.fetch({
+				url: `${originKey}/robots.txt`,
+				headers: { "User-Agent": config.userAgent },
+				signal: AbortSignal.timeout(REQUEST_CONSTANTS.ROBOTS_FETCH_TIMEOUT_MS),
+			});
 
-				if (!response.ok) {
-					continue;
-				}
-
+			if (response.ok) {
 				const text = await response.text();
 				const rules = new NativeRobotsParser(text);
-				this.cache.set(domain, rules);
+				this.cache.set(originKey, rules);
 				return rules;
-			} catch (error) {
-				this.logger.debug(
-					`[Robots] Failed to fetch robots.txt for ${domain}: ${error instanceof Error ? error.message : String(error)}`,
-				);
 			}
+		} catch (error) {
+			this.logger.debug(
+				`[Robots] Failed to fetch robots.txt for ${originKey}: ${error instanceof Error ? error.message : String(error)}`,
+			);
 		}
 
-		this.cache.set(domain, null);
+		this.cache.set(originKey, null);
 		return null;
 	}
 
 	async evaluate(url: string): Promise<RobotsPolicy> {
-		const domain = new URL(url).hostname;
-		const rules = await this.fetchRulesForDomain(domain);
+		const identity = getCrawlUrlIdentity(url);
+		if ("error" in identity) {
+			throw new Error(identity.error);
+		}
+
+		const rules = await this.fetchRulesForOrigin(identity.robotsKey);
 		const crawlDelaySeconds = rules?.getCrawlDelay(config.userAgent);
 
 		return {
-			domain,
+			domain: identity.domainBudgetKey,
 			allowed: rules ? rules.isAllowed(url, config.userAgent) : true,
-			crawlDelayMs: crawlDelaySeconds ? crawlDelaySeconds * 1000 : undefined,
+			crawlDelayMs:
+				crawlDelaySeconds === undefined ? undefined : crawlDelaySeconds * 1000,
 		};
 	}
 

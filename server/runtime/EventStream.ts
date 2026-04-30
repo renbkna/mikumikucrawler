@@ -3,7 +3,7 @@ import type {
 	CrawlEventEnvelopeBase,
 	CrawlEventMap,
 	CrawlEventType,
-} from "../contracts/events.js";
+} from "../../shared/contracts/events.js";
 
 interface StreamState {
 	sequence: number;

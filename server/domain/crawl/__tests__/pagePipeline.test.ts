@@ -267,14 +267,16 @@ describe("page pipeline contract", () => {
 			createLogger(),
 		);
 
-		await pipeline.process({
+		const result = await pipeline.process({
 			url: "https://example.com/",
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
 		});
 
-		expect(save).toHaveBeenCalled();
+		expect(save).not.toHaveBeenCalled();
+		expect(result.page?.saveInput.url).toBe("https://example.com/");
+		expect(result.page?.eventPayload.id).toBeNull();
 		expect(recordDomainPage).toHaveBeenCalledWith("example.com");
 		expect(recordTerminal).toHaveBeenCalledWith(
 			"https://example.com/",
@@ -287,19 +289,12 @@ describe("page pipeline contract", () => {
 	});
 
 	test("saveMedia=false strips extracted media from persisted and emitted page data", async () => {
-		let savedPageInput: any = null;
-		let emittedPage: any = null;
 		const eventSink = {
 			log: mock(() => undefined),
-			page: mock((payload: any) => {
-				emittedPage = payload;
-			}),
+			page: mock(() => undefined),
 		};
 		const recordTerminal = mock(() => true);
-		const save = mock((input: any) => {
-			savedPageInput = input;
-			return 7;
-		});
+		const save = mock(() => 7);
 		const pipeline = new PagePipeline(
 			"crawl-1",
 			{
@@ -346,37 +341,31 @@ describe("page pipeline contract", () => {
 			createLogger(),
 		);
 
-		await pipeline.process({
+		const result = await pipeline.process({
 			url: "https://example.com/post",
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
 		});
 
-		expect(save).toHaveBeenCalled();
-		expect(savedPageInput?.processedContent?.media).toEqual([]);
+		expect(save).not.toHaveBeenCalled();
+		expect(result.page?.saveInput.processedContent.media).toEqual([]);
 		expect(recordTerminal).toHaveBeenCalledWith(
 			"https://example.com/post",
 			"success",
 			expect.objectContaining({ mediaFiles: 0 }),
 		);
-		expect(emittedPage?.processedData?.media).toEqual([]);
+		expect(result.page?.eventPayload.processedData?.media).toEqual([]);
+		expect(eventSink.page).not.toHaveBeenCalled();
 	});
 
 	test("media mode with saveMedia=true keeps extracted media metadata", async () => {
-		let savedPageInput: any = null;
-		let emittedPage: any = null;
 		const eventSink = {
 			log: mock(() => undefined),
-			page: mock((payload: any) => {
-				emittedPage = payload;
-			}),
+			page: mock(() => undefined),
 		};
 		const recordTerminal = mock(() => true);
-		const save = mock((input: any) => {
-			savedPageInput = input;
-			return 8;
-		});
+		const save = mock(() => 8);
 		const pipeline = new PagePipeline(
 			"crawl-1",
 			{
@@ -423,19 +412,21 @@ describe("page pipeline contract", () => {
 			createLogger(),
 		);
 
-		await pipeline.process({
+		const result = await pipeline.process({
 			url: "https://example.com/post",
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
 		});
 
-		expect(savedPageInput?.processedContent?.media).toHaveLength(1);
+		expect(save).not.toHaveBeenCalled();
+		expect(result.page?.saveInput.processedContent.media).toHaveLength(1);
 		expect(recordTerminal).toHaveBeenCalledWith(
 			"https://example.com/post",
 			"success",
 			expect.objectContaining({ mediaFiles: 1 }),
 		);
-		expect(emittedPage?.processedData?.media).toHaveLength(1);
+		expect(result.page?.eventPayload.processedData?.media).toHaveLength(1);
+		expect(eventSink.page).not.toHaveBeenCalled();
 	});
 });

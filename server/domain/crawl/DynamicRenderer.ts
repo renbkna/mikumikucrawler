@@ -9,7 +9,7 @@ import {
 	SITE_COOKIES,
 	SITE_SELECTORS,
 } from "../../constants.js";
-import type { CrawlOptions } from "../../contracts/crawl.js";
+import type { CrawlOptions } from "../../../shared/contracts/crawl.js";
 import type { Resolver } from "../../plugins/security.js";
 import { getErrorMessage } from "../../utils/helpers.js";
 import { logMemoryStatus } from "../../utils/memoryMonitor.js";
