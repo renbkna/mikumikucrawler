@@ -3,10 +3,11 @@ import type {
 	CrawlCounters,
 	CrawlOptions,
 	CrawlStatus,
-} from "../contracts/crawl.js";
+} from "../../shared/contracts/crawl.js";
 import type { HttpClient, Resolver } from "../plugins/security.js";
 import type { StorageRepos } from "../storage/db.js";
-import { CrawlRuntime } from "./CrawlRuntime.js";
+import type { CrawlRuntime } from "./CrawlRuntime.js";
+import { createCrawlRuntime } from "./CrawlRuntimeFactory.js";
 import type { EventStream } from "./EventStream.js";
 import type { RuntimeRegistry } from "./RuntimeRegistry.js";
 
@@ -31,7 +32,7 @@ export class CrawlManager {
 			initialCounters?: CrawlCounters;
 		} = { resume: false },
 	): CrawlRuntime {
-		const runtime = new CrawlRuntime({
+		return createCrawlRuntime({
 			crawlId,
 			options,
 			logger: this.deps.logger,
@@ -42,14 +43,8 @@ export class CrawlManager {
 			initialSequence: config.initialSequence,
 			initialCounters: config.initialCounters,
 			resume: config.resume,
-			onSettled: () => {
-				this.deps.registry.delete(crawlId);
-				this.deps.eventStream.scheduleCleanup(crawlId);
-			},
+			registry: this.deps.registry,
 		});
-
-		this.deps.registry.set(crawlId, runtime);
-		return runtime;
 	}
 
 	create(options: CrawlOptions) {

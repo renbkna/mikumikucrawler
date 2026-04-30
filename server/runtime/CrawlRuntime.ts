@@ -1,23 +1,27 @@
 import type { Logger } from "../config/logging.js";
 import { CRAWL_QUEUE_CONSTANTS } from "../constants.js";
-import type { CrawlCounters, CrawlOptions } from "../contracts/crawl.js";
+import type {
+	CrawlCounters,
+	CrawlOptions,
+} from "../../shared/contracts/crawl.js";
 import type {
 	CrawlEventMap,
 	CrawlEventType,
 	CrawlPagePayload,
-} from "../contracts/events.js";
+} from "../../shared/contracts/events.js";
 import { CrawlQueue, type QueueItem } from "../domain/crawl/CrawlQueue.js";
 import { CrawlState } from "../domain/crawl/CrawlState.js";
 import { DynamicRenderer } from "../domain/crawl/DynamicRenderer.js";
 import { FetchService } from "../domain/crawl/FetchService.js";
 import { PagePipeline } from "../domain/crawl/PagePipeline.js";
+import type { PageProcessResult } from "../domain/crawl/PagePipeline.js";
 import { RobotsService } from "../domain/crawl/RobotsService.js";
 import type { HttpClient, Resolver } from "../plugins/security.js";
 import type { StorageRepos } from "../storage/db.js";
 import { withTimeout } from "../utils/timeout.js";
 import type { EventStream } from "./EventStream.js";
 
-interface CrawlRuntimeDependencies {
+export interface CrawlRuntimeDependencies {
 	crawlId: string;
 	options: CrawlOptions;
 	logger: Logger;
@@ -53,8 +57,7 @@ export class CrawlRuntime {
 
 	constructor(private readonly deps: CrawlRuntimeDependencies) {
 		this.state = new CrawlState(deps.options, deps.initialCounters, {
-			onTerminal: (url, outcome) =>
-				deps.repos.crawlTerminals.upsert(deps.crawlId, url, outcome),
+			onTerminal: undefined,
 		});
 		this.dynamicRenderer = new DynamicRenderer(
 			deps.options,
@@ -240,8 +243,11 @@ export class CrawlRuntime {
 		item: Parameters<PagePipeline["process"]>[0],
 	): Promise<void> {
 		const controller = new AbortController();
+		let processResult: PageProcessResult = {};
 		const task = withTimeout(
-			this.pipeline.process(item, controller.signal),
+			this.pipeline.process(item, controller.signal).then((result) => {
+				processResult = result;
+			}),
 			CRAWL_QUEUE_CONSTANTS.ITEM_PROCESSING_TIMEOUT_MS,
 			`Processing ${item.url}`,
 		)
@@ -251,6 +257,7 @@ export class CrawlRuntime {
 					`[Runtime] Failed to process ${item.url}: ${error instanceof Error ? error.message : String(error)}`,
 				);
 				this.state.recordTerminal(item.url, "failure");
+				processResult = { terminalOutcome: "failure" };
 				this.publish("crawl.log", {
 					message: `[Crawler] Failure: ${item.url}`,
 				});
@@ -258,8 +265,25 @@ export class CrawlRuntime {
 			.finally(() => {
 				if (this.interrupted) {
 					this.queue.markInterrupted(item);
-				} else {
+				} else if (processResult.rescheduled) {
 					this.queue.markDone(item);
+				} else {
+					const itemCommit = this.deps.repos.crawlItems.commitCompletedItem({
+						crawlId: this.deps.crawlId,
+						url: item.url,
+						outcome: processResult.terminalOutcome,
+						page: processResult.page?.saveInput,
+						counters: this.state.snapshotCounters(),
+						eventSequence:
+							this.getCurrentSequence() + (processResult.page ? 1 : 0),
+					});
+					if (processResult.page) {
+						this.publish("crawl.page", {
+							...processResult.page.eventPayload,
+							id: itemCommit.pageId ?? null,
+						});
+					}
+					this.queue.markDone(item, { persist: false });
 				}
 
 				this.activeTasks.delete(item.url);

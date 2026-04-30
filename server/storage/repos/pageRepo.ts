@@ -31,7 +31,7 @@ export interface ExportPageRow {
 
 export type PageRepo = ReturnType<typeof createPageRepo>;
 
-export function createPageRepo(db: Database) {
+export function createPageWriter(db: Database) {
 	const insertPage = db.prepare(`
 		INSERT INTO pages (
 			crawl_id,
@@ -87,7 +87,7 @@ export function createPageRepo(db: Database) {
 		"INSERT OR IGNORE INTO page_links (page_id, target_url, text) VALUES (?, ?, ?)",
 	);
 
-	const saveTransaction = db.transaction((input: SavePageInput) => {
+	function savePage(input: SavePageInput): number {
 		const pageRow = insertPage.get(
 			input.crawlId,
 			input.url,
@@ -119,11 +119,20 @@ export function createPageRepo(db: Database) {
 		}
 
 		return pageRow.id;
-	});
+	}
+
+	return {
+		savePage,
+		savePageTransaction: db.transaction(savePage),
+	};
+}
+
+export function createPageRepo(db: Database) {
+	const writer = createPageWriter(db);
 
 	return {
 		save(input: SavePageInput): number {
-			return saveTransaction(input);
+			return writer.savePageTransaction(input);
 		},
 		getHeaders(
 			crawlId: string,

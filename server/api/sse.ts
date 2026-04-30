@@ -3,18 +3,14 @@ import { CrawlIdParamsSchema } from "../contracts/crawl.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
 import { SseHeadersSchema } from "../contracts/http.js";
 import { createEventStreamResponse } from "../plugins/sse.js";
-import type { CrawlManager } from "../runtime/CrawlManager.js";
-import type { EventStream } from "../runtime/EventStream.js";
+import { routeServices } from "./context.js";
 
 export function sseApi() {
 	return new Elysia({ name: "sse-api", prefix: "/api/crawls" }).get(
 		"/:id/events",
 		(context) => {
 			const { crawlManager, eventStream, headers, params, request, set } =
-				context as typeof context & {
-					crawlManager: CrawlManager;
-					eventStream: EventStream;
-				};
+				routeServices(context);
 			const crawl = crawlManager.get(params.id);
 			if (!crawl) {
 				set.status = 404;

@@ -204,6 +204,17 @@ Crawl-delay: 10
 			expect(parser.getCrawlDelay()).toBe(10);
 		});
 
+		test("preserves explicit zero crawl-delay", () => {
+			const robotsTxt = `
+User-agent: *
+Crawl-delay: 0
+			`.trim();
+
+			const parser = new NativeRobotsParser(robotsTxt);
+
+			expect(parser.getCrawlDelay()).toBe(0);
+		});
+
 		test("returns undefined when no crawl-delay", () => {
 			const robotsTxt = `
 User-agent: *

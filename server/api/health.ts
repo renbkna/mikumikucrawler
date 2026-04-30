@@ -1,13 +1,11 @@
 import { Elysia, t } from "elysia";
-import type { RuntimeRegistry } from "../runtime/RuntimeRegistry.js";
+import { routeServices } from "./context.js";
 
 export function healthApi() {
 	return new Elysia({ name: "health-api" }).get(
 		"/health",
 		(context) => {
-			const { runtimeRegistry } = context as typeof context & {
-				runtimeRegistry: RuntimeRegistry;
-			};
+			const { runtimeRegistry } = routeServices(context);
 			return {
 				status: "ok",
 				activeCrawls: runtimeRegistry.size(),

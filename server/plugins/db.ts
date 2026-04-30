@@ -1,8 +1,6 @@
 import { Elysia } from "elysia";
-import type { Storage } from "../storage/db.js";
+import type { StorageRepos } from "../storage/db.js";
 
-export function dbPlugin(storage: Storage) {
-	return new Elysia({ name: "db-plugin" })
-		.decorate("db", storage.db)
-		.decorate("repos", storage.repos);
+export function dbPlugin(repos: StorageRepos) {
+	return new Elysia({ name: "db-plugin" }).decorate("repos", repos);
 }

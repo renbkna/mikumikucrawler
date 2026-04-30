@@ -3,7 +3,7 @@ import type {
 	CrawlCounters,
 	CrawlOptions,
 	CrawlStatus,
-} from "../../contracts/crawl.js";
+} from "../../../shared/contracts/crawl.js";
 import {
 	type CrawlRunRecord,
 	type CrawlRunRow,

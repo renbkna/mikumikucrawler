@@ -1,4 +1,4 @@
-import type { CrawlMethod } from "./crawl.js";
+import type { CrawlOptions } from "./contracts/crawl.js";
 
 /**
  * Shared runtime-facing types used by both the React client and Bun server.
@@ -113,21 +113,7 @@ export interface QueueStats {
 	pagesPerSecond: number;
 }
 
-export interface CrawlOptions {
-	target: string;
-	crawlMethod: CrawlMethod;
-	crawlDepth: number;
-	crawlDelay: number;
-	maxPages: number;
-	/** Maximum pages to crawl per domain. 0 means unlimited. */
-	maxPagesPerDomain: number;
-	maxConcurrentRequests: number;
-	retryLimit: number;
-	dynamic: boolean;
-	respectRobots: boolean;
-	contentOnly: boolean;
-	saveMedia: boolean;
-}
+export type { CrawlOptions };
 
 export interface CrawledPage {
 	id: number | null;
