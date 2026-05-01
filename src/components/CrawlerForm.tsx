@@ -2,16 +2,19 @@ import {
 	FileText,
 	Globe,
 	Loader2,
+	Pause,
 	Settings,
 	Sparkles,
+	CircleStop,
 	Wand2,
 	Wifi,
 	WifiOff,
 	Zap,
 } from "lucide-react";
-import { type ChangeEvent, memo, useState } from "react";
+import { type ChangeEvent, memo, useMemo } from "react";
+import { validatePublicHttpUrl } from "../../shared/url";
+import type { CrawlOptions } from "../../shared/contracts/crawl.js";
 import type { ConnectionState } from "../hooks";
-import type { CrawlOptions } from "../types";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 
 interface CrawlerFormProps {
@@ -19,8 +22,12 @@ interface CrawlerFormProps {
 	setTarget: (target: string) => void;
 	crawlOptions: CrawlOptions;
 	isAttacking: boolean;
+	canStart: boolean;
+	canForceStop: boolean;
+	canPause: boolean;
 	startAttack: (isQuick?: boolean) => void;
-	stopAttack: () => void;
+	pauseAttack: () => void;
+	forceStopAttack: () => void;
 	setOpenedConfig: (open: boolean) => void;
 	connectionState: ConnectionState;
 }
@@ -30,42 +37,34 @@ export const CrawlerForm = memo(function CrawlerForm({
 	setTarget,
 	crawlOptions,
 	isAttacking,
+	canStart,
+	canForceStop,
+	canPause,
 	startAttack,
-	stopAttack,
+	pauseAttack,
+	forceStopAttack,
 	setOpenedConfig,
 	connectionState,
 }: CrawlerFormProps) {
-	const [validationError, setValidationError] = useState<string | null>(null);
-
 	const validateUrl = (input: string): string | null => {
 		if (!input) return null;
-		const lower = input.toLowerCase();
-		// Simple checks for local/private networks
-		if (
-			lower.includes("localhost") ||
-			lower.includes("127.0.0.1") ||
-			lower.includes("::1") ||
-			lower.startsWith("192.168.") ||
-			lower.startsWith("10.")
-		) {
-			return "Local/Private networks are not allowed!";
-		}
-		return null;
+		const result = validatePublicHttpUrl(input);
+		return "error" in result ? result.error : null;
 	};
+	const validationError = useMemo(() => validateUrl(target), [target]);
+	const hasRunnableTarget = target.trim().length > 0;
 
 	const handleTargetChange = (e: ChangeEvent<HTMLInputElement>) => {
 		const val = e.target.value;
 		setTarget(val);
-		setValidationError(validateUrl(val));
 	};
 
 	const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
 		if (
 			e.key === "Enter" &&
-			!isAttacking &&
-			connectionState === "connected" &&
+			canStart &&
 			!validationError &&
-			target
+			hasRunnableTarget
 		) {
 			e.preventDefault();
 			startAttack();
@@ -88,7 +87,7 @@ export const CrawlerForm = memo(function CrawlerForm({
 		if (isAttacking) {
 			return (
 				<>
-					STOP! <HeartIcon className="text-white/80" size={12} />
+					PAUSE <HeartIcon className="text-white/80" size={12} />
 				</>
 			);
 		}
@@ -161,11 +160,7 @@ export const CrawlerForm = memo(function CrawlerForm({
 							<button
 								type="button"
 								onClick={() => startAttack(true)}
-								disabled={
-									connectionState !== "connected" ||
-									!!validationError ||
-									!target
-								}
+								disabled={!canStart || !!validationError || !hasRunnableTarget}
 								className="relative p-4 rounded-2xl bg-gradient-to-br from-amber-400 via-yellow-500 to-orange-500 text-white hover:scale-110 transition-all duration-300 shadow-lg shadow-amber-300/40 flex items-center justify-center group/zap disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 overflow-hidden disabled:grayscale"
 								title="Lightning Strike! (Skip Animation)"
 								aria-label="Lightning Strike Attack (Skip Animation)"
@@ -184,19 +179,20 @@ export const CrawlerForm = memo(function CrawlerForm({
 
 						<button
 							type="button"
-							onClick={() => (isAttacking ? stopAttack() : startAttack())}
+							onClick={() =>
+								isAttacking && canPause ? pauseAttack() : startAttack()
+							}
 							disabled={
-								(connectionState !== "connected" ||
-									!!validationError ||
-									!target) &&
-								!isAttacking
+								isAttacking
+									? !canPause
+									: !canStart || !!validationError || !hasRunnableTarget
 							}
 							className={`relative px-7 py-4 rounded-2xl font-black text-white shadow-xl transition-all duration-300 hover:scale-105 active:scale-95 flex items-center gap-3 text-base disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 overflow-hidden disabled:grayscale ${
 								isAttacking
 									? "bg-gradient-to-r from-rose-500 via-pink-600 to-rose-500 shadow-miku-pink/40"
 									: "bg-gradient-to-r from-teal-600 via-teal-500 to-emerald-600 shadow-miku-teal/40"
 							}`}
-							aria-label={isAttacking ? "Stop Crawl" : "Start Miku Beam Crawl"}
+							aria-label={isAttacking ? "Pause Crawl" : "Start Miku Beam Crawl"}
 						>
 							<NoteIcon
 								className="absolute top-1 left-3 text-white/40 animate-float"
@@ -209,7 +205,7 @@ export const CrawlerForm = memo(function CrawlerForm({
 							/>
 
 							{isAttacking ? (
-								<Sparkles className="w-5 h-5 animate-spin" />
+								<Pause className="w-5 h-5" />
 							) : (
 								<Wand2 className="w-5 h-5 animate-bounce" />
 							)}
@@ -220,6 +216,19 @@ export const CrawlerForm = memo(function CrawlerForm({
 
 							<span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700" />
 						</button>
+
+						{canForceStop && (
+							<button
+								type="button"
+								onClick={forceStopAttack}
+								className="relative px-4 py-4 rounded-2xl font-black text-white shadow-xl transition-all duration-300 hover:scale-105 active:scale-95 flex items-center gap-2 text-sm bg-gradient-to-r from-red-600 to-rose-700 shadow-rose-500/30"
+								aria-label="Force Stop Crawl"
+								title="Force stop and clear pending queue"
+							>
+								<CircleStop className="w-5 h-5" />
+								<span>Force Stop</span>
+							</button>
+						)}
 
 						<button
 							type="button"

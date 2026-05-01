@@ -1,26 +1,55 @@
 import { describe, expect, test } from "bun:test";
 import type { CrawlEventEnvelope } from "../contracts/events.js";
+import { createEventStreamResponse } from "../../server/plugins/sse.js";
 import { EventStream } from "../../server/runtime/EventStream.js";
 import { parseCrawlEventEnvelope } from "../../src/api/crawlEvents.js";
 
 /**
- * Round-trip contract test: verifies that events published by the server's
- * EventStream survive JSON serialization (as done by the SSE plugin) and
- * are correctly parsed by the frontend's envelope parser.
- *
- * The SSE plugin serializes: `data: ${JSON.stringify(event)}\n\n`
- * The frontend parser receives event.data (the JSON string) and calls
- * parseCrawlEventEnvelope(raw) → JSON.parse → structural validation.
+ * Round-trip contract test: verifies that events published by EventStream pass
+ * through the real SSE response framing and are correctly parsed from the
+ * frontend EventSource payload.
  */
-describe("SSE round-trip: EventStream → JSON → parseCrawlEventEnvelope", () => {
+describe("SSE round-trip: EventStream → SSE response → parseCrawlEventEnvelope", () => {
+	const decoder = new TextDecoder();
+
+	async function readFirstSsePayload(response: Response): Promise<string> {
+		expect(response.headers.get("content-type")).toContain("text/event-stream");
+		expect(response.body).not.toBeNull();
+
+		const reader = response.body!.getReader();
+		try {
+			const { value, done } = await reader.read();
+			expect(done).toBe(false);
+			expect(value).toBeDefined();
+
+			const wire = decoder.decode(value);
+			expect(wire).toContain("\n\n");
+			expect(wire).toContain("id: ");
+			expect(wire).toContain("event: ");
+
+			const dataLine = wire
+				.split("\n")
+				.find((line) => line.startsWith("data: "));
+			expect(dataLine).toBeDefined();
+			return dataLine!.slice("data: ".length);
+		} finally {
+			await reader.cancel();
+		}
+	}
+
 	function roundTrip(stream: EventStream, crawlId: string) {
-		return <TType extends Parameters<EventStream["publish"]>[1]>(
+		return async <TType extends Parameters<EventStream["publish"]>[1]>(
 			type: TType,
 			payload: Parameters<EventStream["publish"]>[2],
 		) => {
 			const published = stream.publish(crawlId, type, payload as never);
-			const serialized = JSON.stringify(published);
-			return parseCrawlEventEnvelope(serialized);
+			const response = createEventStreamResponse({
+				crawlId,
+				eventStream: stream,
+				afterSequence: published.sequence - 1,
+				requestSignal: new AbortController().signal,
+			});
+			return parseCrawlEventEnvelope(await readFirstSsePayload(response));
 		};
 	}
 
@@ -34,13 +63,13 @@ describe("SSE round-trip: EventStream → JSON → parseCrawlEventEnvelope", () 
 		return envelope as Extract<CrawlEventEnvelope, { type: T }>;
 	}
 
-	test("crawl.started survives round-trip", () => {
+	test("crawl.started survives round-trip", async () => {
 		const stream = new EventStream();
 		stream.initialize("rt-1");
 		const publish = roundTrip(stream, "rt-1");
 
 		const parsed = expectEnvelope(
-			publish("crawl.started", {
+			await publish("crawl.started", {
 				target: "https://example.com",
 				resume: false,
 			}),
@@ -55,7 +84,7 @@ describe("SSE round-trip: EventStream → JSON → parseCrawlEventEnvelope", () 
 		});
 	});
 
-	test("crawl.progress survives round-trip with full counters and queue", () => {
+	test("crawl.progress survives round-trip with full counters and queue", async () => {
 		const stream = new EventStream();
 		stream.initialize("rt-2");
 		const publish = roundTrip(stream, "rt-2");
@@ -77,7 +106,7 @@ describe("SSE round-trip: EventStream → JSON → parseCrawlEventEnvelope", () 
 		};
 
 		const parsed = expectEnvelope(
-			publish("crawl.progress", {
+			await publish("crawl.progress", {
 				counters,
 				queue,
 				elapsedSeconds: 15,
@@ -92,13 +121,13 @@ describe("SSE round-trip: EventStream → JSON → parseCrawlEventEnvelope", () 
 		expect(parsed.payload.stopReason).toBeNull();
 	});
 
-	test("crawl.page survives round-trip", () => {
+	test("crawl.page survives round-trip", async () => {
 		const stream = new EventStream();
 		stream.initialize("rt-3");
 		const publish = roundTrip(stream, "rt-3");
 
 		const parsed = expectEnvelope(
-			publish("crawl.page", {
+			await publish("crawl.page", {
 				id: 42,
 				url: "https://example.com/page",
 				title: "Test Page",
@@ -112,13 +141,13 @@ describe("SSE round-trip: EventStream → JSON → parseCrawlEventEnvelope", () 
 		expect(parsed.payload.url).toBe("https://example.com/page");
 	});
 
-	test("crawl.log survives round-trip", () => {
+	test("crawl.log survives round-trip", async () => {
 		const stream = new EventStream();
 		stream.initialize("rt-4");
 		const publish = roundTrip(stream, "rt-4");
 
 		const parsed = expectEnvelope(
-			publish("crawl.log", {
+			await publish("crawl.log", {
 				message: "[Fetch] GET https://example.com → 200 (1.2s)",
 			}),
 			"crawl.log",
@@ -129,7 +158,7 @@ describe("SSE round-trip: EventStream → JSON → parseCrawlEventEnvelope", () 
 		);
 	});
 
-	test("crawl.completed survives round-trip", () => {
+	test("crawl.completed survives round-trip", async () => {
 		const stream = new EventStream();
 		stream.initialize("rt-5");
 		const publish = roundTrip(stream, "rt-5");
@@ -145,20 +174,20 @@ describe("SSE round-trip: EventStream → JSON → parseCrawlEventEnvelope", () 
 		};
 
 		const parsed = expectEnvelope(
-			publish("crawl.completed", { counters }),
+			await publish("crawl.completed", { counters }),
 			"crawl.completed",
 		);
 
 		expect(parsed.payload.counters).toEqual(counters);
 	});
 
-	test("crawl.failed survives round-trip", () => {
+	test("crawl.failed survives round-trip", async () => {
 		const stream = new EventStream();
 		stream.initialize("rt-6");
 		const publish = roundTrip(stream, "rt-6");
 
 		const parsed = expectEnvelope(
-			publish("crawl.failed", {
+			await publish("crawl.failed", {
 				error: "Circuit breaker tripped: 20 consecutive failures",
 				counters: {
 					pagesScanned: 20,
@@ -178,13 +207,13 @@ describe("SSE round-trip: EventStream → JSON → parseCrawlEventEnvelope", () 
 		);
 	});
 
-	test("crawl.stopped survives round-trip", () => {
+	test("crawl.stopped survives round-trip", async () => {
 		const stream = new EventStream();
 		stream.initialize("rt-7");
 		const publish = roundTrip(stream, "rt-7");
 
 		const parsed = expectEnvelope(
-			publish("crawl.stopped", {
+			await publish("crawl.stopped", {
 				stopReason: "User requested stop",
 				counters: {
 					pagesScanned: 10,
@@ -202,17 +231,41 @@ describe("SSE round-trip: EventStream → JSON → parseCrawlEventEnvelope", () 
 		expect(parsed.payload.stopReason).toBe("User requested stop");
 	});
 
-	test("sequence numbers are monotonic across event types", () => {
+	test("crawl.paused survives round-trip", async () => {
+		const stream = new EventStream();
+		stream.initialize("rt-8");
+		const publish = roundTrip(stream, "rt-8");
+
+		const parsed = expectEnvelope(
+			await publish("crawl.paused", {
+				stopReason: "Pause requested",
+				counters: {
+					pagesScanned: 10,
+					successCount: 8,
+					failureCount: 1,
+					skippedCount: 1,
+					linksFound: 30,
+					mediaFiles: 2,
+					totalDataKb: 64,
+				},
+			}),
+			"crawl.paused",
+		);
+
+		expect(parsed.payload.stopReason).toBe("Pause requested");
+	});
+
+	test("sequence numbers are monotonic across event types", async () => {
 		const stream = new EventStream();
 		stream.initialize("rt-seq");
 		const publish = roundTrip(stream, "rt-seq");
 
-		const e1 = publish("crawl.started", {
+		const e1 = await publish("crawl.started", {
 			target: "https://example.com",
 			resume: false,
 		});
-		const e2 = publish("crawl.log", { message: "fetching..." });
-		const e3 = publish("crawl.page", {
+		const e2 = await publish("crawl.log", { message: "fetching..." });
+		const e3 = await publish("crawl.page", {
 			id: 1,
 			url: "https://example.com",
 		});

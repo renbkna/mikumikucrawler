@@ -1,10 +1,10 @@
 import { History, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { useCallback, useEffect } from "react";
-import type { InterruptedSessionSummary } from "../api/crawls";
+import type { ResumableSessionSummary } from "../../shared/contracts/crawl.js";
 import { useDialogModal } from "../hooks";
 import { HeartIcon, SparkleIcon } from "./KawaiiIcons";
 
-export type SessionSummary = InterruptedSessionSummary;
+export type SessionSummary = ResumableSessionSummary;
 
 interface ResumeSessionsPanelProps {
 	isOpen: boolean;
@@ -12,14 +12,15 @@ interface ResumeSessionsPanelProps {
 	isLoading: boolean;
 	fetchError: string | null;
 	deletingId: string | null;
+	resumingId: string | null;
 	onRefresh: () => void;
 	onDelete: (sessionId: string) => void;
 	onClose: () => void;
 	/**
 	 * Called when the user confirms a session resume.
-	 * The panel closes itself before calling this.
+	 * The panel closes only after this returns success.
 	 */
-	onResume: (sessionId: string, target: string) => void;
+	onResume: (sessionId: string, target: string) => boolean | Promise<boolean>;
 }
 
 /** Returns a human-readable relative time string, e.g. "3h ago". */
@@ -53,6 +54,7 @@ export function ResumeSessionsPanel({
 	isLoading,
 	fetchError,
 	deletingId,
+	resumingId,
 	onRefresh,
 	onDelete,
 	onClose,
@@ -63,6 +65,7 @@ export function ResumeSessionsPanel({
 			isOpen,
 			onClose,
 		});
+	const isActionPending = deletingId !== null || resumingId !== null;
 
 	// Fetch whenever the panel opens
 	useEffect(() => {
@@ -74,11 +77,17 @@ export function ResumeSessionsPanel({
 	// ── Event handlers ─────────────────────────────────────────────────────────
 
 	const handleResume = useCallback(
-		(session: SessionSummary) => {
-			onClose();
-			onResume(session.id, session.target);
+		async (session: SessionSummary) => {
+			if (isActionPending) {
+				return;
+			}
+
+			const resumed = await onResume(session.id, session.target);
+			if (resumed) {
+				onClose();
+			}
 		},
-		[onClose, onResume],
+		[isActionPending, onClose, onResume],
 	);
 
 	if (!isOpen) return null;
@@ -110,7 +119,7 @@ export function ResumeSessionsPanel({
 						className="text-2xl font-black gradient-text tracking-tight flex items-center gap-2"
 					>
 						<History className="text-miku-teal w-5 h-5" />
-						Resume Session
+						Resume Crawl
 						<SparkleIcon className="text-miku-pink" size={20} />
 					</h2>
 
@@ -118,7 +127,7 @@ export function ResumeSessionsPanel({
 						<button
 							type="button"
 							onClick={onRefresh}
-							disabled={isLoading}
+							disabled={isLoading || isActionPending}
 							className="p-2 rounded-full hover:bg-miku-teal/10 text-miku-text/40 hover:text-miku-teal transition-colors disabled:opacity-40"
 							aria-label="Refresh session list"
 							title="Refresh"
@@ -165,10 +174,10 @@ export function ResumeSessionsPanel({
 						<div className="py-12 text-center">
 							<HeartIcon className="text-miku-pink/30 mx-auto mb-3" size={40} />
 							<p className="text-miku-text/40 font-medium text-sm">
-								No interrupted sessions found.
+								No resumable crawls found.
 							</p>
 							<p className="text-miku-text/30 text-xs mt-1">
-								Sessions appear here when a crawl is interrupted mid-way.
+								Paused and interrupted crawls appear here.
 							</p>
 						</div>
 					)}
@@ -195,7 +204,8 @@ export function ResumeSessionsPanel({
 										</span>
 										<span className="text-xs text-miku-text/40">·</span>
 										<span className="text-xs text-miku-text/50 font-medium">
-											Interrupted {formatRelativeTime(session.updatedAt)}
+											{session.status === "paused" ? "Paused" : "Interrupted"}{" "}
+											{formatRelativeTime(session.updatedAt)}
 										</span>
 									</div>
 								</div>
@@ -205,7 +215,7 @@ export function ResumeSessionsPanel({
 									<button
 										type="button"
 										onClick={() => onDelete(session.id)}
-										disabled={deletingId === session.id}
+										disabled={isActionPending}
 										className="p-2 rounded-xl text-miku-text/30 hover:text-rose-500 hover:bg-rose-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
 										aria-label={`Delete session for ${session.target}`}
 										title="Delete session"
@@ -215,7 +225,7 @@ export function ResumeSessionsPanel({
 									<button
 										type="button"
 										onClick={() => handleResume(session)}
-										disabled={deletingId === session.id}
+										disabled={isActionPending}
 										className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-miku-teal to-teal-400 text-white text-xs font-bold shadow-md shadow-miku-teal/20 hover:shadow-miku-teal/40 hover:scale-105 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100"
 										aria-label={`Resume session for ${session.target}`}
 									>

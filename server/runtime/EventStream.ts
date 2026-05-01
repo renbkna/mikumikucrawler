@@ -35,8 +35,13 @@ export class EventStream {
 		this.cleanupTimers.delete(crawlId);
 	}
 
-	private getState(crawlId: string): StreamState {
-		this.cancelCleanup(crawlId);
+	private getState(
+		crawlId: string,
+		options: { cancelCleanup?: boolean } = {},
+	): StreamState {
+		if (options.cancelCleanup) {
+			this.cancelCleanup(crawlId);
+		}
 		const existing = this.streams.get(crawlId);
 		if (existing) return existing;
 
@@ -56,12 +61,19 @@ export class EventStream {
 		state.sequence = Math.max(state.sequence, sequence);
 	}
 
+	reset(crawlId: string, sequence = 0): void {
+		this.cancelCleanup(crawlId);
+		const state = this.getState(crawlId);
+		state.sequence = sequence;
+		state.history = [];
+	}
+
 	publish<TType extends CrawlEventType>(
 		crawlId: string,
 		type: TType,
 		payload: CrawlEventMap[TType],
 	): CrawlEventEnvelopeBase<TType> {
-		const state = this.getState(crawlId);
+		const state = this.getState(crawlId, { cancelCleanup: true });
 		const event: CrawlEventEnvelopeBase<TType> = {
 			type,
 			crawlId,
@@ -76,8 +88,12 @@ export class EventStream {
 			state.history.splice(0, state.history.length - MAX_HISTORY);
 		}
 
-		for (const subscriber of state.subscribers) {
-			subscriber(cloneValue(event as CrawlEventEnvelope));
+		for (const subscriber of [...state.subscribers]) {
+			try {
+				subscriber(cloneValue(event as CrawlEventEnvelope));
+			} catch {
+				state.subscribers.delete(subscriber);
+			}
 		}
 
 		return cloneValue(event);

@@ -68,3 +68,29 @@ export function isSoft404(
 
 	return false;
 }
+
+export function isClientErrorShell(
+	title: string,
+	mainContent: string,
+): boolean {
+	const combined = `${title} ${mainContent}`
+		.toLowerCase()
+		.replace(/\s+/g, " ")
+		.trim();
+
+	if (!combined) {
+		return false;
+	}
+
+	if (
+		combined.includes("application error: a client-side exception has occurred")
+	) {
+		return true;
+	}
+
+	return (
+		combined.includes("miku encountered an unexpected error") &&
+		combined.includes("try again") &&
+		combined.includes("reload page")
+	);
+}

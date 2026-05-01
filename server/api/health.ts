@@ -1,9 +1,10 @@
 import { Elysia, t } from "elysia";
+import { API_PATHS } from "../../shared/contracts/api.js";
 import { routeServices } from "./context.js";
 
 export function healthApi() {
 	return new Elysia({ name: "health-api" }).get(
-		"/health",
+		API_PATHS.health,
 		(context) => {
 			const { runtimeRegistry } = routeServices(context);
 			return {

@@ -80,6 +80,36 @@ describe("event stream contract", () => {
 		expect(seen).toEqual([1, 2]);
 	});
 
+	test("reset clears stale replay history and continues after the supplied sequence", () => {
+		const stream = new EventStream();
+		stream.publish("crawl-reset", "crawl.paused", {
+			stopReason: "Pause requested",
+			counters: {
+				pagesScanned: 0,
+				successCount: 0,
+				failureCount: 0,
+				skippedCount: 0,
+				linksFound: 0,
+				mediaFiles: 0,
+				totalDataKb: 0,
+			},
+		});
+
+		stream.reset("crawl-reset", 12);
+		const seenBeforeResume: number[] = [];
+		stream.subscribe("crawl-reset", (event) => {
+			seenBeforeResume.push(event.sequence);
+		});
+
+		const resumed = stream.publish("crawl-reset", "crawl.started", {
+			target: "https://example.com",
+			resume: true,
+		});
+
+		expect(seenBeforeResume).toEqual([13]);
+		expect(resumed.sequence).toBe(13);
+	});
+
 	test("replay history is isolated from later payload mutation", () => {
 		const stream = new EventStream();
 		const counters = {
@@ -117,6 +147,24 @@ describe("event stream contract", () => {
 		expect(seen).toEqual([1]);
 	});
 
+	test("subscriber failures do not break publish or block other subscribers", () => {
+		const stream = new EventStream();
+		const seen: number[] = [];
+		stream.subscribe("crawl-subscriber-failure", () => {
+			throw new Error("subscriber failed");
+		});
+		stream.subscribe("crawl-subscriber-failure", (event) => {
+			seen.push(event.sequence);
+		});
+
+		expect(() =>
+			stream.publish("crawl-subscriber-failure", "crawl.log", {
+				message: "hello",
+			}),
+		).not.toThrow();
+		expect(seen).toEqual([1]);
+	});
+
 	test("cleans up inactive crawl history after the cleanup delay", async () => {
 		const stream = new EventStream();
 		stream.publish("crawl-cleanup", "crawl.log", { message: "hello" });
@@ -128,6 +176,23 @@ describe("event stream contract", () => {
 			seen.push(event.sequence);
 		});
 		unsubscribe();
+
+		expect(seen).toEqual([]);
+	});
+
+	test("late subscribers do not cancel inactive crawl cleanup", async () => {
+		const stream = new EventStream();
+		stream.publish("crawl-late-cleanup", "crawl.log", { message: "hello" });
+		stream.scheduleCleanup("crawl-late-cleanup", 5);
+
+		const unsubscribe = stream.subscribe("crawl-late-cleanup", () => {});
+		unsubscribe();
+		await Bun.sleep(20);
+
+		const seen: number[] = [];
+		stream.subscribe("crawl-late-cleanup", (event) => {
+			seen.push(event.sequence);
+		})();
 
 		expect(seen).toEqual([]);
 	});

@@ -1,5 +1,5 @@
 import { describe, expectTypeOf, test } from "bun:test";
-import type { ProcessedPageData } from "../../src/types.js";
+import type { ProcessedPageData } from "../../shared/types.js";
 import type { ProcessedContent } from "../types.js";
 
 describe("Type Consistency", () => {

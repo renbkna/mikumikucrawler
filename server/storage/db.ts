@@ -8,8 +8,10 @@ import type {
 	CrawlOptions,
 	CrawlStatus,
 } from "../../shared/contracts/crawl.js";
+import { isResumableCrawlStatus } from "../../shared/contracts/crawl.js";
 import { createCrawlQueueRepo } from "./repos/crawlQueueRepo.js";
 import { createCrawlItemPersistence } from "./repos/crawlItemPersistence.js";
+import { createCrawlDomainStateRepo } from "./repos/crawlDomainStateRepo.js";
 import { createCrawlRunRepo } from "./repos/crawlRunRepo.js";
 import { createCrawlTerminalRepo } from "./repos/crawlTerminalRepo.js";
 import { createPageRepo } from "./repos/pageRepo.js";
@@ -23,6 +25,7 @@ export interface StorageRepos {
 	crawlRuns: ReturnType<typeof createCrawlRunRepo>;
 	crawlQueue: ReturnType<typeof createCrawlQueueRepo>;
 	crawlItems: ReturnType<typeof createCrawlItemPersistence>;
+	crawlDomainState: ReturnType<typeof createCrawlDomainStateRepo>;
 	crawlTerminals: ReturnType<typeof createCrawlTerminalRepo>;
 	pages: ReturnType<typeof createPageRepo>;
 	search: ReturnType<typeof createSearchRepo>;
@@ -140,6 +143,7 @@ export function createStorage(databasePath = config.dbPath): Storage {
 			crawlRuns: createCrawlRunRepo(db),
 			crawlQueue: createCrawlQueueRepo(db),
 			crawlItems: createCrawlItemPersistence(db),
+			crawlDomainState: createCrawlDomainStateRepo(db),
 			crawlTerminals: createCrawlTerminalRepo(db),
 			pages: createPageRepo(db),
 			search: createSearchRepo(db),
@@ -223,6 +227,6 @@ export function mapCrawlRunRow(row: CrawlRunRow): CrawlRunRecord {
 			totalDataKb: row.total_data_kb,
 		},
 		eventSequence: row.event_sequence,
-		resumable: row.status === "interrupted",
+		resumable: isResumableCrawlStatus(row.status),
 	};
 }

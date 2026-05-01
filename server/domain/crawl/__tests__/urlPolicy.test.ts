@@ -42,6 +42,7 @@ describe("filterDiscoveredLinks", () => {
 
 		expect(identity).toEqual({
 			canonicalUrl: "https://example.com/path/?a=1&b=2",
+			robotsMatchUrl: "https://example.com/path/?b=2&a=1&utm_source=x",
 			hostname: "example.com",
 			originKey: "https://example.com",
 			robotsKey: "https://example.com",
@@ -55,6 +56,7 @@ describe("filterDiscoveredLinks", () => {
 
 		expect(identity).toMatchObject({
 			canonicalUrl: "http://example.com:8080/page",
+			robotsMatchUrl: "http://example.com:8080/page",
 			originKey: "http://example.com:8080",
 			robotsKey: "http://example.com:8080",
 			domainBudgetKey: "example.com",
@@ -136,6 +138,32 @@ describe("filterDiscoveredLinks", () => {
 
 		expect(result).toHaveLength(1);
 		expect(result[0].url).toBe("https://example.com/about");
+	});
+
+	test("does not trust stale extractor isInternal flags for crawl admission", () => {
+		const result = filterDiscoveredLinks(
+			[
+				{
+					url: "https://external.com/page",
+					domain: "external.com",
+					isInternal: true,
+				},
+				{
+					url: "https://example.com/about",
+					domain: "example.com",
+					isInternal: false,
+				},
+			],
+			makeOptions({ crawlMethod: "links" }),
+			"https://example.com/start",
+		);
+
+		expect(result).toEqual([
+			expect.objectContaining({
+				url: "https://example.com/about",
+				isInternal: true,
+			}),
+		]);
 	});
 
 	test("allows external links when crawlMethod is 'full'", () => {

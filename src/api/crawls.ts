@@ -1,50 +1,20 @@
-import type { CrawlSummary } from "../../shared/contracts/crawl.js";
-import type { CrawlEventEnvelope } from "../../shared/contracts/events.js";
-import type { CrawlOptions } from "../types";
+import type {
+	CrawlSummary,
+	ResumableSessionSummary,
+	StopCrawlMode,
+} from "../../shared/contracts/crawl.js";
 import {
-	api,
-	type CrawlExportFormat,
-	downloadCrawlExport,
-	getBackendUrl,
-} from "./client";
+	isCrawlListResponse,
+	toResumableSessionSummary,
+} from "../../shared/contracts/crawl.js";
+import type { CrawlEventEnvelope } from "../../shared/contracts/events.js";
+import { CrawlEventTypeValues } from "../../shared/contracts/events.js";
+import type { CrawlOptions } from "../../shared/contracts/crawl.js";
+import { api, createCrawlEventSource, downloadCrawlExport } from "./client";
+import type { CrawlExportFormat } from "../../shared/contracts/api.js";
 import { getApiErrorMessage } from "./errors";
 import { parseCrawlEventEnvelope } from "./crawlEvents";
-
-export type { CrawlExportFormat } from "./client";
-
-export interface ApiSuccess<T> {
-	ok: true;
-	data: T;
-}
-
-export interface ApiFailure {
-	ok: false;
-	error: string;
-}
-
-export type ApiResult<T> = ApiSuccess<T> | ApiFailure;
-
-export interface InterruptedSessionSummary {
-	id: string;
-	target: string;
-	status: string;
-	pagesScanned: number;
-	createdAt: string;
-	updatedAt: string;
-}
-
-function toInterruptedSessionSummary(
-	crawl: CrawlSummary,
-): InterruptedSessionSummary {
-	return {
-		id: crawl.id,
-		target: crawl.target,
-		status: crawl.status,
-		pagesScanned: crawl.counters.pagesScanned,
-		createdAt: crawl.createdAt,
-		updatedAt: crawl.updatedAt,
-	};
-}
+import type { ApiResult } from "./result";
 
 export async function createCrawl(
 	options: CrawlOptions,
@@ -58,8 +28,9 @@ export async function createCrawl(
 
 export async function stopCrawl(
 	crawlId: string,
+	mode: StopCrawlMode = "pause",
 ): Promise<ApiResult<CrawlSummary>> {
-	const response = await api.api.crawls({ id: crawlId }).stop.post();
+	const response = await api.api.crawls({ id: crawlId }).stop.post({ mode });
 	if (response.error || !response.data) {
 		return { ok: false, error: getApiErrorMessage(response.error?.value) };
 	}
@@ -76,31 +47,30 @@ export async function resumeCrawl(
 	return { ok: true, data: response.data };
 }
 
-export async function listInterruptedCrawls(): Promise<
-	ApiResult<InterruptedSessionSummary[]>
+export async function listResumableCrawls(): Promise<
+	ApiResult<ResumableSessionSummary[]>
 > {
-	const response = await api.api.crawls.get({
-		query: { status: "interrupted" },
-	});
-
+	const response = await api.api.crawls.resumable.get();
 	if (response.error || !response.data) {
 		return { ok: false, error: getApiErrorMessage(response.error?.value) };
 	}
 
+	if (!isCrawlListResponse(response.data)) {
+		return { ok: false, error: "Unexpected crawl list response" };
+	}
+
 	return {
 		ok: true,
-		data: response.data.crawls.map(toInterruptedSessionSummary),
+		data: response.data.crawls.map(toResumableSessionSummary),
 	};
 }
 
-export async function deleteCrawl(
-	crawlId: string,
-): Promise<ApiResult<{ deleted: true }>> {
+export async function deleteCrawl(crawlId: string): Promise<ApiResult<void>> {
 	const response = await api.api.crawls({ id: crawlId }).delete();
 	if (response.error) {
 		return { ok: false, error: getApiErrorMessage(response.error.value) };
 	}
-	return { ok: true, data: { deleted: true } };
+	return { ok: true, data: undefined };
 }
 
 export async function exportCrawl(
@@ -151,23 +121,13 @@ export function subscribeToCrawlEvents(
 		onEvent: (event: CrawlEventEnvelope) => void;
 	},
 ): CrawlEventSubscription {
-	const source = new EventSource(
-		`${getBackendUrl()}/api/crawls/${crawlId}/events`,
-	);
+	const source = createCrawlEventSource(crawlId);
 	const handleEnvelope = createEnvelopeListener(handlers.onEvent);
 
 	source.addEventListener("open", createSignalListener(handlers.onOpen));
 	source.addEventListener("error", createSignalListener(handlers.onError));
 
-	for (const type of [
-		"crawl.log",
-		"crawl.page",
-		"crawl.progress",
-		"crawl.started",
-		"crawl.completed",
-		"crawl.stopped",
-		"crawl.failed",
-	]) {
+	for (const type of CrawlEventTypeValues) {
 		source.addEventListener(type, handleEnvelope);
 	}
 

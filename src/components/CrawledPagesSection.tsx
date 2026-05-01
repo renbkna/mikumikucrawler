@@ -1,5 +1,4 @@
 import DOMPurify from "dompurify";
-import type { PageContentResponse } from "../../shared/contracts/page.js";
 import {
 	AlertCircle,
 	ChevronDown,
@@ -18,9 +17,8 @@ import {
 	useState,
 } from "react";
 import { Virtuoso } from "react-virtuoso";
-import { getApiErrorMessage } from "../api/errors";
-import { api } from "../api/client";
-import type { CrawledPage } from "../types";
+import type { CrawledPage } from "../../shared/types.js";
+import { getPageContent } from "../api/pages";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 
 const PageLimitFooter = memo(function PageLimitFooter({
@@ -54,7 +52,7 @@ const CrawledPageCard = memo(function CrawledPageCard({
 	const [isExpanded, setIsExpanded] = useState(false);
 	const [showSource, setShowSource] = useState(false);
 	const [fetchedContent, setFetchedContent] = useState<string | null>(
-		page.content || null,
+		page.content ?? null,
 	);
 	const [isLoadingContent, setIsLoadingContent] = useState(false);
 	const [fetchError, setFetchError] = useState<string | null>(null);
@@ -72,22 +70,11 @@ const CrawledPageCard = memo(function CrawledPageCard({
 		setFetchError(null);
 
 		try {
-			const { data, error } = await api.api
-				.pages({ id: page.id })
-				.content.get({ fetch: { signal: AbortSignal.timeout(15_000) } });
-
-			if (error) {
-				throw new Error(getApiErrorMessage(error.value, "Failed to load"));
-			}
-
-			const response = data as PageContentResponse | null;
-			if (response?.status === "ok") {
-				// content is "" when page was crawled in metadata-only mode
-				setFetchedContent(
-					response.content || "(no content stored — metadata-only mode)",
-				);
+			const result = await getPageContent(page.id, AbortSignal.timeout(15_000));
+			if (result.ok) {
+				setFetchedContent(result.data.content);
 			} else {
-				throw new Error("Invalid response format");
+				throw new Error(result.error);
 			}
 		} catch (err) {
 			setFetchError(
@@ -107,7 +94,7 @@ const CrawledPageCard = memo(function CrawledPageCard({
 		}
 
 		setShowSource(true);
-		if (!fetchedContent) {
+		if (fetchedContent === null) {
 			await fetchPageContent();
 		}
 	};
@@ -123,7 +110,9 @@ const CrawledPageCard = memo(function CrawledPageCard({
 	 * sanitization as well. DOMPurify removes all dangerous HTML/script content.
 	 */
 	const sanitizedContent = useMemo(() => {
-		if (!fetchedContent) return "No content available";
+		if (fetchedContent === null) {
+			return "(no content stored - metadata-only mode)";
+		}
 
 		// Configure DOMPurify to be very restrictive - we only want to display text
 		// Allow pre/code blocks for formatting but strip all script/event handlers
@@ -133,6 +122,11 @@ const CrawledPageCard = memo(function CrawledPageCard({
 			KEEP_CONTENT: true, // Keep the text content
 		});
 	}, [fetchedContent]);
+	const analysis = processedData?.analysis;
+	const hasSummaryMetrics =
+		typeof analysis?.wordCount === "number" ||
+		typeof analysis?.readingTime === "number" ||
+		typeof analysis?.language === "string";
 
 	const renderSourceContent = () => {
 		if (isLoadingContent) {
@@ -204,20 +198,26 @@ const CrawledPageCard = memo(function CrawledPageCard({
 				</span>
 			</button>
 
-			{hasProcessedData && !isExpanded && (
+			{hasProcessedData && hasSummaryMetrics && !isExpanded && (
 				<div className="flex flex-wrap gap-2 mt-4">
-					<span className="cute-badge text-blue-500 border-blue-100 flex items-center gap-1">
-						<NoteIcon className="text-blue-400" size={10} />
-						{processedData.analysis.wordCount} words
-					</span>
-					<span className="cute-badge text-emerald-500 border-emerald-100 flex items-center gap-1">
-						<SparkleIcon className="text-emerald-400" size={10} />
-						{processedData.analysis.readingTime} min
-					</span>
-					<span className="cute-badge text-purple-500 border-purple-100 flex items-center gap-1">
-						<HeartIcon className="text-purple-400" size={10} />
-						{processedData.analysis.language}
-					</span>
+					{typeof analysis?.wordCount === "number" && (
+						<span className="cute-badge text-blue-500 border-blue-100 flex items-center gap-1">
+							<NoteIcon className="text-blue-400" size={10} />
+							{analysis.wordCount} words
+						</span>
+					)}
+					{typeof analysis?.readingTime === "number" && (
+						<span className="cute-badge text-emerald-500 border-emerald-100 flex items-center gap-1">
+							<SparkleIcon className="text-emerald-400" size={10} />
+							{analysis.readingTime} min
+						</span>
+					)}
+					{typeof analysis?.language === "string" && (
+						<span className="cute-badge text-purple-500 border-purple-100 flex items-center gap-1">
+							<HeartIcon className="text-purple-400" size={10} />
+							{analysis.language}
+						</span>
+					)}
 				</div>
 			)}
 
@@ -267,7 +267,7 @@ const CrawledPageCard = memo(function CrawledPageCard({
 									HTML Source
 								</span>
 								<span className="text-xs text-slate-500">
-									{fetchedContent
+									{fetchedContent !== null
 										? `${fetchedContent.length} chars`
 										: "0 chars"}
 								</span>
@@ -287,6 +287,9 @@ CrawledPageCard.displayName = "CrawledPageCard";
 const renderPageItem = (_index: number, page: CrawledPage) => (
 	<CrawledPageCard page={page} />
 );
+
+const getPageItemKey = (_index: number, page: CrawledPage) =>
+	page.id ?? page.url;
 
 interface CrawledPagesSectionProps {
 	crawledPages: CrawledPage[];
@@ -354,6 +357,7 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 				<Virtuoso
 					style={{ height: "100%" }}
 					data={displayedPages}
+					computeItemKey={getPageItemKey}
 					context={{ pageLimit, showFooter }}
 					itemContent={renderPageItem}
 					components={virtuosoComponents}

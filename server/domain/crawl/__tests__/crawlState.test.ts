@@ -98,6 +98,38 @@ describe("CrawlState", () => {
 			}
 			expect(state.isStopRequested).toBe(false);
 		});
+
+		test("restored failures preserve the circuit breaker streak across resume", () => {
+			const state = new CrawlState(makeOptions({ maxPages: 100 }));
+
+			state.restoreTerminals(
+				Array.from({ length: 19 }, (_, index) => ({
+					url: `https://a.example/restored-fail-${index}`,
+					outcome: "failure" as const,
+				})),
+			);
+			expect(state.isStopRequested).toBe(false);
+
+			state.recordTerminal("https://a.example/fail-after-resume", "failure");
+			expect(state.isStopRequested).toBe(true);
+			expect(state.stopReason).toContain("Circuit breaker");
+		});
+
+		test("restored failures trip the circuit breaker when resume starts at the threshold", () => {
+			const state = new CrawlState(makeOptions({ maxPages: 100 }));
+
+			state.restoreTerminals(
+				Array.from({ length: 20 }, (_, index) => ({
+					url: `https://a.example/restored-threshold-${index}`,
+					outcome: "failure" as const,
+				})),
+			);
+
+			expect(state.isStopRequested).toBe(true);
+			expect(state.stopReason).toBe(
+				"Circuit breaker tripped after 20 consecutive failures",
+			);
+		});
 	});
 
 	describe("canScheduleMore", () => {
@@ -125,6 +157,15 @@ describe("CrawlState", () => {
 			const state = new CrawlState(makeOptions({ crawlDelay: 200 }));
 			state.adaptDomainDelay("slow.example", 403);
 			expect(state.getDomainDelay("slow.example")).toBe(400);
+		});
+
+		test("403 backs off from zero robots delay to the configured crawl delay", () => {
+			const state = new CrawlState(makeOptions({ crawlDelay: 200 }));
+			state.setDomainDelay("zero-delay.example", 0);
+
+			state.adaptDomainDelay("zero-delay.example", 403);
+
+			expect(state.getDomainDelay("zero-delay.example")).toBe(200);
 		});
 
 		test("uses retryAfterMs when provided for 429", () => {
@@ -171,6 +212,34 @@ describe("CrawlState", () => {
 			expect(state.isDomainBudgetExceeded("a.example")).toBe(true);
 			expect(state.isDomainBudgetExceeded("b.example")).toBe(false);
 		});
+
+		test("restores persisted domain budget charges across resume", () => {
+			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 1 }));
+
+			state.restoreTerminals([
+				{
+					url: "https://example.com/noindex",
+					outcome: "skip",
+					domainBudgetCharged: true,
+				},
+			]);
+
+			expect(state.isDomainBudgetExceeded("example.com")).toBe(true);
+		});
+
+		test("does not infer domain budget charges from terminal outcome alone", () => {
+			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 1 }));
+
+			state.restoreTerminals([
+				{
+					url: "https://example.com/prefetch-skip",
+					outcome: "skip",
+					domainBudgetCharged: false,
+				},
+			]);
+
+			expect(state.isDomainBudgetExceeded("example.com")).toBe(false);
+		});
 	});
 
 	describe("domain rate limiting", () => {
@@ -185,6 +254,28 @@ describe("CrawlState", () => {
 			state.reserveDomain("example.com", now);
 			expect(state.timeUntilDomainReady("example.com", now + 100)).toBe(400);
 			expect(state.timeUntilDomainReady("example.com", now + 500)).toBe(0);
+		});
+
+		test("setDomainDelay seeds a durable next-ready watermark", () => {
+			const changes: unknown[] = [];
+			const state = new CrawlState(
+				makeOptions({ crawlDelay: 100 }),
+				undefined,
+				{
+					onDomainStateChanged: (record) => changes.push(record),
+				},
+			);
+
+			state.setDomainDelay("https://example.com", 750, 2000);
+
+			expect(state.timeUntilDomainReady("https://example.com", 2500)).toBe(250);
+			expect(changes).toEqual([
+				{
+					delayKey: "https://example.com",
+					delayMs: 750,
+					nextAllowedAt: 2750,
+				},
+			]);
 		});
 	});
 });

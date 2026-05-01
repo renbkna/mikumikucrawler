@@ -17,13 +17,13 @@ const getEnv = (key: string, defaultValue: string): string => {
 function requireInt(key: string, defaultValue: number): number {
 	const raw = process.env[key];
 	if (raw === undefined || raw === "") return defaultValue;
-	const parsed = Number.parseInt(raw, 10);
-	if (Number.isNaN(parsed)) {
+	const normalized = raw.trim();
+	if (!/^-?\d+$/.test(normalized)) {
 		throw new Error(
 			`Invalid environment variable ${key}="${raw}" — expected an integer (default: ${defaultValue}).`,
 		);
 	}
-	return parsed;
+	return Number.parseInt(normalized, 10);
 }
 
 const port = requireInt("PORT", 3000);

@@ -7,6 +7,14 @@ import { LRUCacheWithTTL } from "../utils/lruCache.js";
 const RESOLUTION_TTL_MS = 5 * 60 * 1000;
 const RESOLUTION_CACHE_MAX_ENTRIES = 512;
 const MAX_REDIRECT_HOPS = 10;
+const REDIRECT_TO_GET_STATUSES = new Set([301, 302, 303]);
+const ORIGIN_BOUND_HEADERS = new Set([
+	"authorization",
+	"cookie",
+	"host",
+	"proxy-authorization",
+]);
+const BODY_HEADERS = new Set(["content-length", "content-type"]);
 
 export interface Resolver {
 	resolveHost(hostname: string): Promise<string[]>;
@@ -15,7 +23,9 @@ export interface Resolver {
 
 export interface HttpClientRequest {
 	url: string;
+	method?: string;
 	headers?: Record<string, string>;
+	body?: BodyInit;
 	signal?: AbortSignal;
 	redirect?: RequestRedirect;
 }
@@ -96,6 +106,9 @@ export class PinnedHttpClient implements HttpClient {
 		const seenUrls = new Set<string>();
 		let currentUrl = request.url;
 		let redirectCount = 0;
+		let method = request.method?.toUpperCase() ?? "GET";
+		let body = request.body;
+		let headers = sanitizeRequestHeaders(request.headers ?? {});
 
 		for (;;) {
 			if (seenUrls.has(currentUrl)) {
@@ -104,6 +117,9 @@ export class PinnedHttpClient implements HttpClient {
 			seenUrls.add(currentUrl);
 
 			const url = new URL(currentUrl);
+			if (url.protocol !== "http:" && url.protocol !== "https:") {
+				throw new Error(`Disallowed protocol: ${url.protocol}`);
+			}
 			const addresses = await this.resolver.resolveHost(url.hostname);
 
 			let response: Response | undefined;
@@ -115,10 +131,12 @@ export class PinnedHttpClient implements HttpClient {
 				pinnedUrl.hostname = isIpv6 ? `[${address}]` : address;
 
 				const init: RequestInit & { tls?: { serverName?: string } } = {
+					method,
 					headers: {
-						...request.headers,
+						...headers,
 						Host: url.port ? `${url.hostname}:${url.port}` : url.hostname,
 					},
+					body,
 					redirect: "manual",
 					signal: request.signal,
 				};
@@ -167,10 +185,37 @@ export class PinnedHttpClient implements HttpClient {
 			}
 
 			await this.resolver.assertPublicHostname(redirectUrl.hostname);
+			if (shouldRewriteRedirectToGet(response.status, method)) {
+				method = "GET";
+				body = undefined;
+				headers = sanitizeRequestHeaders(headers, BODY_HEADERS);
+			}
+			if (url.origin !== redirectUrl.origin) {
+				headers = sanitizeRequestHeaders(headers, ORIGIN_BOUND_HEADERS);
+			}
 			currentUrl = redirectUrl.toString();
 			redirectCount += 1;
 		}
 	}
+}
+
+function sanitizeRequestHeaders(
+	headers: Record<string, string>,
+	forbiddenNames: ReadonlySet<string> = new Set(["host"]),
+): Record<string, string> {
+	return Object.fromEntries(
+		Object.entries(headers).filter(
+			([name]) => !forbiddenNames.has(name.toLowerCase()),
+		),
+	);
+}
+
+function shouldRewriteRedirectToGet(status: number, method: string): boolean {
+	return (
+		REDIRECT_TO_GET_STATUSES.has(status) &&
+		method !== "GET" &&
+		method !== "HEAD"
+	);
 }
 
 export function securityPlugin(

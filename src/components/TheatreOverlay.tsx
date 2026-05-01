@@ -6,6 +6,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { CircleStop } from "lucide-react";
 import { SEQUENCE_TIMINGS } from "../constants";
 
 const RIPPLE_ANIMATION_DURATION_MS = 1500;
@@ -16,6 +17,9 @@ interface TheatreOverlayProps {
 	status: "idle" | "blackout" | "counting" | "beam" | "live";
 	onComplete: () => void;
 	onBeamStart: () => void;
+	isCrawlActive?: boolean;
+	onStop?: () => void;
+	stopLabel?: string;
 	volume?: number;
 }
 
@@ -23,6 +27,9 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 	status,
 	onComplete,
 	onBeamStart,
+	isCrawlActive = false,
+	onStop,
+	stopLabel = "Pause",
 	volume = 80,
 }: Readonly<TheatreOverlayProps>) {
 	const [count, setCount] = useState<string | null>(null);
@@ -160,6 +167,21 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 
 	return (
 		<div className="fixed inset-0 z-[100] flex items-center justify-center bg-black overflow-hidden">
+			{isCrawlActive && onStop && (
+				<button
+					type="button"
+					aria-label={`${stopLabel} Crawl`}
+					onClick={(event) => {
+						event.stopPropagation();
+						onStop();
+					}}
+					className="fixed top-4 right-4 z-[110] inline-flex h-11 items-center gap-2 rounded-lg border border-white/25 bg-red-500 px-4 text-sm font-bold text-white shadow-lg shadow-red-950/30 transition-colors hover:bg-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
+				>
+					<CircleStop className="h-5 w-5" aria-hidden="true" />
+					<span>{stopLabel}</span>
+				</button>
+			)}
+
 			<div className="absolute inset-0 opacity-30 pointer-events-none">
 				<div className="absolute top-1/4 left-1/4 w-2 h-2 bg-miku-pink rounded-full animate-ping" />
 				<div className="absolute top-3/4 right-1/4 w-3 h-3 bg-miku-teal rounded-full animate-ping delay-300" />

@@ -2,7 +2,7 @@ import type {
 	CrawlCounters,
 	CrawlOptions,
 } from "../../../shared/contracts/crawl.js";
-import type { QueueStats } from "../../types.js";
+import type { QueueStats } from "../../../shared/types.js";
 import { LRUCache } from "../../utils/lruCache.js";
 
 export type TerminalOutcome = "success" | "failure" | "skip";
@@ -11,16 +11,24 @@ const FAILURE_CIRCUIT_BREAKER_THRESHOLD = 20;
 
 interface CrawlStateHooks {
 	onTerminal?: (url: string, outcome: TerminalOutcome) => void;
+	onDomainStateChanged?: (record: DomainStateRecord) => void;
 }
 
 export interface RestoredTerminalRecord {
 	url: string;
 	outcome: TerminalOutcome;
+	domainBudgetCharged?: boolean;
 }
 
 export interface QueueSnapshot {
 	activeRequests: number;
 	queueLength: number;
+}
+
+export interface DomainStateRecord {
+	delayKey: string;
+	delayMs: number;
+	nextAllowedAt: number;
 }
 
 export class CrawlState {
@@ -30,8 +38,8 @@ export class CrawlState {
 	private readonly domainDelays = new Map<string, number>();
 	private readonly domainNextAllowedAt = new Map<string, number>();
 	private readonly domainPageCounts = new Map<string, number>();
+	private readonly domainAdmissionCounts = new Map<string, number>();
 	private consecutiveFailures = 0;
-	private readonly startedAtMs = Date.now();
 	private stopRequested = false;
 
 	readonly counters: CrawlCounters;
@@ -41,6 +49,8 @@ export class CrawlState {
 		private readonly options: CrawlOptions,
 		initialCounters?: CrawlCounters,
 		private readonly hooks: CrawlStateHooks = {},
+		private readonly startedAtMs = Date.now(),
+		initialDomainStates: DomainStateRecord[] = [],
 	) {
 		this.counters = initialCounters ?? {
 			pagesScanned: 0,
@@ -51,6 +61,10 @@ export class CrawlState {
 			mediaFiles: 0,
 			totalDataKb: 0,
 		};
+		for (const record of initialDomainStates) {
+			this.domainDelays.set(record.delayKey, record.delayMs);
+			this.domainNextAllowedAt.set(record.delayKey, record.nextAllowedAt);
+		}
 	}
 
 	get isStopRequested(): boolean {
@@ -80,14 +94,25 @@ export class CrawlState {
 			this.terminalOutcomes.set(record.url, record.outcome);
 			this.restoreAdmission(record.url);
 			this.markVisited(record.url);
+			if (record.outcome === "failure") {
+				this.consecutiveFailures += 1;
+				if (this.consecutiveFailures >= FAILURE_CIRCUIT_BREAKER_THRESHOLD) {
+					this.requestStop(
+						`Circuit breaker tripped after ${this.consecutiveFailures} consecutive failures`,
+					);
+				}
+			} else if (record.outcome === "success") {
+				this.consecutiveFailures = 0;
+			}
 
-			if (record.outcome !== "success") {
+			if (!record.domainBudgetCharged) {
 				continue;
 			}
 
 			try {
 				const domain = new URL(record.url).hostname;
 				this.recordDomainPage(domain);
+				this.restoreDomainAdmission(domain);
 			} catch {}
 		}
 	}
@@ -109,13 +134,32 @@ export class CrawlState {
 		return true;
 	}
 
-	requestStop(reason: string): void {
-		this.stopRequested = true;
-		this.stopReason = this.stopReason ?? reason;
+	canAdmitUrl(url: string): boolean {
+		return (
+			this.admittedUrls.has(url) ||
+			this.admittedUrls.size < this.options.maxPages
+		);
 	}
 
-	setDomainDelay(domain: string, delayMs: number): void {
+	requestStop(
+		reason: string,
+		options: { overrideReason?: boolean } = {},
+	): void {
+		this.stopRequested = true;
+		this.stopReason =
+			options.overrideReason || this.stopReason === null
+				? reason
+				: this.stopReason;
+	}
+
+	setDomainDelay(domain: string, delayMs: number, now = Date.now()): void {
 		this.domainDelays.set(domain, delayMs);
+		const nextAllowedAt = Math.max(
+			this.domainNextAllowedAt.get(domain) ?? 0,
+			now + delayMs,
+		);
+		this.domainNextAllowedAt.set(domain, nextAllowedAt);
+		this.emitDomainState(domain);
 	}
 
 	getDomainDelay(domain: string): number {
@@ -127,8 +171,13 @@ export class CrawlState {
 		return Math.max(nextAllowedAt - now, 0);
 	}
 
+	nextAllowedAtForDomain(domain: string): number {
+		return this.domainNextAllowedAt.get(domain) ?? 0;
+	}
+
 	reserveDomain(domain: string, now = Date.now()): void {
 		this.domainNextAllowedAt.set(domain, now + this.getDomainDelay(domain));
+		this.emitDomainState(domain);
 	}
 
 	adaptDomainDelay(
@@ -143,7 +192,7 @@ export class CrawlState {
 		const currentDelay = this.getDomainDelay(domain);
 		const nextDelay =
 			statusCode === 403
-				? currentDelay * 2
+				? Math.max(currentDelay * 2, this.options.crawlDelay)
 				: Math.max(currentDelay, retryAfterMs ?? currentDelay * 2);
 		this.setDomainDelay(domain, nextDelay);
 	}
@@ -155,10 +204,34 @@ export class CrawlState {
 		);
 	}
 
+	restoreDomainAdmission(domain: string): void {
+		this.domainAdmissionCounts.set(
+			domain,
+			(this.domainAdmissionCounts.get(domain) ?? 0) + 1,
+		);
+	}
+
+	tryAdmitDomain(domain: string): boolean {
+		const budget = this.options.maxPagesPerDomain;
+		if (budget <= 0) return true;
+		const admitted = this.domainAdmissionCounts.get(domain) ?? 0;
+		if (admitted >= budget) return false;
+		this.domainAdmissionCounts.set(domain, admitted + 1);
+		return true;
+	}
+
 	isDomainBudgetExceeded(domain: string): boolean {
 		const budget = this.options.maxPagesPerDomain;
 		if (budget <= 0) return false;
 		return (this.domainPageCounts.get(domain) ?? 0) >= budget;
+	}
+
+	private emitDomainState(delayKey: string): void {
+		this.hooks.onDomainStateChanged?.({
+			delayKey,
+			delayMs: this.getDomainDelay(delayKey),
+			nextAllowedAt: this.nextAllowedAtForDomain(delayKey),
+		});
 	}
 
 	recordDiscoveredLinks(count: number): void {

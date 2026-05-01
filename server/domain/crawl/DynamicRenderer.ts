@@ -1,6 +1,14 @@
 import type { Session } from "crawlee";
 import { BrowserPool, PlaywrightPlugin, SessionPool } from "crawlee";
-import { chromium, type Page } from "playwright";
+import {
+	type BrowserContext,
+	type BrowserContextOptions,
+	chromium,
+	type Page,
+	type Route,
+	type WebSocketRoute,
+} from "playwright";
+import type { CrawlOptions } from "../../../shared/contracts/crawl.js";
 import { config } from "../../config/env.js";
 import type { Logger } from "../../config/logging.js";
 import {
@@ -9,8 +17,7 @@ import {
 	SITE_COOKIES,
 	SITE_SELECTORS,
 } from "../../constants.js";
-import type { CrawlOptions } from "../../../shared/contracts/crawl.js";
-import type { Resolver } from "../../plugins/security.js";
+import type { HttpClient } from "../../plugins/security.js";
 import { getErrorMessage } from "../../utils/helpers.js";
 import { logMemoryStatus } from "../../utils/memoryMonitor.js";
 import { withTimeout, withTimeoutFallback } from "../../utils/timeout.js";
@@ -26,7 +33,8 @@ import {
  * Dynamic renderer contract:
  * - owns one crawl-scoped browser/session pool
  * - classifies dynamic fetches as success, consentBlocked, or static fallback
- * - never bypasses hostname validation for navigated requests
+ * - never uses Playwright's native HTTP(S) network path; browser requests are
+ *   fulfilled through the same pinned HTTP client used by static crawling
  */
 interface InitializeResult {
 	dynamicEnabled: boolean;
@@ -42,7 +50,9 @@ interface DynamicRenderResult {
 	title: string;
 	description: string;
 	lastModified?: string;
+	etag?: string | null;
 	xRobotsTag?: string | null;
+	retryAfter?: string | null;
 }
 
 interface DynamicRenderConsentBlocked {
@@ -113,13 +123,97 @@ function shouldSkipSecurityValidation(url: string): boolean {
 	);
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+	if (!signal?.aborted) return;
+	if (signal.reason instanceof Error) throw signal.reason;
+	throw new Error("Dynamic renderer startup aborted");
+}
+
+function createRouteFulfillHeaders(headers: Headers): Record<string, string> {
+	const fulfilledHeaders = new Headers(headers);
+	fulfilledHeaders.delete("content-encoding");
+	fulfilledHeaders.delete("content-length");
+	return Object.fromEntries(fulfilledHeaders);
+}
+
+export async function fulfillRouteWithPinnedHttpClient(
+	route: Route,
+	httpClient: HttpClient,
+	signal?: AbortSignal,
+): Promise<void> {
+	const request = route.request();
+	const requestUrl = request.url();
+	if (shouldSkipSecurityValidation(requestUrl)) {
+		await route.continue();
+		return;
+	}
+
+	const parsed = new URL(requestUrl);
+	if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+		await route.abort();
+		return;
+	}
+
+	if (
+		["image", "stylesheet", "font", "media"].includes(request.resourceType())
+	) {
+		await route.abort();
+		return;
+	}
+
+	try {
+		const method = request.method();
+		const postData = request.postDataBuffer() ?? undefined;
+		const response = await httpClient.fetch({
+			url: requestUrl,
+			headers: request.headers(),
+			method,
+			body:
+				postData && method !== "GET" && method !== "HEAD"
+					? new Uint8Array(postData)
+					: undefined,
+			signal,
+		});
+		const body = Buffer.from(await response.arrayBuffer());
+		await route.fulfill({
+			status: response.status,
+			headers: createRouteFulfillHeaders(response.headers),
+			body,
+		});
+	} catch {
+		await route.abort();
+	}
+}
+
+export function createDynamicBrowserContextOptions(): BrowserContextOptions {
+	return { serviceWorkers: "block" };
+}
+
+async function abortWebSocketRoute(route: WebSocketRoute): Promise<void> {
+	await route.close({
+		code: 1008,
+		reason: "WebSockets are not allowed during crawling",
+	});
+}
+
+export async function configurePinnedBrowserContext(
+	context: BrowserContext,
+	httpClient: HttpClient,
+	signal?: AbortSignal,
+): Promise<void> {
+	await context.route("**/*", async (route) => {
+		await fulfillRouteWithPinnedHttpClient(route, httpClient, signal);
+	});
+	await context.routeWebSocket("**/*", abortWebSocketRoute);
+}
+
 export class DynamicRenderer {
 	private static readonly instances = new Set<DynamicRenderer>();
 	private static handlersRegistered = false;
 
 	private readonly options: CrawlOptions;
 	private readonly logger: Logger;
-	private readonly resolver: Resolver;
+	private readonly httpClient: HttpClient;
 	private browserPool: BrowserPool | null;
 	private sessionPool: SessionPool | null;
 	private enabled: boolean;
@@ -127,7 +221,7 @@ export class DynamicRenderer {
 	private static registerGlobalHandlers(): void {
 		if (DynamicRenderer.handlersRegistered) return;
 
-		const exitHandler = (): void => {
+		const closeOpenBrowsers = (): void => {
 			for (const instance of DynamicRenderer.instances) {
 				if (instance.browserPool) {
 					instance.browserPool.closeAllBrowsers().catch(() => {});
@@ -135,14 +229,15 @@ export class DynamicRenderer {
 			}
 		};
 
-		process.on("exit", exitHandler);
+		process.on("beforeExit", closeOpenBrowsers);
+		process.on("exit", closeOpenBrowsers);
 		DynamicRenderer.handlersRegistered = true;
 	}
 
-	constructor(options: CrawlOptions, logger: Logger, resolver: Resolver) {
+	constructor(options: CrawlOptions, logger: Logger, httpClient: HttpClient) {
 		this.options = options;
 		this.logger = logger;
-		this.resolver = resolver;
+		this.httpClient = httpClient;
 		this.browserPool = null;
 		this.sessionPool = null;
 		this.enabled = options.dynamic;
@@ -162,7 +257,8 @@ export class DynamicRenderer {
 		}
 	}
 
-	async initialize(): Promise<InitializeResult> {
+	async initialize(signal?: AbortSignal): Promise<InitializeResult> {
+		throwIfAborted(signal);
 		if (!this.isEnabled()) {
 			return { dynamicEnabled: false };
 		}
@@ -181,10 +277,16 @@ export class DynamicRenderer {
 			};
 		}
 
+		const closeOnAbort = () => {
+			void this.close();
+		};
+		signal?.addEventListener("abort", closeOnAbort, { once: true });
 		try {
-			await this.launchBrowser();
+			await this.launchBrowser(signal);
+			throwIfAborted(signal);
 			return { dynamicEnabled: this.isEnabled() };
 		} catch (err) {
+			throwIfAborted(signal);
 			this.disableDynamic(
 				`Failed to launch Playwright: ${getErrorMessage(err)}`,
 			);
@@ -193,10 +295,13 @@ export class DynamicRenderer {
 				fallbackLog:
 					"Falling back to static crawling: dynamic renderer failed to start",
 			};
+		} finally {
+			signal?.removeEventListener("abort", closeOnAbort);
 		}
 	}
 
-	private async createSessionPool(): Promise<SessionPool> {
+	private async createSessionPool(signal?: AbortSignal): Promise<SessionPool> {
+		throwIfAborted(signal);
 		if (this.sessionPool) {
 			return this.sessionPool;
 		}
@@ -209,10 +314,12 @@ export class DynamicRenderer {
 			},
 			persistenceOptions: { enable: false },
 		});
+		throwIfAborted(signal);
 		return this.sessionPool;
 	}
 
-	async launchBrowser(): Promise<void> {
+	async launchBrowser(signal?: AbortSignal): Promise<void> {
+		throwIfAborted(signal);
 		if (!this.isEnabled()) {
 			return;
 		}
@@ -222,7 +329,8 @@ export class DynamicRenderer {
 		}
 
 		this.logger.info("Launching Playwright (Chromium)...");
-		await this.createSessionPool();
+		await this.createSessionPool(signal);
+		throwIfAborted(signal);
 
 		const executablePath = config.browser.executablePath;
 
@@ -254,9 +362,14 @@ export class DynamicRenderer {
 				DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.COMPLEX_NAVIGATION / 1000,
 			),
 		});
+		throwIfAborted(signal);
 
-		const warmupPage = (await this.browserPool.newPage()) as Page;
+		const warmupPage = (await this.browserPool.newPage({
+			pageOptions: createDynamicBrowserContextOptions(),
+		} as never)) as Page;
+		throwIfAborted(signal);
 		await warmupPage.close();
+		throwIfAborted(signal);
 		this.logger.info("Playwright launched successfully");
 	}
 
@@ -264,6 +377,7 @@ export class DynamicRenderer {
 		page: Page,
 		url: string,
 		session: Session,
+		signal?: AbortSignal,
 	): Promise<void> {
 		await page.setViewportSize(DYNAMIC_RENDERER_CONSTANTS.VIEWPORT);
 		page.setDefaultTimeout(
@@ -280,33 +394,11 @@ export class DynamicRenderer {
 			DNT: "1",
 		});
 
-		await page.route("**/*", async (route) => {
-			const requestUrl = route.request().url();
-			if (!shouldSkipSecurityValidation(requestUrl)) {
-				try {
-					const parsed = new URL(requestUrl);
-					if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-						await route.abort();
-						return;
-					}
-					await this.resolver.assertPublicHostname(parsed.hostname);
-				} catch {
-					await route.abort();
-					return;
-				}
-			}
-
-			if (
-				["image", "stylesheet", "font", "media"].includes(
-					route.request().resourceType(),
-				)
-			) {
-				await route.abort();
-				return;
-			}
-
-			await route.continue();
-		});
+		await configurePinnedBrowserContext(
+			page.context(),
+			this.httpClient,
+			signal,
+		);
 
 		page.on("dialog", (dialog) => {
 			dialog.dismiss().catch((err) => {
@@ -378,8 +470,9 @@ export class DynamicRenderer {
 
 		if (!this.browserPool) {
 			try {
-				await this.launchBrowser();
+				await this.launchBrowser(signal);
 			} catch (err) {
+				throwIfAborted(signal);
 				this.disableDynamic(
 					`Failed to relaunch Playwright: ${getErrorMessage(err)}`,
 				);
@@ -392,15 +485,16 @@ export class DynamicRenderer {
 		}
 
 		const session = await this.sessionPool.getSession();
-		const page = (await this.browserPool.newPage()) as Page;
+		const page = (await this.browserPool.newPage({
+			pageOptions: createDynamicBrowserContextOptions(),
+		} as never)) as Page;
 		let navigationOccurred = false;
 		const navigationHandler = () => {
 			navigationOccurred = true;
 		};
 
 		try {
-			await this.resolver.assertPublicHostname(new URL(item.url).hostname);
-			await this.configurePage(page, item.url, session);
+			await this.configurePage(page, item.url, session, signal);
 			if (signal?.aborted) {
 				throw signal.reason instanceof Error
 					? signal.reason
@@ -423,7 +517,9 @@ export class DynamicRenderer {
 			const headers = response?.headers() ?? {};
 			const contentType = headers["content-type"] || "";
 			const lastModified = headers["last-modified"];
+			const etag = headers.etag;
 			const xRobotsTag = headers["x-robots-tag"] ?? null;
+			const retryAfter = headers["retry-after"] ?? null;
 
 			if (statusCode >= 400) {
 				session.retireOnBlockedStatusCodes(statusCode);
@@ -500,7 +596,9 @@ export class DynamicRenderer {
 					title: extracted.title,
 					description: extracted.description || "",
 					lastModified,
+					etag,
 					xRobotsTag,
+					retryAfter,
 				},
 			};
 		} catch (err) {

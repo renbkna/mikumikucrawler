@@ -2,11 +2,13 @@ import type { Database } from "bun:sqlite";
 import type { CrawlCounters } from "../../../shared/contracts/crawl.js";
 import type { TerminalOutcome } from "../../domain/crawl/CrawlState.js";
 import { createPageWriter, type SavePageInput } from "./pageRepo.js";
+import { createCrawlTerminalWriter } from "./crawlTerminalRepo.js";
 
 export interface CommitCompletedItemInput {
 	crawlId: string;
 	url: string;
 	outcome?: TerminalOutcome;
+	domainBudgetCharged: boolean;
 	page?: SavePageInput;
 	counters: CrawlCounters;
 	eventSequence: number;
@@ -18,16 +20,7 @@ export interface CommitCompletedItemResult {
 
 export function createCrawlItemPersistence(db: Database) {
 	const pageWriter = createPageWriter(db);
-	const upsertTerminal = db.prepare(`
-		INSERT INTO crawl_terminal_urls (
-			crawl_id,
-			url,
-			outcome
-		) VALUES (?, ?, ?)
-		ON CONFLICT(crawl_id, url) DO UPDATE SET
-			outcome = excluded.outcome,
-			recorded_at = CURRENT_TIMESTAMP
-	`);
+	const terminalWriter = createCrawlTerminalWriter(db);
 
 	const removeQueueItem = db.prepare(
 		"DELETE FROM crawl_queue_items WHERE crawl_id = ? AND url = ?",
@@ -53,7 +46,12 @@ export function createCrawlItemPersistence(db: Database) {
 			const pageId = input.page ? pageWriter.savePage(input.page) : undefined;
 
 			if (input.outcome) {
-				upsertTerminal.run(input.crawlId, input.url, input.outcome);
+				terminalWriter.upsert(
+					input.crawlId,
+					input.url,
+					input.outcome,
+					input.domainBudgetCharged,
+				);
 			}
 
 			removeQueueItem.run(input.crawlId, input.url);

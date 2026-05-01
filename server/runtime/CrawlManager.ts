@@ -3,10 +3,20 @@ import type {
 	CrawlCounters,
 	CrawlOptions,
 	CrawlStatus,
+	StopCrawlMode,
+} from "../../shared/contracts/crawl.js";
+import {
+	DEFAULT_CRAWL_LIST_LIMIT,
+	isActiveCrawlStatus,
+	isCrawlOptions,
+	isResumableCrawlStatus,
+	isTerminalCrawlStatus,
 } from "../../shared/contracts/crawl.js";
 import type { HttpClient, Resolver } from "../plugins/security.js";
+import type { CrawlRunRecord } from "../storage/db.js";
 import type { StorageRepos } from "../storage/db.js";
 import type { CrawlRuntime } from "./CrawlRuntime.js";
+import type { DomainStateRecord } from "../domain/crawl/CrawlState.js";
 import { createCrawlRuntime } from "./CrawlRuntimeFactory.js";
 import type { EventStream } from "./EventStream.js";
 import type { RuntimeRegistry } from "./RuntimeRegistry.js";
@@ -20,8 +30,41 @@ interface CreateCrawlManagerOptions {
 	httpClient: HttpClient;
 }
 
+export type ResumeCrawlResult =
+	| { type: "not-found" }
+	| { type: "not-resumable"; crawl: CrawlRunRecord }
+	| { type: "already-running"; crawl: CrawlRunRecord }
+	| { type: "resumed"; crawl: CrawlRunRecord };
+
+export type StopCrawlResult =
+	| { type: "not-found" }
+	| { type: "not-active"; crawl: CrawlRunRecord }
+	| { type: "stopped"; crawl: CrawlRunRecord };
+
+export type DeleteCrawlResult =
+	| { type: "not-found" }
+	| { type: "active"; crawl: CrawlRunRecord }
+	| { type: "deleted" };
+
 export class CrawlManager {
-	constructor(private readonly deps: CreateCrawlManagerOptions) {}
+	constructor(private readonly deps: CreateCrawlManagerOptions) {
+		this.recoverOrphanedActiveCrawls();
+	}
+
+	private recoverOrphanedActiveCrawls(): void {
+		for (const crawl of this.deps.repos.crawlRuns.listActive()) {
+			if (this.deps.registry.get(crawl.id)) {
+				continue;
+			}
+
+			this.deps.repos.crawlRuns.markInterrupted(
+				crawl.id,
+				crawl.counters,
+				crawl.stopReason ?? "Runtime interrupted by process restart",
+				crawl.eventSequence,
+			);
+		}
+	}
 
 	private createRuntime(
 		crawlId: string,
@@ -30,6 +73,8 @@ export class CrawlManager {
 			resume: boolean;
 			initialSequence?: number;
 			initialCounters?: CrawlCounters;
+			initialStartedAtMs?: number;
+			initialDomainStates?: DomainStateRecord[];
 		} = { resume: false },
 	): CrawlRuntime {
 		return createCrawlRuntime({
@@ -42,6 +87,8 @@ export class CrawlManager {
 			httpClient: this.deps.httpClient,
 			initialSequence: config.initialSequence,
 			initialCounters: config.initialCounters,
+			initialStartedAtMs: config.initialStartedAtMs,
+			initialDomainStates: config.initialDomainStates,
 			resume: config.resume,
 			registry: this.deps.registry,
 		});
@@ -56,29 +103,61 @@ export class CrawlManager {
 		);
 		const runtime = this.createRuntime(crawlId, options);
 		void runtime.start();
-		return record;
+		return this.deps.repos.crawlRuns.getById(crawlId) ?? record;
 	}
 
-	stop(crawlId: string) {
-		const runtime = this.deps.registry.get(crawlId);
-		if (!runtime) {
-			return this.deps.repos.crawlRuns.getById(crawlId);
+	async stop(
+		crawlId: string,
+		mode: StopCrawlMode = "pause",
+	): Promise<StopCrawlResult> {
+		const record = this.deps.repos.crawlRuns.getById(crawlId);
+		if (!record) return { type: "not-found" };
+		if (isTerminalCrawlStatus(record.status)) {
+			return { type: "stopped", crawl: record };
+		}
+		if (!isActiveCrawlStatus(record.status)) {
+			return { type: "not-active", crawl: record };
 		}
 
-		runtime.requestStop();
-		return this.deps.repos.crawlRuns.getById(crawlId);
+		const runtime = this.deps.registry.get(crawlId);
+		if (!runtime) {
+			return { type: "not-active", crawl: record };
+		}
+
+		if (mode === "force") {
+			await runtime.requestForceStop();
+		} else {
+			await runtime.requestPause();
+		}
+
+		return {
+			type: "stopped",
+			crawl: this.deps.repos.crawlRuns.getById(crawlId) ?? record,
+		};
 	}
 
-	resume(crawlId: string) {
+	resume(crawlId: string): ResumeCrawlResult {
 		const record = this.deps.repos.crawlRuns.getById(crawlId);
-		if (!record) return null;
-		if (record.status !== "interrupted") return null;
-		if (this.deps.registry.get(crawlId)) return record;
+		if (!record) return { type: "not-found" };
+		if (!isResumableCrawlStatus(record.status)) {
+			return { type: "not-resumable", crawl: record };
+		}
+		if (!isCrawlOptions(record.options)) {
+			return { type: "not-resumable", crawl: record };
+		}
+		if (this.deps.registry.get(crawlId)) {
+			return { type: "already-running", crawl: record };
+		}
 
+		this.deps.eventStream.reset(crawlId, record.eventSequence);
 		const runtime = this.createRuntime(crawlId, record.options, {
 			resume: true,
 			initialSequence: record.eventSequence,
 			initialCounters: record.counters,
+			initialStartedAtMs:
+				record.startedAt === null ? undefined : Date.parse(record.startedAt),
+			initialDomainStates:
+				this.deps.repos.crawlDomainState.listByCrawlId(crawlId),
 		});
 		this.deps.repos.crawlRuns.markStarting(
 			crawlId,
@@ -86,7 +165,10 @@ export class CrawlManager {
 			record.eventSequence,
 		);
 		void runtime.start();
-		return this.deps.repos.crawlRuns.getById(crawlId);
+		return {
+			type: "resumed",
+			crawl: this.deps.repos.crawlRuns.getById(crawlId) ?? record,
+		};
 	}
 
 	get(crawlId: string) {
@@ -102,16 +184,24 @@ export class CrawlManager {
 		return this.deps.repos.crawlRuns.list(filters);
 	}
 
-	delete(crawlId: string): boolean {
-		if (this.deps.registry.get(crawlId)) {
-			return false;
+	listResumable(limit?: number) {
+		const effectiveLimit = limit ?? DEFAULT_CRAWL_LIST_LIMIT;
+		return this.deps.repos.crawlRuns
+			.getResumableRuns(effectiveLimit + this.deps.registry.size())
+			.filter((crawl) => !this.deps.registry.get(crawl.id))
+			.slice(0, effectiveLimit);
+	}
+
+	delete(crawlId: string): DeleteCrawlResult {
+		const record = this.deps.repos.crawlRuns.getById(crawlId);
+		if (!record) return { type: "not-found" };
+		if (this.deps.registry.get(crawlId) || isActiveCrawlStatus(record.status)) {
+			return { type: "active", crawl: record };
 		}
 
-		const record = this.deps.repos.crawlRuns.getById(crawlId);
-		if (!record) return false;
 		this.deps.repos.crawlRuns.deleteRun(crawlId);
 		this.deps.eventStream.delete(crawlId);
-		return true;
+		return { type: "deleted" };
 	}
 
 	async shutdownAll(): Promise<void> {

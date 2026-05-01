@@ -1,5 +1,5 @@
 import { PieChart } from "lucide-react";
-import type { Stats } from "../types";
+import type { Stats } from "../../shared/types.js";
 
 interface StatsVisualizerProps {
 	stats: Stats;

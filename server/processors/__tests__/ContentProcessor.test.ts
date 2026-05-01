@@ -9,7 +9,7 @@ import { ContentProcessor } from "../ContentProcessor.js";
  * Output: ProcessedContent with extractedData, metadata, analysis, media, links, errors
  *
  * Dispatch rules:
- *   - text/html → HTML extraction pipeline (extractMainContent, metadata, links, media, analysis)
+ *   - text/html/application/xhtml+xml → HTML extraction pipeline (extractMainContent, metadata, links, media, analysis)
  *   - application/json → JSON processing (mainContent from parsed JSON)
  *   - application/pdf → PDF extraction (text extraction, metadata)
  *   - other → empty result, no errors
@@ -47,6 +47,24 @@ describe("ContentProcessor dispatch contract", () => {
 		expect(Array.isArray(result.media)).toBe(true);
 	});
 
+	test("XHTML → uses the HTML extraction pipeline", async () => {
+		const processor = new ContentProcessor(createMockLogger());
+		const html = `<html><body><main>XHTML content</main><a href="/next">Next</a></body></html>`;
+
+		const result = await processor.processContent(
+			html,
+			"https://example.com/page",
+			"application/xhtml+xml; charset=utf-8",
+		);
+
+		expect(result.errors).toHaveLength(0);
+		expect(result.extractedData.mainContent).toBe("XHTML content");
+		expect(result.links.map((link) => link.url)).toEqual([
+			"https://example.com/next",
+		]);
+		expect(result.analysis.wordCount).toBeGreaterThan(0);
+	});
+
 	test("JSON → extractedData.mainContent contains serialized data", async () => {
 		const processor = new ContentProcessor(createMockLogger());
 		const json = JSON.stringify({ key: "value", nested: { data: 123 } });
@@ -59,6 +77,69 @@ describe("ContentProcessor dispatch contract", () => {
 
 		expect(result.errors).toHaveLength(0);
 		expect(result.extractedData.mainContent).toContain("value");
+		expect(result.analysis.wordCount).toBeGreaterThan(0);
+		expect(result.analysis.language).toBeDefined();
+		expect(result.analysis.sentiment).toBeDefined();
+	});
+
+	test("JSON dispatch normalizes media type casing and parameters", async () => {
+		const processor = new ContentProcessor(createMockLogger());
+
+		const result = await processor.processContent(
+			JSON.stringify({ key: "mixed-case" }),
+			"https://api.example.com/data",
+			"Application/JSON; Charset=UTF-8",
+		);
+
+		expect(result.errors).toHaveLength(0);
+		expect(result.extractedData.mainContent).toContain("mixed-case");
+		expect(result.analysis.wordCount).toBeGreaterThan(0);
+	});
+
+	test("JSON primitives preserve parsed values instead of truthy fallback", async () => {
+		const processor = new ContentProcessor(createMockLogger());
+
+		const [zero, bool, nil] = await Promise.all([
+			processor.processContent(
+				"0",
+				"https://api.example.com/zero",
+				"application/json",
+			),
+			processor.processContent(
+				"false",
+				"https://api.example.com/false",
+				"application/json",
+			),
+			processor.processContent(
+				"null",
+				"https://api.example.com/null",
+				"application/json",
+			),
+		]);
+
+		expect(zero.extractedData.mainContent).toBe("0");
+		expect(bool.extractedData.mainContent).toBe("false");
+		expect(nil.extractedData.mainContent).toBe("null");
+	});
+
+	test("JSON string roots and invalid JSON fallback do not gain extra quotes", async () => {
+		const processor = new ContentProcessor(createMockLogger());
+
+		const [stringRoot, invalid] = await Promise.all([
+			processor.processContent(
+				'"hello"',
+				"https://api.example.com/string",
+				"application/json",
+			),
+			processor.processContent(
+				"not-json",
+				"https://api.example.com/invalid",
+				"application/json",
+			),
+		]);
+
+		expect(stringRoot.extractedData.mainContent).toBe("hello");
+		expect(invalid.extractedData.mainContent).toBe("not-json");
 	});
 
 	test("PDF with invalid data → pdf_processing_error", async () => {
@@ -67,11 +148,23 @@ describe("ContentProcessor dispatch contract", () => {
 		const result = await processor.processContent(
 			Buffer.from("fake pdf content"),
 			"https://example.com/doc.pdf",
-			"application/pdf",
+			"Application/PDF; charset=binary",
 		);
 
 		expect(result.errors).toHaveLength(1);
 		expect(result.errors[0].type).toBe("pdf_processing_error");
+		expect(result.extractedData).toEqual({ mainContent: "" });
+		expect(result.metadata).toEqual({});
+		expect(result.media).toEqual([]);
+		expect(result.links).toEqual([]);
+		expect(result.analysis).toMatchObject({
+			wordCount: 0,
+			readingTime: 0,
+			language: "unknown",
+			sentiment: "neutral",
+			readabilityScore: 0,
+			quality: { score: 0, issues: ["PDF processing failed"] },
+		});
 	});
 
 	test("unknown content type → empty result, no errors", async () => {

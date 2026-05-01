@@ -97,4 +97,38 @@ describe("app error handling", () => {
 		expect(response).toEqual({ error: "Conflict" });
 		expect(logger.error).not.toHaveBeenCalled();
 	});
+
+	test("preserves explicit numeric string statuses from downstream handlers", () => {
+		const logger = createLogger();
+		const set: { status?: number | string } = { status: "409" };
+
+		const response = handleAppError({
+			code: "UNKNOWN",
+			error: new Error("Conflict"),
+			set,
+			logger,
+		});
+
+		expect(set.status).toBe(409);
+		expect(response).toEqual({ error: "Conflict" });
+		expect(logger.error).not.toHaveBeenCalled();
+	});
+
+	test("does not expose raw internal error messages for 500 responses", () => {
+		const logger = createLogger();
+		const set: { status?: number | string } = {};
+
+		const response = handleAppError({
+			code: "UNKNOWN",
+			error: new Error("database password token leaked in stack context"),
+			set,
+			logger,
+		});
+
+		expect(set.status).toBe(500);
+		expect(response).toEqual({ error: "Internal Server Error" });
+		expect(logger.error).toHaveBeenCalledWith(
+			"[App] database password token leaked in stack context",
+		);
+	});
 });

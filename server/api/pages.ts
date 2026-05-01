@@ -1,4 +1,5 @@
 import { Elysia } from "elysia";
+import { API_PATHS, PAGE_ROUTE_SEGMENTS } from "../../shared/contracts/api.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
 import {
 	PageContentParamsSchema,
@@ -7,8 +8,8 @@ import {
 import { routeServices } from "./context.js";
 
 export function pagesApi() {
-	return new Elysia({ name: "pages-api", prefix: "/api/pages" }).get(
-		"/:id/content",
+	return new Elysia({ name: "pages-api", prefix: API_PATHS.pages }).get(
+		PAGE_ROUTE_SEGMENTS.content,
 		(context) => {
 			const { params, repos, set } = routeServices<{
 				params: { id: number };
@@ -21,7 +22,7 @@ export function pagesApi() {
 
 			return {
 				status: "ok",
-				content: content ?? "",
+				content,
 			};
 		},
 		{
@@ -29,6 +30,7 @@ export function pagesApi() {
 			response: {
 				200: PageContentResponseSchema,
 				404: ApiErrorSchema,
+				422: ApiErrorSchema,
 			},
 			detail: {
 				tags: ["Pages"],

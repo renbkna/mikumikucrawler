@@ -1,28 +1,51 @@
 import { Elysia } from "elysia";
+import { API_PATHS } from "../../shared/contracts/api.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
-import type { SearchResult } from "../contracts/search.js";
 import {
+	DEFAULT_SEARCH_LIMIT,
 	SearchQuerySchema,
 	SearchResponseSchema,
 } from "../contracts/search.js";
 import { routeServices } from "./context.js";
 
+function buildFtsQuery(query: string): string | null {
+	const terms = query
+		.trim()
+		.split(/\s+/)
+		.map((term) => term.replace(/"/g, '""'))
+		.filter(Boolean);
+
+	if (terms.length === 0) {
+		return null;
+	}
+
+	return terms.map((term) => `"${term}"*`).join(" ");
+}
+
 export function searchApi() {
-	return new Elysia({ name: "search-api", prefix: "/api" }).get(
-		"/search",
+	return new Elysia({ name: "search-api", prefix: API_PATHS.root }).get(
+		API_PATHS.search.slice(API_PATHS.root.length),
 		(context) => {
 			const { query, repos } = routeServices<{
 				query: typeof SearchQuerySchema.static;
 			}>(context);
-			const escaped = query.q.replace(/"/g, '""');
-			const ftsQuery = `"${escaped}"*`;
+			const ftsQuery = buildFtsQuery(query.q);
+			if (!ftsQuery) {
+				return {
+					query: query.q,
+					count: 0,
+					results: [],
+				};
+			}
+
 			const results = repos.search.search(
 				ftsQuery,
-				query.limit ?? 20,
-			) as SearchResult[];
+				query.limit ?? DEFAULT_SEARCH_LIMIT,
+			);
+			const count = repos.search.count(ftsQuery);
 			return {
 				query: query.q,
-				count: results.length,
+				count,
 				results,
 			};
 		},
@@ -30,6 +53,7 @@ export function searchApi() {
 			query: SearchQuerySchema,
 			response: {
 				200: SearchResponseSchema,
+				422: ApiErrorSchema,
 				500: ApiErrorSchema,
 			},
 			detail: {

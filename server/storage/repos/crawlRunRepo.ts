@@ -5,6 +5,10 @@ import type {
 	CrawlStatus,
 } from "../../../shared/contracts/crawl.js";
 import {
+	DEFAULT_CRAWL_LIST_LIMIT,
+	RESUMABLE_CRAWL_STATUS_VALUES,
+} from "../../../shared/contracts/crawl.js";
+import {
 	type CrawlRunRecord,
 	type CrawlRunRow,
 	mapCrawlRunRow,
@@ -56,6 +60,12 @@ export function createCrawlRunRepo(db: Database) {
 
 	const getRun = db.prepare("SELECT * FROM crawl_runs WHERE id = ? LIMIT 1");
 	const deleteRun = db.prepare("DELETE FROM crawl_runs WHERE id = ?");
+	const listActiveRuns = db.prepare(`
+		SELECT *
+		FROM crawl_runs
+		WHERE status IN ('starting', 'running', 'pausing', 'stopping')
+		ORDER BY updated_at DESC
+	`);
 
 	function getById(id: string): CrawlRunRecord | null {
 		const row = getRun.get(id) as CrawlRunRow | null;
@@ -175,7 +185,7 @@ export function createCrawlRunRepo(db: Database) {
 
 		const whereClause =
 			clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
-		const limit = options.limit ?? 25;
+		const limit = options.limit ?? DEFAULT_CRAWL_LIST_LIMIT;
 
 		const rows = db
 			.query(
@@ -193,8 +203,18 @@ export function createCrawlRunRepo(db: Database) {
 		},
 		getById,
 		list,
-		getInterruptedRuns(limit = 25): CrawlRunRecord[] {
+		listActive(): CrawlRunRecord[] {
+			return (listActiveRuns.all() as CrawlRunRow[]).map(mapCrawlRunRow);
+		},
+		getInterruptedRuns(limit = DEFAULT_CRAWL_LIST_LIMIT): CrawlRunRecord[] {
 			return list({ status: "interrupted", limit });
+		},
+		getResumableRuns(limit = DEFAULT_CRAWL_LIST_LIMIT): CrawlRunRecord[] {
+			return RESUMABLE_CRAWL_STATUS_VALUES.flatMap((status) =>
+				list({ status, limit }),
+			)
+				.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+				.slice(0, limit);
 		},
 		markStarting(
 			id: string,
@@ -221,6 +241,24 @@ export function createCrawlRunRepo(db: Database) {
 			eventSequence?: number,
 		) {
 			return updateStatus(id, "stopping", counters, stopReason, eventSequence);
+		},
+		markPausing(
+			id: string,
+			counters: CrawlCounters,
+			stopReason: string | null,
+			eventSequence?: number,
+		) {
+			return updateStatus(id, "pausing", counters, stopReason, eventSequence);
+		},
+		markPaused(
+			id: string,
+			counters: CrawlCounters,
+			stopReason: string | null,
+			eventSequence?: number,
+		) {
+			return updateStatus(id, "paused", counters, stopReason, eventSequence, {
+				started: true,
+			});
 		},
 		markCompleted(
 			id: string,
