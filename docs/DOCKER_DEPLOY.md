@@ -99,7 +99,7 @@ The Docker container is configured to work with these environment variables:
 
 ## What the Docker Setup Does
 
-1. **Base Image**: Uses Node.js 20 slim with Chrome dependencies
+1. **Base Image**: Uses the official Bun image with Chrome dependencies
 2. **System Dependencies**: Installs all required libraries for Playwright/Chromium
 3. **Browser Installation**: Playwright provides the browser automation runtime used by the crawler
 4. **Dependencies**: Installs packages via Bun

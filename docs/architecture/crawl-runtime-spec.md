@@ -24,9 +24,11 @@ The runtime does not own browser connections. Browser clients are subscribers.
 ### Crawl statuses
 
 ```text
-pending -> starting -> running -> stopping -> completed
-                           |         |
-                           |         -> stopped
+pending -> starting -> running -> pausing -> paused
+                           |             |
+                           |             -> starting
+                           -> stopping -> stopped
+                           -> completed
                            -> failed
                            -> interrupted
 ```
@@ -34,8 +36,8 @@ pending -> starting -> running -> stopping -> completed
 ### Status rules
 
 - `completed`, `failed`, and `stopped` are terminal.
-- `interrupted` is resumable and non-terminal at the product level.
-- `pending`, `starting`, `running`, and `stopping` are active statuses.
+- `paused` and `interrupted` are resumable and non-terminal at the product level.
+- `pending`, `starting`, `running`, `pausing`, and `stopping` are active statuses.
 - Browser disconnect must not change crawl ownership or status.
 
 ### Allowed transitions
@@ -45,11 +47,14 @@ pending -> starting -> running -> stopping -> completed
 | `pending` | `starting` | `POST /api/crawls` accepted |
 | `starting` | `running` | runtime initialization succeeds |
 | `starting` | `failed` | runtime initialization fails |
-| `running` | `stopping` | stop requested |
+| `running` | `pausing` | graceful pause requested |
+| `running` | `stopping` | force stop requested |
 | `running` | `completed` | queue drains without stop request |
 | `running` | `failed` | unrecoverable runtime error |
 | `running` | `interrupted` | process shutdown or runtime crash during active crawl |
-| `stopping` | `stopped` | in-flight work drains after stop request |
+| `pausing` | `paused` | in-flight work drains after pause request |
+| `stopping` | `stopped` | in-flight work is aborted or drains after force stop request |
+| `paused` | `starting` | resume accepted |
 | `interrupted` | `starting` | resume accepted |
 
 ### Forbidden lifecycle states
@@ -109,7 +114,7 @@ Output:
 
 Rules:
 
-- only `interrupted` crawls are resumable
+- only `paused` and `interrupted` crawls are resumable
 - resume restores only data scoped to the same `crawlId`
 - resume never depends on a browser connection identifier
 
@@ -249,6 +254,7 @@ Every event includes:
 - `crawl.completed`
 - `crawl.failed`
 - `crawl.stopped`
+- `crawl.paused`
 
 ### Event rules
 
@@ -256,6 +262,7 @@ Every event includes:
 - `sequence` strictly increases by `1`.
 - `crawl.page` is emitted only after page persistence succeeds.
 - `crawl.completed`, `crawl.failed`, and `crawl.stopped` are terminal and mutually exclusive.
+- `crawl.paused` is resumable and non-terminal.
 - `crawl.progress` may repeat snapshots, but sequence ordering must still hold.
 
 ## Resume Contract
@@ -263,7 +270,7 @@ Every event includes:
 ### A crawl is resumable if and only if
 
 - `crawl_runs.id` exists
-- `crawl_runs.status = "interrupted"`
+- `crawl_runs.status = "paused"` or `crawl_runs.status = "interrupted"`
 - `options_json` validates against the current crawl options contract
 
 ### Resume restoration
