@@ -7,9 +7,6 @@ import type {
 	ProcessingError,
 } from "../shared/types.js";
 
-// Re-export shared types
-export * from "../shared/types.js";
-
 /**
  * Server-side superset of processed data.
  * Includes 'links' which are extracted but not sent to frontend in the same structure.

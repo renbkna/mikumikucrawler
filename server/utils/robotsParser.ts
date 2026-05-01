@@ -47,16 +47,16 @@ export class NativeRobotsParser implements RobotsResult {
 	 * treated as an end-of-string anchor (per the spec).
 	 */
 	private static compilePattern(pattern: string): RegExp | null {
-		// Escape all regex meta-characters except * and $
-		// Note: $ is intentionally excluded from escaping — it is a valid end-of-string
-		// anchor in robots.txt patterns (RFC 9309 §2.2.3) and maps directly to the regex
-		// `$` anchor without any transformation.
-		const escaped = pattern.replace(/[.+^{}()|[\]\\]/g, "\\$&");
+		const hasEndAnchor = pattern.endsWith("$");
+		const patternBody = hasEndAnchor ? pattern.slice(0, -1) : pattern;
+		// Escape all regex meta-characters except the robots wildcard `*`.
+		// A terminal `$` is handled separately as the RFC end-of-string anchor.
+		const escaped = patternBody.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
 		// * → match any sequence of characters (robots.txt wildcard)
 		// Prefix with ^ so patterns match from the start of the path (RFC 9309 §2.2.2).
 		// Without the anchor, a pattern like `/private` would incorrectly match
 		// `/other/private/path` anywhere in the string.
-		const regexSource = `^${escaped.replace(/\*/g, ".*")}`;
+		const regexSource = `^${escaped.replace(/\*/g, ".*")}${hasEndAnchor ? "$" : ""}`;
 
 		try {
 			return new RegExp(regexSource);
@@ -68,11 +68,23 @@ export class NativeRobotsParser implements RobotsResult {
 	private parse(robotsTxt: string): void {
 		const lines = robotsTxt.split("\n");
 		let currentRule:
-			| (Omit<Rule, "allow" | "disallow"> & {
+			| (Omit<Rule, "userAgent" | "allow" | "disallow"> & {
+					userAgents: string[];
 					allow: string[];
 					disallow: string[];
+					hasGroupDirective: boolean;
 			  })
 			| null = null;
+
+		const pushCurrentRule = () => {
+			if (!currentRule) return;
+			const { userAgents, allow, disallow, crawlDelay } = currentRule;
+			for (const userAgent of userAgents) {
+				this.rules.push(
+					this.compileRule({ userAgent, allow, disallow, crawlDelay }),
+				);
+			}
+		};
 
 		for (const line of lines) {
 			const trimmed = line.trim();
@@ -86,23 +98,41 @@ export class NativeRobotsParser implements RobotsResult {
 
 			switch (directive) {
 				case "user-agent":
-					if (currentRule) {
-						this.rules.push(this.compileRule(currentRule));
+					if (currentRule?.hasGroupDirective) {
+						pushCurrentRule();
+						currentRule = null;
 					}
-					currentRule = {
-						userAgent: value.toLowerCase(),
-						allow: [],
-						disallow: [],
-					};
+					if (currentRule) {
+						currentRule.userAgents.push(value.toLowerCase());
+					} else {
+						currentRule = {
+							userAgents: [value.toLowerCase()],
+							allow: [],
+							disallow: [],
+							hasGroupDirective: false,
+						};
+					}
 					break;
 				case "allow":
-					if (currentRule) currentRule.allow.push(value);
+					if (currentRule) {
+						currentRule.hasGroupDirective = true;
+						if (value) currentRule.allow.push(value);
+					}
 					break;
 				case "disallow":
-					if (currentRule) currentRule.disallow.push(value);
+					if (currentRule) {
+						currentRule.hasGroupDirective = true;
+						if (value) currentRule.disallow.push(value);
+					}
 					break;
 				case "crawl-delay":
-					if (currentRule) currentRule.crawlDelay = Number.parseFloat(value);
+					if (currentRule) {
+						currentRule.hasGroupDirective = true;
+						const crawlDelay = Number.parseFloat(value);
+						if (Number.isFinite(crawlDelay) && crawlDelay >= 0) {
+							currentRule.crawlDelay = crawlDelay;
+						}
+					}
 					break;
 				case "sitemap":
 					this.sitemaps.push(value);
@@ -110,9 +140,7 @@ export class NativeRobotsParser implements RobotsResult {
 			}
 		}
 
-		if (currentRule) {
-			this.rules.push(this.compileRule(currentRule));
-		}
+		pushCurrentRule();
 	}
 
 	/** Converts string pattern lists to pre-compiled CompiledPattern arrays. */
@@ -138,43 +166,51 @@ export class NativeRobotsParser implements RobotsResult {
 
 	private getPathFromUrl(url: string): string {
 		try {
-			return new URL(url).pathname;
+			const parsed = new URL(url);
+			return `${parsed.pathname}${parsed.search}`;
 		} catch {
 			return url.startsWith("/") ? url : `/${url}`;
 		}
 	}
 
-	private findMatchingRule(userAgent?: string): Rule | null {
+	private findMatchingRules(userAgent?: string): Rule[] {
 		if (!userAgent) {
-			return this.rules.find((r) => r.userAgent === "*") ?? null;
+			return this.rules.filter((r) => r.userAgent === "*");
 		}
 
 		const ua = userAgent.toLowerCase();
-		return (
-			this.rules.find((r) => r.userAgent === ua) ??
-			this.rules.find((r) => ua.includes(r.userAgent)) ??
-			this.rules.find((r) => r.userAgent === "*") ??
-			null
+		const exact = this.rules.filter((r) => r.userAgent === ua);
+		if (exact.length > 0) return exact;
+
+		const partial = this.rules.filter(
+			(r) => r.userAgent !== "*" && ua.includes(r.userAgent),
 		);
+		if (partial.length > 0) return partial;
+
+		return this.rules.filter((r) => r.userAgent === "*");
 	}
 
 	isAllowed(url: string, userAgent?: string): boolean {
 		const path = this.getPathFromUrl(url);
-		const rule = this.findMatchingRule(userAgent);
-		if (!rule) return true;
+		const rules = this.findMatchingRules(userAgent);
+		if (rules.length === 0) return true;
 
 		// RFC 9309: longest matching pattern wins; Allow beats Disallow on ties.
 		let longestAllow = -1;
-		for (const { raw, regex } of rule.allow) {
-			if (regex.test(path)) {
-				longestAllow = Math.max(longestAllow, raw.length);
+		for (const rule of rules) {
+			for (const { raw, regex } of rule.allow) {
+				if (regex.test(path)) {
+					longestAllow = Math.max(longestAllow, raw.length);
+				}
 			}
 		}
 
 		let longestDisallow = -1;
-		for (const { raw, regex } of rule.disallow) {
-			if (regex.test(path)) {
-				longestDisallow = Math.max(longestDisallow, raw.length);
+		for (const rule of rules) {
+			for (const { raw, regex } of rule.disallow) {
+				if (regex.test(path)) {
+					longestDisallow = Math.max(longestDisallow, raw.length);
+				}
 			}
 		}
 
@@ -187,7 +223,9 @@ export class NativeRobotsParser implements RobotsResult {
 	}
 
 	getCrawlDelay(userAgent?: string): number | undefined {
-		return this.findMatchingRule(userAgent)?.crawlDelay;
+		return this.findMatchingRules(userAgent).find(
+			(rule) => rule.crawlDelay !== undefined,
+		)?.crawlDelay;
 	}
 
 	getSitemaps(): string[] {

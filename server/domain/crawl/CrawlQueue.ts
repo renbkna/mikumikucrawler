@@ -44,6 +44,7 @@ export class CrawlQueue {
 		for (const item of items) {
 			if (this.queuedUrls.has(item.url)) continue;
 			this.state.restoreAdmission(item.url);
+			this.state.restoreDomainAdmission?.(item.domain);
 			this.pending.push(item);
 			this.queuedUrls.add(item.url);
 		}
@@ -61,31 +62,41 @@ export class CrawlQueue {
 			return false;
 		}
 
-		const url = identity.canonicalUrl;
-		if (
-			this.state.hasVisited(url) ||
-			this.activeUrls.has(url) ||
-			this.queuedUrls.has(url)
-		) {
-			return false;
-		}
-
-		if (!this.state.tryAdmit(url)) {
-			return false;
-		}
-
 		const domain = item.domain ?? identity.domainBudgetKey;
-		const queueItem: QueueItem = {
-			url,
+		return this.enqueueNormalized({
+			url: identity.canonicalUrl,
 			domain,
 			depth: item.depth,
 			retries: item.retries,
 			availableAt: item.availableAt ?? Date.now(),
 			parentUrl: item.parentUrl,
+		});
+	}
+
+	enqueueNormalized(item: QueueItem): boolean {
+		if (
+			this.state.hasVisited(item.url) ||
+			this.activeUrls.has(item.url) ||
+			this.queuedUrls.has(item.url)
+		) {
+			return false;
+		}
+
+		if (
+			!(this.state.canAdmitUrl?.(item.url) ?? true) ||
+			!(this.state.tryAdmitDomain?.(item.domain) ?? true) ||
+			!this.state.tryAdmit(item.url)
+		) {
+			return false;
+		}
+
+		const queueItem: QueueItem = {
+			...item,
+			availableAt: item.availableAt ?? Date.now(),
 		};
 
 		this.pending.push(queueItem);
-		this.queuedUrls.add(url);
+		this.queuedUrls.add(queueItem.url);
 		this.persistence.enqueueMany([queueItem]);
 		return true;
 	}
@@ -122,10 +133,17 @@ export class CrawlQueue {
 				break;
 			}
 			this.queuedUrls.delete(candidate.url);
+			const delayKey = this.getDelayKey(candidate);
+
+			if (this.activeUrls.has(candidate.url)) {
+				this.pending.push(candidate);
+				this.queuedUrls.add(candidate.url);
+				continue;
+			}
 
 			const waitMs = Math.max(
 				(candidate.availableAt ?? 0) - now,
-				this.state.timeUntilDomainReady(candidate.domain, now),
+				this.state.timeUntilDomainReady(delayKey, now),
 			);
 			if (waitMs > 0) {
 				minimumWait = Math.min(minimumWait, waitMs);
@@ -135,7 +153,15 @@ export class CrawlQueue {
 			}
 
 			this.activeUrls.add(candidate.url);
-			this.state.reserveDomain(candidate.domain, now);
+			this.state.reserveDomain(delayKey, now);
+			const nextAllowedAt = this.state.nextAllowedAtForDomain(delayKey);
+			if (nextAllowedAt > (candidate.availableAt ?? 0)) {
+				candidate.availableAt = nextAllowedAt;
+				this.persistence.reschedule(candidate);
+			}
+			this.deferPendingByDelayKey((pendingDelayKey) =>
+				this.state.nextAllowedAtForDomain(pendingDelayKey),
+			);
 			return { item: candidate, waitMs: 0 };
 		}
 
@@ -149,17 +175,37 @@ export class CrawlQueue {
 
 	markDone(item: QueueItem, options: { persist?: boolean } = {}): void {
 		this.activeUrls.delete(item.url);
-		if (this.rescheduledUrls.delete(item.url)) {
+		if (options.persist === false) {
+			this.rescheduledUrls.delete(item.url);
 			return;
 		}
-		if (options.persist !== false) {
-			this.persistence.remove(item.url);
+		const wasRescheduled = this.rescheduledUrls.delete(item.url);
+		if (wasRescheduled) {
+			return;
 		}
+		this.persistence.remove(item.url);
 	}
 
 	markInterrupted(item: QueueItem): void {
 		this.activeUrls.delete(item.url);
 		this.logger.debug(`[Queue] Preserving active item for resume: ${item.url}`);
+	}
+
+	private getDelayKey(item: QueueItem): string {
+		const identity = getCrawlUrlIdentity(item.url);
+		return "error" in identity ? item.domain : identity.originKey;
+	}
+
+	deferPendingByDelayKey(getNextAllowedAt: (delayKey: string) => number): void {
+		for (const item of this.pending) {
+			const nextAllowedAt = getNextAllowedAt(this.getDelayKey(item));
+			if (nextAllowedAt <= (item.availableAt ?? 0)) {
+				continue;
+			}
+
+			item.availableAt = nextAllowedAt;
+			this.persistence.reschedule(item);
+		}
 	}
 
 	clearPending(): void {

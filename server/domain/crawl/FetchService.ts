@@ -5,6 +5,7 @@ import {
 	TIMEOUT_CONSTANTS,
 } from "../../constants.js";
 import type { HttpClient } from "../../plugins/security.js";
+import { isPdfContentType } from "../../processors/contentTypes.js";
 import type { PageRepo } from "../../storage/repos/pageRepo.js";
 import type { QueueItem } from "./CrawlQueue.js";
 import type { DynamicRenderer } from "./DynamicRenderer.js";
@@ -12,7 +13,7 @@ import type { DynamicRenderer } from "./DynamicRenderer.js";
 export type FetchResult =
 	| {
 			type: "success";
-			content: string;
+			content: string | Buffer;
 			statusCode: number;
 			contentType: string;
 			contentLength: number;
@@ -114,9 +115,27 @@ export class FetchService {
 		item: QueueItem,
 		signal?: AbortSignal,
 	): Promise<FetchResult> {
-		const dynamicResult = this.dynamicRenderer.isEnabled()
-			? await this.dynamicRenderer.render(item, signal)
-			: null;
+		let dynamicResult: Awaited<ReturnType<DynamicRenderer["render"]>> = null;
+		if (this.dynamicRenderer.isEnabled()) {
+			try {
+				dynamicResult = await this.dynamicRenderer.render(item, signal);
+			} catch (error) {
+				if (signal?.aborted) {
+					throw signal.reason instanceof Error
+						? signal.reason
+						: new Error("Fetch aborted");
+				}
+				this.logger.warn(
+					`[Fetch] Dynamic render failed for ${item.url}; falling back to static crawl: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
+
+		if (signal?.aborted) {
+			throw signal.reason instanceof Error
+				? signal.reason
+				: new Error("Fetch aborted");
+		}
 
 		if (dynamicResult) {
 			if (signal?.aborted) {
@@ -137,13 +156,20 @@ export class FetchService {
 			const classifiedDynamicStatus = classifyFetchStatus(
 				renderedPage.statusCode,
 				{
-					retryAfterMs: RETRY_CONSTANTS.MAX_DELAY,
+					retryAfterMs: parseRetryAfter(renderedPage.retryAfter ?? null),
 					blockedStatuses: [401, 403],
 					blockedReason: `Access blocked for ${item.url}`,
 				},
 			);
 			if (classifiedDynamicStatus) {
 				return classifiedDynamicStatus;
+			}
+
+			if (renderedPage.statusCode >= 400) {
+				return {
+					type: "permanentFailure",
+					statusCode: renderedPage.statusCode,
+				};
 			}
 
 			const contentLength = Buffer.byteLength(renderedPage.content, "utf8");
@@ -157,7 +183,7 @@ export class FetchService {
 				title: renderedPage.title,
 				description: renderedPage.description,
 				lastModified: renderedPage.lastModified ?? null,
-				etag: null,
+				etag: renderedPage.etag ?? null,
 				xRobotsTag: renderedPage.xRobotsTag ?? null,
 				isDynamic: true,
 			};
@@ -208,23 +234,33 @@ export class FetchService {
 
 		const classifiedStaticStatus = classifyFetchStatus(response.status, {
 			retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
-			blockedStatuses: [403],
+			blockedStatuses: [401, 403],
+			blockedReason: `Access blocked for ${item.url}`,
 		});
 		if (classifiedStaticStatus) {
 			return classifiedStaticStatus;
 		}
 
 		if (!response.ok) {
-			throw new Error(`HTTP error ${response.status} for ${item.url}`);
+			return {
+				type: "permanentFailure",
+				statusCode: response.status,
+			};
 		}
 
-		const content = await response.text();
-		const contentLength = Buffer.byteLength(content, "utf8");
+		const contentType = response.headers.get("content-type") ?? "";
+		const content = isPdfContentType(contentType)
+			? Buffer.from(await response.arrayBuffer())
+			: await response.text();
+		const contentLength =
+			typeof content === "string"
+				? Buffer.byteLength(content, "utf8")
+				: content.byteLength;
 		return {
 			type: "success",
 			content,
 			statusCode: response.status,
-			contentType: response.headers.get("content-type") ?? "",
+			contentType,
 			contentLength,
 			title: "",
 			description: "",

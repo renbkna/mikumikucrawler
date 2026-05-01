@@ -12,8 +12,10 @@ export function createCrawlRuntime(
 ): CrawlRuntime {
 	const runtime = new CrawlRuntime({
 		...deps,
-		onSettled: () => {
+		onInactive: () => {
 			deps.registry.delete(deps.crawlId);
+		},
+		onSettled: () => {
 			deps.eventStream.scheduleCleanup(deps.crawlId);
 			deps.onRuntimeSettled?.(deps.crawlId);
 		},

@@ -9,7 +9,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
 );
 
 INSERT INTO pages_fts(rowid, url, title, description, content)
-SELECT id, url, COALESCE(title, ''), COALESCE(description, ''), COALESCE(content, '')
+SELECT id, url, COALESCE(title, ''), COALESCE(description, ''), COALESCE(content, main_content, '')
 FROM pages
 WHERE id NOT IN (SELECT rowid FROM pages_fts);
 
@@ -22,26 +22,43 @@ BEGIN
     NEW.url,
     COALESCE(NEW.title, ''),
     COALESCE(NEW.description, ''),
-    COALESCE(NEW.content, '')
+    COALESCE(NEW.content, NEW.main_content, '')
   );
 END;
 
 CREATE TRIGGER IF NOT EXISTS pages_ad
 AFTER DELETE ON pages
 BEGIN
-  DELETE FROM pages_fts WHERE rowid = OLD.id;
+  INSERT INTO pages_fts(pages_fts, rowid, url, title, description, content)
+  VALUES (
+    'delete',
+    OLD.id,
+    OLD.url,
+    COALESCE(OLD.title, ''),
+    COALESCE(OLD.description, ''),
+    COALESCE(OLD.content, OLD.main_content, '')
+  );
 END;
 
 CREATE TRIGGER IF NOT EXISTS pages_au
 AFTER UPDATE ON pages
 BEGIN
-  DELETE FROM pages_fts WHERE rowid = OLD.id;
+  INSERT INTO pages_fts(pages_fts, rowid, url, title, description, content)
+  VALUES (
+    'delete',
+    OLD.id,
+    OLD.url,
+    COALESCE(OLD.title, ''),
+    COALESCE(OLD.description, ''),
+    COALESCE(OLD.content, OLD.main_content, '')
+  );
+
   INSERT INTO pages_fts(rowid, url, title, description, content)
   VALUES (
     NEW.id,
     NEW.url,
     COALESCE(NEW.title, ''),
     COALESCE(NEW.description, ''),
-    COALESCE(NEW.content, '')
+    COALESCE(NEW.content, NEW.main_content, '')
   );
 END;

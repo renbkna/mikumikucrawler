@@ -1,3 +1,5 @@
+import { config } from "./config/env.js";
+
 export const CRAWL_QUEUE_CONSTANTS = {
 	DEFAULT_SLEEP_MS: 100,
 	ITEM_PROCESSING_TIMEOUT_MS: 60000,
@@ -17,8 +19,7 @@ export const RETRY_CONSTANTS = {
 
 /** Standard HTTP headers for crawling requests */
 export const FETCH_HEADERS = {
-	"User-Agent":
-		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+	"User-Agent": config.userAgent,
 	Accept:
 		"text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
 	"Accept-Language": "en-US,en;q=0.5",

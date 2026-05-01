@@ -62,6 +62,26 @@ describe("security contract", () => {
 		expect(init.tls?.serverName).toBe("example.com");
 	});
 
+	test("rejects non-http protocols before resolving or fetching", async () => {
+		const resolver: Resolver = {
+			assertPublicHostname: mock(async () => {}),
+			resolveHost: mock(async () => ["93.184.216.34"]),
+		};
+		const fetchMock = mock(async () => new Response("ok"));
+		const httpClient = new PinnedHttpClient(
+			resolver,
+			fetchMock as unknown as typeof fetch,
+		);
+
+		await expect(
+			httpClient.fetch({
+				url: "ftp://example.com/file",
+			}),
+		).rejects.toThrow("Disallowed protocol");
+		expect(resolver.resolveHost).not.toHaveBeenCalled();
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
 	test("re-validates redirect targets before following them", async () => {
 		const resolver: Resolver = {
 			resolveHost: async () => ["93.184.216.34"],
@@ -92,6 +112,93 @@ describe("security contract", () => {
 		).rejects.toThrow("Private or reserved IP address");
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
+
+	test("cross-origin redirects rewrite unsafe methods and strip origin-bound headers", async () => {
+		const resolver: Resolver = {
+			resolveHost: async () => ["93.184.216.34"],
+			assertPublicHostname: async () => {},
+		};
+		const fetchMock = mock(async (url: string) =>
+			url.includes("/start")
+				? new Response(null, {
+						status: 302,
+						headers: { location: "https://other.example/landing" },
+					})
+				: new Response("ok"),
+		);
+		const httpClient = new PinnedHttpClient(
+			resolver,
+			fetchMock as unknown as typeof fetch,
+		);
+
+		await httpClient.fetch({
+			url: "https://example.com/start",
+			method: "POST",
+			body: "secret-body",
+			headers: {
+				Authorization: "Bearer secret",
+				Cookie: "session=secret",
+				"Content-Type": "application/json",
+				"X-Public": "kept",
+			},
+		});
+
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		const [, secondInit] = fetchMock.mock.calls[1] as unknown as [
+			string,
+			RequestInit,
+		];
+		const secondHeaders = secondInit.headers as Record<string, string>;
+		expect(secondInit.method).toBe("GET");
+		expect(secondInit.body).toBeUndefined();
+		expect(secondHeaders.Authorization).toBeUndefined();
+		expect(secondHeaders.Cookie).toBeUndefined();
+		expect(secondHeaders["Content-Type"]).toBeUndefined();
+		expect(secondHeaders["X-Public"]).toBe("kept");
+		expect(secondHeaders.Host).toBe("other.example");
+	});
+
+	for (const [status, expectedMethod, expectedBody] of [
+		[301, "GET", undefined],
+		[302, "GET", undefined],
+		[303, "GET", undefined],
+		[307, "POST", "payload"],
+		[308, "POST", "payload"],
+	] as const) {
+		test(`applies browser redirect method semantics for ${status}`, async () => {
+			const resolver: Resolver = {
+				resolveHost: async () => ["93.184.216.34"],
+				assertPublicHostname: async () => {},
+			};
+			const fetchMock = mock(async (url: string) =>
+				url.endsWith("/start")
+					? new Response(null, {
+							status,
+							headers: { location: "/next" },
+						})
+					: new Response("ok"),
+			);
+			const httpClient = new PinnedHttpClient(
+				resolver,
+				fetchMock as unknown as typeof fetch,
+			);
+
+			await httpClient.fetch({
+				url: "https://example.com/start",
+				method: "POST",
+				body: "payload",
+				headers: { "Content-Type": "text/plain" },
+			});
+
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+			const [, secondInit] = fetchMock.mock.calls[1] as unknown as [
+				string,
+				RequestInit,
+			];
+			expect(secondInit.method).toBe(expectedMethod);
+			expect(secondInit.body).toBe(expectedBody);
+		});
+	}
 
 	test("fails fast on redirect loops instead of following forever", async () => {
 		const resolver: Resolver = {

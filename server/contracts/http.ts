@@ -1,5 +1,7 @@
 import { t } from "elysia";
 
+export const SSE_LAST_EVENT_ID_PATTERN = "^(0|[1-9]\\d*)$";
+
 /**
  * Shared HTTP boundary contract:
  * - inputs: repeated API-edge primitives like page ids, list limits, and SSE resume headers
@@ -17,6 +19,17 @@ export const BoundedListLimitSchema = t.Numeric({
 	multipleOf: 1,
 });
 
+export function optionalBoundedListLimitSchema(defaultValue: number) {
+	return t.Optional(
+		t.Numeric({
+			minimum: 1,
+			maximum: 100,
+			multipleOf: 1,
+			default: defaultValue,
+		}),
+	);
+}
+
 export const OptionalBoundedListLimitSchema = t.Optional(
 	BoundedListLimitSchema,
 );
@@ -29,7 +42,7 @@ export const SseHeadersSchema = t.Object(
 	{
 		"last-event-id": t.Optional(
 			t.String({
-				pattern: "^(0|[1-9]\\d*)$",
+				pattern: SSE_LAST_EVENT_ID_PATTERN,
 			}),
 		),
 	},

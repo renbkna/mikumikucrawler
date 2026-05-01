@@ -1,27 +1,28 @@
 import type { CrawlOptions } from "../../../shared/contracts/crawl.js";
-import type { CrawlPagePayload } from "../../../shared/contracts/events.js";
 import { ContentProcessor } from "../../processors/ContentProcessor.js";
-import type { ExtractedLink } from "../../types.js";
-import type { PageRepo, SavePageInput } from "../../storage/repos/pageRepo.js";
+import { isHtmlLikeContentType } from "../../processors/contentTypes.js";
+import type { ExtractedLink } from "../../../shared/types.js";
+import type { PageRepo } from "../../storage/repos/pageRepo.js";
+import { CrawlAdmissionPolicy } from "./CrawlAdmissionPolicy.js";
 import type { CrawlQueue, QueueItem } from "./CrawlQueue.js";
 import type { CrawlState, TerminalOutcome } from "./CrawlState.js";
 import type { FetchService } from "./FetchService.js";
-import { isSoft404, mergeRobotsDirectives } from "./PageDecisionPolicy.js";
+import type { BuiltPageResult } from "./PageResultBuilder.js";
+import { PageResultBuilder } from "./PageResultBuilder.js";
+import { isClientErrorShell, isSoft404 } from "./PageDecisionPolicy.js";
 import type { RobotsService } from "./RobotsService.js";
-import { filterDiscoveredLinks } from "./UrlPolicy.js";
+import { getCrawlUrlIdentity } from "./UrlPolicy.js";
 
 interface EventSink {
 	log(message: string): void;
-	page(payload: CrawlPagePayload): void;
 }
 
 export interface PageProcessResult {
 	terminalOutcome?: TerminalOutcome;
+	domainBudgetCharged?: boolean;
 	rescheduled?: boolean;
-	page?: {
-		saveInput: SavePageInput;
-		eventPayload: CrawlPagePayload;
-	};
+	aborted?: boolean;
+	page?: Pick<BuiltPageResult, "saveInput" | "eventPayload">;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -36,8 +37,15 @@ function throwIfAborted(signal?: AbortSignal): void {
 	throw new Error("Page processing aborted");
 }
 
+function getDelayKey(item: QueueItem): string {
+	const identity = getCrawlUrlIdentity(item.url);
+	return "error" in identity ? item.domain : identity.originKey;
+}
+
 export class PagePipeline {
 	private readonly processor: ContentProcessor;
+	private readonly admissionPolicy: CrawlAdmissionPolicy;
+	private readonly resultBuilder: PageResultBuilder;
 
 	constructor(
 		private readonly crawlId: string,
@@ -46,11 +54,18 @@ export class PagePipeline {
 		private readonly queue: CrawlQueue,
 		private readonly pageRepo: PageRepo,
 		private readonly fetchService: FetchService,
-		private readonly robotsService: RobotsService,
+		robotsService: RobotsService,
 		private readonly eventSink: EventSink,
 		logger: import("../../config/logging.js").Logger,
 	) {
 		this.processor = new ContentProcessor(logger);
+		this.resultBuilder = new PageResultBuilder(crawlId, options);
+		this.admissionPolicy = new CrawlAdmissionPolicy(
+			options,
+			state,
+			queue,
+			robotsService,
+		);
 	}
 
 	private async enqueueLinks(
@@ -59,34 +74,7 @@ export class PagePipeline {
 		signal?: AbortSignal,
 	): Promise<void> {
 		throwIfAborted(signal);
-		if (item.depth >= this.options.crawlDepth) {
-			return;
-		}
-
-		for (const link of links) {
-			throwIfAborted(signal);
-			if (!link.url || link.nofollow) {
-				continue;
-			}
-
-			if (this.options.respectRobots) {
-				const linkPolicy = await this.robotsService.evaluate(link.url);
-				if (!linkPolicy.allowed) {
-					continue;
-				}
-
-				if (linkPolicy.crawlDelayMs !== undefined) {
-					this.state.setDomainDelay(linkPolicy.domain, linkPolicy.crawlDelayMs);
-				}
-			}
-
-			this.queue.enqueue({
-				url: link.url,
-				depth: item.depth + 1,
-				retries: 0,
-				parentUrl: item.url,
-			});
-		}
+		await this.admissionPolicy.admitDiscoveredLinks(item, links, signal);
 	}
 
 	private recordTerminal(
@@ -100,6 +88,21 @@ export class PagePipeline {
 			this.state.recordTerminal(url, outcome);
 		}
 		return { terminalOutcome: outcome };
+	}
+
+	private recordFetchedTerminal(
+		item: QueueItem,
+		outcome: TerminalOutcome,
+		options: { dataKb?: number; mediaFiles?: number } = {},
+	): PageProcessResult {
+		const recorded =
+			Object.keys(options).length > 0
+				? this.state.recordTerminal(item.url, outcome, options)
+				: this.state.recordTerminal(item.url, outcome);
+		if (recorded) {
+			this.state.recordDomainPage(item.domain);
+		}
+		return { terminalOutcome: outcome, domainBudgetCharged: recorded };
 	}
 
 	async process(
@@ -130,24 +133,26 @@ export class PagePipeline {
 		);
 		throwIfAborted(signal);
 		if (fetchResult.type === "unchanged") {
-			const result = this.recordTerminal(item.url, "success");
 			const cachedLinks = this.pageRepo.getLinksByPageUrl(
 				this.crawlId,
 				item.url,
 			);
-			await this.enqueueLinks(
-				item,
-				cachedLinks.map((url) => ({ url, isInternal: true })),
-				signal,
-			);
+			const discoveredLinkCount =
+				this.pageRepo.getDiscoveredLinkCountByPageUrl?.(
+					this.crawlId,
+					item.url,
+				) ?? cachedLinks.length;
+			await this.enqueueLinks(item, cachedLinks, signal);
 			throwIfAborted(signal);
+			this.state.recordDiscoveredLinks(discoveredLinkCount);
+			const result = this.recordFetchedTerminal(item, "success");
 			this.eventSink.log(`[Crawler] Unchanged: ${item.url} (304)`);
 			return result;
 		}
 
 		if (fetchResult.type === "rateLimited") {
 			this.state.adaptDomainDelay(
-				item.domain,
+				getDelayKey(item),
 				fetchResult.statusCode,
 				fetchResult.retryAfterMs,
 			);
@@ -163,7 +168,7 @@ export class PagePipeline {
 				return { rescheduled: true };
 			}
 
-			const result = this.recordTerminal(item.url, "failure");
+			const result = this.recordFetchedTerminal(item, "failure");
 			this.eventSink.log(
 				`[Crawler] Rate limited terminal failure: ${item.url}`,
 			);
@@ -174,8 +179,8 @@ export class PagePipeline {
 			fetchResult.type === "permanentFailure" ||
 			fetchResult.type === "blocked"
 		) {
-			this.state.adaptDomainDelay(item.domain, fetchResult.statusCode);
-			const result = this.recordTerminal(item.url, "failure");
+			this.state.adaptDomainDelay(getDelayKey(item), fetchResult.statusCode);
+			const result = this.recordFetchedTerminal(item, "failure");
 			if (fetchResult.type === "blocked" && fetchResult.reason) {
 				this.eventSink.log(`[Crawler] ${fetchResult.reason}`);
 			} else {
@@ -193,106 +198,67 @@ export class PagePipeline {
 		);
 		throwIfAborted(signal);
 
-		const resolvedTitle =
-			fetchResult.title || processedContent.metadata?.title || "";
-		const resolvedDescription =
-			fetchResult.description || processedContent.metadata?.description || "";
-
-		const filteredLinks =
-			fetchResult.contentType.includes("text/html") &&
+		const crawlLinks =
+			isHtmlLikeContentType(fetchResult.contentType) &&
 			processedContent.links?.length
-				? filterDiscoveredLinks(processedContent.links, this.options, item.url)
+				? this.admissionPolicy
+						.normalizeDiscoveredLinks(item, processedContent.links)
+						.map((link) => link.link)
 				: [];
-
-		const retainedMedia =
-			this.options.saveMedia &&
-			(this.options.crawlMethod === "media" ||
-				this.options.crawlMethod === "full")
-				? (processedContent.media ?? [])
-				: [];
-		const mediaCount = retainedMedia.length;
-
-		const robotsDirectives = mergeRobotsDirectives(
-			processedContent.metadata?.robots,
-			fetchResult.xRobotsTag,
+		const pageResult = this.resultBuilder.build(
+			item,
+			fetchResult,
+			processedContent,
+			crawlLinks,
 		);
-		const mainContent = processedContent.extractedData?.mainContent ?? "";
 
-		if (robotsDirectives.noindex) {
-			const result = this.recordTerminal(item.url, "skip");
-			this.eventSink.log(`[Robots] noindex: ${item.url}`);
-			if (!robotsDirectives.nofollow) {
-				await this.enqueueLinks(item, filteredLinks, signal);
-			}
+		if (isClientErrorShell(pageResult.resolvedTitle, pageResult.mainContent)) {
+			const result = this.recordFetchedTerminal(item, "failure");
+			this.eventSink.log(`[Crawler] Client error shell detected: ${item.url}`);
 			return result;
 		}
 
-		if (isSoft404(resolvedTitle, mainContent, fetchResult.contentLength)) {
-			const result = this.recordTerminal(item.url, "skip");
+		if (pageResult.robotsDirectives.noindex) {
+			this.eventSink.log(`[Robots] noindex: ${item.url}`);
+			if (!pageResult.robotsDirectives.nofollow) {
+				await this.enqueueLinks(item, crawlLinks, signal);
+				throwIfAborted(signal);
+			}
+			this.state.recordDiscoveredLinks(processedContent.links?.length ?? 0);
+			const result = this.recordFetchedTerminal(item, "skip");
+			return result;
+		}
+
+		if (
+			isSoft404(
+				pageResult.resolvedTitle,
+				pageResult.mainContent,
+				fetchResult.contentLength,
+			)
+		) {
+			const result = this.recordFetchedTerminal(item, "skip");
 			this.eventSink.log(`[Crawler] Soft 404 skipped: ${item.url}`);
 			return result;
 		}
 
 		throwIfAborted(signal);
-		const pageSaveInput: SavePageInput = {
-			crawlId: this.crawlId,
-			url: item.url,
-			domain: item.domain,
-			contentType: fetchResult.contentType,
-			statusCode: fetchResult.statusCode,
-			contentLength: fetchResult.contentLength,
-			title: resolvedTitle,
-			description: resolvedDescription,
-			content: this.options.contentOnly ? null : fetchResult.content,
-			isDynamic: fetchResult.isDynamic,
-			lastModified: fetchResult.lastModified,
-			etag: fetchResult.etag,
-			processedContent: {
-				...processedContent,
-				media: retainedMedia,
-			},
-			links: filteredLinks,
-		};
 
-		if (!robotsDirectives.nofollow) {
-			await this.enqueueLinks(item, filteredLinks, signal);
+		if (!pageResult.robotsDirectives.nofollow) {
+			await this.enqueueLinks(item, crawlLinks, signal);
 		}
 
 		this.state.recordDiscoveredLinks(processedContent.links?.length ?? 0);
-		this.state.recordDomainPage(item.domain);
-		const result = this.recordTerminal(item.url, "success", {
-			dataKb: Math.floor(fetchResult.contentLength / 1024),
-			mediaFiles: mediaCount,
+		const result = this.recordFetchedTerminal(item, "success", {
+			dataKb: pageResult.dataSizeKb,
+			mediaFiles: pageResult.mediaCount,
 		});
 
 		this.eventSink.log(`[Crawler] Crawled ${item.url}`);
 		return {
 			...result,
 			page: {
-				saveInput: pageSaveInput,
-				eventPayload: {
-					id: null,
-					url: item.url,
-					title: resolvedTitle,
-					description: resolvedDescription,
-					contentType: fetchResult.contentType,
-					domain: item.domain,
-					processedData: {
-						extractedData: {
-							mainContent: processedContent.extractedData?.mainContent,
-							jsonLd: processedContent.extractedData?.jsonLd ?? [],
-							microdata: processedContent.extractedData?.microdata,
-							openGraph: processedContent.extractedData?.openGraph,
-							twitterCards: processedContent.extractedData?.twitterCards,
-							schema: processedContent.extractedData?.schema,
-						},
-						metadata: processedContent.metadata,
-						analysis: processedContent.analysis,
-						media: retainedMedia,
-						qualityScore: processedContent.analysis?.quality?.score ?? 0,
-						language: processedContent.analysis?.language ?? "unknown",
-					},
-				},
+				saveInput: pageResult.saveInput,
+				eventPayload: pageResult.eventPayload,
 			},
 		};
 	}

@@ -7,12 +7,12 @@ import {
 	NativeRobotsParser,
 	type RobotsResult,
 } from "../../utils/robotsParser.js";
-import { getCrawlUrlIdentity } from "./UrlPolicy.js";
+import { type CrawlUrlIdentity, getCrawlUrlIdentity } from "./UrlPolicy.js";
 
 export interface RobotsPolicy {
 	allowed: boolean;
 	crawlDelayMs?: number;
-	domain: string;
+	delayKey: string;
 }
 
 export class RobotsService {
@@ -28,17 +28,25 @@ export class RobotsService {
 
 	private async fetchRulesForOrigin(
 		originKey: string,
+		signal?: AbortSignal,
 	): Promise<RobotsResult | null> {
 		const cached = this.cache.get(originKey);
 		if (cached !== undefined) {
 			return cached;
 		}
 
+		const timeoutSignal = AbortSignal.timeout(
+			REQUEST_CONSTANTS.ROBOTS_FETCH_TIMEOUT_MS,
+		);
+		const fetchSignal = signal
+			? AbortSignal.any([signal, timeoutSignal])
+			: timeoutSignal;
+
 		try {
 			const response = await this.httpClient.fetch({
 				url: `${originKey}/robots.txt`,
 				headers: { "User-Agent": config.userAgent },
-				signal: AbortSignal.timeout(REQUEST_CONSTANTS.ROBOTS_FETCH_TIMEOUT_MS),
+				signal: fetchSignal,
 			});
 
 			if (response.ok) {
@@ -47,28 +55,52 @@ export class RobotsService {
 				this.cache.set(originKey, rules);
 				return rules;
 			}
+
+			if (
+				response.status === 401 ||
+				response.status === 403 ||
+				response.status === 404 ||
+				response.status === 410
+			) {
+				this.cache.set(originKey, null);
+				return null;
+			}
 		} catch (error) {
+			if (signal?.aborted) {
+				throw signal.reason instanceof Error
+					? signal.reason
+					: new Error("Robots evaluation aborted");
+			}
+
 			this.logger.debug(
 				`[Robots] Failed to fetch robots.txt for ${originKey}: ${error instanceof Error ? error.message : String(error)}`,
 			);
 		}
 
-		this.cache.set(originKey, null);
 		return null;
 	}
 
-	async evaluate(url: string): Promise<RobotsPolicy> {
+	async evaluate(url: string, signal?: AbortSignal): Promise<RobotsPolicy> {
 		const identity = getCrawlUrlIdentity(url);
 		if ("error" in identity) {
 			throw new Error(identity.error);
 		}
 
-		const rules = await this.fetchRulesForOrigin(identity.robotsKey);
+		return this.evaluateIdentity(identity, signal);
+	}
+
+	async evaluateIdentity(
+		identity: CrawlUrlIdentity,
+		signal?: AbortSignal,
+	): Promise<RobotsPolicy> {
+		const rules = await this.fetchRulesForOrigin(identity.robotsKey, signal);
 		const crawlDelaySeconds = rules?.getCrawlDelay(config.userAgent);
 
 		return {
-			domain: identity.domainBudgetKey,
-			allowed: rules ? rules.isAllowed(url, config.userAgent) : true,
+			delayKey: identity.originKey,
+			allowed: rules
+				? rules.isAllowed(identity.robotsMatchUrl, config.userAgent)
+				: true,
 			crawlDelayMs:
 				crawlDelaySeconds === undefined ? undefined : crawlDelaySeconds * 1000,
 		};

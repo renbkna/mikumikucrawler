@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
-import type { ExtractedLink, ProcessedContent } from "../../types.js";
+import type { ExtractedLink } from "../../../shared/types.js";
+import type { ProcessedContent } from "../../types.js";
 
 export interface SavePageInput {
 	crawlId: string;
@@ -29,6 +30,27 @@ export interface ExportPageRow {
 	crawledAt: string;
 }
 
+export const EXPORT_PAGE_FIELDS = [
+	"id",
+	"url",
+	"title",
+	"description",
+	"contentType",
+	"domain",
+	"content",
+	"crawledAt",
+] as const satisfies readonly (keyof ExportPageRow)[];
+
+export const CSV_EXPORT_PAGE_FIELDS = [
+	"id",
+	"url",
+	"title",
+	"description",
+	"contentType",
+	"domain",
+	"crawledAt",
+] as const satisfies readonly (keyof ExportPageRow)[];
+
 export type PageRepo = ReturnType<typeof createPageRepo>;
 
 export function createPageWriter(db: Database) {
@@ -55,8 +77,9 @@ export function createPageWriter(db: Database) {
 			structured_data,
 			media_count,
 			internal_links_count,
-			external_links_count
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			external_links_count,
+			discovered_links_count
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(crawl_id, url) DO UPDATE SET
 			domain = excluded.domain,
 			content_type = excluded.content_type,
@@ -78,13 +101,14 @@ export function createPageWriter(db: Database) {
 			media_count = excluded.media_count,
 			internal_links_count = excluded.internal_links_count,
 			external_links_count = excluded.external_links_count,
+			discovered_links_count = excluded.discovered_links_count,
 			crawled_at = CURRENT_TIMESTAMP
 		RETURNING id
 	`);
 
 	const clearLinks = db.prepare("DELETE FROM page_links WHERE page_id = ?");
 	const insertLink = db.prepare(
-		"INSERT OR IGNORE INTO page_links (page_id, target_url, text) VALUES (?, ?, ?)",
+		"INSERT OR IGNORE INTO page_links (page_id, target_url, text, nofollow) VALUES (?, ?, ?, ?)",
 	);
 
 	function savePage(input: SavePageInput): number {
@@ -111,11 +135,17 @@ export function createPageWriter(db: Database) {
 			input.processedContent.media?.length ?? 0,
 			input.links.filter((link) => link.isInternal).length,
 			input.links.filter((link) => !link.isInternal).length,
+			input.processedContent.links?.length ?? input.links.length,
 		) as { id: number };
 
 		clearLinks.run(pageRow.id);
 		for (const link of input.links) {
-			insertLink.run(pageRow.id, link.url, link.text ?? "");
+			insertLink.run(
+				pageRow.id,
+				link.url,
+				link.text ?? "",
+				link.nofollow ? 1 : 0,
+			);
 		}
 
 		return pageRow.id;
@@ -167,25 +197,53 @@ export function createPageRepo(db: Database) {
 			if (row === null) return undefined;
 			return row.content;
 		},
-		getLinksByPageUrl(crawlId: string, pageUrl: string): string[] {
+		getLinksByPageUrl(crawlId: string, pageUrl: string): ExtractedLink[] {
 			const rows = db
 				.query(
 					`
-					SELECT pl.target_url
+					SELECT pl.target_url, pl.text, pl.nofollow
 					FROM page_links pl
 					INNER JOIN pages p ON p.id = pl.page_id
 					WHERE p.crawl_id = ? AND p.url = ?
 				`,
 				)
-				.all(crawlId, pageUrl) as Array<{ target_url: string }>;
-			return rows.map((row) => row.target_url);
+				.all(crawlId, pageUrl) as Array<{
+				target_url: string;
+				text: string;
+				nofollow: number;
+			}>;
+			return rows.map((row) => ({
+				url: row.target_url,
+				text: row.text,
+				nofollow: row.nofollow === 1,
+			}));
+		},
+		getDiscoveredLinkCountByPageUrl(
+			crawlId: string,
+			pageUrl: string,
+		): number | null {
+			const row = db
+				.query(
+					`
+					SELECT discovered_links_count
+					FROM pages
+					WHERE crawl_id = ? AND url = ?
+					LIMIT 1
+				`,
+				)
+				.get(crawlId, pageUrl) as {
+				discovered_links_count: number;
+			} | null;
+			return row?.discovered_links_count ?? null;
 		},
 		listForExport(crawlId: string): ExportPageRow[] {
 			return db
 				.query(
 					`
 					SELECT id, url, title, description,
-						content_type AS contentType, domain, content,
+						content_type AS contentType,
+						domain,
+						COALESCE(NULLIF(main_content, ''), content) AS content,
 						crawled_at AS crawledAt
 					FROM pages
 					WHERE crawl_id = ?

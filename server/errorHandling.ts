@@ -4,9 +4,16 @@ import type { LoggerLike } from "./types.js";
 import { getErrorMessage } from "./utils/helpers.js";
 
 function readNumericStatus(value: unknown): number | null {
-	return typeof value === "number" && value >= 400 && value < 600
-		? value
-		: null;
+	if (typeof value === "number") {
+		return value >= 400 && value < 600 ? value : null;
+	}
+
+	if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+		const parsed = Number.parseInt(value, 10);
+		return parsed >= 400 && parsed < 600 ? parsed : null;
+	}
+
+	return null;
 }
 
 function readStringField(
@@ -125,7 +132,7 @@ export function resolveErrorStatus(
 
 function buildPublicErrorMessage(status: number, error: unknown): string {
 	if (status >= 500) {
-		return error instanceof Error ? error.message : "Internal Server Error";
+		return "Internal Server Error";
 	}
 
 	return (

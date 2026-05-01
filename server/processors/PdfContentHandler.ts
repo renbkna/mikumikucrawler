@@ -4,6 +4,7 @@ import type { ProcessedContent } from "../types.js";
 import { getErrorMessage } from "../utils/helpers.js";
 import { withTimeout } from "../utils/timeout.js";
 import { analyzeContent } from "./analysisUtils.js";
+import { applyProcessingErrorDefaults } from "./processingDefaults.js";
 
 async function getPDFJS() {
 	const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -124,7 +125,7 @@ export class PdfContentHandler {
 				message: getErrorMessage(err),
 				timestamp: new Date().toISOString(),
 			});
-			result.extractedData = { mainContent: "" };
+			applyProcessingErrorDefaults(result, "PDF processing failed");
 		}
 	}
 }

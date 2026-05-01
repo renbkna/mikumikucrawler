@@ -132,6 +132,104 @@ describe("extractStructuredData CONTRACT", () => {
 		expect(data.jsonLd[0]).toHaveProperty("headline", "Test Article");
 	});
 
+	test("flattens top-level JSON-LD arrays into public record entries", () => {
+		const html = `
+			<script type="application/ld+json">
+			[
+				{
+					"@context": "https://schema.org",
+					"@type": "Article",
+					"headline": "Array Article"
+				},
+				{
+					"@context": "https://schema.org",
+					"@type": ["NewsArticle", "ReportageNewsArticle"],
+					"headline": "Nested Type Article"
+				}
+			]
+			</script>
+		`;
+		const $ = cheerio.load(html);
+		const data = extractStructuredData($);
+
+		expect(data.jsonLd).toHaveLength(2);
+		expect(data.jsonLd[0]).toHaveProperty("headline", "Array Article");
+		expect(data.jsonLd[1]).toHaveProperty("headline", "Nested Type Article");
+		expect(data.schema.Article).toEqual(data.jsonLd[0]);
+		expect(data.schema.NewsArticle).toEqual(data.jsonLd[1]);
+		expect(data.schema.ReportageNewsArticle).toEqual(data.jsonLd[1]);
+	});
+
+	test("maps schema JSON-LD by declared type", () => {
+		const html = `
+				<script type="application/ld+json">
+				{
+					"@context": "https://schema.org",
+				"@type": "Article",
+				"headline": "Schema Article"
+			}
+			</script>
+		`;
+		const $ = cheerio.load(html);
+		const data = extractStructuredData($);
+
+		expect(data.schema.Article).toEqual({
+			"@context": "https://schema.org",
+			"@type": "Article",
+			headline: "Schema Article",
+		});
+	});
+
+	test("indexes multi-type JSON-LD by each declared schema type", () => {
+		const html = `
+			<script type="application/ld+json">
+			{
+				"@context": "https://schema.org",
+				"@type": ["Article", "BlogPosting"],
+				"headline": "Multi typed post"
+			}
+			</script>
+		`;
+		const $ = cheerio.load(html);
+		const data = extractStructuredData($);
+
+		expect(data.schema.Article).toEqual({
+			"@context": "https://schema.org",
+			"@type": ["Article", "BlogPosting"],
+			headline: "Multi typed post",
+		});
+		expect(data.schema.BlogPosting).toEqual(data.schema.Article);
+		expect(data.schema["Article,BlogPosting"]).toBeUndefined();
+	});
+
+	test("preserves JSON-LD and microdata when schema type keys collide", () => {
+		const html = `
+				<script type="application/ld+json">
+				{
+					"@context": "https://schema.org",
+					"@type": "https://schema.org/Article",
+					"headline": "JSON-LD Article"
+				}
+				</script>
+				<div itemscope itemtype="https://schema.org/Article">
+					<span itemprop="name">Microdata Article</span>
+				</div>
+			`;
+		const $ = cheerio.load(html);
+		const data = extractStructuredData($);
+
+		expect(data.schema["https://schema.org/Article"]).toEqual([
+			{
+				"@context": "https://schema.org",
+				"@type": "https://schema.org/Article",
+				headline: "JSON-LD Article",
+			},
+			{
+				name: "Microdata Article",
+			},
+		]);
+	});
+
 	test("handles invalid JSON-LD gracefully", () => {
 		const html = `
 			<script type="application/ld+json">{ invalid json }</script>
@@ -192,6 +290,34 @@ describe("extractStructuredData CONTRACT", () => {
 		expect(personItems.length).toBe(1);
 		expect(personItems[0].name).toBe("John Doe");
 		expect(personItems[0].jobTitle).toBe("Developer");
+		expect(data.schema["https://schema.org/Person"]).toEqual([
+			{
+				name: "John Doe",
+				jobTitle: "Developer",
+			},
+		]);
+	});
+
+	test("preserves nested microdata scopes instead of flattening child properties", () => {
+		const html = `
+			<div itemscope itemtype="https://schema.org/Person">
+				<span itemprop="name">Ada Lovelace</span>
+				<div itemprop="address" itemscope itemtype="https://schema.org/PostalAddress">
+					<span itemprop="streetAddress">12 Analytical Engine Way</span>
+				</div>
+			</div>
+		`;
+		const $ = cheerio.load(html);
+		const data = extractStructuredData($);
+
+		expect(data.microdata["https://schema.org/Person"]).toEqual([
+			{
+				name: "Ada Lovelace",
+				address: {
+					streetAddress: "12 Analytical Engine Way",
+				},
+			},
+		]);
 	});
 
 	test("handles empty HTML", () => {
@@ -231,6 +357,50 @@ describe("extractMainContent CONTRACT", () => {
 		const content = extractMainContent($);
 
 		expect(content).toContain("Article content");
+	});
+
+	test("prefers later substantial main content over a short teaser article", () => {
+		const html = `
+			<html>
+				<body>
+					<article>Mini teaser.</article>
+					<main>
+						<h1>Actual crawler release notes</h1>
+						<p>This is the primary page body with enough detail to drive summaries, search snippets, quality scoring, and persistence decisions instead of saving the preceding teaser card.</p>
+					</main>
+				</body>
+			</html>
+		`;
+		const $ = cheerio.load(html);
+		const content = extractMainContent($);
+
+		expect(content).toContain("Actual crawler release notes");
+		expect(content).toContain("primary page body");
+		expect(content).not.toBe("Mini teaser.");
+	});
+
+	test("uses cleaned body when a short broad selector precedes unwrapped real content", () => {
+		const html = `
+			<html>
+				<body>
+					<nav>Navigation Login Register</nav>
+					<article>Card teaser.</article>
+					<section>
+						<h1>Unwrapped page content</h1>
+						<p>The real article body is not wrapped in a preferred content selector, but it is still the content that should feed saved main content and page quality checks.</p>
+					</section>
+					<footer>Footer boilerplate</footer>
+				</body>
+			</html>
+		`;
+		const $ = cheerio.load(html);
+		const content = extractMainContent($);
+
+		expect(content).toContain("Unwrapped page content");
+		expect(content).toContain("real article body");
+		expect(content).not.toContain("Navigation");
+		expect(content).not.toContain("Footer boilerplate");
+		expect(content).not.toBe("Card teaser.");
 	});
 
 	test("falls back to body when no main/article", () => {
@@ -305,7 +475,10 @@ describe("extractMediaInfo CONTRACT", () => {
 		const media = extractMediaInfo($, "https://example.com");
 
 		// INVARIANT: Picture sources extracted
-		expect(media.length).toBeGreaterThanOrEqual(1);
+		expect(media).toContainEqual({
+			type: "image",
+			url: "https://example.com/image-large.jpg",
+		});
 	});
 
 	test("extracts video sources", () => {
@@ -325,6 +498,17 @@ describe("extractMediaInfo CONTRACT", () => {
 		}
 	});
 
+	test("extracts direct video src attributes", () => {
+		const html = '<video src="/direct-video.mp4"></video>';
+		const $ = cheerio.load(html);
+		const media = extractMediaInfo($, "https://example.com");
+
+		expect(media).toContainEqual({
+			type: "video",
+			url: "https://example.com/direct-video.mp4",
+		});
+	});
+
 	test("extracts audio sources", () => {
 		const html = `
 			<audio>
@@ -340,6 +524,32 @@ describe("extractMediaInfo CONTRACT", () => {
 		if (audio) {
 			expect(audio.url).toBe("https://example.com/audio.mp3");
 		}
+	});
+
+	test("extracts direct audio src attributes", () => {
+		const html = '<audio src="/direct-audio.mp3"></audio>';
+		const $ = cheerio.load(html);
+		const media = extractMediaInfo($, "https://example.com");
+
+		expect(media).toContainEqual({
+			type: "audio",
+			url: "https://example.com/direct-audio.mp3",
+		});
+	});
+
+	test("prefers concise semantic main content over noisy body fallback", () => {
+		const html = `
+			<html>
+				<body>
+					<nav>Navigation Login Register</nav>
+					<main>Short launch update.</main>
+					<footer>Footer boilerplate</footer>
+				</body>
+			</html>
+		`;
+		const $ = cheerio.load(html);
+
+		expect(extractMainContent($)).toBe("Short launch update.");
 	});
 
 	test("resolves relative URLs to absolute", () => {
@@ -388,6 +598,37 @@ describe("extractMediaInfo CONTRACT", () => {
 		expect(media[0].width).toBe("800");
 		expect(media[0].height).toBe("600");
 	});
+
+	test("deduplicates media by normalized type and URL", () => {
+		const html = `
+			<img src="/image.jpg?b=2&a=1#first" alt="First">
+			<img src="https://example.com/image.jpg?a=1&b=2#second" alt="Second">
+			<video src="/clip.mp4"></video>
+			<video><source src="/clip.mp4"></video>
+		`;
+		const $ = cheerio.load(html);
+		const media = extractMediaInfo($, "https://example.com");
+
+		expect(media.map((entry) => `${entry.type}:${entry.url}`)).toEqual([
+			"image:https://example.com/image.jpg?a=1&b=2",
+			"video:https://example.com/clip.mp4",
+		]);
+	});
+
+	test("resolves media through document base href like links", () => {
+		const html = `
+			<base href="https://cdn.example.net/assets/">
+			<img src="image.jpg" alt="From base">
+			<video src="clip.mp4"></video>
+		`;
+		const $ = cheerio.load(html);
+		const media = extractMediaInfo($, "https://example.com/start");
+
+		expect(media.map((entry) => entry.url)).toEqual([
+			"https://cdn.example.net/assets/image.jpg",
+			"https://cdn.example.net/assets/clip.mp4",
+		]);
+	});
 });
 
 describe("processLinks CONTRACT", () => {
@@ -423,6 +664,24 @@ describe("processLinks CONTRACT", () => {
 		const links = processLinks($, "https://example.com");
 
 		// INVARIANT: External links marked
+		expect(links[0].isInternal).toBe(false);
+	});
+
+	test("classifies links resolved through external base href as external to the page", () => {
+		const html =
+			'<base href="https://cdn.example.net/assets/"><a href="/page">Page</a>';
+		const $ = cheerio.load(html);
+		const links = processLinks($, "https://example.com/start");
+
+		expect(links[0].url).toBe("https://cdn.example.net/page");
+		expect(links[0].isInternal).toBe(false);
+	});
+
+	test("classifies same-host different-port links as external to the page origin", () => {
+		const html = '<a href="https://example.com:8443/page">Port</a>';
+		const $ = cheerio.load(html);
+		const links = processLinks($, "https://example.com/start");
+
 		expect(links[0].isInternal).toBe(false);
 	});
 
@@ -535,6 +794,48 @@ describe("processLinks CONTRACT", () => {
 
 		// INVARIANT: Malformed URLs skipped, no crash
 		expect(links.length).toBe(0);
+	});
+
+	test("deduplicates links by normalized URL", () => {
+		const html = `
+				<a href="/page?b=2&a=1">One</a>
+				<a href="https://example.com/page?a=1&b=2#fragment">Two</a>
+			`;
+		const $ = cheerio.load(html);
+		const links = processLinks($, "https://example.com");
+
+		expect(links.map((link) => link.url)).toEqual([
+			"https://example.com/page?a=1&b=2",
+		]);
+	});
+
+	test("keeps duplicate link crawlable when any occurrence is followable", () => {
+		const html = `
+					<a href="/page" rel="nofollow"></a>
+					<a href="https://example.com/page#details" title="Canonical page">Followable page</a>
+			`;
+		const $ = cheerio.load(html);
+		const links = processLinks($, "https://example.com/start");
+
+		expect(links).toHaveLength(1);
+		expect(links[0]).toMatchObject({
+			url: "https://example.com/page",
+			text: "Followable page",
+			title: "Canonical page",
+			nofollow: false,
+		});
+	});
+
+	test("keeps duplicate link nofollow when all occurrences are nofollow", () => {
+		const html = `
+				<a href="/page" rel="nofollow">First</a>
+				<a href="https://example.com/page#details" rel="ugc">Second</a>
+			`;
+		const $ = cheerio.load(html);
+		const links = processLinks($, "https://example.com/start");
+
+		expect(links).toHaveLength(1);
+		expect(links[0].nofollow).toBe(true);
 	});
 });
 
@@ -666,5 +967,35 @@ describe("extractMetadata CONTRACT", () => {
 
 		// INVARIANT: Whitespace trimmed
 		expect(metadata.title).toBe("Title With Spaces");
+	});
+
+	test("trims whitespace from attribute-backed metadata", () => {
+		const html = `
+			<meta property="og:title" content="  OG Title  ">
+			<meta name="description" content="  Page description \n">
+			<meta name="author" content="  John Doe  ">
+			<meta property="article:published_time" content=" 2023-01-01 ">
+			<meta property="article:modified_time" content=" 2023-02-01 ">
+			<link rel="canonical" href=" https://example.com/canonical ">
+			<meta name="robots" content=" noindex, nofollow ">
+			<meta name="viewport" content=" width=device-width ">
+			<meta charset=" UTF-8 ">
+			<meta name="generator" content=" WordPress 5.0 ">
+		`;
+		const $ = cheerio.load(html);
+		const metadata = extractMetadata($);
+
+		expect(metadata).toMatchObject({
+			title: "OG Title",
+			description: "Page description",
+			author: "John Doe",
+			publishDate: "2023-01-01",
+			modifiedDate: "2023-02-01",
+			canonical: "https://example.com/canonical",
+			robots: "noindex, nofollow",
+			viewport: "width=device-width",
+			charset: "UTF-8",
+			generator: "WordPress 5.0",
+		});
 	});
 });

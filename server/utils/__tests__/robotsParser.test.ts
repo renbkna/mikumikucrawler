@@ -22,6 +22,18 @@ Disallow: /private/
 			expect(parser.isAllowed("/private/secret")).toBe(false);
 		});
 
+		test("empty disallow means allow all", () => {
+			const robotsTxt = `
+User-agent: *
+Disallow:
+			`.trim();
+
+			const parser = new NativeRobotsParser(robotsTxt);
+
+			expect(parser.isAllowed("/public/page")).toBe(true);
+			expect(parser.isAllowed("/private/secret")).toBe(true);
+		});
+
 		test("parses simple allow rule", () => {
 			const robotsTxt = `
 User-agent: *
@@ -51,6 +63,59 @@ Disallow: /bing-only/
 			expect(parser.isAllowed("/google-only/page", "Googlebot")).toBe(false);
 			expect(parser.isAllowed("/bing-only/page", "Googlebot")).toBe(true);
 			expect(parser.isAllowed("/bing-only/page", "Bingbot")).toBe(false);
+		});
+
+		test("applies shared rules to grouped user-agent lines", () => {
+			const robotsTxt = `
+User-agent: Googlebot
+User-agent: Bingbot
+Disallow: /shared/
+			`.trim();
+
+			const parser = new NativeRobotsParser(robotsTxt);
+
+			expect(parser.isAllowed("/shared/page", "Googlebot")).toBe(false);
+			expect(parser.isAllowed("/shared/page", "Bingbot")).toBe(false);
+			expect(parser.isAllowed("/shared/page", "OtherBot")).toBe(true);
+		});
+
+		test("combines split groups for the same user-agent", () => {
+			const robotsTxt = `
+User-agent: MyBot
+Allow: /public/
+
+User-agent: MyBot
+Disallow: /private/
+			`.trim();
+
+			const parser = new NativeRobotsParser(robotsTxt);
+
+			expect(parser.isAllowed("/public/page", "MyBot")).toBe(true);
+			expect(parser.isAllowed("/private/page", "MyBot")).toBe(false);
+		});
+
+		test("ignored group directives still separate following user-agent groups", () => {
+			const emptyDisallow = new NativeRobotsParser(`
+User-agent: *
+Disallow:
+User-agent: BadBot
+Disallow: /private
+			`);
+
+			expect(emptyDisallow.isAllowed("/private/page", "AnyBot")).toBe(true);
+			expect(emptyDisallow.isAllowed("/private/page", "BadBot")).toBe(false);
+
+			const invalidCrawlDelay = new NativeRobotsParser(`
+User-agent: *
+Crawl-delay: eventually
+User-agent: BadBot
+Disallow: /private
+			`);
+
+			expect(invalidCrawlDelay.isAllowed("/private/page", "AnyBot")).toBe(true);
+			expect(invalidCrawlDelay.isAllowed("/private/page", "BadBot")).toBe(
+				false,
+			);
 		});
 
 		test("matches wildcard user-agent", () => {
@@ -134,6 +199,49 @@ Disallow: /*.pdf$
 			expect(parser.isAllowed("/document.pdf")).toBe(false);
 			expect(parser.isAllowed("/document.pdf?query")).toBe(true);
 			expect(parser.isAllowed("/document.html")).toBe(true);
+		});
+
+		test("matches full URL paths with query strings for $ anchor rules", () => {
+			const robotsTxt = `
+User-agent: *
+Disallow: /*.pdf$
+			`.trim();
+
+			const parser = new NativeRobotsParser(robotsTxt);
+
+			expect(parser.isAllowed("https://example.com/document.pdf")).toBe(false);
+			expect(parser.isAllowed("https://example.com/document.pdf?query")).toBe(
+				true,
+			);
+		});
+	});
+
+	describe("query string patterns", () => {
+		test("treats query delimiters as literals in robots patterns", () => {
+			const parser = new NativeRobotsParser(`
+User-agent: *
+Disallow: /search?sort=
+			`);
+
+			expect(parser.isAllowed("https://example.com/search?sort=asc")).toBe(
+				false,
+			);
+			expect(parser.isAllowed("https://example.com/searchxsort=asc")).toBe(
+				true,
+			);
+		});
+
+		test("query-string allow rules participate in longest-match precedence", () => {
+			const parser = new NativeRobotsParser(`
+User-agent: *
+Disallow: /
+Allow: /search?sort=
+			`);
+
+			expect(parser.isAllowed("https://example.com/search?sort=asc")).toBe(
+				true,
+			);
+			expect(parser.isAllowed("https://example.com/other")).toBe(false);
 		});
 	});
 
@@ -224,6 +332,17 @@ Disallow: /private/
 			const parser = new NativeRobotsParser(robotsTxt);
 
 			expect(parser.getCrawlDelay()).toBeUndefined();
+		});
+
+		test("ignores invalid crawl-delay values", () => {
+			for (const value of ["eventually", "-1"]) {
+				const parser = new NativeRobotsParser(`
+User-agent: *
+Crawl-delay: ${value}
+				`);
+
+				expect(parser.getCrawlDelay()).toBeUndefined();
+			}
 		});
 
 		test("returns crawl-delay for specific user-agent", () => {

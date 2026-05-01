@@ -1,14 +1,22 @@
 import { t } from "elysia";
+import { CRAWL_EXPORT_FORMAT_VALUES } from "../../shared/contracts/api.js";
 import { CRAWL_METHODS, CRAWL_OPTION_BOUNDS } from "../../shared/crawl.js";
-import { CrawlStatusValues } from "../../shared/contracts/crawl.js";
-import { OkResponseSchema, OptionalBoundedListLimitSchema } from "./http.js";
+import {
+	DEFAULT_CRAWL_LIST_LIMIT,
+	CrawlStatusValues,
+	StopCrawlModeValues,
+} from "../../shared/contracts/crawl.js";
+import { OkResponseSchema, optionalBoundedListLimitSchema } from "./http.js";
 
 // Re-export shared types for server consumers
 export { CrawlStatusValues } from "../../shared/contracts/crawl.js";
 export type {
 	CrawlCounters,
+	CrawlListResponse,
 	CrawlStatus,
 	CrawlSummary,
+	ResumableSessionSummary,
+	StopCrawlMode,
 } from "../../shared/contracts/crawl.js";
 
 export const CrawlStatusSchema = t.UnionEnum([...CrawlStatusValues]);
@@ -17,6 +25,14 @@ export const CrawlMethodValues = CRAWL_METHODS;
 export type CrawlMethod = (typeof CrawlMethodValues)[number];
 
 export const CrawlMethodSchema = t.UnionEnum([...CrawlMethodValues]);
+
+export const StopCrawlModeSchema = t.UnionEnum([...StopCrawlModeValues]);
+
+export const StopCrawlBodySchema = t.Optional(
+	t.Object({
+		mode: t.Optional(StopCrawlModeSchema),
+	}),
+);
 
 export const CrawlOptionsSchema = t.Object({
 	target: t.String({ minLength: 1 }),
@@ -87,12 +103,18 @@ export const CrawlListQuerySchema = t.Object({
 	status: t.Optional(CrawlStatusSchema),
 	from: t.Optional(t.String({ format: "date-time" })),
 	to: t.Optional(t.String({ format: "date-time" })),
-	limit: OptionalBoundedListLimitSchema,
+	limit: optionalBoundedListLimitSchema(DEFAULT_CRAWL_LIST_LIMIT),
 });
 
 export const CrawlListResponseSchema = t.Object({
 	crawls: t.Array(CrawlSummarySchema),
 });
+
+export const ResumableCrawlListQuerySchema = t.Object({
+	limit: optionalBoundedListLimitSchema(DEFAULT_CRAWL_LIST_LIMIT),
+});
+
+export const ResumableCrawlListResponseSchema = CrawlListResponseSchema;
 
 export const CreateCrawlResponseSchema = CrawlSummarySchema;
 export const StopCrawlResponseSchema = CrawlSummarySchema;
@@ -107,5 +129,7 @@ export const CrawlIdParamsSchema = t.Object({
 });
 
 export const ExportQuerySchema = t.Object({
-	format: t.Optional(t.Union([t.Literal("json"), t.Literal("csv")])),
+	format: t.Optional(
+		t.Union(CRAWL_EXPORT_FORMAT_VALUES.map((value) => t.Literal(value))),
+	),
 });

@@ -1,5 +1,5 @@
 import { Heart, History, Music } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	ActionButtons,
 	ConfigurationView,
@@ -20,11 +20,10 @@ import { MikuBanner } from "./components/MikuBanner";
 import { TheatreOverlay } from "./components/TheatreOverlay";
 import { UI_LIMITS } from "./constants";
 import { useCrawlController, useToast } from "./hooks";
+import { type TheatreStatus, shouldResetTheatreStatus } from "./theatreStatus";
 
 function App() {
-	const [theatreStatus, setTheatreStatus] = useState<
-		"idle" | "blackout" | "counting" | "beam" | "live"
-	>("idle");
+	const [theatreStatus, setTheatreStatus] = useState<TheatreStatus>("idle");
 	const [openedConfig, setOpenedConfig] = useState(false);
 	const [openExportDialog, setOpenExportDialog] = useState(false);
 	const [openResumePanel, setOpenResumePanel] = useState(false);
@@ -49,15 +48,20 @@ function App() {
 		displayedPages,
 		clearFilter,
 		isAttacking,
+		canStart,
+		canForceStop,
+		canPause,
 		connectionState,
-		interruptedSessions,
-		interruptedSessionsLoading,
-		interruptedSessionsError,
-		deletingInterruptedSessionId,
-		refreshInterruptedSessions,
-		deleteInterruptedSession,
+		resumableSessions,
+		resumableSessionsLoading,
+		resumableSessionsError,
+		deletingResumableSessionId,
+		resumingResumableSessionId,
+		refreshResumableSessions,
+		deleteResumableSession,
 		startCrawl,
-		stopCrawl,
+		pauseCrawl,
+		forceStopCrawl,
 		resumeCrawl,
 		exportCrawl,
 	} = useCrawlController({ addToast });
@@ -80,10 +84,22 @@ function App() {
 		[startCrawl],
 	);
 
-	const stopAttack = useCallback(() => {
-		void stopCrawl();
-		setTheatreStatus("idle");
-	}, [stopCrawl]);
+	const pauseAttack = useCallback(() => {
+		void pauseCrawl();
+	}, [pauseCrawl]);
+
+	const forceStopAttack = useCallback(() => {
+		if (!window.confirm("Force stop this crawl and clear its pending queue?")) {
+			return;
+		}
+		void forceStopCrawl();
+	}, [forceStopCrawl]);
+
+	useEffect(() => {
+		if (shouldResetTheatreStatus(theatreStatus, isAttacking)) {
+			setTheatreStatus("idle");
+		}
+	}, [isAttacking, theatreStatus]);
 
 	const handleExport = useCallback(
 		(format: string) => {
@@ -94,10 +110,11 @@ function App() {
 
 	const handleResumeSession = useCallback(
 		(sessionId: string, resumedTarget: string) => {
-			void resumeCrawl(sessionId, resumedTarget).then((resumed: boolean) => {
+			return resumeCrawl(sessionId, resumedTarget).then((resumed: boolean) => {
 				if (resumed) {
 					setTheatreStatus("live");
 				}
+				return resumed;
 			});
 		},
 		[resumeCrawl],
@@ -121,6 +138,9 @@ function App() {
 				status={theatreStatus}
 				onBeamStart={handleBeamStart}
 				onComplete={handleTheatreComplete}
+				isCrawlActive={canPause || canForceStop}
+				onStop={canPause ? pauseAttack : forceStopAttack}
+				stopLabel={canPause ? "Pause" : "Force Stop"}
 				volume={audioVol}
 			/>
 
@@ -185,19 +205,23 @@ function App() {
 							setTarget={handleTargetChange}
 							crawlOptions={crawlOptions}
 							isAttacking={isAttacking}
+							canStart={canStart}
+							canForceStop={canForceStop}
+							canPause={canPause}
 							startAttack={startAttack}
-							stopAttack={stopAttack}
+							pauseAttack={pauseAttack}
+							forceStopAttack={forceStopAttack}
 							setOpenedConfig={setOpenedConfig}
 							connectionState={connectionState}
 						/>
 					</section>
 
-					{interruptedSessions.length > 0 && !isAttacking && (
+					{resumableSessions.length > 0 && !isAttacking && (
 						<div className="flex items-center justify-between px-5 py-3 rounded-2xl border-2 border-amber-200 bg-amber-50 text-amber-800 shadow-sm">
 							<div className="flex items-center gap-2 text-sm font-bold">
 								<History className="w-4 h-4 shrink-0" />
-								{interruptedSessions.length} interrupted crawl
-								{interruptedSessions.length !== 1 ? "s" : ""} found
+								{resumableSessions.length} resumable crawl
+								{resumableSessions.length !== 1 ? "s" : ""} found
 							</div>
 							<button
 								type="button"
@@ -347,13 +371,14 @@ function App() {
 
 			<ResumeSessionsPanel
 				isOpen={openResumePanel}
-				sessions={interruptedSessions}
-				isLoading={interruptedSessionsLoading}
-				fetchError={interruptedSessionsError}
-				deletingId={deletingInterruptedSessionId}
-				onRefresh={refreshInterruptedSessions}
+				sessions={resumableSessions}
+				isLoading={resumableSessionsLoading}
+				fetchError={resumableSessionsError}
+				deletingId={deletingResumableSessionId}
+				resumingId={resumingResumableSessionId}
+				onRefresh={refreshResumableSessions}
 				onDelete={(sessionId) => {
-					void deleteInterruptedSession(sessionId);
+					void deleteResumableSession(sessionId);
 				}}
 				onClose={() => setOpenResumePanel(false)}
 				onResume={handleResumeSession}

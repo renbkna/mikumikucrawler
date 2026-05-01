@@ -1,5 +1,5 @@
 import { Download, ScrollText } from "lucide-react";
-import type { CrawledPage } from "../types";
+import type { CrawledPage } from "../../shared/types.js";
 import { HeartIcon, SparkleIcon } from "./KawaiiIcons";
 
 interface ActionButtonsProps {

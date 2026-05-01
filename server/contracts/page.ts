@@ -9,5 +9,5 @@ export const PageContentParamsSchema = t.Object({
 
 export const PageContentResponseSchema = t.Object({
 	status: t.Literal("ok"),
-	content: t.String(),
+	content: t.Nullable(t.String()),
 });

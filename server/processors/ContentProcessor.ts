@@ -1,17 +1,19 @@
 import type { CheerioAPI } from "cheerio";
 import * as cheerio from "cheerio";
 import type { Logger } from "../config/logging.js";
-import type {
-	ContentAnalysis,
-	ExtractedData,
-	ProcessedContent,
-} from "../types.js";
+import type { ContentAnalysis, ExtractedData } from "../../shared/types.js";
+import type { ProcessedContent } from "../types.js";
 import { getErrorMessage } from "../utils/helpers.js";
 import {
 	analyzeContent,
 	assessContentQuality,
 	processJSON,
 } from "./analysisUtils.js";
+import {
+	isHtmlLikeContentType,
+	isJsonContentType,
+	isPdfContentType,
+} from "./contentTypes.js";
 import {
 	extractMainContent,
 	extractMediaInfo,
@@ -20,6 +22,7 @@ import {
 	processLinks,
 } from "./extractionUtils.js";
 import { PdfContentHandler } from "./PdfContentHandler.js";
+import { applyProcessingErrorDefaults } from "./processingDefaults.js";
 
 /**
  * Safely executes an extraction function and returns a fallback on error.
@@ -37,6 +40,10 @@ function safeExtract<T>(
 		logger.warn(`Failed to ${context}: ${getErrorMessage(err)}`);
 		return fallback;
 	}
+}
+
+function serializeJsonMainContent(value: unknown): string {
+	return typeof value === "string" ? value : JSON.stringify(value);
 }
 
 /**
@@ -72,11 +79,11 @@ export class ContentProcessor {
 		};
 
 		try {
-			if (contentType.includes("text/html")) {
+			if (isHtmlLikeContentType(contentType)) {
 				await this.processHtml(content, url, result);
-			} else if (contentType.includes("application/json")) {
+			} else if (isJsonContentType(contentType)) {
 				this.processJson(content, result);
-			} else if (contentType.includes("application/pdf")) {
+			} else if (isPdfContentType(contentType)) {
 				await this.pdfHandler.process(content, result);
 			}
 		} catch (error) {
@@ -88,7 +95,7 @@ export class ContentProcessor {
 				message: getErrorMessage(error),
 				timestamp: new Date().toISOString(),
 			});
-			this.setErrorDefaults(result);
+			applyProcessingErrorDefaults(result);
 		}
 
 		return result;
@@ -178,25 +185,12 @@ export class ContentProcessor {
 		const jsonString =
 			typeof content === "string" ? content : content.toString();
 		const jsonResult = processJSON(jsonString);
+		const mainContent =
+			jsonResult.data !== undefined ? jsonResult.data : (jsonResult.raw ?? "");
+		const serializedContent = serializeJsonMainContent(mainContent);
 		result.extractedData = {
-			mainContent: JSON.stringify(jsonResult.data || jsonResult.raw || ""),
+			mainContent: serializedContent,
 		};
-	}
-
-	/** Sets default values for result object when processing fails. */
-	private setErrorDefaults(result: ProcessedContent): void {
-		result.extractedData = { mainContent: "" };
-		result.analysis = {
-			wordCount: 0,
-			readingTime: 0,
-			language: "unknown",
-			keywords: [],
-			sentiment: "neutral",
-			readabilityScore: 0,
-			quality: { score: 0, factors: {}, issues: ["Processing failed"] },
-		};
-		result.metadata = {};
-		result.media = [];
-		result.links = [];
+		result.analysis = analyzeContent(serializedContent);
 	}
 }

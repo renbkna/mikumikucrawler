@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { cors } from "@elysiajs/cors";
 import { Elysia } from "elysia";
 import { rateLimit } from "elysia-rate-limit";
+import { API_PATHS, isCrawlEventsPath } from "../shared/contracts/api.js";
 import { crawlsApi } from "./api/crawls.js";
 import { healthApi } from "./api/health.js";
 import { pagesApi } from "./api/pages.js";
@@ -35,6 +36,11 @@ import { createStorage, type Storage } from "./storage/db.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const distPath = path.join(__dirname, "..", "dist");
+
+function isRateLimitExempt(request: Request): boolean {
+	const pathname = new URL(request.url).pathname;
+	return pathname === API_PATHS.health || isCrawlEventsPath(pathname);
+}
 
 export interface AppDependencies {
 	logger: AppLogger;
@@ -102,8 +108,7 @@ export function createApp(deps: AppDependencies) {
 			rateLimit({
 				max: 100,
 				duration: 60_000,
-				skip: (request) =>
-					request.url.includes("/health") || request.url.includes("/events"),
+				skip: isRateLimitExempt,
 			}),
 		)
 		.use(compression())

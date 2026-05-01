@@ -1,7 +1,7 @@
 import { Coffee, Database, TriangleAlert } from "lucide-react";
+import type { CrawlOptions } from "../../shared/contracts/crawl.js";
 import { CRAWL_OPTION_BOUNDS, isCrawlMethod } from "../../shared/crawl.js";
 import { useDialogModal } from "../hooks";
-import type { CrawlOptions } from "../types";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 
 interface ConfigurationViewProps {
@@ -34,6 +34,7 @@ export function ConfigurationView({
 			"Follows internal HTML links and keeps extracted image, video, and audio metadata",
 		full: "Follows internal and external HTML links and keeps extracted media metadata",
 	}[options.crawlMethod];
+	const mediaRetentionDisabled = options.crawlMethod === "links";
 
 	return (
 		<dialog
@@ -103,6 +104,8 @@ export function ConfigurationView({
 										onOptionsChange({
 											...options,
 											crawlMethod: nextMethod,
+											saveMedia:
+												nextMethod === "links" ? false : options.saveMedia,
 										});
 									}}
 									className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
@@ -367,16 +370,23 @@ export function ConfigurationView({
 								{
 									id: "saveMedia",
 									label: "Keep Media Metadata",
-									desc: "(Store extracted image/video/audio metadata in results)",
+									desc: mediaRetentionDisabled
+										? "(Requires Media or Full crawl method)"
+										: "(Store extracted image/video/audio metadata in results)",
 									checked: options.saveMedia,
+									disabled: mediaRetentionDisabled,
 								},
 							].map((item) => (
-								<div key={item.id} className="flex items-start">
+								<div
+									key={item.id}
+									className={`flex items-start ${item.disabled ? "opacity-50" : ""}`}
+								>
 									<div className="flex items-center h-5">
 										<input
 											type="checkbox"
 											id={item.id}
 											checked={item.checked}
+											disabled={item.disabled}
 											onChange={(e) =>
 												onOptionsChange({
 													...options,
