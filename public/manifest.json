@@ -20,24 +20,10 @@
 	],
 	"screenshots": [
 		{
-			"src": "/mikumikucrawler.jpeg",
+			"src": "/mikumikucrawler.png",
 			"sizes": "1280x720",
-			"type": "image/jpeg",
+			"type": "image/png",
 			"form_factor": "wide"
-		}
-	],
-	"shortcuts": [
-		{
-			"name": "Start Crawling",
-			"short_name": "Crawl",
-			"description": "Start a new web crawling session",
-			"url": "/?action=crawl",
-			"icons": [
-				{
-					"src": "/miku.ico",
-					"sizes": "any"
-				}
-			]
 		}
 	]
 }
