@@ -50,7 +50,7 @@
 | ⚡ | **Cheerio** — fast HTML extraction for static pages |
 | 🤖 | **robots.txt** — optional compliance with crawl rules and crawl-delay |
 | 🔀 | **Concurrency** — configurable parallel fetch workers |
-| 🔄 | **Retry with backoff** — automatic retries on transient failures |
+| 🔄 | **Retry with backoff** — delayed retries for rate-limit and backpressure responses |
 | 💾 | **Session resume** — interrupted crawls persist and resume from where they stopped |
 | 🚦 | **Domain throttling** — per-domain rate limiting to be a polite crawler |
 
@@ -140,9 +140,9 @@ RENDER=false
 |---------|---------|-------|
 | Crawl Depth | `2` | 1–5 |
 | Max Pages | `50` | 1–200 |
-| Max Pages Per Domain | `50` | 1–200 |
+| Max Pages Per Domain | `0` | 0–1000 (`0` = unlimited) |
 | Crawl Delay | `1000ms` | 200–10000ms |
-| Method | `links` | links / content / media / full |
+| Method | `full` | links / media / full |
 | Concurrent Requests | `5` | 1–10 |
 | Retry Limit | `3` | 0–5 |
 | Dynamic Content | `true` | — |
@@ -164,7 +164,7 @@ RENDER=false
 | 📋 | `GET` | `/api/crawls` | List crawl runs |
 | 🔍 | `GET` | `/api/crawls/:id` | Get crawl state & counters |
 | ⏹️ | `POST` | `/api/crawls/:id/stop` | Request graceful stop |
-| ▶️ | `POST` | `/api/crawls/:id/resume` | Resume an interrupted crawl |
+| ▶️ | `POST` | `/api/crawls/:id/resume` | Resume a paused or interrupted crawl |
 | 📡 | `GET` | `/api/crawls/:id/events` | SSE event stream |
 | 📦 | `GET` | `/api/crawls/:id/export` | Export pages (JSON / CSV) |
 | 🗑️ | `DELETE` | `/api/crawls/:id` | Delete a stored crawl |
@@ -192,6 +192,7 @@ source.addEventListener("crawl.progress", (event) => {
 | `crawl.page` | A page was crawled |
 | `crawl.log` | Runtime log message |
 | `crawl.completed` | Crawl finished normally |
+| `crawl.paused` | Paused by user and available to resume |
 | `crawl.stopped` | Stopped by user |
 | `crawl.failed` | Terminated due to error |
 
@@ -324,7 +325,7 @@ docker run -p 3000:3000 mikumikucrawler
 NODE_ENV=production
 PORT=3000
 FRONTEND_URL=https://your-domain.com
-DB_PATH=/data/crawler.db
+DB_PATH=/app/data/crawler.db
 ```
 
 ---
