@@ -208,7 +208,9 @@ function App() {
 							canStart={canStart}
 							canForceStop={canForceStop}
 							canPause={canPause}
-							startAttack={startAttack}
+							startAttack={(isQuick) => {
+								void startAttack(isQuick);
+							}}
 							pauseAttack={pauseAttack}
 							forceStopAttack={forceStopAttack}
 							setOpenedConfig={setOpenedConfig}
@@ -376,7 +378,9 @@ function App() {
 				fetchError={resumableSessionsError}
 				deletingId={deletingResumableSessionId}
 				resumingId={resumingResumableSessionId}
-				onRefresh={refreshResumableSessions}
+				onRefresh={() => {
+					void refreshResumableSessions();
+				}}
 				onDelete={(sessionId) => {
 					void deleteResumableSession(sessionId);
 				}}

@@ -140,7 +140,7 @@ export class CrawlRuntime {
 			pipeline: this.pipeline,
 			state: this.state,
 			logger: deps.logger,
-			log: eventSink.log,
+			log: (message) => eventSink.log(message),
 		});
 		this.finalizer = new CrawlItemFinalizer({
 			crawlId: deps.crawlId,
@@ -574,7 +574,7 @@ export class CrawlRuntime {
 					error instanceof Error ? error : new Error("Runtime failed"),
 				);
 			}
-			await Promise.allSettled([...this.activeTasks.values()]);
+			await Promise.allSettled(this.activeTasks.values());
 			this.queue.clearRetryTimers();
 			await this.dynamicRenderer.close();
 			if (

@@ -16,7 +16,7 @@ export function useFocusTrap<T extends HTMLElement>(
 	const initialFocusRef = useRef<HTMLButtonElement | null>(null);
 
 	useEffect(() => {
-		if (!isOpen) return;
+		if (!isOpen) return undefined;
 
 		const focusTimer = setTimeout(() => {
 			initialFocusRef.current?.focus();

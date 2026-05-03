@@ -44,7 +44,14 @@ export function createCrawlTerminalRepo(db: Database) {
 	const writer = createCrawlTerminalWriter(db);
 
 	return {
-		upsert: writer.upsert,
+		upsert(
+			crawlId: string,
+			url: string,
+			outcome: TerminalOutcome,
+			domainBudgetCharged: boolean,
+		): void {
+			writer.upsert(crawlId, url, outcome, domainBudgetCharged);
+		},
 		listByCrawlId(crawlId: string): TerminalUrlRecord[] {
 			const rows = db
 				.query(

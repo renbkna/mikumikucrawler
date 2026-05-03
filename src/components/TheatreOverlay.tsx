@@ -71,6 +71,7 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 				audioRef.current = null;
 			};
 		}
+		return undefined;
 	}, []); // Empty deps - only runs once
 
 	/** Control audio play/pause based on status */
@@ -121,7 +122,7 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 	}, []);
 
 	useEffect(() => {
-		if (!count || count === "READY?") return;
+		if (!count || count === "READY?") return undefined;
 
 		const id = Date.now();
 		requestAnimationFrame(() => triggerRipple(id));
