@@ -2,16 +2,16 @@ import type {
 	CrawlSummary,
 	ResumableSessionSummary,
 	StopCrawlMode,
-} from "../../shared/contracts/crawl.js";
+} from "../../shared/contracts/index.js";
 import {
 	isCrawlListResponse,
 	toResumableSessionSummary,
-} from "../../shared/contracts/crawl.js";
-import type { CrawlEventEnvelope } from "../../shared/contracts/events.js";
-import { CrawlEventTypeValues } from "../../shared/contracts/events.js";
-import type { CrawlOptions } from "../../shared/contracts/crawl.js";
+} from "../../shared/contracts/index.js";
+import type { CrawlEventEnvelope } from "../../shared/contracts/index.js";
+import { CrawlEventTypeValues } from "../../shared/contracts/index.js";
+import type { CrawlOptions } from "../../shared/contracts/index.js";
 import { api, createCrawlEventSource, downloadCrawlExport } from "./client";
-import type { CrawlExportFormat } from "../../shared/contracts/api.js";
+import type { CrawlExportFormat } from "../../shared/contracts/index.js";
 import { getApiErrorMessage } from "./errors";
 import { parseCrawlEventEnvelope } from "./crawlEvents";
 import type { ApiResult } from "./result";

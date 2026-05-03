@@ -1,7 +1,8 @@
-import type { QueueStats } from "../types.js";
-import { isCrawledPage, isQueueStats, type CrawledPage } from "../types.js";
-import type { CrawlCounters } from "./crawl.js";
-import { isCrawlCounters } from "./crawl.js";
+import { Value } from "@sinclair/typebox/value";
+import { t } from "elysia";
+import { isCrawledPage, type CrawledPage } from "../types.js";
+import { CrawlCountersSchema } from "./crawl.js";
+import { CrawlPagePayloadSchema, QueueStatsSchema } from "./pageData.js";
 
 export const CrawlEventTypeValues = [
 	"crawl.started",
@@ -40,43 +41,57 @@ export type TerminalCrawlEventType =
 export type SettledCrawlEventType =
 	(typeof SETTLED_CRAWL_EVENT_TYPE_VALUES)[number];
 
-export interface CrawlStartedPayload {
-	target: string;
-	resume: boolean;
-}
+export const CrawlStartedPayloadSchema = t.Object({
+	target: t.String(),
+	resume: t.Boolean(),
+});
 
-export interface CrawlProgressPayload {
-	counters: CrawlCounters;
-	queue: QueueStats;
-	elapsedSeconds: number;
-	pagesPerSecond: number;
-	stopReason: string | null;
-}
+export type CrawlStartedPayload = typeof CrawlStartedPayloadSchema.static;
+
+export const CrawlProgressPayloadSchema = t.Object({
+	counters: CrawlCountersSchema,
+	queue: QueueStatsSchema,
+	elapsedSeconds: t.Number({ minimum: 0 }),
+	pagesPerSecond: t.Number({ minimum: 0 }),
+	stopReason: t.Nullable(t.String()),
+});
+
+export type CrawlProgressPayload = typeof CrawlProgressPayloadSchema.static;
 
 export type CrawlPagePayload = CrawledPage;
 
-export interface CrawlLogPayload {
-	message: string;
-}
+export const CrawlLogPayloadSchema = t.Object({
+	message: t.String(),
+});
 
-export interface CrawlCompletedPayload {
-	counters: CrawlCounters;
-}
+export type CrawlLogPayload = typeof CrawlLogPayloadSchema.static;
 
-export interface CrawlFailedPayload {
-	error: string;
-	counters: CrawlCounters;
-}
+export const CrawlCompletedPayloadSchema = t.Object({
+	counters: CrawlCountersSchema,
+});
 
-export interface CrawlStoppedPayload {
-	stopReason: string;
-	counters: CrawlCounters;
-}
+export type CrawlCompletedPayload = typeof CrawlCompletedPayloadSchema.static;
 
-export interface CrawlPausedPayload {
-	stopReason: string | null;
-	counters: CrawlCounters;
-}
+export const CrawlFailedPayloadSchema = t.Object({
+	error: t.String(),
+	counters: CrawlCountersSchema,
+});
+
+export type CrawlFailedPayload = typeof CrawlFailedPayloadSchema.static;
+
+export const CrawlStoppedPayloadSchema = t.Object({
+	stopReason: t.String(),
+	counters: CrawlCountersSchema,
+});
+
+export type CrawlStoppedPayload = typeof CrawlStoppedPayloadSchema.static;
+
+export const CrawlPausedPayloadSchema = t.Object({
+	stopReason: t.Nullable(t.String()),
+	counters: CrawlCountersSchema,
+});
+
+export type CrawlPausedPayload = typeof CrawlPausedPayloadSchema.static;
 
 export interface CrawlEventMap {
 	"crawl.started": CrawlStartedPayload;
@@ -101,16 +116,57 @@ export type CrawlEventEnvelope = {
 	[TType in CrawlEventType]: CrawlEventEnvelopeBase<TType>;
 }[CrawlEventType];
 
+const EventEnvelopeBaseSchema = {
+	crawlId: t.String(),
+	sequence: t.Number({ minimum: 1, multipleOf: 1 }),
+	timestamp: t.String({ format: "date-time" }),
+};
+
+export const CrawlEventEnvelopeSchema = t.Union([
+	t.Object({
+		type: t.Literal("crawl.started"),
+		...EventEnvelopeBaseSchema,
+		payload: CrawlStartedPayloadSchema,
+	}),
+	t.Object({
+		type: t.Literal("crawl.progress"),
+		...EventEnvelopeBaseSchema,
+		payload: CrawlProgressPayloadSchema,
+	}),
+	t.Object({
+		type: t.Literal("crawl.page"),
+		...EventEnvelopeBaseSchema,
+		payload: CrawlPagePayloadSchema,
+	}),
+	t.Object({
+		type: t.Literal("crawl.log"),
+		...EventEnvelopeBaseSchema,
+		payload: CrawlLogPayloadSchema,
+	}),
+	t.Object({
+		type: t.Literal("crawl.completed"),
+		...EventEnvelopeBaseSchema,
+		payload: CrawlCompletedPayloadSchema,
+	}),
+	t.Object({
+		type: t.Literal("crawl.failed"),
+		...EventEnvelopeBaseSchema,
+		payload: CrawlFailedPayloadSchema,
+	}),
+	t.Object({
+		type: t.Literal("crawl.stopped"),
+		...EventEnvelopeBaseSchema,
+		payload: CrawlStoppedPayloadSchema,
+	}),
+	t.Object({
+		type: t.Literal("crawl.paused"),
+		...EventEnvelopeBaseSchema,
+		payload: CrawlPausedPayloadSchema,
+	}),
+]);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
-}
-
-function isCounters(value: unknown): value is CrawlCounters {
-	return isCrawlCounters(value);
-}
-
-function isNonNegativeFiniteNumber(value: unknown): value is number {
-	return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
 function isCrawlPagePayload(value: unknown): value is CrawlPagePayload {
@@ -123,45 +179,21 @@ function isPayloadForType<TType extends CrawlEventType>(
 ): payload is CrawlEventMap[TType] {
 	switch (type) {
 		case "crawl.started":
-			return (
-				isRecord(payload) &&
-				typeof payload.target === "string" &&
-				typeof payload.resume === "boolean"
-			);
+			return Value.Check(CrawlStartedPayloadSchema, payload);
 		case "crawl.progress":
-			return (
-				isRecord(payload) &&
-				isCounters(payload.counters) &&
-				isQueueStats(payload.queue) &&
-				isNonNegativeFiniteNumber(payload.elapsedSeconds) &&
-				isNonNegativeFiniteNumber(payload.pagesPerSecond) &&
-				(payload.stopReason === null || typeof payload.stopReason === "string")
-			);
+			return Value.Check(CrawlProgressPayloadSchema, payload);
 		case "crawl.page":
 			return isCrawlPagePayload(payload);
 		case "crawl.log":
-			return isRecord(payload) && typeof payload.message === "string";
+			return Value.Check(CrawlLogPayloadSchema, payload);
 		case "crawl.completed":
-			return isRecord(payload) && isCounters(payload.counters);
+			return Value.Check(CrawlCompletedPayloadSchema, payload);
 		case "crawl.failed":
-			return (
-				isRecord(payload) &&
-				typeof payload.error === "string" &&
-				isCounters(payload.counters)
-			);
+			return Value.Check(CrawlFailedPayloadSchema, payload);
 		case "crawl.stopped":
-			return (
-				isRecord(payload) &&
-				typeof payload.stopReason === "string" &&
-				isCounters(payload.counters)
-			);
+			return Value.Check(CrawlStoppedPayloadSchema, payload);
 		case "crawl.paused":
-			return (
-				isRecord(payload) &&
-				(payload.stopReason === null ||
-					typeof payload.stopReason === "string") &&
-				isCounters(payload.counters)
-			);
+			return Value.Check(CrawlPausedPayloadSchema, payload);
 	}
 }
 

@@ -1,7 +1,7 @@
-import type { CrawlEventEnvelope } from "../../shared/contracts/events.js";
-import type { ResumableSessionSummary } from "../../shared/contracts/crawl.js";
+import type { CrawlEventEnvelope } from "../../shared/contracts/index.js";
+import type { ResumableSessionSummary } from "../../shared/contracts/index.js";
 import { CRAWLER_DEFAULTS, TOAST_DEFAULTS, UI_LIMITS } from "../constants";
-import type { CrawlOptions } from "../../shared/contracts/crawl.js";
+import type { CrawlOptions } from "../../shared/contracts/index.js";
 import type { CrawledPage, QueueStats, Stats } from "../../shared/types.js";
 
 export type ConnectionState = "connecting" | "connected" | "disconnected";
@@ -384,6 +384,11 @@ function applyTerminalEvent(
 ): ControllerStateTransition {
 	const nextStats = buildStats(envelope.payload.counters);
 	const effects: ControllerEffect[] = [];
+	const terminalPhaseByType = {
+		"crawl.completed": "completed",
+		"crawl.stopped": "stopped",
+		"crawl.failed": "failed",
+	} as const;
 
 	if (envelope.type === "crawl.completed") {
 		effects.push({
@@ -411,12 +416,7 @@ function applyTerminalEvent(
 			...state,
 			stats: nextStats,
 			connectionState: "disconnected",
-			runPhase:
-				envelope.type === "crawl.completed"
-					? "completed"
-					: envelope.type === "crawl.stopped"
-						? "stopped"
-						: "failed",
+			runPhase: terminalPhaseByType[envelope.type],
 			progress: 100,
 			lastCommand: createIdleCommandStatus(),
 		},

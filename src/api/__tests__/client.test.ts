@@ -2,7 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
 	buildCrawlEventsPath,
 	buildCrawlExportPath,
-} from "../../../shared/contracts/api.js";
+} from "../../../shared/contracts/index.js";
 import { subscribeToCrawlEvents } from "../crawls";
 import {
 	downloadCrawlExport,

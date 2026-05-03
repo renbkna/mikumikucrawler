@@ -3,11 +3,11 @@ import type {
 	CrawlCounters,
 	CrawlOptions,
 	CrawlStatus,
-} from "../../../shared/contracts/crawl.js";
+} from "../../../shared/contracts/index.js";
 import {
 	DEFAULT_CRAWL_LIST_LIMIT,
 	RESUMABLE_CRAWL_STATUS_VALUES,
-} from "../../../shared/contracts/crawl.js";
+} from "../../../shared/contracts/index.js";
 import {
 	type CrawlRunRecord,
 	type CrawlRunRow,

@@ -8,7 +8,7 @@ import {
 	type Route,
 	type WebSocketRoute,
 } from "playwright";
-import type { CrawlOptions } from "../../../shared/contracts/crawl.js";
+import type { CrawlOptions } from "../../../shared/contracts/index.js";
 import { config } from "../../config/env.js";
 import type { Logger } from "../../config/logging.js";
 import {

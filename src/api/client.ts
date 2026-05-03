@@ -4,7 +4,7 @@ import {
 	buildCrawlEventsPath,
 	buildCrawlExportPath,
 	type CrawlExportFormat,
-} from "../../shared/contracts/api.js";
+} from "../../shared/contracts/index.js";
 import { getApiErrorMessage } from "./errors";
 
 interface BackendUrlEnv {
@@ -32,7 +32,7 @@ const backendUrl = resolveBackendUrl(import.meta.env);
 /** Type-safe Eden Treaty client for the Miku Crawler API */
 export const api = treaty<App>(backendUrl);
 
-export type { CrawlExportFormat } from "../../shared/contracts/api.js";
+export type { CrawlExportFormat } from "../../shared/contracts/index.js";
 
 export function getBackendUrl(): string {
 	return backendUrl.replace(/\/$/, "");

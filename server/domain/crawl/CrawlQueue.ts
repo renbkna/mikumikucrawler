@@ -1,5 +1,5 @@
 import type { Logger } from "../../config/logging.js";
-import type { CrawlOptions } from "../../../shared/contracts/crawl.js";
+import type { CrawlOptions } from "../../../shared/contracts/index.js";
 import type { CrawlState } from "./CrawlState.js";
 import { getCrawlUrlIdentity } from "./UrlPolicy.js";
 

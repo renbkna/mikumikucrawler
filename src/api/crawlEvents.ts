@@ -1,1 +1,1 @@
-export { parseCrawlEventEnvelope } from "../../shared/contracts/events.js";
+export { parseCrawlEventEnvelope } from "../../shared/contracts/index.js";

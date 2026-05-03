@@ -1,6 +1,9 @@
 import { Elysia, t } from "elysia";
-import { API_PATHS, CRAWL_ROUTE_SEGMENTS } from "../../shared/contracts/api.js";
-import { CrawlIdParamsSchema } from "../contracts/crawl.js";
+import {
+	API_PATHS,
+	CRAWL_ROUTE_SEGMENTS,
+	CrawlIdParamsSchema,
+} from "../../shared/contracts/index.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
 import { SseHeadersSchema } from "../contracts/http.js";
 import { createEventStreamResponse } from "../plugins/sse.js";

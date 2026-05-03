@@ -1,9 +1,10 @@
 import type {
 	CrawlCounters,
 	CrawlOptions,
-} from "../../../shared/contracts/crawl.js";
+} from "../../../shared/contracts/index.js";
 import type { QueueStats } from "../../../shared/types.js";
 import { LRUCache } from "../../utils/lruCache.js";
+import { shouldAdaptDomainDelay } from "./httpStatusPolicy.js";
 
 export type TerminalOutcome = "success" | "failure" | "skip";
 
@@ -185,7 +186,7 @@ export class CrawlState {
 		statusCode: number,
 		retryAfterMs?: number,
 	): void {
-		if (statusCode !== 429 && statusCode !== 503 && statusCode !== 403) {
+		if (!shouldAdaptDomainDelay(statusCode)) {
 			return;
 		}
 

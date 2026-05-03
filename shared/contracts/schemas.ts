@@ -1,38 +1,44 @@
 import { t } from "elysia";
-import { CRAWL_EXPORT_FORMAT_VALUES } from "../../shared/contracts/api.js";
-import { CRAWL_METHODS, CRAWL_OPTION_BOUNDS } from "../../shared/crawl.js";
+import { CRAWL_EXPORT_FORMAT_VALUES } from "./api.js";
+import { DEFAULT_CRAWL_LIST_LIMIT } from "./crawl.js";
+import { optionalBoundedListLimitSchema } from "./http.js";
+import { CRAWL_METHODS, CRAWL_OPTION_BOUNDS } from "../crawl.js";
 import {
-	DEFAULT_CRAWL_LIST_LIMIT,
+	CrawlCountersSchema,
 	CrawlStatusValues,
 	StopCrawlModeValues,
-} from "../../shared/contracts/crawl.js";
-import { OkResponseSchema, optionalBoundedListLimitSchema } from "./http.js";
-
-// Re-export shared types for server consumers
-export { CrawlStatusValues } from "../../shared/contracts/crawl.js";
-export type {
-	CrawlCounters,
-	CrawlListResponse,
-	CrawlStatus,
-	CrawlSummary,
-	ResumableSessionSummary,
-	StopCrawlMode,
-} from "../../shared/contracts/crawl.js";
+} from "./crawl.js";
+import { CrawlEventTypeValues } from "./events.js";
+export {
+	CrawlCompletedPayloadSchema,
+	CrawlEventEnvelopeSchema,
+	CrawlFailedPayloadSchema,
+	CrawlLogPayloadSchema,
+	CrawlPausedPayloadSchema,
+	CrawlProgressPayloadSchema,
+	CrawlStartedPayloadSchema,
+	CrawlStoppedPayloadSchema,
+} from "./events.js";
+export { CrawlCountersSchema } from "./crawl.js";
+export {
+	ContentAnalysisSchema,
+	CrawlPagePayloadSchema,
+	ExtractedDataSchema,
+	MediaInfoSchema,
+	PageMetadataSchema,
+	ProcessedPageDataSchema,
+	ProcessingErrorSchema,
+	QualityAnalysisSchema,
+	QueueStatsSchema,
+} from "./pageData.js";
 
 export const CrawlStatusSchema = t.UnionEnum([...CrawlStatusValues]);
 
 export const CrawlMethodValues = CRAWL_METHODS;
 export type CrawlMethod = (typeof CrawlMethodValues)[number];
-
 export const CrawlMethodSchema = t.UnionEnum([...CrawlMethodValues]);
 
 export const StopCrawlModeSchema = t.UnionEnum([...StopCrawlModeValues]);
-
-export const StopCrawlBodySchema = t.Optional(
-	t.Object({
-		mode: t.Optional(StopCrawlModeSchema),
-	}),
-);
 
 export const CrawlOptionsSchema = t.Object({
 	target: t.String({ minLength: 1 }),
@@ -75,16 +81,6 @@ export const CrawlOptionsSchema = t.Object({
 
 export type CrawlOptions = typeof CrawlOptionsSchema.static;
 
-export const CrawlCountersSchema = t.Object({
-	pagesScanned: t.Number({ minimum: 0 }),
-	successCount: t.Number({ minimum: 0 }),
-	failureCount: t.Number({ minimum: 0 }),
-	skippedCount: t.Number({ minimum: 0 }),
-	linksFound: t.Number({ minimum: 0 }),
-	mediaFiles: t.Number({ minimum: 0 }),
-	totalDataKb: t.Number({ minimum: 0 }),
-});
-
 export const CrawlSummarySchema = t.Object({
 	id: t.String(),
 	target: t.String(),
@@ -120,9 +116,14 @@ export const CreateCrawlResponseSchema = CrawlSummarySchema;
 export const StopCrawlResponseSchema = CrawlSummarySchema;
 export const ResumeCrawlResponseSchema = CrawlSummarySchema;
 export const GetCrawlResponseSchema = CrawlSummarySchema;
-export const DeleteCrawlResponseSchema = OkResponseSchema;
 
 export const CreateCrawlBodySchema = CrawlOptionsSchema;
+
+export const StopCrawlBodySchema = t.Optional(
+	t.Object({
+		mode: t.Optional(StopCrawlModeSchema),
+	}),
+);
 
 export const CrawlIdParamsSchema = t.Object({
 	id: t.String(),
@@ -133,3 +134,7 @@ export const ExportQuerySchema = t.Object({
 		t.Union(CRAWL_EXPORT_FORMAT_VALUES.map((value) => t.Literal(value))),
 	),
 });
+
+export const CrawlEventTypeSchema = t.Union(
+	CrawlEventTypeValues.map((value) => t.Literal(value)),
+);

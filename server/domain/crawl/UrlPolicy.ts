@@ -1,4 +1,4 @@
-import type { CrawlOptions } from "../../../shared/contracts/crawl.js";
+import type { CrawlOptions } from "../../../shared/contracts/index.js";
 import { normalizeHttpUrl } from "../../../shared/url.js";
 import type { ExtractedLink } from "../../../shared/types.js";
 

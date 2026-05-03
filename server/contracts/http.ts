@@ -1,5 +1,12 @@
 import { t } from "elysia";
 
+export {
+	API_LIST_LIMIT_BOUNDS,
+	BoundedListLimitSchema,
+	OptionalBoundedListLimitSchema,
+	optionalBoundedListLimitSchema,
+} from "../../shared/contracts/index.js";
+
 export const SSE_LAST_EVENT_ID_PATTERN = "^(0|[1-9]\\d*)$";
 
 /**
@@ -12,27 +19,6 @@ export const PositiveIntegerIdSchema = t.Numeric({
 	minimum: 1,
 	multipleOf: 1,
 });
-
-export const BoundedListLimitSchema = t.Numeric({
-	minimum: 1,
-	maximum: 100,
-	multipleOf: 1,
-});
-
-export function optionalBoundedListLimitSchema(defaultValue: number) {
-	return t.Optional(
-		t.Numeric({
-			minimum: 1,
-			maximum: 100,
-			multipleOf: 1,
-			default: defaultValue,
-		}),
-	);
-}
-
-export const OptionalBoundedListLimitSchema = t.Optional(
-	BoundedListLimitSchema,
-);
 
 export const OkResponseSchema = t.Object({
 	status: t.Literal("ok"),

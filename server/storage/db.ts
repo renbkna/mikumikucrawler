@@ -7,8 +7,8 @@ import { config } from "../config/env.js";
 import type {
 	CrawlOptions,
 	CrawlStatus,
-} from "../../shared/contracts/crawl.js";
-import { isResumableCrawlStatus } from "../../shared/contracts/crawl.js";
+} from "../../shared/contracts/index.js";
+import { isResumableCrawlStatus } from "../../shared/contracts/index.js";
 import { createCrawlQueueRepo } from "./repos/crawlQueueRepo.js";
 import { createCrawlItemPersistence } from "./repos/crawlItemPersistence.js";
 import { createCrawlDomainStateRepo } from "./repos/crawlDomainStateRepo.js";

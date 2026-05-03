@@ -8,6 +8,7 @@ import {
 	type RobotsResult,
 } from "../../utils/robotsParser.js";
 import { type CrawlUrlIdentity, getCrawlUrlIdentity } from "./UrlPolicy.js";
+import { shouldTreatRobotsResponseAsNoRules } from "./httpStatusPolicy.js";
 
 export interface RobotsPolicy {
 	allowed: boolean;
@@ -56,12 +57,7 @@ export class RobotsService {
 				return rules;
 			}
 
-			if (
-				response.status === 401 ||
-				response.status === 403 ||
-				response.status === 404 ||
-				response.status === 410
-			) {
+			if (shouldTreatRobotsResponseAsNoRules(response.status)) {
 				this.cache.set(originKey, null);
 				return null;
 			}

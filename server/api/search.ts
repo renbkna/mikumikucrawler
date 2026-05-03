@@ -1,5 +1,5 @@
 import { Elysia } from "elysia";
-import { API_PATHS } from "../../shared/contracts/api.js";
+import { API_PATHS } from "../../shared/contracts/index.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
 import {
 	DEFAULT_SEARCH_LIMIT,

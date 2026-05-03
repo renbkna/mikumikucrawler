@@ -1,5 +1,5 @@
-import type { CrawlOptions } from "../../../shared/contracts/crawl.js";
-import type { CrawlPagePayload } from "../../../shared/contracts/events.js";
+import type { CrawlOptions } from "../../../shared/contracts/index.js";
+import type { CrawlPagePayload } from "../../../shared/contracts/index.js";
 import type { ProcessedContent } from "../../types.js";
 import type { SavePageInput } from "../../storage/repos/pageRepo.js";
 import type { QueueItem } from "./CrawlQueue.js";

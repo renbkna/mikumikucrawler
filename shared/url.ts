@@ -1,4 +1,4 @@
-import ipaddr from "ipaddr.js";
+import { isPrivateOrReservedIpAddressLiteral } from "./ipPolicy.js";
 
 /**
  * URL normalization contract:
@@ -35,27 +35,6 @@ const STRIP_PARAMS = new Set([
 	"sid",
 ]);
 
-const ALLOWED_IP_RANGES = new Set(["unicast", "global"]);
-
-function isPrivateOrReservedAddressLiteral(hostname: string): boolean {
-	const normalizedHost =
-		hostname.startsWith("[") && hostname.endsWith("]")
-			? hostname.slice(1, -1)
-			: hostname;
-	try {
-		let parsed: ipaddr.IPv4 | ipaddr.IPv6 = ipaddr.parse(normalizedHost);
-		if (
-			parsed.kind() === "ipv6" &&
-			(parsed as ipaddr.IPv6).isIPv4MappedAddress()
-		) {
-			parsed = (parsed as ipaddr.IPv6).toIPv4Address();
-		}
-		return !ALLOWED_IP_RANGES.has(parsed.range());
-	} catch {
-		return false;
-	}
-}
-
 export function validatePublicHttpUrl(url: string): NormalizedUrlResult {
 	const normalized = normalizeHttpUrl(url);
 	if ("error" in normalized) {
@@ -67,7 +46,7 @@ export function validatePublicHttpUrl(url: string): NormalizedUrlResult {
 		return { error: "Localhost targets are not allowed" };
 	}
 
-	if (isPrivateOrReservedAddressLiteral(hostname)) {
+	if (isPrivateOrReservedIpAddressLiteral(hostname)) {
 		return { error: "Private or reserved IP addresses are not allowed" };
 	}
 

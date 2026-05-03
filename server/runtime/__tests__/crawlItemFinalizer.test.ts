@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { CrawlCounters } from "../../../shared/contracts/crawl.js";
+import type { CrawlCounters } from "../../../shared/contracts/index.js";
 import { CrawlItemFinalizer } from "../CrawlItemFinalizer.js";
 
 const item = {

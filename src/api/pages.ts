@@ -1,5 +1,5 @@
-import type { PageContentResponse } from "../../shared/contracts/page.js";
-import { isPageContentResponse } from "../../shared/contracts/page.js";
+import type { PageContentResponse } from "../../shared/contracts/index.js";
+import { isPageContentResponse } from "../../shared/contracts/index.js";
 import { api } from "./client";
 import { getApiErrorMessage } from "./errors";
 import type { ApiResult } from "./result";
