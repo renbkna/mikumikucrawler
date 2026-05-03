@@ -28,9 +28,10 @@ WORKDIR /app
 
 # Copy dependency files
 COPY package.json bun.lock ./
+COPY scripts ./scripts
 
 # Install dependencies (includes Playwright browser download)
-RUN bun install
+RUN bun install --frozen-lockfile
 
 COPY . .
 
