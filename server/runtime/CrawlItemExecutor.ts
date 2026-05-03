@@ -6,7 +6,7 @@ import type {
 	PagePipeline,
 	PageProcessResult,
 } from "../domain/crawl/PagePipeline.js";
-import { withTimeout } from "../utils/timeout.js";
+import { runWithTimeout } from "../utils/timeout.js";
 
 export interface CrawlItemExecutorDependencies {
 	pipeline: PagePipeline;
@@ -23,23 +23,20 @@ export class CrawlItemExecutor {
 		item: QueueItem,
 		externalSignal?: AbortSignal,
 	): Promise<PageProcessResult> {
-		const controller = new AbortController();
-		const signal = externalSignal
-			? AbortSignal.any([externalSignal, controller.signal])
-			: controller.signal;
 		try {
-			return await withTimeout(
-				this.deps.pipeline.process(item, signal),
-				this.deps.processingTimeoutMs ??
+			return await runWithTimeout({
+				timeoutMs:
+					this.deps.processingTimeoutMs ??
 					CRAWL_QUEUE_CONSTANTS.ITEM_PROCESSING_TIMEOUT_MS,
-				`Processing ${item.url}`,
-			);
+				operationName: `Processing ${item.url}`,
+				signal: externalSignal,
+				run: (signal) => this.deps.pipeline.process(item, signal),
+			});
 		} catch (error) {
 			if (externalSignal?.aborted) {
 				return { aborted: true };
 			}
 
-			controller.abort(error);
 			this.deps.logger.error(
 				`[Runtime] Failed to process ${item.url}: ${error instanceof Error ? error.message : String(error)}`,
 			);

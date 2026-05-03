@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { normalizeHttpUrl, validatePublicHttpUrl } from "../../../shared/url";
+import {
+	normalizeCanonicalHttpUrl,
+	normalizeRobotsMatchHttpUrl,
+	validatePublicHttpUrl,
+} from "../../../shared/url";
 
 /**
- * CONTRACT: normalizeHttpUrl
+ * CONTRACT: normalizeCanonicalHttpUrl
  *
  * Input: user-entered or discovered URL text
  * Output: { url: string } | { error: string }
@@ -22,10 +26,10 @@ import { normalizeHttpUrl, validatePublicHttpUrl } from "../../../shared/url";
  *   - empty/null input → error
  */
 
-describe("normalizeHttpUrl", () => {
+describe("normalizeCanonicalHttpUrl", () => {
 	test("canonical normalization: lowercase, port strip, param sort, tracking strip, fragment strip", () => {
 		expect(
-			normalizeHttpUrl(
+			normalizeCanonicalHttpUrl(
 				" Example.COM:80/path/?b=2&utm_source=newsletter&a=1#section ",
 			),
 		).toEqual({
@@ -34,47 +38,47 @@ describe("normalizeHttpUrl", () => {
 	});
 
 	test("strips fragment from URLs", () => {
-		expect(normalizeHttpUrl("https://example.com/page#section")).toEqual({
-			url: "https://example.com/page",
-		});
+		expect(
+			normalizeCanonicalHttpUrl("https://example.com/page#section"),
+		).toEqual({ url: "https://example.com/page" });
 	});
 
 	test("removes default port 80 for http", () => {
-		expect(normalizeHttpUrl("http://example.com:80/path")).toEqual({
+		expect(normalizeCanonicalHttpUrl("http://example.com:80/path")).toEqual({
 			url: "http://example.com/path",
 		});
 	});
 
 	test("removes default port 443 for https", () => {
-		expect(normalizeHttpUrl("https://example.com:443/path")).toEqual({
+		expect(normalizeCanonicalHttpUrl("https://example.com:443/path")).toEqual({
 			url: "https://example.com/path",
 		});
 	});
 
 	test("preserves non-default ports", () => {
-		expect(normalizeHttpUrl("http://example.com:8080/path")).toEqual({
+		expect(normalizeCanonicalHttpUrl("http://example.com:8080/path")).toEqual({
 			url: "http://example.com:8080/path",
 		});
 	});
 
 	test("prepends http:// for bare hostnames", () => {
-		const result = normalizeHttpUrl("example.com/page");
+		const result = normalizeCanonicalHttpUrl("example.com/page");
 		expect(result).toEqual({ url: "http://example.com/page" });
 	});
 
 	test("trims trailing slash except for root path", () => {
-		expect(normalizeHttpUrl("https://example.com/path/")).toEqual({
+		expect(normalizeCanonicalHttpUrl("https://example.com/path/")).toEqual({
 			url: "https://example.com/path",
 		});
 		// Root path keeps its slash
-		expect(normalizeHttpUrl("https://example.com/")).toEqual({
+		expect(normalizeCanonicalHttpUrl("https://example.com/")).toEqual({
 			url: "https://example.com/",
 		});
 	});
 
 	test("strips tracking params (utm_*, fbclid, gclid)", () => {
 		expect(
-			normalizeHttpUrl(
+			normalizeCanonicalHttpUrl(
 				"https://example.com/page?q=search&utm_medium=email&fbclid=abc&gclid=def",
 			),
 		).toEqual({
@@ -83,21 +87,47 @@ describe("normalizeHttpUrl", () => {
 	});
 
 	test("rejects non-http schemes", () => {
-		expect(normalizeHttpUrl("mailto:test@example.com")).toEqual({
+		expect(normalizeCanonicalHttpUrl("mailto:test@example.com")).toEqual({
 			error: "Only HTTP and HTTPS URLs are supported",
 		});
-		expect(normalizeHttpUrl("ftp://files.example.com")).toEqual({
+		expect(normalizeCanonicalHttpUrl("ftp://files.example.com")).toEqual({
 			error: "Only HTTP and HTTPS URLs are supported",
 		});
 	});
 
 	test("rejects empty input", () => {
-		expect(normalizeHttpUrl("")).toEqual({ error: "URL is required" });
+		expect(normalizeCanonicalHttpUrl("")).toEqual({
+			error: "URL is required",
+		});
 	});
 
 	test("rejects unparsable URLs", () => {
-		expect(normalizeHttpUrl("http://[invalid")).toEqual({
+		expect(normalizeCanonicalHttpUrl("http://[invalid")).toEqual({
 			error: "Invalid URL format",
+		});
+	});
+});
+
+describe("normalizeRobotsMatchHttpUrl", () => {
+	test("shares parse invariants but preserves query shape for robots matching", () => {
+		expect(
+			normalizeRobotsMatchHttpUrl(
+				"HTTPS://Example.COM:443/path/?b=2&a=1&utm_source=x#section",
+			),
+		).toEqual({
+			url: "https://example.com/path/?b=2&a=1&utm_source=x",
+		});
+	});
+
+	test("preserves trailing slash and non-default ports", () => {
+		expect(
+			normalizeRobotsMatchHttpUrl("http://Example.COM:8080/path/?b=2&a=1"),
+		).toEqual({ url: "http://example.com:8080/path/?b=2&a=1" });
+	});
+
+	test("rejects the same forbidden schemes as canonical mode", () => {
+		expect(normalizeRobotsMatchHttpUrl("javascript:void(0)")).toEqual({
+			error: "Only HTTP and HTTPS URLs are supported",
 		});
 	});
 });
