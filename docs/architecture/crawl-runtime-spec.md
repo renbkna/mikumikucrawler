@@ -25,12 +25,16 @@ The runtime does not own browser connections. Browser clients are subscribers.
 
 ```text
 pending -> starting -> running -> pausing -> paused
-                           |             |
-                           |             -> starting
-                           -> stopping -> stopped
-                           -> completed
-                           -> failed
-                           -> interrupted
+              |            |             |
+              |            |             -> starting
+              |            -> stopping -> stopped
+              |            -> completed
+              |            -> failed
+              |            -> interrupted
+              -> pausing
+              -> stopping
+              -> failed
+              -> interrupted
 ```
 
 ### Status rules
@@ -45,8 +49,11 @@ pending -> starting -> running -> pausing -> paused
 | From | To | Trigger |
 | --- | --- | --- |
 | `pending` | `starting` | `POST /api/crawls` accepted |
-| `starting` | `running` | runtime initialization succeeds |
+| `starting` | `running` | runtime initialization succeeds without a stop request |
+| `starting` | `pausing` | graceful pause requested during initialization |
+| `starting` | `stopping` | force stop requested during initialization |
 | `starting` | `failed` | runtime initialization fails |
+| `starting` | `interrupted` | process shutdown or runtime crash during initialization |
 | `running` | `pausing` | graceful pause requested |
 | `running` | `stopping` | force stop requested |
 | `running` | `completed` | queue drains without stop request |
@@ -91,7 +98,7 @@ Validation:
 
 Input:
 
-- none
+- optional `mode: "pause" | "force"` body
 
 Output:
 
@@ -100,6 +107,8 @@ Output:
 Rules:
 
 - stopping a terminal crawl is idempotent
+- graceful stop defaults to pause for any active crawl, including `starting`
+- force stop moves any active crawl, including `starting`, toward `stopping`
 - stopping a missing crawl returns `404`
 
 ### `POST /api/crawls/:id/resume`

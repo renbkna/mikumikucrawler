@@ -2,13 +2,15 @@ import { Elysia, t } from "elysia";
 import {
 	API_PATHS,
 	CRAWL_ROUTE_SEGMENTS,
+	type CrawlStatus,
+	DEFAULT_CRAWL_LIST_LIMIT,
+} from "../../shared/contracts/index.js";
+import {
 	CrawlIdParamsSchema,
 	CrawlListQuerySchema,
 	CrawlListResponseSchema,
-	type CrawlStatus,
 	CreateCrawlBodySchema,
 	CreateCrawlResponseSchema,
-	DEFAULT_CRAWL_LIST_LIMIT,
 	ExportQuerySchema,
 	GetCrawlResponseSchema,
 	ResumableCrawlListQuerySchema,
@@ -16,7 +18,7 @@ import {
 	ResumeCrawlResponseSchema,
 	StopCrawlBodySchema,
 	StopCrawlResponseSchema,
-} from "../../shared/contracts/index.js";
+} from "../../shared/contracts/schemas.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
 import { OkResponseSchema } from "../contracts/http.js";
 import { CrawlExportService } from "../domain/export/CrawlExportService.js";

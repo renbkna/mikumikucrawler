@@ -165,10 +165,6 @@ describe("page result builder contract", () => {
 				extractedData: {
 					mainContent: "Processed body",
 					jsonLd: [{ "@type": "Article" }],
-					microdata: undefined,
-					openGraph: undefined,
-					twitterCards: undefined,
-					schema: undefined,
 				},
 				metadata: {
 					title: "Metadata title",

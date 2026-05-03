@@ -1,16 +1,14 @@
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 import {
 	API_PATHS,
-	API_LIST_LIMIT_BOUNDS,
 	buildCrawlEventsPath,
 	buildCrawlExportPath,
 	buildPageContentPath,
-	CrawlEventEnvelopeSchema,
 	CRAWL_EXPORT_FORMAT_VALUES,
-	CrawlListQuerySchema,
 	CRAWL_ROUTE_SEGMENTS,
 	isApiPath,
 	isCrawlEventsPath,
@@ -28,7 +26,6 @@ import {
 	isResumableCrawlStatus,
 	isTerminalCrawlStatus,
 	PENDING_CRAWL_STATUS_VALUES,
-	ResumableCrawlListQuerySchema,
 	RESUMABLE_CRAWL_STATUS_VALUES,
 	TERMINAL_CRAWL_STATUS_VALUES,
 	toResumableSessionSummary,
@@ -42,6 +39,12 @@ import {
 	SETTLED_CRAWL_EVENT_TYPE_VALUES,
 	TERMINAL_CRAWL_EVENT_TYPE_VALUES,
 } from "../../../shared/contracts/index.js";
+import { API_LIST_LIMIT_BOUNDS } from "../../../shared/contracts/http.js";
+import {
+	CrawlEventEnvelopeSchema,
+	CrawlListQuerySchema,
+	ResumableCrawlListQuerySchema,
+} from "../../../shared/contracts/schemas.js";
 import {
 	shouldResetTheatreStatus,
 	THEATRE_STATUS_VALUES,
@@ -224,6 +227,16 @@ describe("cross-boundary invariants", () => {
 		expect(CrawlListQuerySchema).toBeDefined();
 		expect(ResumableCrawlListQuerySchema).toBeDefined();
 		expect(CrawlEventEnvelopeSchema).toBeDefined();
+	});
+
+	test("browser-facing shared validation does not compile schemas with eval", async () => {
+		const validationSource = await readFile(
+			new URL("../../../shared/contracts/validation.ts", import.meta.url),
+			"utf8",
+		);
+
+		expect(validationSource).not.toContain("TypeCompiler");
+		expect(validationSource).not.toContain(".Compile(");
 	});
 
 	test("crawl statuses are classified in one exhaustive partition", () => {

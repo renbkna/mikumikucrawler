@@ -10,6 +10,12 @@ export type PendingCrawlPagePayload = Omit<CrawlPagePayload, "id">;
 
 type SuccessfulFetchResult = Extract<FetchResult, { type: "success" }>;
 
+function omitUndefined<T extends Record<string, unknown>>(value: T): T {
+	return Object.fromEntries(
+		Object.entries(value).filter(([, entry]) => entry !== undefined),
+	) as T;
+}
+
 export interface BuiltPageResult {
 	resolvedTitle: string;
 	resolvedDescription: string;
@@ -89,14 +95,14 @@ export class PageResultBuilder {
 				contentType: fetchResult.contentType,
 				domain: item.domain,
 				processedData: {
-					extractedData: {
+					extractedData: omitUndefined({
 						mainContent: processedContent.extractedData?.mainContent,
 						jsonLd: processedContent.extractedData?.jsonLd ?? [],
 						microdata: processedContent.extractedData?.microdata,
 						openGraph: processedContent.extractedData?.openGraph,
 						twitterCards: processedContent.extractedData?.twitterCards,
 						schema: processedContent.extractedData?.schema,
-					},
+					}),
 					metadata: processedContent.metadata,
 					analysis: processedContent.analysis,
 					media: retainedMedia,

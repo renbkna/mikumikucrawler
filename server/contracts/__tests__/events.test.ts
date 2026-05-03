@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Elysia } from "elysia";
-import { CrawlEventEnvelopeSchema } from "../../../shared/contracts/index.js";
+import { CrawlEventEnvelopeSchema } from "../../../shared/contracts/schemas.js";
 
 const counters = {
 	pagesScanned: 0,

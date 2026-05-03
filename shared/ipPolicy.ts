@@ -26,5 +26,10 @@ export function isPublicIpAddressLiteral(address: string): boolean {
 }
 
 export function isPrivateOrReservedIpAddressLiteral(address: string): boolean {
+	try {
+		ipaddr.parse(normalizeIpLiteral(address));
+	} catch {
+		return false;
+	}
 	return !isPublicIpAddressLiteral(address);
 }

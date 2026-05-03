@@ -12,16 +12,28 @@
 	"categories": ["developer", "utilities"],
 	"icons": [
 		{
-			"src": "/miku.ico",
-			"sizes": "any",
-			"type": "image/x-icon",
-			"purpose": "any maskable"
+			"src": "/icons/miku-192.png",
+			"sizes": "192x192",
+			"type": "image/png",
+			"purpose": "any"
+		},
+		{
+			"src": "/icons/miku-512.png",
+			"sizes": "512x512",
+			"type": "image/png",
+			"purpose": "any"
+		},
+		{
+			"src": "/icons/miku-maskable-512.png",
+			"sizes": "512x512",
+			"type": "image/png",
+			"purpose": "maskable"
 		}
 	],
 	"screenshots": [
 		{
 			"src": "/mikumikucrawler.png",
-			"sizes": "1280x720",
+			"sizes": "2514x1804",
 			"type": "image/png",
 			"form_factor": "wide"
 		}
