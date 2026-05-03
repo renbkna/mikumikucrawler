@@ -5,7 +5,7 @@ export {
 	BoundedListLimitSchema,
 	OptionalBoundedListLimitSchema,
 	optionalBoundedListLimitSchema,
-} from "../../shared/contracts/index.js";
+} from "../../shared/contracts/http.js";
 
 export const SSE_LAST_EVENT_ID_PATTERN = "^(0|[1-9]\\d*)$";
 

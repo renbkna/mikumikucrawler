@@ -14,7 +14,7 @@ export {
 	isCrawledPage,
 	isProcessedPageData,
 	isQueueStats,
-} from "./contracts/pageData.js";
+} from "./contracts/validation.js";
 
 /**
  * Shared runtime-facing types used by both the React client and Bun server.

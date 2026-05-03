@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { normalizeHttpUrl } from "../../../shared/url";
+import { normalizeHttpUrl, validatePublicHttpUrl } from "../../../shared/url";
 
 /**
  * CONTRACT: normalizeHttpUrl
@@ -98,6 +98,29 @@ describe("normalizeHttpUrl", () => {
 	test("rejects unparsable URLs", () => {
 		expect(normalizeHttpUrl("http://[invalid")).toEqual({
 			error: "Invalid URL format",
+		});
+	});
+});
+
+describe("validatePublicHttpUrl", () => {
+	test("accepts normal DNS hostnames", () => {
+		expect(validatePublicHttpUrl("https://example.com/page")).toEqual({
+			url: "https://example.com/page",
+		});
+		expect(validatePublicHttpUrl("example.com/path")).toEqual({
+			url: "http://example.com/path",
+		});
+	});
+
+	test("rejects localhost, private IP, and IPv4-mapped private literals", () => {
+		expect(validatePublicHttpUrl("http://localhost")).toEqual({
+			error: "Localhost targets are not allowed",
+		});
+		expect(validatePublicHttpUrl("http://127.0.0.1")).toEqual({
+			error: "Private or reserved IP addresses are not allowed",
+		});
+		expect(validatePublicHttpUrl("http://[::ffff:127.0.0.1]")).toEqual({
+			error: "Private or reserved IP addresses are not allowed",
 		});
 	});
 });

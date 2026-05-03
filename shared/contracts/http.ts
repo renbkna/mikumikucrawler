@@ -1,4 +1,4 @@
-import { t } from "elysia";
+import { t } from "elysia/type-system";
 
 export const API_LIST_LIMIT_BOUNDS = {
 	min: 1,
