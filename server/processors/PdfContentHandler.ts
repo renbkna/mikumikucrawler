@@ -58,7 +58,7 @@ export class PdfContentHandler {
 						.map((item) => item.str)
 						.join(" ");
 					textParts.push(pageText);
-					await page.cleanup();
+					page.cleanup();
 				} catch {
 					this.logger.warn(`Failed to extract text from PDF page ${pageNum}`);
 				}

@@ -211,9 +211,9 @@ async function compressResponse(
 	request: Request,
 	response: Response,
 ): Promise<Response | undefined> {
-	if (response.headers.get("content-encoding")) return;
-	if (request.headers.has("range")) return;
-	if ([204, 304].includes(response.status)) return;
+	if (response.headers.get("content-encoding")) return undefined;
+	if (request.headers.has("range")) return undefined;
+	if ([204, 304].includes(response.status)) return undefined;
 
 	const acceptEncoding = request.headers.get("accept-encoding") || "";
 	const contentType = response.headers.get("content-type") || "";
@@ -223,12 +223,12 @@ async function compressResponse(
 		isNeverCompressedContentType(contentType) ||
 		!isCompressibleContentType(contentType)
 	) {
-		return;
+		return undefined;
 	}
 
 	const encoding = chooseEncoding(acceptEncoding);
 	if (!encoding) {
-		return;
+		return undefined;
 	}
 
 	let compressed: Uint8Array;
@@ -290,7 +290,7 @@ export const compression = () => {
 		{ as: "global" },
 		async ({ request, response, set }) => {
 			const normalized = toResponse(response, set);
-			if (!normalized) return;
+			if (!normalized) return undefined;
 
 			return compressResponse(request, normalized);
 		},

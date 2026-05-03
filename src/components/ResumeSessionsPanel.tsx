@@ -224,7 +224,9 @@ export function ResumeSessionsPanel({
 									</button>
 									<button
 										type="button"
-										onClick={() => handleResume(session)}
+										onClick={() => {
+											void handleResume(session);
+										}}
 										disabled={isActionPending}
 										className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-miku-teal to-teal-400 text-white text-xs font-bold shadow-md shadow-miku-teal/20 hover:shadow-miku-teal/40 hover:scale-105 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100"
 										aria-label={`Resume session for ${session.target}`}

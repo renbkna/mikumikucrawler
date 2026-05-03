@@ -88,7 +88,7 @@ export class EventStream {
 			state.history.splice(0, state.history.length - MAX_HISTORY);
 		}
 
-		for (const subscriber of [...state.subscribers]) {
+		for (const subscriber of Array.from(state.subscribers)) {
 			try {
 				subscriber(cloneValue(event as CrawlEventEnvelope));
 			} catch {

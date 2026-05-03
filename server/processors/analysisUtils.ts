@@ -278,7 +278,7 @@ const WORD_CLEANUP_REGEX = /[^a-z0-9]/g;
 
 /** Analyzes text to determine word count, language, sentiment, and readability. */
 export function analyzeContent(text: string): AnalysisResult {
-	const cleanText = (text || "").toString().trim();
+	const cleanText = text.trim();
 	const words = cleanText.split(/\s+/).filter((w) => w.length > 0);
 	const wordCount = words.length;
 	const readingTime = Math.ceil(wordCount / 200);

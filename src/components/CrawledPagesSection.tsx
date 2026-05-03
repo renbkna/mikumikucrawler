@@ -251,7 +251,9 @@ const CrawledPageCard = memo(function CrawledPageCard({
 					<div className="flex gap-2">
 						<button
 							type="button"
-							onClick={handleToggleSource}
+							onClick={(event) => {
+								void handleToggleSource(event);
+							}}
 							className="px-3 py-1.5 rounded-xl bg-miku-teal/10 text-miku-teal text-xs font-bold hover:bg-miku-teal/20 transition-colors flex items-center gap-1.5 border border-miku-teal/20"
 							disabled={isLoadingContent}
 						>

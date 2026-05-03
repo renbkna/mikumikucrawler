@@ -91,7 +91,7 @@ export function normalizeHttpUrl(url: string): NormalizedUrlResult {
 
 		if (parsed.search) {
 			const params = new URLSearchParams(parsed.search);
-			for (const key of [...params.keys()]) {
+			for (const key of Array.from(params.keys())) {
 				if (STRIP_PARAMS.has(key.toLowerCase())) {
 					params.delete(key);
 				}

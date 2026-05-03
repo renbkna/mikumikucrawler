@@ -33,9 +33,9 @@ import { RuntimeRegistry } from "./runtime/RuntimeRegistry.js";
 import { handleAppError } from "./errorHandling.js";
 import { createStorage, type Storage } from "./storage/db.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const distPath = path.join(__dirname, "..", "dist");
+const moduleFilename = fileURLToPath(import.meta.url);
+const moduleDirectory = path.dirname(moduleFilename);
+const distPath = path.join(moduleDirectory, "..", "dist");
 
 function isRateLimitExempt(request: Request): boolean {
 	const pathname = new URL(request.url).pathname;

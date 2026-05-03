@@ -22,8 +22,8 @@ interface RouteContextBase {
 	};
 }
 
-export function routeServices<TExtra = object, TContext = unknown>(
-	context: TContext,
+export function routeServices<TExtra = object>(
+	context: unknown,
 ): Omit<RouteContextBase, keyof TExtra> & RouteServices & TExtra {
 	return context as Omit<RouteContextBase, keyof TExtra> &
 		RouteServices &

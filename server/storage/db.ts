@@ -17,9 +17,9 @@ import { createCrawlTerminalRepo } from "./repos/crawlTerminalRepo.js";
 import { createPageRepo } from "./repos/pageRepo.js";
 import { createSearchRepo } from "./repos/searchRepo.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const migrationsDirectory = path.join(__dirname, "migrations");
+const moduleFilename = fileURLToPath(import.meta.url);
+const moduleDirectory = path.dirname(moduleFilename);
+const migrationsDirectory = path.join(moduleDirectory, "migrations");
 
 export interface StorageRepos {
 	crawlRuns: ReturnType<typeof createCrawlRunRepo>;
