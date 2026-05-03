@@ -1,5 +1,8 @@
 import type { CrawlOptions } from "../../../shared/contracts/index.js";
-import { normalizeHttpUrl } from "../../../shared/url.js";
+import {
+	normalizeCanonicalHttpUrl,
+	normalizeRobotsMatchHttpUrl,
+} from "../../../shared/url.js";
 import type { ExtractedLink } from "../../../shared/types.js";
 
 const SKIPPED_EXTENSIONS =
@@ -33,48 +36,14 @@ export type NormalizedDiscoveredLink = {
 	identity: CrawlUrlIdentity;
 };
 
-function toRobotsMatchUrl(url: string): string | { error: string } {
-	let candidate = url.trim();
-	const hasExplicitHttpScheme = /^https?:\/\//i.test(candidate);
-	const hasSchemeLikePrefix = /^[a-z][a-z0-9+.-]*:/i.test(candidate);
-	const looksLikeHostWithPort = /^[^/?#]+:\d/.test(candidate);
-
-	if (hasSchemeLikePrefix && !hasExplicitHttpScheme && !looksLikeHostWithPort) {
-		return { error: "Only HTTP and HTTPS URLs are supported" };
-	}
-
-	if (!hasExplicitHttpScheme) {
-		candidate = `http://${candidate}`;
-	}
-
-	try {
-		const parsed = new URL(candidate);
-		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-			return { error: "Only HTTP and HTTPS URLs are supported" };
-		}
-
-		parsed.hostname = parsed.hostname.toLowerCase();
-		if (
-			(parsed.protocol === "http:" && parsed.port === "80") ||
-			(parsed.protocol === "https:" && parsed.port === "443")
-		) {
-			parsed.port = "";
-		}
-		parsed.hash = "";
-		return parsed.toString();
-	} catch {
-		return { error: "Invalid URL format" };
-	}
-}
-
 export function getCrawlUrlIdentity(url: string): CrawlUrlIdentityResult {
-	const normalized = normalizeHttpUrl(url);
+	const normalized = normalizeCanonicalHttpUrl(url);
 	if ("error" in normalized) {
 		return normalized;
 	}
-	const robotsMatchUrl = toRobotsMatchUrl(url);
-	if (typeof robotsMatchUrl !== "string") {
-		return robotsMatchUrl;
+	const robotsMatch = normalizeRobotsMatchHttpUrl(url);
+	if ("error" in robotsMatch) {
+		return robotsMatch;
 	}
 
 	const parsed = new URL(normalized.url);
@@ -82,7 +51,7 @@ export function getCrawlUrlIdentity(url: string): CrawlUrlIdentityResult {
 
 	return {
 		canonicalUrl: normalized.url,
-		robotsMatchUrl,
+		robotsMatchUrl: robotsMatch.url,
 		hostname: parsed.hostname,
 		originKey,
 		robotsKey: originKey,

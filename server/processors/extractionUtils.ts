@@ -7,7 +7,7 @@ import type {
 	PageMetadata,
 } from "../../shared/types.js";
 import type { LoggerLike } from "../types.js";
-import { normalizeHttpUrl } from "../../shared/url.js";
+import { normalizeCanonicalHttpUrl } from "../../shared/url.js";
 import { getErrorMessage } from "../utils/helpers.js";
 
 /** Pre-compiled regex for downloadable file extensions */
@@ -112,7 +112,7 @@ function normalizeResolvedResourceUrl(url: URL): string | null {
 		return null;
 	}
 
-	const normalized = normalizeHttpUrl(url.href);
+	const normalized = normalizeCanonicalHttpUrl(url.href);
 	return "error" in normalized ? null : normalized.url;
 }
 
@@ -445,7 +445,7 @@ export function processLinks(
 			const linkType = classifyLink(url, text);
 			const normalizedUrl =
 				url.protocol === "http:" || url.protocol === "https:"
-					? normalizeHttpUrl(url.href)
+					? normalizeCanonicalHttpUrl(url.href)
 					: url.protocol === "mailto:" || url.protocol === "tel:"
 						? { url: url.toString() }
 						: { error: "Unsupported link scheme" };

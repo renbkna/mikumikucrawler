@@ -2,7 +2,7 @@ import type { Logger } from "../config/logging.js";
 import { PDF_CONSTANTS } from "../constants.js";
 import type { ProcessedContent } from "../types.js";
 import { getErrorMessage } from "../utils/helpers.js";
-import { withTimeout } from "../utils/timeout.js";
+import { runWithTimeout } from "../utils/timeout.js";
 import { analyzeContent } from "./analysisUtils.js";
 import { applyProcessingErrorDefaults } from "./processingDefaults.js";
 
@@ -34,11 +34,22 @@ export class PdfContentHandler {
 				typeof content === "string" ? Buffer.from(content) : content;
 			const data = new Uint8Array(pdfBuffer);
 			const pdfjs = await getPDFJS();
-			const pdfDocument = await withTimeout(
-				pdfjs.getDocument({ data }).promise,
-				PDF_CONSTANTS.PROCESSING_TIMEOUT_MS,
-				"PDF loading",
-			);
+			const loadingTask = pdfjs.getDocument({ data });
+			const pdfDocument = await runWithTimeout({
+				timeoutMs: PDF_CONSTANTS.PROCESSING_TIMEOUT_MS,
+				operationName: "PDF loading",
+				run: async (signal) => {
+					const destroyOnAbort = () => {
+						void Promise.resolve(loadingTask.destroy()).catch(() => undefined);
+					};
+					signal.addEventListener("abort", destroyOnAbort, { once: true });
+					try {
+						return await loadingTask.promise;
+					} finally {
+						signal.removeEventListener("abort", destroyOnAbort);
+					}
+				},
+			});
 
 			if (pdfDocument.numPages > PDF_CONSTANTS.MAX_PAGES) {
 				throw new Error(

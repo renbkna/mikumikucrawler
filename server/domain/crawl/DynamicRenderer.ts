@@ -20,7 +20,7 @@ import {
 import type { HttpClient } from "../../plugins/security.js";
 import { getErrorMessage } from "../../utils/helpers.js";
 import { logMemoryStatus } from "../../utils/memoryMonitor.js";
-import { withTimeout, withTimeoutFallback } from "../../utils/timeout.js";
+import { runWithTimeout, runWithTimeoutFallback } from "../../utils/timeout.js";
 import type { QueueItem } from "./CrawlQueue.js";
 import {
 	CONSENT_ACTION_MARKERS,
@@ -419,24 +419,25 @@ export class DynamicRenderer {
 				return null;
 			}
 
-			const content = await withTimeout(
-				page.content(),
-				EXTRACTION_TIMEOUT_MS,
-				"Content extraction",
-			);
+			const content = await runWithTimeout({
+				timeoutMs: EXTRACTION_TIMEOUT_MS,
+				operationName: "Content extraction",
+				run: () => page.content(),
+			});
 
-			const metadata = await withTimeout(
-				page.evaluate(() => {
-					const title = document.title || "";
-					const description =
-						document
-							.querySelector('meta[name="description"]')
-							?.getAttribute("content") || "";
-					return { title, description };
-				}),
-				EXTRACTION_TIMEOUT_MS,
-				"Metadata extraction",
-			);
+			const metadata = await runWithTimeout({
+				timeoutMs: EXTRACTION_TIMEOUT_MS,
+				operationName: "Metadata extraction",
+				run: () =>
+					page.evaluate(() => {
+						const title = document.title || "";
+						const description =
+							document
+								.querySelector('meta[name="description"]')
+								?.getAttribute("content") || "";
+						return { title, description };
+					}),
+			});
 
 			return {
 				content,
@@ -629,11 +630,12 @@ export class DynamicRenderer {
 			DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.CONSENT_NAVIGATION;
 
 		try {
-			const bodyText = await withTimeoutFallback(
-				page.evaluate(() => document.body?.textContent ?? ""),
-				EVAL_TIMEOUT_MS,
-				"",
-			);
+			const bodyText = await runWithTimeoutFallback({
+				timeoutMs: EVAL_TIMEOUT_MS,
+				operationName: "Consent body text extraction",
+				fallback: "",
+				run: () => page.evaluate(() => document.body?.textContent ?? ""),
+			});
 
 			if (!isConsentWallText(bodyText)) {
 				return { detected: false, clicked: false };
@@ -645,103 +647,105 @@ export class DynamicRenderer {
 
 			let clicked = false;
 			for (const frame of page.frames()) {
-				clicked = await withTimeoutFallback(
-					frame.evaluate(
-						({
-							selectors,
-							actionMarkers,
-						}: {
-							selectors: string[];
-							actionMarkers: string[];
-						}) => {
-							const interactiveSelector =
-								"button, input[type='submit'], a[role='button'], [role='button']";
+				clicked = await runWithTimeoutFallback({
+					timeoutMs: EVAL_TIMEOUT_MS,
+					operationName: "Consent button evaluation",
+					fallback: false,
+					run: () =>
+						frame.evaluate(
+							({
+								selectors,
+								actionMarkers,
+							}: {
+								selectors: string[];
+								actionMarkers: string[];
+							}) => {
+								const interactiveSelector =
+									"button, input[type='submit'], a[role='button'], [role='button']";
 
-							function collectInteractiveElements(
-								root: ParentNode,
-							): HTMLElement[] {
-								const elements = Array.from(
-									root.querySelectorAll(interactiveSelector),
-								) as HTMLElement[];
-								const walker = document.createTreeWalker(
-									root,
-									NodeFilter.SHOW_ELEMENT,
-								);
-								const shadowElements: HTMLElement[] = [];
+								function collectInteractiveElements(
+									root: ParentNode,
+								): HTMLElement[] {
+									const elements = Array.from(
+										root.querySelectorAll(interactiveSelector),
+									) as HTMLElement[];
+									const walker = document.createTreeWalker(
+										root,
+										NodeFilter.SHOW_ELEMENT,
+									);
+									const shadowElements: HTMLElement[] = [];
 
-								while (walker.nextNode()) {
-									const node = walker.currentNode;
-									if (!(node instanceof Element)) continue;
-									if (node.shadowRoot) {
-										shadowElements.push(
-											...collectInteractiveElements(node.shadowRoot),
-										);
+									while (walker.nextNode()) {
+										const node = walker.currentNode;
+										if (!(node instanceof Element)) continue;
+										if (node.shadowRoot) {
+											shadowElements.push(
+												...collectInteractiveElements(node.shadowRoot),
+											);
+										}
 									}
+
+									return [...elements, ...shadowElements];
 								}
 
-								return [...elements, ...shadowElements];
-							}
+								function isVisible(element: HTMLElement): boolean {
+									if (element.hidden) return false;
+									if ("disabled" in element && element.disabled) return false;
+									const style = window.getComputedStyle(element);
+									return (
+										style.display !== "none" &&
+										style.visibility !== "hidden" &&
+										style.pointerEvents !== "none"
+									);
+								}
 
-							function isVisible(element: HTMLElement): boolean {
-								if (element.hidden) return false;
-								if ("disabled" in element && element.disabled) return false;
-								const style = window.getComputedStyle(element);
-								return (
-									style.display !== "none" &&
-									style.visibility !== "hidden" &&
-									style.pointerEvents !== "none"
+								const buttons = collectInteractiveElements(document);
+								const exactMatch = buttons.find(
+									(button) =>
+										isVisible(button) &&
+										selectors.some((selector: string) =>
+											button.matches(selector),
+										),
 								);
-							}
+								if (exactMatch) {
+									exactMatch.click();
+									return true;
+								}
 
-							const buttons = collectInteractiveElements(document);
-							const exactMatch = buttons.find(
-								(button) =>
-									isVisible(button) &&
-									selectors.some((selector: string) =>
-										button.matches(selector),
-									),
-							);
-							if (exactMatch) {
-								exactMatch.click();
-								return true;
-							}
+								const normalize = (value: string | null | undefined) =>
+									(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+								const matchesAction = (
+									...values: Array<string | null | undefined>
+								) =>
+									values.some((value) => {
+										const normalized = normalize(value);
+										return actionMarkers.some((marker: string) =>
+											normalized.includes(marker),
+										);
+									});
 
-							const normalize = (value: string | null | undefined) =>
-								(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
-							const matchesAction = (
-								...values: Array<string | null | undefined>
-							) =>
-								values.some((value) => {
-									const normalized = normalize(value);
-									return actionMarkers.some((marker: string) =>
-										normalized.includes(marker),
+								const textMatch = buttons.find((button) => {
+									if (!isVisible(button)) return false;
+									return matchesAction(
+										button.textContent,
+										button.getAttribute("aria-label"),
+										button.getAttribute("title"),
+										button.getAttribute("value"),
 									);
 								});
+								if (textMatch) {
+									textMatch.click();
+									return true;
+								}
 
-							const textMatch = buttons.find((button) => {
-								if (!isVisible(button)) return false;
-								return matchesAction(
-									button.textContent,
-									button.getAttribute("aria-label"),
-									button.getAttribute("title"),
-									button.getAttribute("value"),
-								);
-							});
-							if (textMatch) {
-								textMatch.click();
-								return true;
-							}
-
-							return false;
-						},
-						{
-							selectors: [...CONSENT_BUTTON_SELECTORS],
-							actionMarkers: [...CONSENT_ACTION_MARKERS],
-						},
-					),
-					EVAL_TIMEOUT_MS,
-					false,
-				);
+								return false;
+							},
+							{
+								selectors: [...CONSENT_BUTTON_SELECTORS],
+								actionMarkers: [...CONSENT_ACTION_MARKERS],
+							},
+						),
+				});
 
 				if (clicked) break;
 			}
@@ -756,13 +760,9 @@ export class DynamicRenderer {
 			);
 
 			try {
-				await withTimeoutFallback(
-					page.waitForLoadState("domcontentloaded", {
-						timeout: NAV_TIMEOUT_MS,
-					}),
-					NAV_TIMEOUT_MS,
-					null,
-				);
+				await page.waitForLoadState("domcontentloaded", {
+					timeout: NAV_TIMEOUT_MS,
+				});
 			} catch {
 				this.logger.debug(
 					`Consent navigation wait completed/timed out for ${url}`,
@@ -801,29 +801,31 @@ export class DynamicRenderer {
 			}
 		}
 
-		const readiness = await withTimeoutFallback<ReadinessSnapshot>(
-			page.evaluate(() => {
-				const bodyText = (document.body?.innerText ?? "")
-					.replace(/\s+/g, " ")
-					.trim();
-				const hasPrimaryCandidate = Boolean(
-					document.querySelector(
-						"main, article, [role='main'], shreddit-post, [data-testid='post-container'], ytd-watch-flexy, ytd-page-manager",
-					),
-				);
-				return {
-					bodyLength: bodyText.length,
-					hasPrimaryCandidate,
-					title: document.title || "",
-				};
-			}),
-			DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.SELECTOR_WAIT,
-			{
+		const readiness = await runWithTimeoutFallback<ReadinessSnapshot>({
+			timeoutMs: DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.SELECTOR_WAIT,
+			operationName: "Complex content readiness evaluation",
+			fallback: {
 				bodyLength: 0,
 				hasPrimaryCandidate: false,
 				title: "",
 			},
-		);
+			run: () =>
+				page.evaluate(() => {
+					const bodyText = (document.body?.innerText ?? "")
+						.replace(/\s+/g, " ")
+						.trim();
+					const hasPrimaryCandidate = Boolean(
+						document.querySelector(
+							"main, article, [role='main'], shreddit-post, [data-testid='post-container'], ytd-watch-flexy, ytd-page-manager",
+						),
+					);
+					return {
+						bodyLength: bodyText.length,
+						hasPrimaryCandidate,
+						title: document.title || "",
+					};
+				}),
+		});
 
 		if (
 			!selectorMatched &&
