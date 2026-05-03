@@ -8,7 +8,8 @@
 		"url": "https://github.com/renbkna"
 	},
 	"scripts": {
-		"prepare": "lefthook install --force",
+		"prepare": "bun scripts/install-git-hooks.ts",
+		"hooks:install": "lefthook install --force",
 		"dev": "concurrently --ks SIGKILL -n \"Client,Server\" \"npm run dev:client\" \"npm run dev:server\"",
 		"dev:server": "bun --watch server/server.ts",
 		"dev:client": "vite",
