@@ -1,3 +1,4 @@
+import { t } from "elysia";
 import {
 	CRAWL_OPTION_BOUNDS,
 	type CrawlMethod,
@@ -140,6 +141,16 @@ export interface CrawlCounters {
 	mediaFiles: number;
 	totalDataKb: number;
 }
+
+export const CrawlCountersSchema = t.Object({
+	pagesScanned: t.Number({ minimum: 0 }),
+	successCount: t.Number({ minimum: 0 }),
+	failureCount: t.Number({ minimum: 0 }),
+	skippedCount: t.Number({ minimum: 0 }),
+	linksFound: t.Number({ minimum: 0 }),
+	mediaFiles: t.Number({ minimum: 0 }),
+	totalDataKb: t.Number({ minimum: 0 }),
+});
 
 function isNonNegativeFiniteNumber(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0;

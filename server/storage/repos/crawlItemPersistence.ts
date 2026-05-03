@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { CrawlCounters } from "../../../shared/contracts/crawl.js";
+import type { CrawlCounters } from "../../../shared/contracts/index.js";
 import type { TerminalOutcome } from "../../domain/crawl/CrawlState.js";
 import { createPageWriter, type SavePageInput } from "./pageRepo.js";
 import { createCrawlTerminalWriter } from "./crawlTerminalRepo.js";

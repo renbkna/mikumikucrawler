@@ -1,6 +1,6 @@
 import { History, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { useCallback, useEffect } from "react";
-import type { ResumableSessionSummary } from "../../shared/contracts/crawl.js";
+import type { ResumableSessionSummary } from "../../shared/contracts/index.js";
 import { useDialogModal } from "../hooks";
 import { HeartIcon, SparkleIcon } from "./KawaiiIcons";
 

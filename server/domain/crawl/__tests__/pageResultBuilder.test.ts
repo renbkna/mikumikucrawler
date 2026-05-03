@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { CrawlOptions } from "../../../../shared/contracts/crawl.js";
+import type { CrawlOptions } from "../../../../shared/contracts/index.js";
 import type { ProcessedContent } from "../../../types.js";
 import { PageResultBuilder } from "../PageResultBuilder.js";
 import type { QueueItem } from "../CrawlQueue.js";

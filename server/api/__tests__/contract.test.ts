@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { CrawlOptions } from "../../../shared/contracts/crawl.js";
+import type { CrawlOptions } from "../../../shared/contracts/index.js";
 import { createApp } from "../../app.js";
 import type { AppLogger } from "../../config/logging.js";
 import type { HttpClient, Resolver } from "../../plugins/security.js";

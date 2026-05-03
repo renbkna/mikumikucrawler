@@ -3,7 +3,7 @@ import {
 	EXPORT_PAGE_FIELDS,
 	type ExportPageRow,
 } from "../../storage/repos/pageRepo.js";
-import type { CrawlExportFormat } from "../../../shared/contracts/api.js";
+import type { CrawlExportFormat } from "../../../shared/contracts/index.js";
 
 export interface CrawlExportResult {
 	body: string;

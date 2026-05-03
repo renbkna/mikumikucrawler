@@ -1,5 +1,5 @@
 import { Coffee, Database, TriangleAlert } from "lucide-react";
-import type { CrawlOptions } from "../../shared/contracts/crawl.js";
+import type { CrawlOptions } from "../../shared/contracts/index.js";
 import { CRAWL_OPTION_BOUNDS, isCrawlMethod } from "../../shared/crawl.js";
 import { useDialogModal } from "../hooks";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
@@ -10,6 +10,17 @@ interface ConfigurationViewProps {
 	options: CrawlOptions;
 	onOptionsChange: (options: CrawlOptions) => void;
 	onSave: () => void;
+}
+
+function clampCrawlOption(
+	key: keyof typeof CRAWL_OPTION_BOUNDS,
+	rawValue: string,
+): number {
+	const bounds = CRAWL_OPTION_BOUNDS[key];
+	return Math.min(
+		bounds.max,
+		Math.max(bounds.min, Number(rawValue) || bounds.min),
+	);
 }
 
 export function ConfigurationView({
@@ -138,13 +149,9 @@ export function ConfigurationView({
 									type="number"
 									value={options.crawlDepth}
 									onChange={(e) => {
-										const value = Math.min(
-											CRAWL_OPTION_BOUNDS.crawlDepth.max,
-											Math.max(
-												CRAWL_OPTION_BOUNDS.crawlDepth.min,
-												Number(e.target.value) ||
-													CRAWL_OPTION_BOUNDS.crawlDepth.min,
-											),
+										const value = clampCrawlOption(
+											"crawlDepth",
+											e.target.value,
 										);
 										onOptionsChange({ ...options, crawlDepth: value });
 									}}
@@ -178,13 +185,9 @@ export function ConfigurationView({
 										type="number"
 										value={options.maxPages}
 										onChange={(e) => {
-											const value = Math.min(
-												CRAWL_OPTION_BOUNDS.maxPages.max,
-												Math.max(
-													CRAWL_OPTION_BOUNDS.maxPages.min,
-													Number(e.target.value) ||
-														CRAWL_OPTION_BOUNDS.maxPages.min,
-												),
+											const value = clampCrawlOption(
+												"maxPages",
+												e.target.value,
 											);
 											onOptionsChange({ ...options, maxPages: value });
 										}}
@@ -209,13 +212,9 @@ export function ConfigurationView({
 										type="number"
 										value={options.maxPagesPerDomain}
 										onChange={(e) => {
-											const value = Math.min(
-												CRAWL_OPTION_BOUNDS.maxPagesPerDomain.max,
-												Math.max(
-													CRAWL_OPTION_BOUNDS.maxPagesPerDomain.min,
-													Number(e.target.value) ||
-														CRAWL_OPTION_BOUNDS.maxPagesPerDomain.min,
-												),
+											const value = clampCrawlOption(
+												"maxPagesPerDomain",
+												e.target.value,
 											);
 											onOptionsChange({
 												...options,
@@ -283,13 +282,9 @@ export function ConfigurationView({
 										type="number"
 										value={options.maxConcurrentRequests}
 										onChange={(e) => {
-											const value = Math.min(
-												CRAWL_OPTION_BOUNDS.maxConcurrentRequests.max,
-												Math.max(
-													CRAWL_OPTION_BOUNDS.maxConcurrentRequests.min,
-													Number(e.target.value) ||
-														CRAWL_OPTION_BOUNDS.maxConcurrentRequests.min,
-												),
+											const value = clampCrawlOption(
+												"maxConcurrentRequests",
+												e.target.value,
 											);
 											onOptionsChange({
 												...options,
@@ -317,13 +312,9 @@ export function ConfigurationView({
 										type="number"
 										value={options.retryLimit}
 										onChange={(e) => {
-											const value = Math.min(
-												CRAWL_OPTION_BOUNDS.retryLimit.max,
-												Math.max(
-													CRAWL_OPTION_BOUNDS.retryLimit.min,
-													Number(e.target.value) ||
-														CRAWL_OPTION_BOUNDS.retryLimit.min,
-												),
+											const value = clampCrawlOption(
+												"retryLimit",
+												e.target.value,
 											);
 											onOptionsChange({ ...options, retryLimit: value });
 										}}

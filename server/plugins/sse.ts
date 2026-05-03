@@ -1,4 +1,4 @@
-import type { CrawlEventEnvelope } from "../contracts/events.js";
+import type { CrawlEventEnvelope } from "../../shared/contracts/index.js";
 import type { EventStream } from "../runtime/EventStream.js";
 
 const encoder = new TextEncoder();

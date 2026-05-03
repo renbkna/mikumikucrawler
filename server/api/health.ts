@@ -1,5 +1,5 @@
 import { Elysia, t } from "elysia";
-import { API_PATHS } from "../../shared/contracts/api.js";
+import { API_PATHS } from "../../shared/contracts/index.js";
 import { routeServices } from "./context.js";
 
 export function healthApi() {

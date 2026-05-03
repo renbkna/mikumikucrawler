@@ -1,6 +1,6 @@
 import path from "node:path";
 import { Elysia } from "elysia";
-import { API_PATHS, isApiPath } from "../../shared/contracts/api.js";
+import { API_PATHS, isApiPath } from "../../shared/contracts/index.js";
 import { resolveStaticFilePath } from "../utils/staticFilePath.js";
 
 interface SpaStaticPluginOptions {

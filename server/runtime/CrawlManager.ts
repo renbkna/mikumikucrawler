@@ -4,14 +4,14 @@ import type {
 	CrawlOptions,
 	CrawlStatus,
 	StopCrawlMode,
-} from "../../shared/contracts/crawl.js";
+} from "../../shared/contracts/index.js";
 import {
 	DEFAULT_CRAWL_LIST_LIMIT,
 	isActiveCrawlStatus,
 	isCrawlOptions,
 	isResumableCrawlStatus,
 	isTerminalCrawlStatus,
-} from "../../shared/contracts/crawl.js";
+} from "../../shared/contracts/index.js";
 import type { HttpClient, Resolver } from "../plugins/security.js";
 import type { CrawlRunRecord } from "../storage/db.js";
 import type { StorageRepos } from "../storage/db.js";

@@ -1,9 +1,9 @@
 import type {
 	CrawlSummary,
 	ResumableSessionSummary,
-} from "../../../shared/contracts/crawl.js";
+} from "../../../shared/contracts/index.js";
 import { describe, expect, test } from "bun:test";
-import type { CrawlEventEnvelope } from "../../../shared/contracts/events.js";
+import type { CrawlEventEnvelope } from "../../../shared/contracts/index.js";
 import { UI_LIMITS } from "../../constants";
 import {
 	type CrawlControllerAction,

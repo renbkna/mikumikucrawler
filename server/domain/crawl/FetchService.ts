@@ -9,6 +9,11 @@ import { isPdfContentType } from "../../processors/contentTypes.js";
 import type { PageRepo } from "../../storage/repos/pageRepo.js";
 import type { QueueItem } from "./CrawlQueue.js";
 import type { DynamicRenderer } from "./DynamicRenderer.js";
+import {
+	isAccessBlockedStatus,
+	isPermanentFetchFailureStatus,
+	isRateLimitedStatus,
+} from "./httpStatusPolicy.js";
 
 export type FetchResult =
 	| {
@@ -45,9 +50,6 @@ export type FetchResult =
 			reason?: string;
 	  };
 
-const RATE_LIMIT_STATUS_CODES = new Set([429, 503]);
-const PERMANENT_FAILURE_STATUS_CODES = new Set([404, 410, 501]);
-
 function parseRetryAfter(value: string | null): number {
 	if (!value) return RETRY_CONSTANTS.MAX_DELAY;
 	if (/^\d+$/.test(value.trim())) {
@@ -76,7 +78,7 @@ function classifyFetchStatus(
 		blockedReason?: string;
 	},
 ): Exclude<FetchResult, { type: "success" | "unchanged" }> | null {
-	if (RATE_LIMIT_STATUS_CODES.has(statusCode)) {
+	if (isRateLimitedStatus(statusCode)) {
 		return {
 			type: "rateLimited",
 			statusCode,
@@ -84,7 +86,7 @@ function classifyFetchStatus(
 		};
 	}
 
-	if (PERMANENT_FAILURE_STATUS_CODES.has(statusCode)) {
+	if (isPermanentFetchFailureStatus(statusCode)) {
 		return {
 			type: "permanentFailure",
 			statusCode,
@@ -157,12 +159,20 @@ export class FetchService {
 				renderedPage.statusCode,
 				{
 					retryAfterMs: parseRetryAfter(renderedPage.retryAfter ?? null),
-					blockedStatuses: [401, 403],
+					blockedStatuses: [],
 					blockedReason: `Access blocked for ${item.url}`,
 				},
 			);
 			if (classifiedDynamicStatus) {
 				return classifiedDynamicStatus;
+			}
+
+			if (isAccessBlockedStatus(renderedPage.statusCode)) {
+				return {
+					type: "blocked",
+					statusCode: renderedPage.statusCode,
+					reason: `Access blocked for ${item.url}`,
+				};
 			}
 
 			if (renderedPage.statusCode >= 400) {
@@ -234,11 +244,19 @@ export class FetchService {
 
 		const classifiedStaticStatus = classifyFetchStatus(response.status, {
 			retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
-			blockedStatuses: [401, 403],
+			blockedStatuses: [],
 			blockedReason: `Access blocked for ${item.url}`,
 		});
 		if (classifiedStaticStatus) {
 			return classifiedStaticStatus;
+		}
+
+		if (isAccessBlockedStatus(response.status)) {
+			return {
+				type: "blocked",
+				statusCode: response.status,
+				reason: `Access blocked for ${item.url}`,
+			};
 		}
 
 		if (!response.ok) {

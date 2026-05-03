@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { type ChangeEvent, memo, useMemo } from "react";
 import { validatePublicHttpUrl } from "../../shared/url";
-import type { CrawlOptions } from "../../shared/contracts/crawl.js";
+import type { CrawlOptions } from "../../shared/contracts/index.js";
 import type { ConnectionState } from "../hooks";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 

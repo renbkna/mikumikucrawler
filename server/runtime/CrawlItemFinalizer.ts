@@ -1,4 +1,4 @@
-import type { CrawlPagePayload } from "../../shared/contracts/events.js";
+import type { CrawlPagePayload } from "../../shared/contracts/index.js";
 import type { QueueItem } from "../domain/crawl/CrawlQueue.js";
 import type { CrawlState } from "../domain/crawl/CrawlState.js";
 import type { PageProcessResult } from "../domain/crawl/PagePipeline.js";

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { CrawlEventEnvelope } from "../contracts/events.js";
+import type { CrawlEventEnvelope } from "../contracts/index.js";
 import { createEventStreamResponse } from "../../server/plugins/sse.js";
 import { EventStream } from "../../server/runtime/EventStream.js";
 import { parseCrawlEventEnvelope } from "../../src/api/crawlEvents.js";

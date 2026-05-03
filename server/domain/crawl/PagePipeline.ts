@@ -1,4 +1,4 @@
-import type { CrawlOptions } from "../../../shared/contracts/crawl.js";
+import type { CrawlOptions } from "../../../shared/contracts/index.js";
 import { ContentProcessor } from "../../processors/ContentProcessor.js";
 import { isHtmlLikeContentType } from "../../processors/contentTypes.js";
 import type { ExtractedLink } from "../../../shared/types.js";

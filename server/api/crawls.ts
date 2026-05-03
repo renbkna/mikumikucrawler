@@ -1,14 +1,14 @@
 import { Elysia, t } from "elysia";
-import { API_PATHS, CRAWL_ROUTE_SEGMENTS } from "../../shared/contracts/api.js";
-import { DEFAULT_CRAWL_LIST_LIMIT } from "../../shared/contracts/crawl.js";
-import type { CrawlStatus } from "../contracts/crawl.js";
 import {
+	API_PATHS,
+	CRAWL_ROUTE_SEGMENTS,
 	CrawlIdParamsSchema,
 	CrawlListQuerySchema,
 	CrawlListResponseSchema,
+	type CrawlStatus,
 	CreateCrawlBodySchema,
 	CreateCrawlResponseSchema,
-	DeleteCrawlResponseSchema,
+	DEFAULT_CRAWL_LIST_LIMIT,
 	ExportQuerySchema,
 	GetCrawlResponseSchema,
 	ResumableCrawlListQuerySchema,
@@ -16,8 +16,9 @@ import {
 	ResumeCrawlResponseSchema,
 	StopCrawlBodySchema,
 	StopCrawlResponseSchema,
-} from "../contracts/crawl.js";
+} from "../../shared/contracts/index.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
+import { OkResponseSchema } from "../contracts/http.js";
 import { CrawlExportService } from "../domain/export/CrawlExportService.js";
 import { routeServices } from "./context.js";
 import { validatePublicHttpUrl } from "../../shared/url.js";
@@ -174,7 +175,7 @@ export function crawlsApi() {
 					},
 					{
 						response: {
-							200: DeleteCrawlResponseSchema,
+							200: OkResponseSchema,
 							404: ApiErrorSchema,
 							409: ApiErrorSchema,
 							422: ApiErrorSchema,

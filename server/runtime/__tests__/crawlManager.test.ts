@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { CrawlCounters } from "../../../shared/contracts/crawl.js";
+import type { CrawlCounters } from "../../../shared/contracts/index.js";
 import type { Logger } from "../../config/logging.js";
 import type { HttpClient, Resolver } from "../../plugins/security.js";
 import { createInMemoryStorage } from "../../storage/db.js";

@@ -1,5 +1,8 @@
 import { Elysia } from "elysia";
-import { API_PATHS, PAGE_ROUTE_SEGMENTS } from "../../shared/contracts/api.js";
+import {
+	API_PATHS,
+	PAGE_ROUTE_SEGMENTS,
+} from "../../shared/contracts/index.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
 import {
 	PageContentParamsSchema,

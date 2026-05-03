@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { cors } from "@elysiajs/cors";
 import { Elysia } from "elysia";
 import { rateLimit } from "elysia-rate-limit";
-import { API_PATHS, isCrawlEventsPath } from "../shared/contracts/api.js";
+import { API_PATHS, isCrawlEventsPath } from "../shared/contracts/index.js";
 import { crawlsApi } from "./api/crawls.js";
 import { healthApi } from "./api/health.js";
 import { pagesApi } from "./api/pages.js";

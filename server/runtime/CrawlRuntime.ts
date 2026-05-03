@@ -3,11 +3,11 @@ import { CRAWL_QUEUE_CONSTANTS } from "../constants.js";
 import type {
 	CrawlCounters,
 	CrawlOptions,
-} from "../../shared/contracts/crawl.js";
+} from "../../shared/contracts/index.js";
 import type {
 	CrawlEventMap,
 	CrawlEventType,
-} from "../../shared/contracts/events.js";
+} from "../../shared/contracts/index.js";
 import { CrawlQueue, type QueueItem } from "../domain/crawl/CrawlQueue.js";
 import { CrawlState } from "../domain/crawl/CrawlState.js";
 import { DynamicRenderer } from "../domain/crawl/DynamicRenderer.js";

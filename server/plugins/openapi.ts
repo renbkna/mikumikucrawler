@@ -5,7 +5,7 @@ import {
 	CRAWL_EXPORT_FORMAT_VALUES,
 	OPENAPI_CRAWL_EVENTS_PATH,
 	OPENAPI_CRAWL_EXPORT_PATH,
-} from "../../shared/contracts/api.js";
+} from "../../shared/contracts/index.js";
 import { SSE_LAST_EVENT_ID_PATTERN } from "../contracts/http.js";
 
 export function openapiPlugin() {

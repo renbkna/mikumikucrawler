@@ -1,18 +1,22 @@
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 import {
 	API_PATHS,
+	API_LIST_LIMIT_BOUNDS,
 	buildCrawlEventsPath,
 	buildCrawlExportPath,
 	buildPageContentPath,
+	CrawlEventEnvelopeSchema,
 	CRAWL_EXPORT_FORMAT_VALUES,
+	CrawlListQuerySchema,
 	CRAWL_ROUTE_SEGMENTS,
 	isApiPath,
 	isCrawlEventsPath,
 	OPENAPI_CRAWL_EVENTS_PATH,
 	OPENAPI_CRAWL_EXPORT_PATH,
 	PAGE_ROUTE_SEGMENTS,
-} from "../../../shared/contracts/api.js";
-import {
 	ACTIVE_CRAWL_STATUS_VALUES,
 	type CrawlCounters,
 	type CrawlOptions,
@@ -24,11 +28,10 @@ import {
 	isResumableCrawlStatus,
 	isTerminalCrawlStatus,
 	PENDING_CRAWL_STATUS_VALUES,
+	ResumableCrawlListQuerySchema,
 	RESUMABLE_CRAWL_STATUS_VALUES,
 	TERMINAL_CRAWL_STATUS_VALUES,
 	toResumableSessionSummary,
-} from "../../../shared/contracts/crawl.js";
-import {
 	type CrawlEventEnvelope,
 	CrawlEventTypeValues,
 	isCrawlEventEnvelope,
@@ -38,7 +41,7 @@ import {
 	LIVE_CRAWL_EVENT_TYPE_VALUES,
 	SETTLED_CRAWL_EVENT_TYPE_VALUES,
 	TERMINAL_CRAWL_EVENT_TYPE_VALUES,
-} from "../../../shared/contracts/events.js";
+} from "../../../shared/contracts/index.js";
 import {
 	shouldResetTheatreStatus,
 	THEATRE_STATUS_VALUES,
@@ -77,6 +80,11 @@ const COUNTERS: CrawlCounters = {
 	mediaFiles: 0,
 	totalDataKb: 3,
 };
+
+const SERVER_CONTRACTS_DIR = join(
+	dirname(fileURLToPath(import.meta.url)),
+	"..",
+);
 
 function createLogger(): AppLogger {
 	const noop = () => undefined;
@@ -208,6 +216,16 @@ function buildEnvelope(
 }
 
 describe("cross-boundary invariants", () => {
+	test("shared contracts own crawl and event validation schemas", () => {
+		expect(existsSync(join(SERVER_CONTRACTS_DIR, "crawl.ts"))).toBe(false);
+		expect(existsSync(join(SERVER_CONTRACTS_DIR, "events.ts"))).toBe(false);
+
+		expect(API_LIST_LIMIT_BOUNDS).toEqual({ min: 1, max: 100 });
+		expect(CrawlListQuerySchema).toBeDefined();
+		expect(ResumableCrawlListQuerySchema).toBeDefined();
+		expect(CrawlEventEnvelopeSchema).toBeDefined();
+	});
+
 	test("crawl statuses are classified in one exhaustive partition", () => {
 		const partitions = [
 			PENDING_CRAWL_STATUS_VALUES,

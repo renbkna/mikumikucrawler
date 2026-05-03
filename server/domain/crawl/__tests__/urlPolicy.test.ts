@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { CrawlOptions } from "../../../../shared/contracts/crawl.js";
+import type { CrawlOptions } from "../../../../shared/contracts/index.js";
 import { filterDiscoveredLinks, getCrawlUrlIdentity } from "../UrlPolicy.js";
 
 /**

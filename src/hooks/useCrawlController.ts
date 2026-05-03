@@ -10,9 +10,12 @@ import {
 import type {
 	CrawlSummary,
 	ResumableSessionSummary,
-} from "../../shared/contracts/crawl.js";
-import type { CrawlEventEnvelope } from "../../shared/contracts/events.js";
-import type { CrawlExportFormat } from "../../shared/contracts/api.js";
+} from "../../shared/contracts/index.js";
+import {
+	isSettledCrawlEventType,
+	type CrawlEventEnvelope,
+} from "../../shared/contracts/index.js";
+import type { CrawlExportFormat } from "../../shared/contracts/index.js";
 import type { ApiResult } from "../api/result";
 import {
 	createCrawl,
@@ -63,10 +66,7 @@ export function shouldSettleActiveSubscription(
 ): boolean {
 	return (
 		activeSubscriptionCrawlId === envelope.crawlId &&
-		(envelope.type === "crawl.completed" ||
-			envelope.type === "crawl.failed" ||
-			envelope.type === "crawl.stopped" ||
-			envelope.type === "crawl.paused")
+		isSettledCrawlEventType(envelope.type)
 	);
 }
 

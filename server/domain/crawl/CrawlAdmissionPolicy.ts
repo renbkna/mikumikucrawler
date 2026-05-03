@@ -1,4 +1,4 @@
-import type { CrawlOptions } from "../../../shared/contracts/crawl.js";
+import type { CrawlOptions } from "../../../shared/contracts/index.js";
 import type { ExtractedLink } from "../../../shared/types.js";
 import type { CrawlQueue, QueueItem } from "./CrawlQueue.js";
 import type { CrawlState } from "./CrawlState.js";
