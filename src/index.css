@@ -42,7 +42,6 @@ html {
 
 	--animate-float: float 3s ease-in-out infinite;
 	--animate-bounce-slow: bounce-slow 2s ease-in-out infinite;
-	--animate-wiggle: wiggle 0.5s ease-in-out;
 	--animate-sparkle: sparkle 1.5s ease-in-out infinite;
 	--animate-pop: pop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
 	--animate-heart-beat: heart-beat 1s ease-in-out infinite;
@@ -64,19 +63,6 @@ html {
 		}
 		50% {
 			transform: translateY(3px);
-		}
-	}
-
-	@keyframes wiggle {
-		0%,
-		100% {
-			transform: rotate(0deg);
-		}
-		25% {
-			transform: rotate(-3deg);
-		}
-		75% {
-			transform: rotate(3deg);
 		}
 	}
 
@@ -232,66 +218,6 @@ body::after {
 	border-color: var(--miku-pink-soft);
 }
 
-.cute-button {
-	background: linear-gradient(135deg, var(--miku-teal), var(--miku-teal-soft));
-	color: white;
-	border-radius: 50px;
-	font-weight: bold;
-	padding: 12px 24px;
-	border: none;
-	box-shadow: 0 4px 15px rgba(57, 197, 187, 0.3);
-	transition: all 0.3s ease;
-	position: relative;
-	overflow: hidden;
-	cursor: pointer;
-}
-
-.cute-button::after {
-	content: "✧";
-	position: absolute;
-	right: 12px;
-	opacity: 0;
-	transform: scale(0);
-	transition: all 0.3s ease;
-}
-
-.cute-button:hover {
-	transform: translateY(-2px) scale(1.02);
-	box-shadow: 0 6px 20px rgba(57, 197, 187, 0.4);
-}
-
-.cute-button:hover::after {
-	opacity: 1;
-	transform: scale(1);
-}
-
-.cute-button:active {
-	transform: translateY(0) scale(0.98);
-}
-
-.cute-input {
-	background: white;
-	border: 2px solid var(--miku-pink-pale);
-	border-radius: 16px;
-	padding: 12px 20px;
-	color: var(--miku-text);
-	transition: all 0.3s ease;
-	font-weight: 500;
-}
-
-.cute-input::placeholder {
-	color: var(--miku-text-soft);
-	opacity: 0.8;
-}
-
-.cute-input:focus {
-	outline: none;
-	border-color: var(--miku-teal);
-	box-shadow:
-		0 0 0 3px rgba(42, 145, 138, 0.2),
-		0 4px 12px rgba(57, 197, 187, 0.15);
-}
-
 .sparkle {
 	animation: sparkle 1.5s ease-in-out infinite;
 }
@@ -358,15 +284,4 @@ body::after {
 	background-size: 200% 100%;
 	animation: gradient-shift 2s ease infinite;
 	border-radius: 50px;
-}
-
-.text-shadow-cute {
-	text-shadow: 0 2px 4px rgba(57, 197, 187, 0.2);
-}
-
-.border-gradient {
-	border: 2px solid transparent;
-	background:
-		linear-gradient(white, white) padding-box,
-		linear-gradient(135deg, var(--miku-teal), var(--miku-pink)) border-box;
 }

@@ -1,5 +1,5 @@
 import { Copy, Filter, Terminal, Trash2, X } from "lucide-react";
-import { memo, type RefObject, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { Virtuoso } from "react-virtuoso";
 import {
 	formatTimestamp,
@@ -90,13 +90,11 @@ const LogItem = memo(function LogItem({
 interface LogsSectionProps {
 	logs: string[];
 	clearLogs: () => void;
-	logContainerRef: RefObject<HTMLDivElement | null>;
 }
 
 export const LogsSection = memo(function LogsSection({
 	logs,
 	clearLogs,
-	logContainerRef,
 }: Readonly<LogsSectionProps>) {
 	const [filterLevel, setFilterLevel] = useState<ParsedLog["level"] | "all">(
 		"all",
@@ -113,13 +111,17 @@ export const LogsSection = memo(function LogsSection({
 	}, [parsedLogs, filterLevel]);
 
 	const handleCopy = useCallback((text: string) => {
-		void navigator.clipboard.writeText(text);
-		const index = Date.now();
-		setCopiedIndex(index);
-		setTimeout(
-			() => setCopiedIndex((prev) => (prev === index ? null : prev)),
-			2000,
-		);
+		void navigator.clipboard
+			.writeText(text)
+			.then(() => {
+				const index = Date.now();
+				setCopiedIndex(index);
+				setTimeout(
+					() => setCopiedIndex((prev) => (prev === index ? null : prev)),
+					2000,
+				);
+			})
+			.catch(() => undefined);
 	}, []);
 
 	const clearFilter = useCallback(() => {
@@ -251,7 +253,7 @@ export const LogsSection = memo(function LogsSection({
 				)}
 
 				{/* Logs list */}
-				<div className="flex-1 overflow-hidden" ref={logContainerRef}>
+				<div className="flex-1 overflow-hidden">
 					{filteredLogs.length > 0 ? (
 						<Virtuoso
 							style={{ height: "100%" }}

@@ -30,11 +30,7 @@ export function ConfigurationView({
 	onOptionsChange,
 	onSave,
 }: Readonly<ConfigurationViewProps>) {
-	const { dialogRef, modalRef, initialFocusRef } =
-		useDialogModal<HTMLDivElement>({
-			isOpen,
-			onClose,
-		});
+	const { dialogRef } = useDialogModal({ isOpen });
 
 	if (!isOpen) return null;
 
@@ -61,10 +57,7 @@ export function ConfigurationView({
 				aria-label="Close dialog"
 				tabIndex={-1}
 			/>
-			<div
-				ref={modalRef}
-				className="relative w-full max-w-xl p-6 bg-white rounded-3xl shadow-xl border-2 border-miku-pink/20 max-h-[90vh] overflow-y-auto animate-pop focus:outline-none"
-			>
+			<div className="relative w-full max-w-xl p-6 bg-white rounded-3xl shadow-xl border-2 border-miku-pink/20 max-h-[90vh] overflow-y-auto animate-pop focus:outline-none">
 				<div className="flex items-center justify-between mb-6">
 					<h2
 						id="config-dialog-title"
@@ -76,7 +69,6 @@ export function ConfigurationView({
 					</h2>
 					<button
 						type="button"
-						ref={initialFocusRef}
 						onClick={onClose}
 						className="p-2 rounded-full hover:bg-miku-pink/10 text-miku-text/40 hover:text-miku-pink transition-colors"
 						aria-label="Close configuration dialog"

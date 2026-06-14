@@ -13,11 +13,7 @@ export function ExportDialog({
 	onClose,
 	onExport,
 }: Readonly<ExportDialogProps>) {
-	const { dialogRef, modalRef, initialFocusRef } =
-		useDialogModal<HTMLDivElement>({
-			isOpen,
-			onClose,
-		});
+	const { dialogRef } = useDialogModal({ isOpen });
 
 	if (!isOpen) return null;
 
@@ -35,10 +31,7 @@ export function ExportDialog({
 				aria-label="Close dialog"
 				tabIndex={-1}
 			/>
-			<div
-				ref={modalRef}
-				className="relative w-full max-w-md p-6 bg-white rounded-3xl shadow-xl border-2 border-miku-pink/20 animate-pop focus:outline-none"
-			>
+			<div className="relative w-full max-w-md p-6 bg-white rounded-3xl shadow-xl border-2 border-miku-pink/20 animate-pop focus:outline-none">
 				<h2
 					id="export-dialog-title"
 					className="mb-4 text-xl font-black gradient-text flex items-center gap-2"
@@ -51,7 +44,6 @@ export function ExportDialog({
 				<div className="space-y-3">
 					<button
 						type="button"
-						ref={initialFocusRef}
 						onClick={() => {
 							onExport("json");
 							onClose();

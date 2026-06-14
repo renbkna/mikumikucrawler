@@ -1,26 +1,15 @@
-import { type RefObject, useEffect, useRef } from "react";
-import { useFocusTrap } from "./useFocusTrap";
+import { type RefObject, useLayoutEffect, useRef } from "react";
 
 interface UseDialogModalOptions {
 	isOpen: boolean;
-	onClose: () => void;
 }
 
-export function useDialogModal<T extends HTMLElement>({
-	isOpen,
-	onClose,
-}: UseDialogModalOptions): {
+export function useDialogModal({ isOpen }: UseDialogModalOptions): {
 	dialogRef: RefObject<HTMLDialogElement | null>;
-	modalRef: RefObject<T | null>;
-	initialFocusRef: RefObject<HTMLButtonElement | null>;
 } {
 	const dialogRef = useRef<HTMLDialogElement>(null);
-	const { modalRef, initialFocusRef } = useFocusTrap<T>({
-		isOpen,
-		onClose,
-	});
 
-	useEffect(() => {
+	useLayoutEffect(() => {
 		const dialog = dialogRef.current;
 		if (!dialog) return;
 
@@ -31,5 +20,5 @@ export function useDialogModal<T extends HTMLElement>({
 		}
 	}, [isOpen]);
 
-	return { dialogRef, modalRef, initialFocusRef };
+	return { dialogRef };
 }

@@ -1,5 +1,5 @@
 import { Heart, History, Music } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
 	ActionButtons,
 	ConfigurationView,
@@ -65,8 +65,6 @@ function App() {
 		resumeCrawl,
 		exportCrawl,
 	} = useCrawlController({ addToast });
-
-	const logContainerRef = useRef<HTMLDivElement>(null);
 
 	const startAttack = useCallback(
 		async (isQuick = false) => {
@@ -274,11 +272,7 @@ function App() {
 									System Logs <NoteIcon className="text-miku-teal" size={14} />
 								</h2>
 							</div>
-							<LogsSection
-								logs={logs}
-								clearLogs={clearLogs}
-								logContainerRef={logContainerRef}
-							/>
+							<LogsSection logs={logs} clearLogs={clearLogs} />
 						</section>
 						<section
 							aria-labelledby="data-heading"
