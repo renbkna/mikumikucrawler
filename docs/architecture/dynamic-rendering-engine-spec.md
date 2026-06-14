@@ -1,9 +1,13 @@
-# Crawlee Engine Specification
+# Dynamic Rendering Engine Specification
 
 ## Purpose
 
-This document defines the contract for the Crawlee + Playwright crawl engine
-that powers the runtime.
+This document defines the contract for the dynamic rendering engine used by
+the crawl runtime.
+
+The product crawler is a custom runtime. Crawlee is used only for
+browser/session pool primitives, not as the owner of queueing, lifecycle,
+public counters, persistence, retries, or SSE semantics.
 
 It is subordinate to [crawl-runtime-spec.md](./crawl-runtime-spec.md).
 If the two documents disagree, the runtime spec wins for product-visible
@@ -16,12 +20,14 @@ The engine owns:
 - browser-backed page acquisition
 - session and cookie persistence within a crawl runtime
 - page readiness heuristics for JS-heavy sites
-- controlled request enqueueing into the runtime queue
 - dynamic render failure classification
+- routing browser HTTP(S) requests through the runtime security/fetch boundary
 
 The engine does not own:
 
 - crawl identity
+- queue admission or scheduling
+- retry policy
 - public API status transitions
 - SSE transport
 - database schema
@@ -40,7 +46,6 @@ Inputs:
 Outputs:
 
 - typed fetch result for the requested URL
-- discovered links eligible for runtime admission
 - classified failure reason when rendering or navigation is blocked
 
 ## Invariants
@@ -52,6 +57,8 @@ Outputs:
 - A queue item may produce at most one terminal fetch outcome.
 - Browser disconnect or SSE disconnect must not terminate the crawl.
 - Session state is scoped to one crawl runtime and must not leak across runs.
+- Browser-routed HTTP(S) responses must obey the same response-size ceiling as
+  static fetches before buffering.
 
 ## Readiness Contract
 
@@ -69,12 +76,13 @@ Failure to satisfy one preferred selector may downgrade confidence, but must
 not automatically force static fallback if meaningful content is already
 readable.
 
-## Enqueue Contract
+## Rendered Content Admission Contract
 
-The engine may discover candidate links, but the runtime remains the final
-admission authority.
+The engine does not enqueue. Rendered page content is returned to the runtime
+pipeline, where content processing discovers links and the runtime admission
+policy remains the final authority.
 
-Required rules:
+The runtime pipeline rules for rendered content are:
 
 - normalize URLs before enqueue
 - preserve `parentUrl`
@@ -84,7 +92,7 @@ Required rules:
 
 ## Session Contract
 
-- Use Crawlee-managed browser/session primitives.
+- Use Crawlee `BrowserPool` and `SessionPool` primitives.
 - Cookies may persist within one crawl runtime to improve continuity.
 - Sessions must be discarded when the engine classifies a request as blocked.
 - Resume may restore runtime queue state, but does not require restoring an
@@ -92,7 +100,7 @@ Required rules:
 
 ## Failure Taxonomy
 
-The engine must distinguish at least:
+The engine and fetch boundary together must distinguish at least:
 
 - `success`
 - `unchanged`

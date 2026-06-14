@@ -73,6 +73,10 @@ Rules:
 - Per-crawl sequence numbers must be monotonic.
 - Events with sequence less than or equal to the last applied sequence for the
   active crawl must be ignored as stale.
+- `Last-Event-ID` is a bounded live replay cursor only. If the backend cannot
+  replay missed events because the process restarted or stream history was
+  cleaned up, the controller must recover from persisted crawl/page state rather
+  than treating the missing events as corruption.
 
 ## State Transitions
 
@@ -104,6 +108,8 @@ When `crawl.completed`, `crawl.failed`, or `crawl.stopped` is applied:
 
 - `Captured Data` reflects only persisted `crawl.page` events.
 - Missing `crawl.page` events must not be misreported as frontend failure.
+- On reconnect or resume, persisted crawl summary/pages are the durable source
+  of truth; SSE events are telemetry for live updates.
 - System logs must show backend-visible blocked reasons when provided.
 - Progress uses reducer state only, not ad hoc refs that can drift.
 

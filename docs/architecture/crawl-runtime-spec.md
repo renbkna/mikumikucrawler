@@ -273,6 +273,12 @@ Every event includes:
 - `crawl.completed`, `crawl.failed`, and `crawl.stopped` are terminal and mutually exclusive.
 - `crawl.paused` is resumable and non-terminal.
 - `crawl.progress` may repeat snapshots, but sequence ordering must still hold.
+- SSE replay is bounded live transport, not durable event storage.
+- `Last-Event-ID` replays only events still present in the in-memory stream
+  history.
+- After process restart, stream cleanup, or history eviction, clients must
+  recover from persisted crawl summary and page state, then continue from new
+  live events.
 
 ## Resume Contract
 
@@ -303,6 +309,9 @@ The runtime must not restore:
 - resuming a terminal crawl is rejected
 - persisted `eventSequence` is a resume checkpoint and may lag live in-memory SSE
   sequence between checkpoints
+- persisted `eventSequence` is not a promise that old event envelopes can be
+  replayed after restart; durable resume state lives in typed crawl, queue,
+  terminal URL, and page tables
 
 ## Persistence Contract
 
@@ -334,6 +343,8 @@ Rules:
 - `options_json` is validated before write
 - `event_sequence` is checkpointed with lifecycle/progress persistence writes, not
   by a dedicated write on every emitted event
+- event envelopes are not persisted; use existing typed tables for durable
+  recovery instead of reconstructing crawler truth from SSE
 
 ### `crawl_queue_items`
 

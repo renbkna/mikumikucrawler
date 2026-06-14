@@ -146,7 +146,7 @@ server/
     CrawlManager.ts
     CrawlRuntime.ts
     EventStream.ts
-    RuntimeRegistry.ts
+    CrawlManager.ts active runtime map
   domain/
     crawl/
       CrawlQueue.ts
@@ -608,7 +608,7 @@ Goal:
 
 Steps:
 
-1. Implement `RuntimeRegistry`.
+1. Implement active runtime tracking inside `CrawlManager`.
 2. Implement `EventStream`.
 3. Implement `CrawlManager`.
 4. Implement `CrawlRuntime`.

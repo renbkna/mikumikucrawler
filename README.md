@@ -45,7 +45,7 @@
 
 | | Feature |
 |---|---------|
-| 📡 | **SSE streaming** — ordered, resumable events with sequence tracking |
+| 📡 | **SSE streaming** — ordered live events with bounded `Last-Event-ID` replay |
 | 🎭 | **Playwright** — renders JavaScript-heavy pages with headless Chromium |
 | ⚡ | **Cheerio** — fast HTML extraction for static pages |
 | 🤖 | **robots.txt** — optional compliance with crawl rules and crawl-delay |
@@ -196,7 +196,8 @@ source.addEventListener("crawl.progress", (event) => {
 | `crawl.stopped` | Stopped by user |
 | `crawl.failed` | Terminated due to error |
 
-Events are sequenced — use `Last-Event-ID` for resumable connections.
+Events are sequenced. `Last-Event-ID` replays recent in-memory events; after a
+restart or cleanup, recover from the persisted crawl summary and stored pages.
 
 ---
 
@@ -255,8 +256,7 @@ server/
 ├── runtime/                # Crawl execution layer
 │   ├── CrawlRuntime.ts     #   Orchestrates a single crawl run
 │   ├── CrawlManager.ts     #   Creates, stops, resumes, lists runs
-│   ├── EventStream.ts      #   Sequenced SSE publishing
-│   └── RuntimeRegistry.ts  #   Active runtime tracking
+│   └── EventStream.ts      #   Sequenced bounded live SSE publishing
 ├── processors/             # Content analysis
 │   ├── ContentProcessor.ts #   Dispatch by content type
 │   ├── analysisUtils.ts    #   Keywords, quality scoring
@@ -265,7 +265,7 @@ server/
 ├── storage/                # SQLite persistence
 │   ├── migrations/         #   Schema migrations
 │   └── repos/              #   Query repositories
-├── plugins/                # Elysia plugins (DI, security, logging)
+├── plugins/                # Elysia plugins (security, SSE, OpenAPI, static)
 └── config/                 # Env validation, logging setup
 
 shared/                     # Cross-boundary contracts
