@@ -40,6 +40,8 @@ export const REQUEST_CONSTANTS = {
 	ROBOTS_FETCH_TIMEOUT_MS: 5000,
 	/** Maximum URL length for validation (2000 characters) */
 	MAX_URL_LENGTH: 2000,
+	/** Maximum response body size to buffer per crawled page (50 MB) */
+	MAX_RESPONSE_BYTES: 50 * 1024 * 1024,
 } as const;
 
 /** PDF processing limits to prevent resource exhaustion */

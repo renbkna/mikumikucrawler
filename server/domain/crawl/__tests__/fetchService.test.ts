@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { Logger } from "../../../config/logging.js";
 import { config } from "../../../config/env.js";
+import { REQUEST_CONSTANTS } from "../../../constants.js";
 import { FetchService } from "../FetchService.js";
 
 function createLogger(): Logger {
@@ -96,7 +97,7 @@ describe("fetch service contract", () => {
 		});
 	});
 
-	test("maps unclassified browser-rendered HTTP errors to terminal failures", async () => {
+	test("maps transient browser-rendered HTTP errors to retryable failures", async () => {
 		const service = new FetchService(
 			{
 				getHeaders: () => null,
@@ -133,12 +134,12 @@ describe("fetch service contract", () => {
 		});
 
 		expect(result).toEqual({
-			type: "permanentFailure",
+			type: "transientFailure",
 			statusCode: 500,
 		});
 	});
 
-	test("maps unclassified static HTTP errors to terminal failures", async () => {
+	test("maps transient static HTTP errors to retryable failures", async () => {
 		const service = new FetchService(
 			{
 				getHeaders: () => null,
@@ -161,7 +162,7 @@ describe("fetch service contract", () => {
 		});
 
 		expect(result).toEqual({
-			type: "permanentFailure",
+			type: "transientFailure",
 			statusCode: 500,
 		});
 	});
@@ -420,6 +421,77 @@ describe("fetch service contract", () => {
 		expect(Buffer.isBuffer(result.content)).toBe(true);
 		expect(result.content).toEqual(Buffer.from(pdfBytes));
 		expect(result.contentLength).toBe(pdfBytes.byteLength);
+	});
+
+	test("rejects declared oversized static responses before buffering", async () => {
+		let textRead = false;
+		const response = new Response("unused", {
+			status: 200,
+			headers: {
+				"content-type": "text/html",
+				"content-length": String(REQUEST_CONSTANTS.MAX_RESPONSE_BYTES + 1),
+			},
+		});
+		response.text = async () => {
+			textRead = true;
+			return "unused";
+		};
+		const service = new FetchService(
+			{
+				getHeaders: () => null,
+			} as never,
+			{
+				fetch: async () => response,
+			},
+			{
+				isEnabled: () => false,
+				render: async () => null,
+			} as never,
+			createLogger(),
+		);
+
+		const result = await service.fetch("crawl-1", {
+			url: "https://example.com/too-large",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(result).toMatchObject({
+			type: "blocked",
+			statusCode: 413,
+		});
+		expect(textRead).toBe(false);
+	});
+
+	test("classifies thrown static fetches as retryable transient failures", async () => {
+		const service = new FetchService(
+			{
+				getHeaders: () => null,
+			} as never,
+			{
+				fetch: async () => {
+					throw new Error("socket reset");
+				},
+			},
+			{
+				isEnabled: () => false,
+				render: async () => null,
+			} as never,
+			createLogger(),
+		);
+
+		const result = await service.fetch("crawl-1", {
+			url: "https://example.com/socket-reset",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(result).toMatchObject({
+			type: "transientFailure",
+			statusCode: 0,
+		});
 	});
 
 	test("measures dynamic contentLength from rendered DOM instead of renderer metadata", async () => {

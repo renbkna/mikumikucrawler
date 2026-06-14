@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CrawlExportService } from "../CrawlExportService.js";
+import { exportPages } from "../CrawlExportService.js";
 
 const pages = [
 	{
@@ -16,9 +16,7 @@ const pages = [
 
 describe("crawl export service contract", () => {
 	test("JSON export preserves pretty stored page rows", () => {
-		const service = new CrawlExportService();
-
-		const result = service.exportPages("crawl:unsafe/id", pages, "json");
+		const result = exportPages("crawl:unsafe/id", pages, "json");
 
 		expect(result.body).toBe(JSON.stringify(pages, null, 2));
 		expect(result.contentType).toBe("application/json; charset=utf-8");
@@ -28,9 +26,7 @@ describe("crawl export service contract", () => {
 	});
 
 	test("CSV export preserves header order and row mapping", () => {
-		const service = new CrawlExportService();
-
-		const result = service.exportPages("crawl-1", pages, "csv");
+		const result = exportPages("crawl-1", pages, "csv");
 
 		expect(result.body.split("\n")[0]).toBe(
 			'"id","url","title","description","contentType","domain","crawledAt"',
@@ -44,16 +40,13 @@ describe("crawl export service contract", () => {
 	});
 
 	test("CSV escapes quotes and commas", () => {
-		const service = new CrawlExportService();
-
-		const result = service.exportPages("crawl-1", pages, "csv");
+		const result = exportPages("crawl-1", pages, "csv");
 
 		expect(result.body).toContain('"A ""quoted"" title"');
 		expect(result.body).toContain('"https://example.com/a?x=1,2"');
 	});
 
 	test("CSV prefixes dangerous cells", () => {
-		const service = new CrawlExportService();
 		const dangerousRows = ["=x", "+x", "-x", "@x", "|x", "\tx"].map(
 			(value, index) => ({
 				...pages[0],
@@ -62,7 +55,7 @@ describe("crawl export service contract", () => {
 			}),
 		);
 
-		const result = service.exportPages("crawl-1", dangerousRows, "csv");
+		const result = exportPages("crawl-1", dangerousRows, "csv");
 
 		for (const value of ["'=x", "'+x", "'-x", "'@x", "'|x", "'\tx"]) {
 			expect(result.body).toContain(`"${value}"`);
@@ -70,9 +63,7 @@ describe("crawl export service contract", () => {
 	});
 
 	test("filename sanitization replaces unsafe characters", () => {
-		const service = new CrawlExportService();
-
-		const result = service.exportPages("crawl:/unsafe id", [], "csv");
+		const result = exportPages("crawl:/unsafe id", [], "csv");
 
 		expect(result.filename).toBe("crawl__unsafe_id.csv");
 		expect(result.contentDisposition).toBe(

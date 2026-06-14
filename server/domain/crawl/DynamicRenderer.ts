@@ -14,12 +14,14 @@ import type { Logger } from "../../config/logging.js";
 import {
 	DYNAMIC_RENDERER_CONSTANTS,
 	FETCH_HEADERS,
+	REQUEST_CONSTANTS,
 	SITE_COOKIES,
 	SITE_SELECTORS,
 } from "../../constants.js";
 import type { HttpClient } from "../../plugins/security.js";
 import { getErrorMessage } from "../../utils/helpers.js";
 import { logMemoryStatus } from "../../utils/memoryMonitor.js";
+import { readLimitedResponseBody } from "../../utils/responseBody.js";
 import { runWithTimeout, runWithTimeoutFallback } from "../../utils/timeout.js";
 import type { QueueItem } from "./CrawlQueue.js";
 import {
@@ -74,6 +76,10 @@ type DynamicRenderAttempt =
 interface ConsentBypassResult {
 	detected: boolean;
 	clicked: boolean;
+}
+
+export function renderedContentByteLength(content: string): number {
+	return Buffer.byteLength(content, "utf8");
 }
 
 interface ReadinessSnapshot {
@@ -174,11 +180,18 @@ export async function fulfillRouteWithPinnedHttpClient(
 					: undefined,
 			signal,
 		});
-		const body = Buffer.from(await response.arrayBuffer());
+		const body = await readLimitedResponseBody(
+			response,
+			REQUEST_CONSTANTS.MAX_RESPONSE_BYTES,
+		);
+		if (body.type === "tooLarge") {
+			await route.abort();
+			return;
+		}
 		await route.fulfill({
 			status: response.status,
 			headers: createRouteFulfillHeaders(response.headers),
-			body,
+			body: Buffer.from(body.bytes),
 		});
 	} catch {
 		await route.abort();
@@ -567,6 +580,21 @@ export class DynamicRenderer {
 				return null;
 			}
 
+			const htmlLength = await runWithTimeoutFallback({
+				timeoutMs: 5_000,
+				operationName: "Rendered HTML size check",
+				fallback: 0,
+				run: () =>
+					page.evaluate(() => document.documentElement?.outerHTML.length ?? 0),
+			});
+			if (htmlLength > REQUEST_CONSTANTS.MAX_RESPONSE_BYTES) {
+				// ponytail: char preflight avoids transferring huge DOM; static fetch owns the exact byte cap.
+				page.off("framenavigated", navigationHandler);
+				session.markBad();
+				await this.closePageSafely(page);
+				return null;
+			}
+
 			const extracted = await this.safeExtractContent(page);
 			if (signal?.aborted) {
 				throw signal.reason instanceof Error
@@ -574,6 +602,14 @@ export class DynamicRenderer {
 					: new Error("Dynamic render aborted");
 			}
 			if (!extracted || navigationOccurred) {
+				page.off("framenavigated", navigationHandler);
+				session.markBad();
+				await this.closePageSafely(page);
+				return null;
+			}
+
+			const contentLength = renderedContentByteLength(extracted.content);
+			if (contentLength > REQUEST_CONSTANTS.MAX_RESPONSE_BYTES) {
 				page.off("framenavigated", navigationHandler);
 				session.markBad();
 				await this.closePageSafely(page);
@@ -593,7 +629,7 @@ export class DynamicRenderer {
 					content: extracted.content,
 					statusCode,
 					contentType,
-					contentLength: Buffer.byteLength(extracted.content, "utf8"),
+					contentLength,
 					title: extracted.title,
 					description: extracted.description || "",
 					lastModified,

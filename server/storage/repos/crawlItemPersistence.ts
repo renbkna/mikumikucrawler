@@ -2,7 +2,6 @@ import type { Database } from "bun:sqlite";
 import type { CrawlCounters } from "../../../shared/contracts/index.js";
 import type { TerminalOutcome } from "../../domain/crawl/CrawlState.js";
 import { createPageWriter, type SavePageInput } from "./pageRepo.js";
-import { createCrawlTerminalWriter } from "./crawlTerminalRepo.js";
 
 export interface CommitCompletedItemInput {
 	crawlId: string;
@@ -18,9 +17,26 @@ export interface CommitCompletedItemResult {
 	pageId?: number;
 }
 
+export interface TerminalUrlRecord {
+	url: string;
+	outcome: TerminalOutcome;
+	domainBudgetCharged: boolean;
+}
+
 export function createCrawlItemPersistence(db: Database) {
 	const pageWriter = createPageWriter(db);
-	const terminalWriter = createCrawlTerminalWriter(db);
+	const upsertTerminal = db.prepare(`
+		INSERT INTO crawl_terminal_urls (
+				crawl_id,
+				url,
+				outcome,
+				domain_budget_charged
+			) VALUES (?, ?, ?, ?)
+			ON CONFLICT(crawl_id, url) DO UPDATE SET
+				outcome = excluded.outcome,
+				domain_budget_charged = excluded.domain_budget_charged,
+				recorded_at = CURRENT_TIMESTAMP
+	`);
 
 	const removeQueueItem = db.prepare(
 		"DELETE FROM crawl_queue_items WHERE crawl_id = ? AND url = ?",
@@ -46,11 +62,11 @@ export function createCrawlItemPersistence(db: Database) {
 			const pageId = input.page ? pageWriter.savePage(input.page) : undefined;
 
 			if (input.outcome) {
-				terminalWriter.upsert(
+				upsertTerminal.run(
 					input.crawlId,
 					input.url,
 					input.outcome,
-					input.domainBudgetCharged,
+					input.domainBudgetCharged ? 1 : 0,
 				);
 			}
 
@@ -76,6 +92,27 @@ export function createCrawlItemPersistence(db: Database) {
 			input: CommitCompletedItemInput,
 		): CommitCompletedItemResult {
 			return commitCompletedTransaction(input);
+		},
+		listTerminalUrls(crawlId: string): TerminalUrlRecord[] {
+			const rows = db
+				.query(
+					`
+						SELECT url, outcome, domain_budget_charged
+						FROM crawl_terminal_urls
+						WHERE crawl_id = ?
+						ORDER BY terminal_sequence ASC
+					`,
+				)
+				.all(crawlId) as Array<{
+				url: string;
+				outcome: TerminalOutcome;
+				domain_budget_charged: number;
+			}>;
+			return rows.map((row) => ({
+				url: row.url,
+				outcome: row.outcome,
+				domainBudgetCharged: row.domain_budget_charged === 1,
+			}));
 		},
 	};
 }

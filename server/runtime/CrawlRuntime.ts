@@ -12,14 +12,16 @@ import { CrawlQueue, type QueueItem } from "../domain/crawl/CrawlQueue.js";
 import { CrawlState } from "../domain/crawl/CrawlState.js";
 import { DynamicRenderer } from "../domain/crawl/DynamicRenderer.js";
 import { FetchService } from "../domain/crawl/FetchService.js";
-import { PagePipeline } from "../domain/crawl/PagePipeline.js";
+import {
+	PagePipeline,
+	type PageProcessResult,
+} from "../domain/crawl/PagePipeline.js";
 import type { DomainStateRecord } from "../domain/crawl/CrawlState.js";
 import { RobotsService } from "../domain/crawl/RobotsService.js";
 import type { HttpClient, Resolver } from "../plugins/security.js";
 import type { StorageRepos } from "../storage/db.js";
-import { CrawlItemExecutor } from "./CrawlItemExecutor.js";
-import { CrawlItemFinalizer } from "./CrawlItemFinalizer.js";
 import type { EventStream } from "./EventStream.js";
+import { runWithTimeout } from "../utils/timeout.js";
 
 export interface CrawlRuntimeDependencies {
 	crawlId: string;
@@ -58,8 +60,6 @@ export class CrawlRuntime {
 	private readonly fetchService: FetchService;
 	private readonly robotsService: RobotsService;
 	private readonly pipeline: PagePipeline;
-	private readonly executor: CrawlItemExecutor;
-	private readonly finalizer: CrawlItemFinalizer;
 	private readonly activeTasks = new Map<string, Promise<void>>();
 	private readonly activeControllers = new Map<string, AbortController>();
 	private readonly lifecycleController = new AbortController();
@@ -136,21 +136,6 @@ export class CrawlRuntime {
 			eventSink,
 			deps.logger,
 		);
-		this.executor = new CrawlItemExecutor({
-			pipeline: this.pipeline,
-			state: this.state,
-			logger: deps.logger,
-			log: (message) => eventSink.log(message),
-		});
-		this.finalizer = new CrawlItemFinalizer({
-			crawlId: deps.crawlId,
-			state: this.state,
-			queue: this.queue,
-			repos: deps.repos,
-			eventStream: deps.eventStream,
-			getCurrentSequence: () => this.getCurrentSequence(),
-		});
-
 		if (deps.initialSequence) {
 			deps.eventStream.initialize(deps.crawlId, deps.initialSequence);
 		}
@@ -282,7 +267,7 @@ export class CrawlRuntime {
 
 	private async seedInitialQueue(): Promise<void> {
 		if (this.deps.resume) {
-			const terminalUrls = this.deps.repos.crawlTerminals.listByCrawlId(
+			const terminalUrls = this.deps.repos.crawlItems.listTerminalUrls(
 				this.deps.crawlId,
 			);
 			this.state.restoreTerminals(terminalUrls);
@@ -376,13 +361,12 @@ export class CrawlRuntime {
 		const controller = new AbortController();
 		this.activeControllers.set(item.url, controller);
 		let finalized = false;
-		const task = this.executor
-			.execute(item, controller.signal)
+		const task = this.executeItem(item, controller.signal)
 			.then((processResult) => {
 				if (this.terminalizing) {
 					return;
 				}
-				this.finalizer.finalize(item, processResult, {
+				this.finalizeItem(item, processResult, {
 					interrupted: this.interrupted,
 				});
 				this.lastDurableCounters = this.state.snapshotCounters();
@@ -400,6 +384,82 @@ export class CrawlRuntime {
 			});
 
 		this.activeTasks.set(item.url, task);
+	}
+
+	private async executeItem(
+		item: QueueItem,
+		externalSignal?: AbortSignal,
+	): Promise<PageProcessResult> {
+		try {
+			return await runWithTimeout({
+				timeoutMs: CRAWL_QUEUE_CONSTANTS.ITEM_PROCESSING_TIMEOUT_MS,
+				operationName: `Processing ${item.url}`,
+				signal: externalSignal,
+				run: (signal) => this.pipeline.process(item, signal),
+			});
+		} catch (error) {
+			if (externalSignal?.aborted) {
+				return { aborted: true };
+			}
+
+			this.deps.logger.error(
+				`[Runtime] Failed to process ${item.url}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			const domainBudgetCharged = this.state.recordTerminal(
+				item.url,
+				"failure",
+			);
+			if (domainBudgetCharged) {
+				this.state.recordDomainPage(item.domain);
+			}
+			this.publish("crawl.log", { message: `[Crawler] Failure: ${item.url}` });
+			return { terminalOutcome: "failure", domainBudgetCharged };
+		}
+	}
+
+	private finalizeItem(
+		item: QueueItem,
+		processResult: PageProcessResult,
+		options: { interrupted: boolean },
+	): void {
+		if (processResult.aborted) {
+			this.queue.markDone(item, { persist: false });
+			return;
+		}
+
+		if (processResult.rescheduled) {
+			this.queue.markDone(item);
+			return;
+		}
+
+		if (
+			options.interrupted &&
+			!processResult.terminalOutcome &&
+			!processResult.page
+		) {
+			this.queue.markInterrupted(item);
+			return;
+		}
+
+		const pendingPageEvent = processResult.page ? 1 : 0;
+		const itemCommit = this.deps.repos.crawlItems.commitCompletedItem({
+			crawlId: this.deps.crawlId,
+			url: item.url,
+			outcome: processResult.terminalOutcome,
+			domainBudgetCharged: processResult.domainBudgetCharged ?? false,
+			page: processResult.page?.saveInput,
+			counters: this.state.snapshotCounters(),
+			eventSequence: this.getCurrentSequence() + pendingPageEvent,
+		});
+
+		if (processResult.page) {
+			this.publish("crawl.page", {
+				...processResult.page.eventPayload,
+				id: itemCommit.pageId ?? null,
+			});
+		}
+
+		this.queue.markDone(item, { persist: false });
 	}
 
 	private async initializeRuntime(): Promise<void> {

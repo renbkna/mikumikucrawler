@@ -3,12 +3,12 @@ import type {
 	CrawlOptions,
 } from "../../../shared/contracts/index.js";
 import type { QueueStats } from "../../../shared/types.js";
-import { LRUCache } from "../../utils/lruCache.js";
 import { shouldAdaptDomainDelay } from "./httpStatusPolicy.js";
 
 export type TerminalOutcome = "success" | "failure" | "skip";
 
 const FAILURE_CIRCUIT_BREAKER_THRESHOLD = 20;
+const VISITED_URL_LIMIT = 50_000;
 
 interface CrawlStateHooks {
 	onTerminal?: (url: string, outcome: TerminalOutcome) => void;
@@ -33,7 +33,7 @@ export interface DomainStateRecord {
 }
 
 export class CrawlState {
-	private readonly visited = new LRUCache<string, true>(50_000);
+	private readonly visited = new Map<string, true>();
 	private readonly terminalOutcomes = new Map<string, TerminalOutcome>();
 	private readonly admittedUrls = new Set<string>();
 	private readonly domainDelays = new Map<string, number>();
@@ -83,6 +83,14 @@ export class CrawlState {
 	}
 
 	markVisited(url: string): void {
+		if (this.visited.has(url)) {
+			this.visited.delete(url);
+		} else if (this.visited.size >= VISITED_URL_LIMIT) {
+			const oldestUrl = this.visited.keys().next().value;
+			if (oldestUrl !== undefined) {
+				this.visited.delete(oldestUrl);
+			}
+		}
 		this.visited.set(url, true);
 	}
 

@@ -21,11 +21,9 @@ import {
 } from "../../shared/contracts/schemas.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
 import { OkResponseSchema } from "../contracts/http.js";
-import { CrawlExportService } from "../domain/export/CrawlExportService.js";
+import { exportPages } from "../domain/export/CrawlExportService.js";
 import { routeServices } from "./context.js";
 import { validatePublicHttpUrl } from "../../shared/url.js";
-
-const crawlExportService = new CrawlExportService();
 
 export function crawlsApi() {
 	const crawlByIdRoutes = new Elysia().guard(
@@ -138,7 +136,7 @@ export function crawlsApi() {
 						}
 
 						const pages = repos.pages.listForExport(params.id);
-						const exported = crawlExportService.exportPages(
+						const exported = exportPages(
 							params.id,
 							pages,
 							query.format ?? "json",

@@ -1,10 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { BrowserContext, Route, WebSocketRoute } from "playwright";
+import { REQUEST_CONSTANTS } from "../../../constants.js";
 import type { HttpClient } from "../../../plugins/security.js";
 import {
 	configurePinnedBrowserContext,
 	createDynamicBrowserContextOptions,
 	fulfillRouteWithPinnedHttpClient,
+	renderedContentByteLength,
 } from "../DynamicRenderer.js";
 
 type RouteFulfillOptions = Parameters<Route["fulfill"]>[0];
@@ -38,6 +40,13 @@ function createRoute(input: {
 }
 
 describe("dynamic renderer network contract", () => {
+	test("measures rendered HTML limits in UTF-8 bytes, not JS characters", () => {
+		const content = "a\u0100\u0100";
+
+		expect(content.length).toBe(3);
+		expect(renderedContentByteLength(content)).toBe(5);
+	});
+
 	test("browser contexts block service workers before pages are created", () => {
 		expect(createDynamicBrowserContextOptions()).toEqual({
 			serviceWorkers: "block",
@@ -140,6 +149,36 @@ describe("dynamic renderer network contract", () => {
 		});
 		expect(fulfillPayload.headers).not.toHaveProperty("content-encoding");
 		expect(fulfillPayload.headers).not.toHaveProperty("content-length");
+	});
+
+	test("aborts oversized HTTP browser responses before buffering", async () => {
+		let bodyRead = false;
+		const { route, calls } = createRoute({
+			url: "https://example.com/huge-script.js",
+			resourceType: "script",
+		});
+		const fetch = mock(async () => {
+			return {
+				status: 200,
+				headers: new Headers({
+					"content-length": String(REQUEST_CONSTANTS.MAX_RESPONSE_BYTES + 1),
+				}),
+				body: {
+					getReader() {
+						bodyRead = true;
+						throw new Error("body should not be read");
+					},
+				},
+			} as unknown as Response;
+		});
+		const httpClient: HttpClient = { fetch };
+
+		await fulfillRouteWithPinnedHttpClient(route, httpClient);
+
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(calls.abort).toHaveBeenCalled();
+		expect(calls.fulfill).not.toHaveBeenCalled();
+		expect(bodyRead).toBe(false);
 	});
 
 	test("does not let HTTP subresources continue on Playwright native networking", async () => {

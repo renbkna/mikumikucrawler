@@ -41,6 +41,8 @@ export function openapiPlugin() {
 									name: "Last-Event-ID",
 									in: "header",
 									required: false,
+									description:
+										"Bounded live replay cursor. Older events may be unavailable after process restart or stream cleanup; recover durable state from crawl and page endpoints.",
 									schema: {
 										type: "string",
 										pattern: SSE_LAST_EVENT_ID_PATTERN,

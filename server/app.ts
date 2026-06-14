@@ -1,6 +1,8 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cors } from "@elysiajs/cors";
+import { opentelemetry } from "@elysiajs/opentelemetry";
+import { serverTiming } from "@elysiajs/server-timing";
 import { Elysia } from "elysia";
 import { rateLimit } from "elysia-rate-limit";
 import { API_PATHS, isCrawlEventsPath } from "../shared/contracts/index.js";
@@ -11,11 +13,8 @@ import { searchApi } from "./api/search.js";
 import { sseApi } from "./api/sse.js";
 import { config } from "./config/env.js";
 import type { AppLogger } from "./config/logging.js";
-import { createStartupBanner } from "./config/prettyPrinter.js";
 import type { ApiErrorSchema } from "./contracts/errors.js";
 import { compression } from "./middleware/compression.js";
-import { dbPlugin } from "./plugins/db.js";
-import { loggerPlugin } from "./plugins/logger.js";
 import { openapiPlugin } from "./plugins/openapi.js";
 import {
 	DefaultResolver,
@@ -24,12 +23,10 @@ import {
 	type Resolver,
 	securityPlugin,
 } from "./plugins/security.js";
-import { servicesPlugin } from "./plugins/services.js";
 import { spaStaticPlugin } from "./plugins/spaStatic.js";
-import { telemetryPlugin } from "./plugins/telemetry.js";
 import { CrawlManager } from "./runtime/CrawlManager.js";
+import type { CrawlRuntime } from "./runtime/CrawlRuntime.js";
 import { EventStream } from "./runtime/EventStream.js";
-import { RuntimeRegistry } from "./runtime/RuntimeRegistry.js";
 import { handleAppError } from "./errorHandling.js";
 import { createStorage, type Storage } from "./storage/db.js";
 
@@ -48,7 +45,7 @@ export interface AppDependencies {
 	resolver: Resolver;
 	httpClient: HttpClient;
 	eventStream: EventStream;
-	runtimeRegistry: RuntimeRegistry;
+	runtimeRegistry: Map<string, CrawlRuntime>;
 	crawlManager: CrawlManager;
 }
 
@@ -59,7 +56,7 @@ export function createDefaultAppDependencies(
 	const resolver = new DefaultResolver();
 	const httpClient = new PinnedHttpClient(resolver);
 	const eventStream = new EventStream();
-	const runtimeRegistry = new RuntimeRegistry();
+	const runtimeRegistry = new Map<string, CrawlRuntime>();
 	const crawlManager = new CrawlManager({
 		logger,
 		repos: storage.repos,
@@ -82,16 +79,12 @@ export function createDefaultAppDependencies(
 
 export function createApp(deps: AppDependencies) {
 	return new Elysia()
-		.use(loggerPlugin(deps.logger))
-		.use(dbPlugin(deps.storage.repos))
 		.use(securityPlugin(deps.resolver, deps.httpClient))
-		.use(
-			servicesPlugin({
-				crawlManager: deps.crawlManager,
-				eventStream: deps.eventStream,
-				runtimeRegistry: deps.runtimeRegistry,
-			}),
-		)
+		.decorate("logger", deps.logger)
+		.decorate("repos", deps.storage.repos)
+		.decorate("crawlManager", deps.crawlManager)
+		.decorate("eventStream", deps.eventStream)
+		.decorate("runtimeRegistry", deps.runtimeRegistry)
 		.use(
 			cors({
 				origin: (request) => {
@@ -113,7 +106,8 @@ export function createApp(deps: AppDependencies) {
 		)
 		.use(compression())
 		.use(openapiPlugin())
-		.use(telemetryPlugin())
+		.use(serverTiming())
+		.use(opentelemetry())
 		.use(crawlsApi())
 		.use(sseApi())
 		.use(pagesApi())
@@ -132,4 +126,3 @@ export function createApp(deps: AppDependencies) {
 }
 
 export type App = ReturnType<typeof createApp>;
-export { createStartupBanner };

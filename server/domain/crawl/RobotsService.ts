@@ -14,7 +14,13 @@ export interface RobotsPolicy {
 	allowed: boolean;
 	crawlDelayMs?: number;
 	delayKey: string;
+	unavailableReason?: string;
 }
+
+type RobotsRulesResult =
+	| { type: "rules"; rules: RobotsResult }
+	| { type: "no-rules" }
+	| { type: "unavailable"; reason: string };
 
 export class RobotsService {
 	private readonly cache = new LRUCacheWithTTL<string, RobotsResult | null>(
@@ -30,10 +36,12 @@ export class RobotsService {
 	private async fetchRulesForOrigin(
 		originKey: string,
 		signal?: AbortSignal,
-	): Promise<RobotsResult | null> {
+	): Promise<RobotsRulesResult> {
 		const cached = this.cache.get(originKey);
 		if (cached !== undefined) {
-			return cached;
+			return cached === null
+				? { type: "no-rules" }
+				: { type: "rules", rules: cached };
 		}
 
 		const timeoutSignal = AbortSignal.timeout(
@@ -54,13 +62,18 @@ export class RobotsService {
 				const text = await response.text();
 				const rules = new NativeRobotsParser(text);
 				this.cache.set(originKey, rules);
-				return rules;
+				return { type: "rules", rules };
 			}
 
 			if (shouldTreatRobotsResponseAsNoRules(response.status)) {
 				this.cache.set(originKey, null);
-				return null;
+				return { type: "no-rules" };
 			}
+
+			return {
+				type: "unavailable",
+				reason: `robots.txt returned HTTP ${response.status}`,
+			};
 		} catch (error) {
 			if (signal?.aborted) {
 				throw signal.reason instanceof Error
@@ -68,12 +81,12 @@ export class RobotsService {
 					: new Error("Robots evaluation aborted");
 			}
 
+			const reason = error instanceof Error ? error.message : String(error);
 			this.logger.debug(
-				`[Robots] Failed to fetch robots.txt for ${originKey}: ${error instanceof Error ? error.message : String(error)}`,
+				`[Robots] Failed to fetch robots.txt for ${originKey}: ${reason}`,
 			);
+			return { type: "unavailable", reason };
 		}
-
-		return null;
 	}
 
 	async evaluate(url: string, signal?: AbortSignal): Promise<RobotsPolicy> {
@@ -89,7 +102,19 @@ export class RobotsService {
 		identity: CrawlUrlIdentity,
 		signal?: AbortSignal,
 	): Promise<RobotsPolicy> {
-		const rules = await this.fetchRulesForOrigin(identity.robotsKey, signal);
+		const rulesResult = await this.fetchRulesForOrigin(
+			identity.robotsKey,
+			signal,
+		);
+		if (rulesResult.type === "unavailable") {
+			return {
+				delayKey: identity.originKey,
+				allowed: false,
+				unavailableReason: rulesResult.reason,
+			};
+		}
+
+		const rules = rulesResult.type === "rules" ? rulesResult.rules : null;
 		const crawlDelaySeconds = rules?.getCrawlDelay(config.userAgent);
 
 		return {
@@ -100,13 +125,5 @@ export class RobotsService {
 			crawlDelayMs:
 				crawlDelaySeconds === undefined ? undefined : crawlDelaySeconds * 1000,
 		};
-	}
-
-	async isAllowed(url: string): Promise<boolean> {
-		return (await this.evaluate(url)).allowed;
-	}
-
-	async getCrawlDelay(url: string): Promise<number | undefined> {
-		return (await this.evaluate(url)).crawlDelayMs;
 	}
 }

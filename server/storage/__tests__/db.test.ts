@@ -981,7 +981,7 @@ describe("storage contract", () => {
 
 		expect(typeof result.pageId).toBe("number");
 		expect(storage.repos.pages.listForExport("crawl-item")).toHaveLength(1);
-		expect(storage.repos.crawlTerminals.listByCrawlId("crawl-item")).toEqual([
+		expect(storage.repos.crawlItems.listTerminalUrls("crawl-item")).toEqual([
 			{
 				url: "https://item.example/page",
 				outcome: "success",
@@ -1015,21 +1015,34 @@ describe("storage contract", () => {
 			},
 		);
 
-		storage.repos.crawlTerminals.upsert(
-			"crawl-terminal-order",
-			"https://order.example/z-success",
-			"success",
-			true,
-		);
-		storage.repos.crawlTerminals.upsert(
-			"crawl-terminal-order",
-			"https://order.example/a-failure",
-			"failure",
-			false,
-		);
+		const counters = {
+			pagesScanned: 0,
+			successCount: 0,
+			failureCount: 0,
+			skippedCount: 0,
+			linksFound: 0,
+			mediaFiles: 0,
+			totalDataKb: 0,
+		};
+		storage.repos.crawlItems.commitCompletedItem({
+			crawlId: "crawl-terminal-order",
+			url: "https://order.example/z-success",
+			outcome: "success",
+			domainBudgetCharged: true,
+			counters,
+			eventSequence: 1,
+		});
+		storage.repos.crawlItems.commitCompletedItem({
+			crawlId: "crawl-terminal-order",
+			url: "https://order.example/a-failure",
+			outcome: "failure",
+			domainBudgetCharged: false,
+			counters,
+			eventSequence: 2,
+		});
 
 		expect(
-			storage.repos.crawlTerminals.listByCrawlId("crawl-terminal-order"),
+			storage.repos.crawlItems.listTerminalUrls("crawl-terminal-order"),
 		).toEqual([
 			{
 				url: "https://order.example/z-success",
@@ -1111,7 +1124,7 @@ describe("storage contract", () => {
 			[],
 		);
 		expect(
-			storage.repos.crawlTerminals.listByCrawlId("crawl-item-rollback"),
+			storage.repos.crawlItems.listTerminalUrls("crawl-item-rollback"),
 		).toEqual([]);
 		expect(
 			storage.repos.crawlRuns.getById("crawl-item-rollback")?.eventSequence,

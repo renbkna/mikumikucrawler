@@ -799,4 +799,50 @@ describe("page pipeline contract", () => {
 		expect(result.page?.eventPayload.processedData?.media).toHaveLength(1);
 		expect(eventSink.page).not.toHaveBeenCalled();
 	});
+
+	test("reschedules transient fetch failures through the queue retry path", async () => {
+		const scheduleRetry = mock(() => undefined);
+		const item = {
+			url: "https://example.com/",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		};
+		const pipeline = new PagePipeline(
+			"crawl-1",
+			{
+				crawlDepth: 1,
+				retryLimit: 1,
+				respectRobots: false,
+				saveMedia: false,
+				crawlMethod: "links",
+				contentOnly: false,
+			} as never,
+			{
+				canScheduleMore: () => true,
+				hasVisited: () => false,
+				isDomainBudgetExceeded: () => false,
+				adaptDomainDelay: mock(() => undefined),
+			} as never,
+			{
+				enqueue: mock(() => undefined),
+				scheduleRetry,
+			} as never,
+			{} as never,
+			{
+				fetch: async () => ({
+					type: "transientFailure",
+					statusCode: 500,
+				}),
+			} as never,
+			{} as never,
+			{ log: mock(() => undefined) },
+			createLogger(),
+		);
+
+		await expect(pipeline.process(item)).resolves.toEqual({
+			rescheduled: true,
+		});
+		expect(scheduleRetry).toHaveBeenCalledWith(item, 1000);
+	});
 });

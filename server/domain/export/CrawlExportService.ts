@@ -28,44 +28,42 @@ function escapeCsvCell(value: string | null | undefined): string {
 	return `"${sanitized.replaceAll('"', '""')}"`;
 }
 
-export class CrawlExportService {
-	exportPages(
-		crawlId: string,
-		pages: ExportPageRow[],
-		format: CrawlExportFormat = "json",
-	): CrawlExportResult {
-		const filename = safeExportFilename(crawlId, format);
+export function exportPages(
+	crawlId: string,
+	pages: ExportPageRow[],
+	format: CrawlExportFormat = "json",
+): CrawlExportResult {
+	const filename = safeExportFilename(crawlId, format);
 
-		if (format === "csv") {
-			const rows = [
-				CSV_HEADERS,
-				...pages.map((page) =>
-					CSV_EXPORT_PAGE_FIELDS.map((field) => String(page[field] ?? "")),
-				),
-			];
-			return {
-				body: rows
-					.map((row) => row.map((cell) => escapeCsvCell(cell)).join(","))
-					.join("\n"),
-				contentType: "text/csv; charset=utf-8",
-				contentDisposition: `attachment; filename="${filename}"`,
-				filename,
-			};
-		}
-
-		return {
-			body: JSON.stringify(
-				pages.map((page) =>
-					Object.fromEntries(
-						EXPORT_PAGE_FIELDS.map((field) => [field, page[field]]),
-					),
-				),
-				null,
-				2,
+	if (format === "csv") {
+		const rows = [
+			CSV_HEADERS,
+			...pages.map((page) =>
+				CSV_EXPORT_PAGE_FIELDS.map((field) => String(page[field] ?? "")),
 			),
-			contentType: "application/json; charset=utf-8",
+		];
+		return {
+			body: rows
+				.map((row) => row.map((cell) => escapeCsvCell(cell)).join(","))
+				.join("\n"),
+			contentType: "text/csv; charset=utf-8",
 			contentDisposition: `attachment; filename="${filename}"`,
 			filename,
 		};
 	}
+
+	return {
+		body: JSON.stringify(
+			pages.map((page) =>
+				Object.fromEntries(
+					EXPORT_PAGE_FIELDS.map((field) => [field, page[field]]),
+				),
+			),
+			null,
+			2,
+		),
+		contentType: "application/json; charset=utf-8",
+		contentDisposition: `attachment; filename="${filename}"`,
+		filename,
+	};
 }

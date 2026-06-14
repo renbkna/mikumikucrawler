@@ -15,17 +15,15 @@ import {
 import type { HttpClient, Resolver } from "../plugins/security.js";
 import type { CrawlRunRecord } from "../storage/db.js";
 import type { StorageRepos } from "../storage/db.js";
-import type { CrawlRuntime } from "./CrawlRuntime.js";
 import type { DomainStateRecord } from "../domain/crawl/CrawlState.js";
-import { createCrawlRuntime } from "./CrawlRuntimeFactory.js";
+import { CrawlRuntime } from "./CrawlRuntime.js";
 import type { EventStream } from "./EventStream.js";
-import type { RuntimeRegistry } from "./RuntimeRegistry.js";
 
 interface CreateCrawlManagerOptions {
 	logger: Logger;
 	repos: StorageRepos;
 	eventStream: EventStream;
-	registry: RuntimeRegistry;
+	registry: Map<string, CrawlRuntime>;
 	resolver: Resolver;
 	httpClient: HttpClient;
 }
@@ -77,7 +75,7 @@ export class CrawlManager {
 			initialDomainStates?: DomainStateRecord[];
 		} = { resume: false },
 	): CrawlRuntime {
-		return createCrawlRuntime({
+		const runtime = new CrawlRuntime({
 			crawlId,
 			options,
 			logger: this.deps.logger,
@@ -90,8 +88,15 @@ export class CrawlManager {
 			initialStartedAtMs: config.initialStartedAtMs,
 			initialDomainStates: config.initialDomainStates,
 			resume: config.resume,
-			registry: this.deps.registry,
+			onInactive: () => {
+				this.deps.registry.delete(crawlId);
+			},
+			onSettled: () => {
+				this.deps.eventStream.scheduleCleanup(crawlId);
+			},
 		});
+		this.deps.registry.set(crawlId, runtime);
+		return runtime;
 	}
 
 	create(options: CrawlOptions) {
@@ -187,7 +192,7 @@ export class CrawlManager {
 	listResumable(limit?: number) {
 		const effectiveLimit = limit ?? DEFAULT_CRAWL_LIST_LIMIT;
 		return this.deps.repos.crawlRuns
-			.getResumableRuns(effectiveLimit + this.deps.registry.size())
+			.getResumableRuns(effectiveLimit + this.deps.registry.size)
 			.filter((crawl) => !this.deps.registry.get(crawl.id))
 			.slice(0, effectiveLimit);
 	}

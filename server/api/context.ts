@@ -1,13 +1,13 @@
 import type { CrawlManager } from "../runtime/CrawlManager.js";
 import type { EventStream } from "../runtime/EventStream.js";
-import type { RuntimeRegistry } from "../runtime/RuntimeRegistry.js";
+import type { CrawlRuntime } from "../runtime/CrawlRuntime.js";
 import type { StorageRepos } from "../storage/db.js";
 
 export interface RouteServices {
 	crawlManager: CrawlManager;
 	eventStream: EventStream;
 	repos: StorageRepos;
-	runtimeRegistry: RuntimeRegistry;
+	runtimeRegistry: Map<string, CrawlRuntime>;
 }
 
 interface RouteContextBase {

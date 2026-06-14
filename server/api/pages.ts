@@ -3,12 +3,15 @@ import {
 	API_PATHS,
 	PAGE_ROUTE_SEGMENTS,
 } from "../../shared/contracts/index.js";
+import { PageContentResponseSchema } from "../../shared/contracts/schemas.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
-import {
-	PageContentParamsSchema,
-	PageContentResponseSchema,
-} from "../contracts/page.js";
+import { PositiveIntegerIdSchema } from "../contracts/http.js";
 import { routeServices } from "./context.js";
+import { t } from "elysia";
+
+const PageContentParamsSchema = t.Object({
+	id: PositiveIntegerIdSchema,
+});
 
 export function pagesApi() {
 	return new Elysia({ name: "pages-api", prefix: API_PATHS.pages }).get(
