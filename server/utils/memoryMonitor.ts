@@ -27,15 +27,9 @@ function getMemoryUsage(): MemoryUsage {
 	};
 }
 
-function isLowMemory(): boolean {
-	const usage = getMemoryUsage();
-	// Use configurable threshold based on environment (350MB for Render, 600MB otherwise)
-	return usage.rss > config.memoryThreshold;
-}
-
 function getMemoryStatus(): MemoryStatus {
 	const usage = getMemoryUsage();
-	const lowMem = isLowMemory();
+	const lowMem = usage.rss > config.memoryThreshold;
 
 	return {
 		...usage,

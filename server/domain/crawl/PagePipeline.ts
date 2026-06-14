@@ -1,14 +1,14 @@
 import type { CrawlOptions } from "../../../shared/contracts/index.js";
-import { ContentProcessor } from "../../processors/ContentProcessor.js";
+import { RETRY_CONSTANTS } from "../../constants.js";
+import { processContent } from "../../processors/ContentProcessor.js";
 import { isHtmlLikeContentType } from "../../processors/contentTypes.js";
-import type { ExtractedLink } from "../../../shared/types.js";
 import type { PageRepo } from "../../storage/repos/pageRepo.js";
 import { CrawlAdmissionPolicy } from "./CrawlAdmissionPolicy.js";
 import type { CrawlQueue, QueueItem } from "./CrawlQueue.js";
 import type { CrawlState, TerminalOutcome } from "./CrawlState.js";
 import type { FetchService } from "./FetchService.js";
 import type { BuiltPageResult } from "./PageResultBuilder.js";
-import { PageResultBuilder } from "./PageResultBuilder.js";
+import { buildPageResult } from "./PageResultBuilder.js";
 import { isClientErrorShell, isSoft404 } from "./PageDecisionPolicy.js";
 import type { RobotsService } from "./RobotsService.js";
 import { getCrawlUrlIdentity } from "./UrlPolicy.js";
@@ -42,10 +42,21 @@ function getDelayKey(item: QueueItem): string {
 	return "error" in identity ? item.domain : identity.originKey;
 }
 
+function retryDelayMs(
+	result: { retryAfterMs?: number },
+	retries: number,
+): number {
+	return (
+		result.retryAfterMs ??
+		Math.min(
+			RETRY_CONSTANTS.BASE_DELAY * 2 ** retries,
+			RETRY_CONSTANTS.MAX_DELAY,
+		)
+	);
+}
+
 export class PagePipeline {
-	private readonly processor: ContentProcessor;
 	private readonly admissionPolicy: CrawlAdmissionPolicy;
-	private readonly resultBuilder: PageResultBuilder;
 
 	constructor(
 		private readonly crawlId: string,
@@ -56,10 +67,8 @@ export class PagePipeline {
 		private readonly fetchService: FetchService,
 		robotsService: RobotsService,
 		private readonly eventSink: EventSink,
-		logger: import("../../config/logging.js").Logger,
+		private readonly logger: import("../../config/logging.js").Logger,
 	) {
-		this.processor = new ContentProcessor(logger);
-		this.resultBuilder = new PageResultBuilder(crawlId, options);
 		this.admissionPolicy = new CrawlAdmissionPolicy(
 			options,
 			state,
@@ -70,11 +79,15 @@ export class PagePipeline {
 
 	private async enqueueLinks(
 		item: QueueItem,
-		links: ExtractedLink[],
+		links: ReturnType<CrawlAdmissionPolicy["normalizeDiscoveredLinks"]>,
 		signal?: AbortSignal,
 	): Promise<void> {
 		throwIfAborted(signal);
-		await this.admissionPolicy.admitDiscoveredLinks(item, links, signal);
+		await this.admissionPolicy.admitNormalizedDiscoveredLinks(
+			item,
+			links,
+			signal,
+		);
 	}
 
 	private recordTerminal(
@@ -133,9 +146,9 @@ export class PagePipeline {
 		);
 		throwIfAborted(signal);
 		if (fetchResult.type === "unchanged") {
-			const cachedLinks = this.pageRepo.getLinksByPageUrl(
-				this.crawlId,
-				item.url,
+			const cachedLinks = this.admissionPolicy.normalizeDiscoveredLinks(
+				item,
+				this.pageRepo.getLinksByPageUrl(this.crawlId, item.url),
 			);
 			const discoveredLinkCount =
 				this.pageRepo.getDiscoveredLinkCountByPageUrl?.(
@@ -150,27 +163,31 @@ export class PagePipeline {
 			return result;
 		}
 
-		if (fetchResult.type === "rateLimited") {
+		if (
+			fetchResult.type === "rateLimited" ||
+			fetchResult.type === "transientFailure"
+		) {
+			const delayMs = retryDelayMs(fetchResult, item.retries);
 			this.state.adaptDomainDelay(
 				getDelayKey(item),
 				fetchResult.statusCode,
-				fetchResult.retryAfterMs,
+				delayMs,
 			);
 			if (
 				item.retries < this.options.retryLimit &&
 				!this.state.isStopRequested &&
 				!signal?.aborted
 			) {
-				this.queue.scheduleRetry(item, fetchResult.retryAfterMs);
+				this.queue.scheduleRetry(item, delayMs);
 				this.eventSink.log(
-					`[Crawler] Rate limited: ${item.url} — retrying in ${Math.round(fetchResult.retryAfterMs / 1000)}s`,
+					`[Crawler] ${fetchResult.type === "rateLimited" ? "Rate limited" : "Transient failure"}: ${item.url} — retrying in ${Math.round(delayMs / 1000)}s`,
 				);
 				return { rescheduled: true };
 			}
 
 			const result = this.recordFetchedTerminal(item, "failure");
 			this.eventSink.log(
-				`[Crawler] Rate limited terminal failure: ${item.url}`,
+				`[Crawler] ${fetchResult.type === "rateLimited" ? "Rate limited" : "Transient failure"} terminal failure: ${item.url}`,
 			);
 			return result;
 		}
@@ -191,25 +208,29 @@ export class PagePipeline {
 			return result;
 		}
 
-		const processedContent = await this.processor.processContent(
+		const processedContent = await processContent(
 			fetchResult.content,
 			item.url,
 			fetchResult.contentType,
+			this.logger,
 		);
 		throwIfAborted(signal);
 
-		const crawlLinks =
+		const normalizedCrawlLinks =
 			isHtmlLikeContentType(fetchResult.contentType) &&
 			processedContent.links?.length
-				? this.admissionPolicy
-						.normalizeDiscoveredLinks(item, processedContent.links)
-						.map((link) => link.link)
+				? this.admissionPolicy.normalizeDiscoveredLinks(
+						item,
+						processedContent.links,
+					)
 				: [];
-		const pageResult = this.resultBuilder.build(
+		const pageResult = buildPageResult(
+			this.crawlId,
+			this.options,
 			item,
 			fetchResult,
 			processedContent,
-			crawlLinks,
+			normalizedCrawlLinks.map((link) => link.link),
 		);
 
 		if (isClientErrorShell(pageResult.resolvedTitle, pageResult.mainContent)) {
@@ -221,7 +242,7 @@ export class PagePipeline {
 		if (pageResult.robotsDirectives.noindex) {
 			this.eventSink.log(`[Robots] noindex: ${item.url}`);
 			if (!pageResult.robotsDirectives.nofollow) {
-				await this.enqueueLinks(item, crawlLinks, signal);
+				await this.enqueueLinks(item, normalizedCrawlLinks, signal);
 				throwIfAborted(signal);
 			}
 			this.state.recordDiscoveredLinks(processedContent.links?.length ?? 0);
@@ -244,7 +265,7 @@ export class PagePipeline {
 		throwIfAborted(signal);
 
 		if (!pageResult.robotsDirectives.nofollow) {
-			await this.enqueueLinks(item, crawlLinks, signal);
+			await this.enqueueLinks(item, normalizedCrawlLinks, signal);
 		}
 
 		this.state.recordDiscoveredLinks(processedContent.links?.length ?? 0);

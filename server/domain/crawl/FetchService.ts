@@ -2,17 +2,20 @@ import type { Logger } from "../../config/logging.js";
 import {
 	FETCH_HEADERS,
 	RETRY_CONSTANTS,
+	REQUEST_CONSTANTS,
 	TIMEOUT_CONSTANTS,
 } from "../../constants.js";
 import type { HttpClient } from "../../plugins/security.js";
 import { isPdfContentType } from "../../processors/contentTypes.js";
 import type { PageRepo } from "../../storage/repos/pageRepo.js";
+import { readLimitedResponseBody } from "../../utils/responseBody.js";
 import type { QueueItem } from "./CrawlQueue.js";
 import type { DynamicRenderer } from "./DynamicRenderer.js";
 import {
 	isAccessBlockedStatus,
 	isPermanentFetchFailureStatus,
 	isRateLimitedStatus,
+	isTransientFetchFailureStatus,
 } from "./httpStatusPolicy.js";
 
 export type FetchResult =
@@ -41,6 +44,11 @@ export type FetchResult =
 			retryAfterMs: number;
 	  }
 	| {
+			type: "transientFailure";
+			statusCode: number;
+			retryAfterMs?: number;
+	  }
+	| {
 			type: "permanentFailure";
 			statusCode: number;
 	  }
@@ -50,8 +58,8 @@ export type FetchResult =
 			reason?: string;
 	  };
 
-function parseRetryAfter(value: string | null): number {
-	if (!value) return RETRY_CONSTANTS.MAX_DELAY;
+function parseRetryAfter(value: string | null): number | undefined {
+	if (!value) return undefined;
 	if (/^\d+$/.test(value.trim())) {
 		return Math.min(
 			Number.parseInt(value, 10) * 1000,
@@ -67,7 +75,35 @@ function parseRetryAfter(value: string | null): number {
 		);
 	}
 
-	return RETRY_CONSTANTS.MAX_DELAY;
+	return undefined;
+}
+
+async function readResponseContent(
+	response: Response,
+	contentType: string,
+): Promise<
+	| { type: "content"; content: string | Buffer; contentLength: number }
+	| { type: "tooLarge" }
+> {
+	const body = await readLimitedResponseBody(
+		response,
+		REQUEST_CONSTANTS.MAX_RESPONSE_BYTES,
+	);
+	if (body.type === "tooLarge") {
+		return { type: "tooLarge" };
+	}
+
+	return isPdfContentType(contentType)
+		? {
+				type: "content",
+				content: Buffer.from(body.bytes),
+				contentLength: body.contentLength,
+			}
+		: {
+				type: "content",
+				content: new TextDecoder().decode(body.bytes),
+				contentLength: body.contentLength,
+			};
 }
 
 function classifyFetchStatus(
@@ -90,6 +126,14 @@ function classifyFetchStatus(
 		return {
 			type: "permanentFailure",
 			statusCode,
+		};
+	}
+
+	if (isTransientFetchFailureStatus(statusCode)) {
+		return {
+			type: "transientFailure",
+			statusCode,
+			retryAfterMs: options.retryAfterMs,
 		};
 	}
 
@@ -213,20 +257,37 @@ export class FetchService {
 			conditionalHeaders["If-None-Match"] = cachedHeaders.etag;
 		}
 
-		const response = await this.httpClient.fetch({
-			url: item.url,
-			headers: {
-				...FETCH_HEADERS,
-				...conditionalHeaders,
-			},
-			signal:
-				signal && "any" in AbortSignal
-					? AbortSignal.any([
-							signal,
-							AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH),
-						])
-					: AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH),
-		});
+		let response: Response;
+		try {
+			response = await this.httpClient.fetch({
+				url: item.url,
+				headers: {
+					...FETCH_HEADERS,
+					...conditionalHeaders,
+				},
+				signal:
+					signal && "any" in AbortSignal
+						? AbortSignal.any([
+								signal,
+								AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH),
+							])
+						: AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH),
+			});
+		} catch (error) {
+			if (signal?.aborted) {
+				throw signal.reason instanceof Error
+					? signal.reason
+					: new Error("Fetch aborted");
+			}
+			this.logger.warn(
+				`[Fetch] Transient fetch failure for ${item.url}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			return {
+				type: "transientFailure",
+				statusCode: 0,
+				retryAfterMs: RETRY_CONSTANTS.BASE_DELAY,
+			};
+		}
 		if (signal?.aborted) {
 			throw signal.reason instanceof Error
 				? signal.reason
@@ -267,19 +328,20 @@ export class FetchService {
 		}
 
 		const contentType = response.headers.get("content-type") ?? "";
-		const content = isPdfContentType(contentType)
-			? Buffer.from(await response.arrayBuffer())
-			: await response.text();
-		const contentLength =
-			typeof content === "string"
-				? Buffer.byteLength(content, "utf8")
-				: content.byteLength;
+		const readContent = await readResponseContent(response, contentType);
+		if (readContent.type === "tooLarge") {
+			return {
+				type: "blocked",
+				statusCode: 413,
+				reason: `Response too large for ${item.url}`,
+			};
+		}
 		return {
 			type: "success",
-			content,
+			content: readContent.content,
 			statusCode: response.status,
 			contentType,
-			contentLength,
+			contentLength: readContent.contentLength,
 			title: "",
 			description: "",
 			lastModified: response.headers.get("last-modified"),

@@ -61,14 +61,6 @@ export class CrawlAdmissionPolicy {
 		links: ExtractedLink[],
 		signal?: AbortSignal,
 	): Promise<LinkAdmissionResult[]> {
-		if (parent.depth >= this.options.crawlDepth) {
-			return links.map((link) => ({
-				type: "rejected",
-				reason: "depth-limit",
-				url: link.url,
-			}));
-		}
-
 		const results: LinkAdmissionResult[] = [];
 		for (const link of links) {
 			throwIfAborted(signal);
@@ -86,6 +78,32 @@ export class CrawlAdmissionPolicy {
 				continue;
 			}
 
+			const [result] = await this.admitNormalizedDiscoveredLinks(
+				parent,
+				[normalized],
+				signal,
+			);
+			if (result) results.push(result);
+		}
+		return results;
+	}
+
+	async admitNormalizedDiscoveredLinks(
+		parent: QueueItem,
+		links: NormalizedDiscoveredLink[],
+		signal?: AbortSignal,
+	): Promise<LinkAdmissionResult[]> {
+		if (parent.depth >= this.options.crawlDepth) {
+			return links.map((link) => ({
+				type: "rejected",
+				reason: "depth-limit",
+				url: link.link.url,
+			}));
+		}
+
+		const results: LinkAdmissionResult[] = [];
+		for (const normalized of links) {
+			throwIfAborted(signal);
 			if (normalized.link.nofollow) {
 				results.push({
 					type: "rejected",

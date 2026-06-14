@@ -1,8 +1,8 @@
 import { createWriteStream, renameSync, statSync, unlinkSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import pino, { type Logger } from "pino";
+import pinoPretty from "pino-pretty";
 import { config } from "./env.js";
-import { createPrettyPrinter } from "./prettyPrinter.js";
 
 const MAX_LOG_BYTES = 10 * 1024 * 1024; // 10 MB
 const MAX_ROTATED_FILES = 3;
@@ -76,7 +76,7 @@ export const setupLogging = async (): Promise<AppLogger> => {
 		// Console output with beautiful formatting
 		{
 			level: "debug",
-			stream: isProduction ? process.stdout : createPrettyPrinter(),
+			stream: isProduction ? process.stdout : pinoPretty({ colorize: true }),
 		},
 		// All logs to crawler.log (JSON format for parsing)
 		{ level: "debug", stream: allStream },

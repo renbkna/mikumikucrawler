@@ -1,8 +1,4 @@
-import {
-	createApp,
-	createDefaultAppDependencies,
-	createStartupBanner,
-} from "./app.js";
+import { createApp, createDefaultAppDependencies } from "./app.js";
 import { config } from "./config/env.js";
 import { setupLogging } from "./config/logging.js";
 
@@ -12,13 +8,13 @@ const app = createApp(dependencies);
 const crawlManager = dependencies.crawlManager;
 
 const instance = app.listen(config.port, (server) => {
-	// biome-ignore lint/suspicious/noConsole: startup banner is intentional output
-	console.log(
-		createStartupBanner({
+	logger.info(
+		{
 			port: server.port ?? config.port,
 			frontendUrl: config.frontendUrl,
 			env: config.env,
-		}),
+		},
+		"server started",
 	);
 });
 

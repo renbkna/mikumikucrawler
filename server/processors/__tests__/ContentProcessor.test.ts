@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { Logger } from "../../config/logging.js";
-import { ContentProcessor } from "../ContentProcessor.js";
+import { processContent } from "../ContentProcessor.js";
 
 /**
  * CONTRACT: ContentProcessor.processContent
@@ -28,13 +28,18 @@ const createMockLogger = (): Logger =>
 		debug: mock(() => {}),
 	}) as unknown as Logger;
 
+const processTestContent = (
+	content: string | Buffer,
+	url: string,
+	contentType: string,
+) => processContent(content, url, contentType, createMockLogger());
+
 describe("ContentProcessor dispatch contract", () => {
 	test("HTML → extracts main content and populates analysis", async () => {
-		const processor = new ContentProcessor(createMockLogger());
 		const html = `<html><head><title>Test</title></head>
 			<body><main><h1>Hello World</h1><p>Crawler test content here.</p></main></body></html>`;
 
-		const result = await processor.processContent(
+		const result = await processTestContent(
 			html,
 			"https://example.com/test",
 			"text/html",
@@ -48,10 +53,9 @@ describe("ContentProcessor dispatch contract", () => {
 	});
 
 	test("XHTML → uses the HTML extraction pipeline", async () => {
-		const processor = new ContentProcessor(createMockLogger());
 		const html = `<html><body><main>XHTML content</main><a href="/next">Next</a></body></html>`;
 
-		const result = await processor.processContent(
+		const result = await processTestContent(
 			html,
 			"https://example.com/page",
 			"application/xhtml+xml; charset=utf-8",
@@ -66,10 +70,9 @@ describe("ContentProcessor dispatch contract", () => {
 	});
 
 	test("JSON → extractedData.mainContent contains serialized data", async () => {
-		const processor = new ContentProcessor(createMockLogger());
 		const json = JSON.stringify({ key: "value", nested: { data: 123 } });
 
-		const result = await processor.processContent(
+		const result = await processTestContent(
 			json,
 			"https://api.example.com/data",
 			"application/json",
@@ -83,9 +86,7 @@ describe("ContentProcessor dispatch contract", () => {
 	});
 
 	test("JSON dispatch normalizes media type casing and parameters", async () => {
-		const processor = new ContentProcessor(createMockLogger());
-
-		const result = await processor.processContent(
+		const result = await processTestContent(
 			JSON.stringify({ key: "mixed-case" }),
 			"https://api.example.com/data",
 			"Application/JSON; Charset=UTF-8",
@@ -97,20 +98,18 @@ describe("ContentProcessor dispatch contract", () => {
 	});
 
 	test("JSON primitives preserve parsed values instead of truthy fallback", async () => {
-		const processor = new ContentProcessor(createMockLogger());
-
 		const [zero, bool, nil] = await Promise.all([
-			processor.processContent(
+			processTestContent(
 				"0",
 				"https://api.example.com/zero",
 				"application/json",
 			),
-			processor.processContent(
+			processTestContent(
 				"false",
 				"https://api.example.com/false",
 				"application/json",
 			),
-			processor.processContent(
+			processTestContent(
 				"null",
 				"https://api.example.com/null",
 				"application/json",
@@ -123,15 +122,13 @@ describe("ContentProcessor dispatch contract", () => {
 	});
 
 	test("JSON string roots and invalid JSON fallback do not gain extra quotes", async () => {
-		const processor = new ContentProcessor(createMockLogger());
-
 		const [stringRoot, invalid] = await Promise.all([
-			processor.processContent(
+			processTestContent(
 				'"hello"',
 				"https://api.example.com/string",
 				"application/json",
 			),
-			processor.processContent(
+			processTestContent(
 				"not-json",
 				"https://api.example.com/invalid",
 				"application/json",
@@ -143,9 +140,7 @@ describe("ContentProcessor dispatch contract", () => {
 	});
 
 	test("PDF with invalid data → pdf_processing_error", async () => {
-		const processor = new ContentProcessor(createMockLogger());
-
-		const result = await processor.processContent(
+		const result = await processTestContent(
 			Buffer.from("fake pdf content"),
 			"https://example.com/doc.pdf",
 			"Application/PDF; charset=binary",
@@ -168,9 +163,7 @@ describe("ContentProcessor dispatch contract", () => {
 	});
 
 	test("unknown content type → empty result, no errors", async () => {
-		const processor = new ContentProcessor(createMockLogger());
-
-		const result = await processor.processContent(
+		const result = await processTestContent(
 			"some binary data",
 			"https://example.com/file.bin",
 			"application/octet-stream",
@@ -181,8 +174,6 @@ describe("ContentProcessor dispatch contract", () => {
 	});
 
 	test("PDF with valid minimal structure → extracts without errors", async () => {
-		const processor = new ContentProcessor(createMockLogger());
-
 		// Minimal valid PDF with text content
 		const minimalPdf = Buffer.from(
 			`%PDF-1.4
@@ -206,7 +197,7 @@ startxref
 			"binary",
 		);
 
-		const result = await processor.processContent(
+		const result = await processTestContent(
 			minimalPdf,
 			"https://example.com/test.pdf",
 			"application/pdf",

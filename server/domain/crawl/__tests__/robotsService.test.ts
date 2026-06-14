@@ -30,10 +30,14 @@ describe("RobotsService", () => {
 		const service = new RobotsService({ fetch }, createLogger());
 
 		await expect(
-			service.isAllowed("https://example.com/private"),
-		).resolves.toBe(true);
+			service
+				.evaluate("https://example.com/private")
+				.then((policy) => policy.allowed),
+		).resolves.toBe(false);
 		await expect(
-			service.isAllowed("https://example.com/private"),
+			service
+				.evaluate("https://example.com/private")
+				.then((policy) => policy.allowed),
 		).resolves.toBe(false);
 		expect(fetch).toHaveBeenCalledTimes(2);
 	});
@@ -43,25 +47,33 @@ describe("RobotsService", () => {
 		const service = new RobotsService({ fetch }, createLogger());
 
 		await expect(
-			service.isAllowed("https://example.com/anything"),
+			service
+				.evaluate("https://example.com/anything")
+				.then((policy) => policy.allowed),
 		).resolves.toBe(true);
 		await expect(
-			service.isAllowed("https://example.com/anything-else"),
+			service
+				.evaluate("https://example.com/anything-else")
+				.then((policy) => policy.allowed),
 		).resolves.toBe(true);
 		expect(fetch).toHaveBeenCalledTimes(1);
 	});
 
-	test("caches persistent denied robots fetches as allow-all", async () => {
+	test("treats denied robots fetches as unavailable policy", async () => {
 		const fetch = mock(async () => new Response("forbidden", { status: 403 }));
 		const service = new RobotsService({ fetch }, createLogger());
 
 		await expect(
-			service.isAllowed("https://example.com/anything"),
-		).resolves.toBe(true);
+			service
+				.evaluate("https://example.com/anything")
+				.then((policy) => policy.allowed),
+		).resolves.toBe(false);
 		await expect(
-			service.isAllowed("https://example.com/anything-else"),
-		).resolves.toBe(true);
-		expect(fetch).toHaveBeenCalledTimes(1);
+			service
+				.evaluate("https://example.com/anything-else")
+				.then((policy) => policy.allowed),
+		).resolves.toBe(false);
+		expect(fetch).toHaveBeenCalledTimes(2);
 	});
 
 	test("propagates caller aborts instead of converting them to allow-all", async () => {
@@ -95,7 +107,9 @@ describe("RobotsService", () => {
 		const service = new RobotsService({ fetch }, createLogger());
 
 		await expect(
-			service.isAllowed("https://example.com/search?b=2&a=1"),
+			service
+				.evaluate("https://example.com/search?b=2&a=1")
+				.then((policy) => policy.allowed),
 		).resolves.toBe(false);
 	});
 

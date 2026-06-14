@@ -6,7 +6,6 @@ import type { HttpClient, Resolver } from "../../plugins/security.js";
 import { CrawlManager } from "../../runtime/CrawlManager.js";
 import type { CrawlRuntime } from "../../runtime/CrawlRuntime.js";
 import { EventStream } from "../../runtime/EventStream.js";
-import { RuntimeRegistry } from "../../runtime/RuntimeRegistry.js";
 import { createInMemoryStorage } from "../../storage/db.js";
 
 function createLogger(): AppLogger {
@@ -40,7 +39,7 @@ async function waitFor<T>(read: () => T, predicate: (value: T) => boolean) {
 function buildApp(httpClient: HttpClient) {
 	const storage = createInMemoryStorage();
 	const eventStream = new EventStream();
-	const registry = new RuntimeRegistry();
+	const registry = new Map<string, CrawlRuntime>();
 	const logger = createLogger();
 	const resolver: Resolver = {
 		assertPublicHostname: async () => {},
@@ -551,6 +550,9 @@ describe("api contract", () => {
 			type: "string",
 			pattern: "^(0|[1-9]\\d*)$",
 		});
+		expect(lastEventIdParameter?.description).toContain(
+			"Bounded live replay cursor",
+		);
 		expect(findParameter("/api/crawls/", "limit")?.schema.default).toBe(25);
 		expect(
 			findParameter("/api/crawls/resumable", "limit")?.schema.default,

@@ -55,8 +55,8 @@ import { createDynamicBrowserContextOptions } from "../../domain/crawl/DynamicRe
 import type { HttpClient, Resolver } from "../../plugins/security.js";
 import { isHtmlLikeContentType } from "../../processors/contentTypes.js";
 import { CrawlManager } from "../../runtime/CrawlManager.js";
+import type { CrawlRuntime } from "../../runtime/CrawlRuntime.js";
 import { EventStream } from "../../runtime/EventStream.js";
-import { RuntimeRegistry } from "../../runtime/RuntimeRegistry.js";
 import { createInMemoryStorage } from "../../storage/db.js";
 
 const VALID_OPTIONS: CrawlOptions = {
@@ -108,7 +108,7 @@ function createLogger(): AppLogger {
 function buildBoundaryApp() {
 	const storage = createInMemoryStorage();
 	const eventStream = new EventStream();
-	const runtimeRegistry = new RuntimeRegistry();
+	const runtimeRegistry = new Map<string, CrawlRuntime>();
 	const logger = createLogger();
 	const resolver: Resolver = {
 		assertPublicHostname: async () => {},

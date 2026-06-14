@@ -13,7 +13,6 @@ import { createCrawlQueueRepo } from "./repos/crawlQueueRepo.js";
 import { createCrawlItemPersistence } from "./repos/crawlItemPersistence.js";
 import { createCrawlDomainStateRepo } from "./repos/crawlDomainStateRepo.js";
 import { createCrawlRunRepo } from "./repos/crawlRunRepo.js";
-import { createCrawlTerminalRepo } from "./repos/crawlTerminalRepo.js";
 import { createPageRepo } from "./repos/pageRepo.js";
 import { createSearchRepo } from "./repos/searchRepo.js";
 
@@ -26,7 +25,6 @@ export interface StorageRepos {
 	crawlQueue: ReturnType<typeof createCrawlQueueRepo>;
 	crawlItems: ReturnType<typeof createCrawlItemPersistence>;
 	crawlDomainState: ReturnType<typeof createCrawlDomainStateRepo>;
-	crawlTerminals: ReturnType<typeof createCrawlTerminalRepo>;
 	pages: ReturnType<typeof createPageRepo>;
 	search: ReturnType<typeof createSearchRepo>;
 }
@@ -144,7 +142,6 @@ export function createStorage(databasePath = config.dbPath): Storage {
 			crawlQueue: createCrawlQueueRepo(db),
 			crawlItems: createCrawlItemPersistence(db),
 			crawlDomainState: createCrawlDomainStateRepo(db),
-			crawlTerminals: createCrawlTerminalRepo(db),
 			pages: createPageRepo(db),
 			search: createSearchRepo(db),
 		},

@@ -6,7 +6,6 @@ import { createInMemoryStorage } from "../../storage/db.js";
 import { CrawlManager, type ResumeCrawlResult } from "../CrawlManager.js";
 import { CrawlRuntime } from "../CrawlRuntime.js";
 import { EventStream } from "../EventStream.js";
-import { RuntimeRegistry } from "../RuntimeRegistry.js";
 
 function createLogger(): Logger {
 	return {
@@ -68,7 +67,7 @@ async function waitFor<T>(read: () => T, predicate: (value: T) => boolean) {
 function createManager(httpClient: HttpClient, resolverOverride?: Resolver) {
 	const storage = createInMemoryStorage();
 	const eventStream = new EventStream();
-	const registry = new RuntimeRegistry();
+	const registry = new Map<string, CrawlRuntime>();
 	const resolver: Resolver = resolverOverride ?? {
 		assertPublicHostname: async () => {},
 		resolveHost: async () => ["93.184.216.34"],
@@ -451,7 +450,7 @@ describe("crawl manager contract", () => {
 			failed?.counters ?? null,
 		);
 		expect(storage.repos.pages.listForExport(created.id)).toEqual([]);
-		expect(storage.repos.crawlTerminals.listByCrawlId(created.id)).toEqual([]);
+		expect(storage.repos.crawlItems.listTerminalUrls(created.id)).toEqual([]);
 	});
 
 	test("worker failure drains active workers before publishing failed terminal event", async () => {
@@ -763,7 +762,7 @@ describe("crawl manager contract", () => {
 		expect(storage.repos.crawlRuns.getById(created.id)?.status).toBe(
 			"interrupted",
 		);
-		expect(registry.size()).toBe(0);
+		expect(registry.size).toBe(0);
 	});
 
 	test("shutdown aborts active work and keeps the active URL resumable", async () => {
@@ -974,7 +973,7 @@ describe("crawl manager contract", () => {
 	test("startup recovers registry-less active crawls as interrupted", () => {
 		const storage = createInMemoryStorage();
 		const eventStream = new EventStream();
-		const registry = new RuntimeRegistry();
+		const registry = new Map<string, CrawlRuntime>();
 		const activeStatuses = [
 			"starting",
 			"running",
@@ -1568,7 +1567,7 @@ describe("crawl manager contract", () => {
 		expect(storage.repos.crawlRuns.getById(created.id)?.stopReason).toBe(
 			"Force stop requested",
 		);
-		expect(registry.size()).toBe(0);
+		expect(registry.size).toBe(0);
 	});
 
 	test("force stop after pause overrides the terminal stop reason", async () => {
@@ -1670,7 +1669,7 @@ describe("crawl manager contract", () => {
 	test("stop requested during startup does not expose running state before stop is applied", async () => {
 		const storage = createInMemoryStorage();
 		const eventStream = new EventStream();
-		const registry = new RuntimeRegistry();
+		const registry = new Map<string, CrawlRuntime>();
 		let releaseResolver!: () => void;
 		const resolver: Resolver = {
 			assertPublicHostname: async () => {

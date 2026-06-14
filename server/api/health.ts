@@ -9,7 +9,7 @@ export function healthApi() {
 			const { runtimeRegistry } = routeServices(context);
 			return {
 				status: "ok",
-				activeCrawls: runtimeRegistry.size(),
+				activeCrawls: runtimeRegistry.size,
 				uptime: process.uptime(),
 			};
 		},

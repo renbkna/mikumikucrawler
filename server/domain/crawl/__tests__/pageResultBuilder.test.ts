@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CrawlOptions } from "../../../../shared/contracts/index.js";
 import type { ProcessedContent } from "../../../types.js";
-import { PageResultBuilder } from "../PageResultBuilder.js";
+import { buildPageResult } from "../PageResultBuilder.js";
 import type { QueueItem } from "../CrawlQueue.js";
 import type { FetchResult } from "../FetchService.js";
 
@@ -74,12 +74,9 @@ function createProcessedContent(): ProcessedContent {
 
 describe("page result builder contract", () => {
 	test("contentOnly=true stores null content", () => {
-		const builder = new PageResultBuilder("crawl-1", {
-			...baseOptions,
-			contentOnly: true,
-		});
-
-		const result = builder.build(
+		const result = buildPageResult(
+			"crawl-1",
+			{ ...baseOptions, contentOnly: true },
 			item,
 			fetchResult,
 			createProcessedContent(),
@@ -90,12 +87,9 @@ describe("page result builder contract", () => {
 	});
 
 	test("saveMedia=false strips media from save and event payload and reports zero media", () => {
-		const builder = new PageResultBuilder("crawl-1", {
-			...baseOptions,
-			saveMedia: false,
-		});
-
-		const result = builder.build(
+		const result = buildPageResult(
+			"crawl-1",
+			{ ...baseOptions, saveMedia: false },
 			item,
 			fetchResult,
 			createProcessedContent(),
@@ -108,13 +102,9 @@ describe("page result builder contract", () => {
 	});
 
 	test("saveMedia=true with media or full crawl retains media", () => {
-		const builder = new PageResultBuilder("crawl-1", {
-			...baseOptions,
-			crawlMethod: "media",
-			saveMedia: true,
-		});
-
-		const result = builder.build(
+		const result = buildPageResult(
+			"crawl-1",
+			{ ...baseOptions, crawlMethod: "media", saveMedia: true },
 			item,
 			fetchResult,
 			createProcessedContent(),
@@ -127,8 +117,9 @@ describe("page result builder contract", () => {
 	});
 
 	test("fetch title and description override processed metadata fallback", () => {
-		const builder = new PageResultBuilder("crawl-1", baseOptions);
-		const result = builder.build(
+		const result = buildPageResult(
+			"crawl-1",
+			baseOptions,
 			item,
 			{
 				...fetchResult,
@@ -146,9 +137,9 @@ describe("page result builder contract", () => {
 	});
 
 	test("pending event payload contains public page fields except id", () => {
-		const builder = new PageResultBuilder("crawl-1", baseOptions);
-
-		const result = builder.build(
+		const result = buildPageResult(
+			"crawl-1",
+			baseOptions,
 			item,
 			fetchResult,
 			createProcessedContent(),
@@ -195,8 +186,9 @@ describe("page result builder contract", () => {
 	});
 
 	test("page-level nofollow strips replayable stored links", () => {
-		const builder = new PageResultBuilder("crawl-1", baseOptions);
-		const result = builder.build(
+		const result = buildPageResult(
+			"crawl-1",
+			baseOptions,
 			item,
 			fetchResult,
 			{
