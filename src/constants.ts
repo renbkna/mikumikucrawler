@@ -15,8 +15,6 @@ export const CRAWLER_DEFAULTS = {
 
 export const UI_LIMITS = {
 	MAX_PAGE_BUFFER: 200,
-	INITIAL_VISIBLE_COUNT: 20,
-	LOAD_MORE_COUNT: 20,
 	MAX_LOGS: 100,
 } as const;
 

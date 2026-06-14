@@ -34,7 +34,7 @@ export class ErrorBoundary extends Component<
 	render(): ReactNode {
 		if (this.state.hasError) {
 			return (
-				<div className="fixed inset-0 flex items-center justify-center bg-miku-bg">
+				<div className="fixed inset-0 flex items-center justify-center bg-white">
 					<div className="glass-panel p-8 max-w-md text-center space-y-6">
 						<div className="text-6xl animate-bounce-slow">😿</div>
 						<h1 className="text-2xl font-black text-miku-teal">

@@ -60,11 +60,7 @@ export function ResumeSessionsPanel({
 	onClose,
 	onResume,
 }: Readonly<ResumeSessionsPanelProps>) {
-	const { dialogRef, modalRef, initialFocusRef } =
-		useDialogModal<HTMLDivElement>({
-			isOpen,
-			onClose,
-		});
+	const { dialogRef } = useDialogModal({ isOpen });
 	const isActionPending = deletingId !== null || resumingId !== null;
 
 	// Fetch whenever the panel opens
@@ -99,7 +95,6 @@ export function ResumeSessionsPanel({
 			className="fixed inset-0 z-50 flex items-center justify-center p-4 m-0 w-full h-full bg-transparent border-none backdrop:bg-black/20 backdrop:backdrop-blur-sm"
 			onClose={onClose}
 		>
-			{/* Invisible backdrop hit-target */}
 			<button
 				type="button"
 				className="absolute inset-0 w-full h-full bg-transparent border-none cursor-default"
@@ -107,11 +102,7 @@ export function ResumeSessionsPanel({
 				aria-label="Close dialog"
 				tabIndex={-1}
 			/>
-
-			<div
-				ref={modalRef}
-				className="relative w-full max-w-xl p-6 bg-white rounded-3xl shadow-xl border-2 border-miku-teal/20 max-h-[90vh] overflow-y-auto animate-pop focus:outline-none"
-			>
+			<div className="relative w-full max-w-xl p-6 bg-white rounded-3xl shadow-xl border-2 border-miku-teal/20 max-h-[90vh] overflow-y-auto animate-pop focus:outline-none">
 				{/* ── Header ─────────────────────────────────────────────────────── */}
 				<div className="flex items-center justify-between mb-6">
 					<h2
@@ -138,7 +129,6 @@ export function ResumeSessionsPanel({
 						</button>
 						<button
 							type="button"
-							ref={initialFocusRef}
 							onClick={onClose}
 							className="p-2 rounded-full hover:bg-miku-pink/10 text-miku-text/40 hover:text-miku-pink transition-colors"
 							aria-label="Close dialog"
