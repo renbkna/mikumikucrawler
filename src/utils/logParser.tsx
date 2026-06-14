@@ -61,13 +61,22 @@ const LOG_LEVELS = {
 
 export function parseLog(log: string): ParsedLog {
 	try {
-		const parsed = JSON.parse(log);
+		const parsed = JSON.parse(log) as unknown;
+		if (!parsed || typeof parsed !== "object") {
+			throw new Error("Not an object log");
+		}
+		const record = parsed as Record<string, unknown>;
+		const level =
+			typeof record.level === "string" && record.level in LOG_LEVELS
+				? (record.level as ParsedLog["level"])
+				: "unknown";
 		return {
 			raw: log,
-			level: parsed.level || "unknown",
-			message: parsed.message || log,
-			timestamp: parsed.timestamp,
-			metadata: parsed,
+			level,
+			message: typeof record.message === "string" ? record.message : log,
+			timestamp:
+				typeof record.timestamp === "string" ? record.timestamp : undefined,
+			metadata: record,
 		};
 	} catch {
 		// Try to detect level from plain text
