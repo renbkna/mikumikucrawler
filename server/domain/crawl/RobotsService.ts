@@ -10,12 +10,22 @@ import {
 import { type CrawlUrlIdentity, getCrawlUrlIdentity } from "./UrlPolicy.js";
 import { shouldTreatRobotsResponseAsNoRules } from "./httpStatusPolicy.js";
 
-export interface RobotsPolicy {
-	allowed: boolean;
-	crawlDelayMs?: number;
-	delayKey: string;
-	unavailableReason?: string;
-}
+export type RobotsPolicy =
+	| {
+			type: "allowed";
+			crawlDelayMs?: number;
+			delayKey: string;
+	  }
+	| {
+			type: "disallowed";
+			crawlDelayMs?: number;
+			delayKey: string;
+	  }
+	| {
+			type: "unavailable";
+			delayKey: string;
+			reason: string;
+	  };
 
 type RobotsRulesResult =
 	| { type: "rules"; rules: RobotsResult }
@@ -108,20 +118,21 @@ export class RobotsService {
 		);
 		if (rulesResult.type === "unavailable") {
 			return {
+				type: "unavailable",
 				delayKey: identity.originKey,
-				allowed: false,
-				unavailableReason: rulesResult.reason,
+				reason: rulesResult.reason,
 			};
 		}
 
 		const rules = rulesResult.type === "rules" ? rulesResult.rules : null;
 		const crawlDelaySeconds = rules?.getCrawlDelay(config.userAgent);
+		const allowed = rules
+			? rules.isAllowed(identity.robotsMatchUrl, config.userAgent)
+			: true;
 
 		return {
+			type: allowed ? "allowed" : "disallowed",
 			delayKey: identity.originKey,
-			allowed: rules
-				? rules.isAllowed(identity.robotsMatchUrl, config.userAgent)
-				: true,
 			crawlDelayMs:
 				crawlDelaySeconds === undefined ? undefined : crawlDelaySeconds * 1000,
 		};

@@ -486,11 +486,19 @@ export class CrawlRuntime {
 				),
 			);
 			this.throwIfForceStopped();
-			if (!targetPolicy.allowed) {
+			if (targetPolicy.type === "disallowed") {
 				throw new Error("Target URL is disallowed by robots.txt");
 			}
+			if (targetPolicy.type === "unavailable") {
+				this.publish("crawl.log", {
+					message: `[Robots] Continuing because target robots.txt is unavailable: ${targetPolicy.reason}`,
+				});
+			}
 
-			if (targetPolicy.crawlDelayMs !== undefined) {
+			if (
+				targetPolicy.type !== "unavailable" &&
+				targetPolicy.crawlDelayMs !== undefined
+			) {
 				this.state.setDomainDelay(
 					targetPolicy.delayKey,
 					targetPolicy.crawlDelayMs,

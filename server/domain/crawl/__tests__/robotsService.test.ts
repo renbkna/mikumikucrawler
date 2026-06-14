@@ -17,7 +17,7 @@ function createLogger(): Logger {
 }
 
 describe("RobotsService", () => {
-	test("does not cache transient robots fetch failures as allow-all policy", async () => {
+	test("separates transient robots fetch failures from robots denial", async () => {
 		const fetch = mock(async () => {
 			if (fetch.mock.calls.length === 1) {
 				throw new Error("temporary outage");
@@ -30,15 +30,19 @@ describe("RobotsService", () => {
 		const service = new RobotsService({ fetch }, createLogger());
 
 		await expect(
-			service
-				.evaluate("https://example.com/private")
-				.then((policy) => policy.allowed),
-		).resolves.toBe(false);
+			service.evaluate("https://example.com/private"),
+		).resolves.toEqual({
+			type: "unavailable",
+			delayKey: "https://example.com",
+			reason: "temporary outage",
+		});
 		await expect(
-			service
-				.evaluate("https://example.com/private")
-				.then((policy) => policy.allowed),
-		).resolves.toBe(false);
+			service.evaluate("https://example.com/private"),
+		).resolves.toEqual({
+			type: "disallowed",
+			delayKey: "https://example.com",
+			crawlDelayMs: undefined,
+		});
 		expect(fetch).toHaveBeenCalledTimes(2);
 	});
 
@@ -49,13 +53,13 @@ describe("RobotsService", () => {
 		await expect(
 			service
 				.evaluate("https://example.com/anything")
-				.then((policy) => policy.allowed),
-		).resolves.toBe(true);
+				.then((policy) => policy.type),
+		).resolves.toBe("allowed");
 		await expect(
 			service
 				.evaluate("https://example.com/anything-else")
-				.then((policy) => policy.allowed),
-		).resolves.toBe(true);
+				.then((policy) => policy.type),
+		).resolves.toBe("allowed");
 		expect(fetch).toHaveBeenCalledTimes(1);
 	});
 
@@ -66,13 +70,13 @@ describe("RobotsService", () => {
 		await expect(
 			service
 				.evaluate("https://example.com/anything")
-				.then((policy) => policy.allowed),
-		).resolves.toBe(false);
+				.then((policy) => policy.type),
+		).resolves.toBe("unavailable");
 		await expect(
 			service
 				.evaluate("https://example.com/anything-else")
-				.then((policy) => policy.allowed),
-		).resolves.toBe(false);
+				.then((policy) => policy.type),
+		).resolves.toBe("unavailable");
 		expect(fetch).toHaveBeenCalledTimes(2);
 	});
 
@@ -109,8 +113,8 @@ describe("RobotsService", () => {
 		await expect(
 			service
 				.evaluate("https://example.com/search?b=2&a=1")
-				.then((policy) => policy.allowed),
-		).resolves.toBe(false);
+				.then((policy) => policy.type),
+		).resolves.toBe("disallowed");
 	});
 
 	test("returns an origin-scoped crawl-delay key", async () => {
@@ -125,7 +129,7 @@ describe("RobotsService", () => {
 		const policy = await service.evaluate("http://example.com:8080/page");
 
 		expect(policy).toMatchObject({
-			allowed: true,
+			type: "allowed",
 			crawlDelayMs: 2000,
 			delayKey: "http://example.com:8080",
 		});

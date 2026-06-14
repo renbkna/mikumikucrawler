@@ -845,4 +845,56 @@ describe("page pipeline contract", () => {
 		});
 		expect(scheduleRetry).toHaveBeenCalledWith(item, 1000);
 	});
+
+	test("owns retry fallback timing for rate limits without retry-after", async () => {
+		const scheduleRetry = mock(() => undefined);
+		const adaptDomainDelay = mock(() => undefined);
+		const item = {
+			url: "https://example.com/",
+			domain: "example.com",
+			depth: 0,
+			retries: 1,
+		};
+		const pipeline = new PagePipeline(
+			"crawl-1",
+			{
+				crawlDepth: 1,
+				retryLimit: 2,
+				respectRobots: false,
+				saveMedia: false,
+				crawlMethod: "links",
+				contentOnly: false,
+			} as never,
+			{
+				canScheduleMore: () => true,
+				hasVisited: () => false,
+				isDomainBudgetExceeded: () => false,
+				adaptDomainDelay,
+			} as never,
+			{
+				enqueue: mock(() => undefined),
+				scheduleRetry,
+			} as never,
+			{} as never,
+			{
+				fetch: async () => ({
+					type: "rateLimited",
+					statusCode: 429,
+				}),
+			} as never,
+			{} as never,
+			{ log: mock(() => undefined) },
+			createLogger(),
+		);
+
+		await expect(pipeline.process(item)).resolves.toEqual({
+			rescheduled: true,
+		});
+		expect(scheduleRetry).toHaveBeenCalledWith(item, 2000);
+		expect(adaptDomainDelay).toHaveBeenCalledWith(
+			"https://example.com",
+			429,
+			2000,
+		);
+	});
 });

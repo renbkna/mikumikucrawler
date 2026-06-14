@@ -118,7 +118,7 @@ export class CrawlAdmissionPolicy {
 					normalized.identity,
 					signal,
 				);
-				if (!linkPolicy.allowed) {
+				if (linkPolicy.type === "disallowed") {
 					results.push({
 						type: "rejected",
 						reason: "robots-disallowed",
@@ -127,7 +127,10 @@ export class CrawlAdmissionPolicy {
 					continue;
 				}
 
-				if (linkPolicy.crawlDelayMs !== undefined) {
+				if (
+					linkPolicy.type !== "unavailable" &&
+					linkPolicy.crawlDelayMs !== undefined
+				) {
 					this.state.setDomainDelay(
 						linkPolicy.delayKey,
 						linkPolicy.crawlDelayMs,

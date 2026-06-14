@@ -35,7 +35,7 @@ describe("CrawlAdmissionPolicy", () => {
 			{ setDomainDelay: mock(() => undefined) } as never,
 			{ enqueueNormalized: mock(() => true) } as never,
 			{
-				evaluateIdentity: mock(async () => ({ allowed: true, delayKey: "" })),
+				evaluateIdentity: mock(async () => ({ type: "allowed", delayKey: "" })),
 			} as never,
 		);
 
@@ -54,7 +54,9 @@ describe("CrawlAdmissionPolicy", () => {
 		const enqueueNormalized = mock(() => true);
 		const evaluateIdentity = mock(
 			async (identity: { canonicalUrl: string }) => ({
-				allowed: !identity.canonicalUrl.endsWith("/blocked"),
+				type: identity.canonicalUrl.endsWith("/blocked")
+					? "disallowed"
+					: "allowed",
 				delayKey: "https://example.com",
 				crawlDelayMs: identity.canonicalUrl.endsWith("/allowed")
 					? 500
@@ -122,7 +124,7 @@ describe("CrawlAdmissionPolicy", () => {
 			{ enqueueNormalized } as never,
 			{
 				evaluateIdentity: mock(async (identity: { originKey: string }) => ({
-					allowed: true,
+					type: "allowed",
 					delayKey: identity.originKey,
 					crawlDelayMs: 1200,
 				})),
