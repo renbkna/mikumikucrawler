@@ -211,6 +211,35 @@ describe("fetch service contract", () => {
 		});
 	});
 
+	test("leaves missing rate-limit retry fallback to the pipeline", async () => {
+		const service = new FetchService(
+			{
+				getHeaders: () => null,
+			} as never,
+			{
+				fetch: async () => new Response("", { status: 429 }),
+			},
+			{
+				isEnabled: () => false,
+				render: async () => null,
+			} as never,
+			createLogger(),
+		);
+
+		await expect(
+			service.fetch("crawl-1", {
+				url: "https://example.com/rate-limited",
+				domain: "example.com",
+				depth: 0,
+				retries: 0,
+			}),
+		).resolves.toEqual({
+			type: "rateLimited",
+			statusCode: 429,
+			retryAfterMs: undefined,
+		});
+	});
+
 	test("falls back to static fetch when dynamic rendering setup fails", async () => {
 		const httpFetch = mock(
 			async () =>

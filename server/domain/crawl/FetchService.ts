@@ -41,7 +41,7 @@ export type FetchResult =
 	| {
 			type: "rateLimited";
 			statusCode: number;
-			retryAfterMs: number;
+			retryAfterMs?: number;
 	  }
 	| {
 			type: "transientFailure";
@@ -118,7 +118,7 @@ function classifyFetchStatus(
 		return {
 			type: "rateLimited",
 			statusCode,
-			retryAfterMs: options.retryAfterMs ?? RETRY_CONSTANTS.MAX_DELAY,
+			retryAfterMs: options.retryAfterMs,
 		};
 	}
 
