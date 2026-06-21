@@ -1,19 +1,19 @@
 import {
+	CircleStop,
 	FileText,
 	Globe,
 	Loader2,
 	Pause,
 	Settings,
 	Sparkles,
-	CircleStop,
 	Wand2,
 	Wifi,
 	WifiOff,
 	Zap,
 } from "lucide-react";
-import { type ChangeEvent, memo, useMemo } from "react";
-import { validatePublicHttpUrl } from "../../shared/url";
+import { type ChangeEvent, memo, useCallback, useMemo } from "react";
 import type { CrawlOptions } from "../../shared/contracts/index.js";
+import { validatePublicHttpUrl } from "../../shared/url";
 import type { ConnectionState } from "../hooks";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 
@@ -46,12 +46,12 @@ export const CrawlerForm = memo(function CrawlerForm({
 	setOpenedConfig,
 	connectionState,
 }: CrawlerFormProps) {
-	const validateUrl = (input: string): string | null => {
+	const validateUrl = useCallback((input: string): string | null => {
 		if (!input) return null;
-		const result = validatePublicHttpUrl(input);
+		const result = validatePublicHttpUrl(input, { allowLocalhost: import.meta.env.DEV });
 		return "error" in result ? result.error : null;
-	};
-	const validationError = useMemo(() => validateUrl(target), [target]);
+	}, []);
+	const validationError = useMemo(() => validateUrl(target), [target, validateUrl]);
 	const hasRunnableTarget = target.trim().length > 0;
 
 	const handleTargetChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -60,12 +60,7 @@ export const CrawlerForm = memo(function CrawlerForm({
 	};
 
 	const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-		if (
-			e.key === "Enter" &&
-			canStart &&
-			!validationError &&
-			hasRunnableTarget
-		) {
+		if (e.key === "Enter" && canStart && !validationError && hasRunnableTarget) {
 			e.preventDefault();
 			startAttack();
 		}
@@ -144,16 +139,10 @@ export const CrawlerForm = memo(function CrawlerForm({
 							title={`Status: ${connectionState}`}
 							aria-live="polite"
 						>
-							<span className="sr-only">
-								Connection status: {connectionState}
-							</span>
+							<span className="sr-only">Connection status: {connectionState}</span>
 							{connectionState === "connected" && <Wifi className="w-5 h-5" />}
-							{connectionState === "connecting" && (
-								<Loader2 className="w-5 h-5 animate-spin" />
-							)}
-							{connectionState === "disconnected" && (
-								<WifiOff className="w-5 h-5" />
-							)}
+							{connectionState === "connecting" && <Loader2 className="w-5 h-5 animate-spin" />}
+							{connectionState === "disconnected" && <WifiOff className="w-5 h-5" />}
 						</output>
 
 						{!isAttacking && (
@@ -169,23 +158,16 @@ export const CrawlerForm = memo(function CrawlerForm({
 									className="absolute -top-1 -right-1 text-white/80 group-hover/zap:animate-ping"
 									size={10}
 								/>
-								<NoteIcon
-									className="absolute -bottom-1 -left-1 text-white/60"
-									size={10}
-								/>
+								<NoteIcon className="absolute -bottom-1 -left-1 text-white/60" size={10} />
 								<Zap className="w-5 h-5 group-hover/zap:fill-white group-hover/zap:animate-bounce transition-all" />
 							</button>
 						)}
 
 						<button
 							type="button"
-							onClick={() =>
-								isAttacking && canPause ? pauseAttack() : startAttack()
-							}
+							onClick={() => (isAttacking && canPause ? pauseAttack() : startAttack())}
 							disabled={
-								isAttacking
-									? !canPause
-									: !canStart || !!validationError || !hasRunnableTarget
+								isAttacking ? !canPause : !canStart || !!validationError || !hasRunnableTarget
 							}
 							className={`relative px-7 py-4 rounded-2xl font-black text-white shadow-xl transition-all duration-300 hover:scale-105 active:scale-95 flex items-center gap-3 text-base disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 overflow-hidden disabled:grayscale ${
 								isAttacking
@@ -194,10 +176,7 @@ export const CrawlerForm = memo(function CrawlerForm({
 							}`}
 							aria-label={isAttacking ? "Pause Crawl" : "Start Miku Beam Crawl"}
 						>
-							<NoteIcon
-								className="absolute top-1 left-3 text-white/40 animate-float"
-								size={10}
-							/>
+							<NoteIcon className="absolute top-1 left-3 text-white/40 animate-float" size={10} />
 							<SparkleIcon
 								className="absolute bottom-1 right-3 text-white/40 animate-float"
 								size={10}
@@ -210,9 +189,7 @@ export const CrawlerForm = memo(function CrawlerForm({
 								<Wand2 className="w-5 h-5 animate-bounce" />
 							)}
 
-							<span className="relative flex items-center gap-1">
-								{buttonLabel}
-							</span>
+							<span className="relative flex items-center gap-1">{buttonLabel}</span>
 
 							<span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700" />
 						</button>
@@ -246,28 +223,18 @@ export const CrawlerForm = memo(function CrawlerForm({
 			<div className="flex flex-wrap gap-4 justify-center">
 				<div className="cute-badge">
 					<Globe className="w-4 h-4 text-miku-teal" />
-					Depth:{" "}
-					<span className="text-teal-700 font-bold">
-						{crawlOptions.crawlDepth}
-					</span>
+					Depth: <span className="text-teal-700 font-bold">{crawlOptions.crawlDepth}</span>
 				</div>
 				<div className="cute-badge">
 					<FileText className="w-4 h-4 text-miku-pink" />
-					Pages:{" "}
-					<span className="text-pink-700 font-bold">
-						{crawlOptions.maxPages}
-					</span>
+					Pages: <span className="text-pink-700 font-bold">{crawlOptions.maxPages}</span>
 				</div>
 				<div className="cute-badge">
 					<Zap className="w-4 h-4 text-amber-400" />
 					Method:{" "}
-					<span className="text-amber-700 font-bold capitalize">
-						{crawlOptions.crawlMethod}
-					</span>
+					<span className="text-amber-700 font-bold capitalize">{crawlOptions.crawlMethod}</span>
 				</div>
-				<div
-					className={`cute-badge ${crawlOptions.dynamic ? "" : "opacity-50"}`}
-				>
+				<div className={`cute-badge ${crawlOptions.dynamic ? "" : "opacity-50"}`}>
 					<Sparkles
 						className={`w-4 h-4 ${crawlOptions.dynamic ? "text-miku-teal" : "text-miku-text/40"}`}
 					/>

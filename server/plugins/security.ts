@@ -8,12 +8,7 @@ const RESOLUTION_TTL_MS = 5 * 60 * 1000;
 const RESOLUTION_CACHE_MAX_ENTRIES = 512;
 const MAX_REDIRECT_HOPS = 10;
 const REDIRECT_TO_GET_STATUSES = new Set([301, 302, 303]);
-const ORIGIN_BOUND_HEADERS = new Set([
-	"authorization",
-	"cookie",
-	"host",
-	"proxy-authorization",
-]);
+const ORIGIN_BOUND_HEADERS = new Set(["authorization", "cookie", "host", "proxy-authorization"]);
 const BODY_HEADERS = new Set(["content-length", "content-type"]);
 
 export interface Resolver {
@@ -40,7 +35,10 @@ export class DefaultResolver implements Resolver {
 		RESOLUTION_TTL_MS,
 	);
 
-	constructor(private readonly lookupFn: typeof lookup = lookup) {}
+	constructor(
+		private readonly lookupFn: typeof lookup = lookup,
+		private readonly allowLocalhost = false,
+	) {}
 
 	async assertPublicHostname(hostname: string): Promise<void> {
 		await this.resolveHost(hostname);
@@ -52,11 +50,12 @@ export class DefaultResolver implements Resolver {
 		}
 
 		const normalizedHost =
-			hostname.startsWith("[") && hostname.endsWith("]")
-				? hostname.slice(1, -1)
-				: hostname;
+			hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
 
 		if (normalizedHost.toLowerCase() === "localhost") {
+			if (this.allowLocalhost) {
+				return ["127.0.0.1"];
+			}
 			throw new Error("Localhost targets are not allowed");
 		}
 
@@ -85,9 +84,7 @@ export class DefaultResolver implements Resolver {
 		}
 
 		if (addresses.some((address) => isInvalidIpAddress(address))) {
-			throw new Error(
-				`Hostname ${normalizedHost} resolves to a private or reserved IP`,
-			);
+			throw new Error(`Hostname ${normalizedHost} resolves to a private or reserved IP`);
 		}
 
 		this.cache.set(normalizedHost, addresses);
@@ -157,9 +154,7 @@ export class PinnedHttpClient implements HttpClient {
 			}
 
 			if (!response) {
-				throw lastError instanceof Error
-					? lastError
-					: new Error(String(lastError));
+				throw lastError instanceof Error ? lastError : new Error(String(lastError));
 			}
 			if (response.status < 300 || response.status >= 400) {
 				return response;
@@ -175,13 +170,8 @@ export class PinnedHttpClient implements HttpClient {
 			}
 
 			const redirectUrl = new URL(location, currentUrl);
-			if (
-				redirectUrl.protocol !== "http:" &&
-				redirectUrl.protocol !== "https:"
-			) {
-				throw new Error(
-					`Redirect to disallowed protocol: ${redirectUrl.protocol}`,
-				);
+			if (redirectUrl.protocol !== "http:" && redirectUrl.protocol !== "https:") {
+				throw new Error(`Redirect to disallowed protocol: ${redirectUrl.protocol}`);
 			}
 
 			await this.resolver.assertPublicHostname(redirectUrl.hostname);
@@ -204,18 +194,12 @@ function sanitizeRequestHeaders(
 	forbiddenNames: ReadonlySet<string> = new Set(["host"]),
 ): Record<string, string> {
 	return Object.fromEntries(
-		Object.entries(headers).filter(
-			([name]) => !forbiddenNames.has(name.toLowerCase()),
-		),
+		Object.entries(headers).filter(([name]) => !forbiddenNames.has(name.toLowerCase())),
 	);
 }
 
 function shouldRewriteRedirectToGet(status: number, method: string): boolean {
-	return (
-		REDIRECT_TO_GET_STATUSES.has(status) &&
-		method !== "GET" &&
-		method !== "HEAD"
-	);
+	return REDIRECT_TO_GET_STATUSES.has(status) && method !== "GET" && method !== "HEAD";
 }
 
 export function securityPlugin(

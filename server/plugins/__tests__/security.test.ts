@@ -1,9 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
-import {
-	DefaultResolver,
-	PinnedHttpClient,
-	type Resolver,
-} from "../security.js";
+import { lookup } from "node:dns/promises";
+import { DefaultResolver, PinnedHttpClient, type Resolver } from "../security.js";
 
 describe("security contract", () => {
 	test("allows public hostnames resolved by injected lookup", async () => {
@@ -11,9 +8,7 @@ describe("security contract", () => {
 			mock(async () => [{ address: "93.184.216.34", family: 4 }]) as never,
 		);
 
-		await expect(resolver.resolveHost("example.com")).resolves.toEqual([
-			"93.184.216.34",
-		]);
+		await expect(resolver.resolveHost("example.com")).resolves.toEqual(["93.184.216.34"]);
 	});
 
 	test("blocks mixed DNS answers containing a private IP", async () => {
@@ -24,15 +19,23 @@ describe("security contract", () => {
 			]) as never,
 		);
 
-		await expect(resolver.resolveHost("mixed.example")).rejects.toThrow(
-			"private or reserved IP",
-		);
+		await expect(resolver.resolveHost("mixed.example")).rejects.toThrow("private or reserved IP");
 	});
 
 	test("blocks direct private IP targets", async () => {
 		const resolver = new DefaultResolver();
-		await expect(resolver.resolveHost("127.0.0.1")).rejects.toThrow(
-			"Private or reserved IP",
+		await expect(resolver.resolveHost("127.0.0.1")).rejects.toThrow("Private or reserved IP");
+	});
+
+	test("allows localhost when allowLocalhost is true", async () => {
+		const resolver = new DefaultResolver(lookup, true);
+		await expect(resolver.resolveHost("localhost")).resolves.toEqual(["127.0.0.1"]);
+	});
+
+	test("blocks localhost when allowLocalhost is false", async () => {
+		const resolver = new DefaultResolver(lookup, false);
+		await expect(resolver.resolveHost("localhost")).rejects.toThrow(
+			"Localhost targets are not allowed",
 		);
 	});
 
@@ -42,10 +45,7 @@ describe("security contract", () => {
 			resolveHost: async () => ["93.184.216.34"],
 		};
 		const fetchMock = mock(async () => new Response("ok"));
-		const httpClient = new PinnedHttpClient(
-			resolver,
-			fetchMock as unknown as typeof fetch,
-		);
+		const httpClient = new PinnedHttpClient(resolver, fetchMock as unknown as typeof fetch);
 
 		await httpClient.fetch({
 			url: "https://example.com/docs",
@@ -68,10 +68,7 @@ describe("security contract", () => {
 			resolveHost: mock(async () => ["93.184.216.34"]),
 		};
 		const fetchMock = mock(async () => new Response("ok"));
-		const httpClient = new PinnedHttpClient(
-			resolver,
-			fetchMock as unknown as typeof fetch,
-		);
+		const httpClient = new PinnedHttpClient(resolver, fetchMock as unknown as typeof fetch);
 
 		await expect(
 			httpClient.fetch({
@@ -100,10 +97,7 @@ describe("security contract", () => {
 					},
 				}),
 		);
-		const httpClient = new PinnedHttpClient(
-			resolver,
-			fetchMock as unknown as typeof fetch,
-		);
+		const httpClient = new PinnedHttpClient(resolver, fetchMock as unknown as typeof fetch);
 
 		await expect(
 			httpClient.fetch({
@@ -126,10 +120,7 @@ describe("security contract", () => {
 					})
 				: new Response("ok"),
 		);
-		const httpClient = new PinnedHttpClient(
-			resolver,
-			fetchMock as unknown as typeof fetch,
-		);
+		const httpClient = new PinnedHttpClient(resolver, fetchMock as unknown as typeof fetch);
 
 		await httpClient.fetch({
 			url: "https://example.com/start",
@@ -144,10 +135,7 @@ describe("security contract", () => {
 		});
 
 		expect(fetchMock).toHaveBeenCalledTimes(2);
-		const [, secondInit] = fetchMock.mock.calls[1] as unknown as [
-			string,
-			RequestInit,
-		];
+		const [, secondInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
 		const secondHeaders = secondInit.headers as Record<string, string>;
 		expect(secondInit.method).toBe("GET");
 		expect(secondInit.body).toBeUndefined();
@@ -178,10 +166,7 @@ describe("security contract", () => {
 						})
 					: new Response("ok"),
 			);
-			const httpClient = new PinnedHttpClient(
-				resolver,
-				fetchMock as unknown as typeof fetch,
-			);
+			const httpClient = new PinnedHttpClient(resolver, fetchMock as unknown as typeof fetch);
 
 			await httpClient.fetch({
 				url: "https://example.com/start",
@@ -191,10 +176,7 @@ describe("security contract", () => {
 			});
 
 			expect(fetchMock).toHaveBeenCalledTimes(2);
-			const [, secondInit] = fetchMock.mock.calls[1] as unknown as [
-				string,
-				RequestInit,
-			];
+			const [, secondInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
 			expect(secondInit.method).toBe(expectedMethod);
 			expect(secondInit.body).toBe(expectedBody);
 		});
@@ -214,10 +196,7 @@ describe("security contract", () => {
 					},
 				}),
 		);
-		const httpClient = new PinnedHttpClient(
-			resolver,
-			fetchMock as unknown as typeof fetch,
-		);
+		const httpClient = new PinnedHttpClient(resolver, fetchMock as unknown as typeof fetch);
 
 		await expect(
 			httpClient.fetch({
@@ -242,10 +221,7 @@ describe("security contract", () => {
 				},
 			});
 		});
-		const httpClient = new PinnedHttpClient(
-			resolver,
-			fetchMock as unknown as typeof fetch,
-		);
+		const httpClient = new PinnedHttpClient(resolver, fetchMock as unknown as typeof fetch);
 
 		await expect(
 			httpClient.fetch({

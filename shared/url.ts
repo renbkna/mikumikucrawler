@@ -14,6 +14,8 @@ import { isPrivateOrReservedIpAddressLiteral } from "./ipPolicy.js";
  */
 export type NormalizedUrlResult = { url: string } | { error: string };
 
+export type ValidateUrlOptions = { allowLocalhost?: boolean };
+
 const STRIP_PARAMS = new Set([
 	"utm_source",
 	"utm_medium",
@@ -38,14 +40,17 @@ const STRIP_PARAMS = new Set([
 	"sid",
 ]);
 
-export function validatePublicHttpUrl(url: string): NormalizedUrlResult {
+export function validatePublicHttpUrl(
+	url: string,
+	options: ValidateUrlOptions = {},
+): NormalizedUrlResult {
 	const normalized = normalizeCanonicalHttpUrl(url);
 	if ("error" in normalized) {
 		return normalized;
 	}
 
 	const hostname = new URL(normalized.url).hostname;
-	if (hostname.toLowerCase() === "localhost") {
+	if (!options.allowLocalhost && hostname.toLowerCase() === "localhost") {
 		return { error: "Localhost targets are not allowed" };
 	}
 
@@ -111,9 +116,7 @@ export function normalizeCanonicalHttpUrl(url: string): NormalizedUrlResult {
 			}
 		}
 		const sorted = new URLSearchParams(
-			[...params.entries()].toSorted(([left], [right]) =>
-				left.localeCompare(right),
-			),
+			[...params.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
 		);
 		parsed.search = sorted.toString() ? `?${sorted.toString()}` : "";
 	}

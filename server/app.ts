@@ -1,3 +1,4 @@
+import { lookup } from "node:dns/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cors } from "@elysiajs/cors";
@@ -14,6 +15,7 @@ import { sseApi } from "./api/sse.js";
 import { config } from "./config/env.js";
 import type { AppLogger } from "./config/logging.js";
 import type { ApiErrorSchema } from "./contracts/errors.js";
+import { handleAppError } from "./errorHandling.js";
 import { compression } from "./middleware/compression.js";
 import { openapiPlugin } from "./plugins/openapi.js";
 import {
@@ -27,7 +29,6 @@ import { spaStaticPlugin } from "./plugins/spaStatic.js";
 import { CrawlManager } from "./runtime/CrawlManager.js";
 import type { CrawlRuntime } from "./runtime/CrawlRuntime.js";
 import { EventStream } from "./runtime/EventStream.js";
-import { handleAppError } from "./errorHandling.js";
 import { createStorage, type Storage } from "./storage/db.js";
 
 const moduleFilename = fileURLToPath(import.meta.url);
@@ -49,11 +50,9 @@ export interface AppDependencies {
 	crawlManager: CrawlManager;
 }
 
-export function createDefaultAppDependencies(
-	logger: AppLogger,
-): AppDependencies {
+export function createDefaultAppDependencies(logger: AppLogger): AppDependencies {
 	const storage = createStorage();
-	const resolver = new DefaultResolver();
+	const resolver = new DefaultResolver(lookup, !config.isProduction);
 	const httpClient = new PinnedHttpClient(resolver);
 	const eventStream = new EventStream();
 	const runtimeRegistry = new Map<string, CrawlRuntime>();
