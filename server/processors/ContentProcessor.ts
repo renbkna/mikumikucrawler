@@ -1,19 +1,11 @@
 import type { CheerioAPI } from "cheerio";
 import * as cheerio from "cheerio";
-import type { Logger } from "../config/logging.js";
 import type { ContentAnalysis, ExtractedData } from "../../shared/types.js";
+import type { Logger } from "../config/logging.js";
 import type { ProcessedContent } from "../types.js";
 import { getErrorMessage } from "../utils/helpers.js";
-import {
-	analyzeContent,
-	assessContentQuality,
-	processJSON,
-} from "./analysisUtils.js";
-import {
-	isHtmlLikeContentType,
-	isJsonContentType,
-	isPdfContentType,
-} from "./contentTypes.js";
+import { analyzeContent, assessContentQuality, processJSON } from "./analysisUtils.js";
+import { isHtmlLikeContentType, isJsonContentType, isPdfContentType } from "./contentTypes.js";
 import {
 	extractMainContent,
 	extractMediaInfo,
@@ -28,12 +20,7 @@ import { applyProcessingErrorDefaults } from "./processingDefaults.js";
  * Safely executes an extraction function and returns a fallback on error.
  * Reduces repetitive try-catch blocks in content processing.
  */
-function safeExtract<T>(
-	fn: () => T,
-	fallback: T,
-	logger: Logger,
-	context: string,
-): T {
+function safeExtract<T>(fn: () => T, fallback: T, logger: Logger, context: string): T {
 	try {
 		return fn();
 	} catch (err) {
@@ -72,9 +59,7 @@ export async function processContent(
 			await new PdfContentHandler(logger).process(content, result);
 		}
 	} catch (error) {
-		logger.error(
-			`Content processing error for ${url}: ${getErrorMessage(error)}`,
-		);
+		logger.error(`Content processing error for ${url}: ${getErrorMessage(error)}`);
 		result.errors.push({
 			type: "processing_error",
 			message: getErrorMessage(error),
@@ -100,12 +85,7 @@ async function processHtml(
 	}
 
 	// Extract main content first (needed for analysis)
-	const mainContent = safeExtract(
-		() => extractMainContent($),
-		"",
-		logger,
-		"extract main content",
-	);
+	const mainContent = safeExtract(() => extractMainContent($), "", logger, "extract main content");
 
 	// Analyze content (word count, language, keywords, sentiment)
 	result.analysis = analyzeContent(mainContent);
@@ -123,24 +103,9 @@ async function processHtml(
 			logger,
 			"extract structured data",
 		),
-		media: safeExtract(
-			() => extractMediaInfo($, url, logger),
-			[],
-			logger,
-			"extract media info",
-		),
-		links: safeExtract(
-			() => processLinks($, url, logger),
-			[],
-			logger,
-			"process links",
-		),
-		metadata: safeExtract(
-			() => extractMetadata($),
-			{},
-			logger,
-			"extract metadata",
-		),
+		media: safeExtract(() => extractMediaInfo($, url, logger), [], logger, "extract media info"),
+		links: safeExtract(() => processLinks($, url, logger), [], logger, "process links"),
+		metadata: safeExtract(() => extractMetadata($), {}, logger, "extract metadata"),
 		quality: safeExtract(
 			() => assessContentQuality($, mainContent),
 			{ score: 0, factors: {}, issues: ["Quality assessment failed"] },
@@ -163,8 +128,7 @@ async function processHtml(
 function processJson(content: string | Buffer, result: ProcessedContent): void {
 	const jsonString = typeof content === "string" ? content : content.toString();
 	const jsonResult = processJSON(jsonString);
-	const mainContent =
-		jsonResult.data !== undefined ? jsonResult.data : (jsonResult.raw ?? "");
+	const mainContent = jsonResult.data !== undefined ? jsonResult.data : (jsonResult.raw ?? "");
 	const serializedContent = serializeJsonMainContent(mainContent);
 	result.extractedData = {
 		mainContent: serializedContent,

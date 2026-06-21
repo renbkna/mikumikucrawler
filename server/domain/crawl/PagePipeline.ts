@@ -7,9 +7,9 @@ import { CrawlAdmissionPolicy } from "./CrawlAdmissionPolicy.js";
 import type { CrawlQueue, QueueItem } from "./CrawlQueue.js";
 import type { CrawlState, TerminalOutcome } from "./CrawlState.js";
 import type { FetchService } from "./FetchService.js";
+import { isClientErrorShell, isSoft404 } from "./PageDecisionPolicy.js";
 import type { BuiltPageResult } from "./PageResultBuilder.js";
 import { buildPageResult } from "./PageResultBuilder.js";
-import { isClientErrorShell, isSoft404 } from "./PageDecisionPolicy.js";
 import type { RobotsService } from "./RobotsService.js";
 import { getCrawlUrlIdentity } from "./UrlPolicy.js";
 
@@ -42,16 +42,10 @@ function getDelayKey(item: QueueItem): string {
 	return "error" in identity ? item.domain : identity.originKey;
 }
 
-function retryDelayMs(
-	result: { retryAfterMs?: number },
-	retries: number,
-): number {
+function retryDelayMs(result: { retryAfterMs?: number }, retries: number): number {
 	return (
 		result.retryAfterMs ??
-		Math.min(
-			RETRY_CONSTANTS.BASE_DELAY * 2 ** retries,
-			RETRY_CONSTANTS.MAX_DELAY,
-		)
+		Math.min(RETRY_CONSTANTS.BASE_DELAY * 2 ** retries, RETRY_CONSTANTS.MAX_DELAY)
 	);
 }
 
@@ -69,12 +63,7 @@ export class PagePipeline {
 		private readonly eventSink: EventSink,
 		private readonly logger: import("../../config/logging.js").Logger,
 	) {
-		this.admissionPolicy = new CrawlAdmissionPolicy(
-			options,
-			state,
-			queue,
-			robotsService,
-		);
+		this.admissionPolicy = new CrawlAdmissionPolicy(options, state, queue, robotsService);
 	}
 
 	private async enqueueLinks(
@@ -83,11 +72,7 @@ export class PagePipeline {
 		signal?: AbortSignal,
 	): Promise<void> {
 		throwIfAborted(signal);
-		await this.admissionPolicy.admitNormalizedDiscoveredLinks(
-			item,
-			links,
-			signal,
-		);
+		await this.admissionPolicy.admitNormalizedDiscoveredLinks(item, links, signal);
 	}
 
 	private recordTerminal(
@@ -118,10 +103,7 @@ export class PagePipeline {
 		return { terminalOutcome: outcome, domainBudgetCharged: recorded };
 	}
 
-	async process(
-		item: QueueItem,
-		signal?: AbortSignal,
-	): Promise<PageProcessResult> {
+	async process(item: QueueItem, signal?: AbortSignal): Promise<PageProcessResult> {
 		throwIfAborted(signal);
 		if (!this.state.canScheduleMore() && !this.state.hasVisited(item.url)) {
 			const result = this.recordTerminal(item.url, "skip");
@@ -139,11 +121,7 @@ export class PagePipeline {
 			return result;
 		}
 
-		const fetchResult = await this.fetchService.fetch(
-			this.crawlId,
-			item,
-			signal,
-		);
+		const fetchResult = await this.fetchService.fetch(this.crawlId, item, signal);
 		throwIfAborted(signal);
 		if (fetchResult.type === "unchanged") {
 			const cachedLinks = this.admissionPolicy.normalizeDiscoveredLinks(
@@ -151,10 +129,8 @@ export class PagePipeline {
 				this.pageRepo.getLinksByPageUrl(this.crawlId, item.url),
 			);
 			const discoveredLinkCount =
-				this.pageRepo.getDiscoveredLinkCountByPageUrl?.(
-					this.crawlId,
-					item.url,
-				) ?? cachedLinks.length;
+				this.pageRepo.getDiscoveredLinkCountByPageUrl?.(this.crawlId, item.url) ??
+				cachedLinks.length;
 			await this.enqueueLinks(item, cachedLinks, signal);
 			throwIfAborted(signal);
 			this.state.recordDiscoveredLinks(discoveredLinkCount);
@@ -163,16 +139,9 @@ export class PagePipeline {
 			return result;
 		}
 
-		if (
-			fetchResult.type === "rateLimited" ||
-			fetchResult.type === "transientFailure"
-		) {
+		if (fetchResult.type === "rateLimited" || fetchResult.type === "transientFailure") {
 			const delayMs = retryDelayMs(fetchResult, item.retries);
-			this.state.adaptDomainDelay(
-				getDelayKey(item),
-				fetchResult.statusCode,
-				delayMs,
-			);
+			this.state.adaptDomainDelay(getDelayKey(item), fetchResult.statusCode, delayMs);
 			if (
 				item.retries < this.options.retryLimit &&
 				!this.state.isStopRequested &&
@@ -192,18 +161,13 @@ export class PagePipeline {
 			return result;
 		}
 
-		if (
-			fetchResult.type === "permanentFailure" ||
-			fetchResult.type === "blocked"
-		) {
+		if (fetchResult.type === "permanentFailure" || fetchResult.type === "blocked") {
 			this.state.adaptDomainDelay(getDelayKey(item), fetchResult.statusCode);
 			const result = this.recordFetchedTerminal(item, "failure");
 			if (fetchResult.type === "blocked" && fetchResult.reason) {
 				this.eventSink.log(`[Crawler] ${fetchResult.reason}`);
 			} else {
-				this.eventSink.log(
-					`[Crawler] Failed ${item.url} with ${fetchResult.statusCode}`,
-				);
+				this.eventSink.log(`[Crawler] Failed ${item.url} with ${fetchResult.statusCode}`);
 			}
 			return result;
 		}
@@ -217,12 +181,8 @@ export class PagePipeline {
 		throwIfAborted(signal);
 
 		const normalizedCrawlLinks =
-			isHtmlLikeContentType(fetchResult.contentType) &&
-			processedContent.links?.length
-				? this.admissionPolicy.normalizeDiscoveredLinks(
-						item,
-						processedContent.links,
-					)
+			isHtmlLikeContentType(fetchResult.contentType) && processedContent.links?.length
+				? this.admissionPolicy.normalizeDiscoveredLinks(item, processedContent.links)
 				: [];
 		const pageResult = buildPageResult(
 			this.crawlId,
@@ -250,13 +210,7 @@ export class PagePipeline {
 			return result;
 		}
 
-		if (
-			isSoft404(
-				pageResult.resolvedTitle,
-				pageResult.mainContent,
-				fetchResult.contentLength,
-			)
-		) {
+		if (isSoft404(pageResult.resolvedTitle, pageResult.mainContent, fetchResult.contentLength)) {
 			const result = this.recordFetchedTerminal(item, "skip");
 			this.eventSink.log(`[Crawler] Soft 404 skipped: ${item.url}`);
 			return result;

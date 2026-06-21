@@ -47,9 +47,9 @@ export const config = {
 	memoryThreshold,
 	browser: {
 		executablePath:
-			process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ||
-			process.env.PUPPETEER_EXECUTABLE_PATH ||
-			process.env.CHROME_BIN ||
+			process.env["PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"] ||
+			process.env["PUPPETEER_EXECUTABLE_PATH"] ||
+			process.env["CHROME_BIN"] ||
 			undefined,
 	},
 } as const;

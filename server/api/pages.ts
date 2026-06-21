@@ -1,13 +1,9 @@
-import { Elysia } from "elysia";
-import {
-	API_PATHS,
-	PAGE_ROUTE_SEGMENTS,
-} from "../../shared/contracts/index.js";
+import { Elysia, t } from "elysia";
+import { API_PATHS, PAGE_ROUTE_SEGMENTS } from "../../shared/contracts/index.js";
 import { PageContentResponseSchema } from "../../shared/contracts/schemas.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
 import { PositiveIntegerIdSchema } from "../contracts/http.js";
 import { routeServices } from "./context.js";
-import { t } from "elysia";
 
 const PageContentParamsSchema = t.Object({
 	id: PositiveIntegerIdSchema,

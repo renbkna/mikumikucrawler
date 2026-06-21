@@ -34,28 +34,16 @@ export const CrawlStatusValues = [
 export type CrawlStatus = (typeof CrawlStatusValues)[number];
 
 export function isCrawlStatus(value: unknown): value is CrawlStatus {
-	return (
-		typeof value === "string" &&
-		CrawlStatusValues.includes(value as CrawlStatus)
-	);
+	return typeof value === "string" && CrawlStatusValues.includes(value as CrawlStatus);
 }
 
 export const PENDING_CRAWL_STATUS_VALUES = ["pending"] as const;
 
-export const ACTIVE_CRAWL_STATUS_VALUES = [
-	"starting",
-	"running",
-	"pausing",
-	"stopping",
-] as const;
+export const ACTIVE_CRAWL_STATUS_VALUES = ["starting", "running", "pausing", "stopping"] as const;
 
 export const RESUMABLE_CRAWL_STATUS_VALUES = ["paused", "interrupted"] as const;
 
-export const TERMINAL_CRAWL_STATUS_VALUES = [
-	"completed",
-	"stopped",
-	"failed",
-] as const;
+export const TERMINAL_CRAWL_STATUS_VALUES = ["completed", "stopped", "failed"] as const;
 
 export function isPendingCrawlStatus(status: CrawlStatus): boolean {
 	return PENDING_CRAWL_STATUS_VALUES.includes(
@@ -64,9 +52,7 @@ export function isPendingCrawlStatus(status: CrawlStatus): boolean {
 }
 
 export function isActiveCrawlStatus(status: CrawlStatus): boolean {
-	return ACTIVE_CRAWL_STATUS_VALUES.includes(
-		status as (typeof ACTIVE_CRAWL_STATUS_VALUES)[number],
-	);
+	return ACTIVE_CRAWL_STATUS_VALUES.includes(status as (typeof ACTIVE_CRAWL_STATUS_VALUES)[number]);
 }
 
 export function isResumableCrawlStatus(status: CrawlStatus): boolean {
@@ -122,9 +108,7 @@ export interface ResumableSessionSummary {
 	updatedAt: string;
 }
 
-export function toResumableSessionSummary(
-	crawl: CrawlSummary,
-): ResumableSessionSummary {
+export function toResumableSessionSummary(crawl: CrawlSummary): ResumableSessionSummary {
 	return {
 		id: crawl.id,
 		target: crawl.target,

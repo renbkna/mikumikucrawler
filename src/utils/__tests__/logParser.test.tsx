@@ -13,9 +13,7 @@ describe("log parser", () => {
 	});
 
 	test("rejects unknown structured levels instead of trusting arbitrary strings", () => {
-		const parsed = parseLog(
-			JSON.stringify({ level: "fatal", message: "failed" }),
-		);
+		const parsed = parseLog(JSON.stringify({ level: "fatal", message: "failed" }));
 
 		expect(parsed.level).toBe("unknown");
 		expect(parsed.message).toBe("failed");

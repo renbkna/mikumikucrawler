@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
 import { describe, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
 
 interface WebManifest {
 	icons?: Array<{
@@ -30,10 +30,7 @@ function readPngSize(bytes: Uint8Array): string {
 describe("web manifest", () => {
 	async function readManifest(): Promise<WebManifest> {
 		return JSON.parse(
-			await readFile(
-				new URL("../../../public/manifest.json", import.meta.url),
-				"utf8",
-			),
+			await readFile(new URL("../../../public/manifest.json", import.meta.url), "utf8"),
 		) as WebManifest;
 	}
 
@@ -62,21 +59,15 @@ describe("web manifest", () => {
 			expect(icon?.type).toBe("image/png");
 			expect(icon?.purpose).toBe(expected.purpose);
 			expect(icon?.sizes).toBe(expected.sizes);
-			expect(readPngSize(await readPublicAsset(expected.src))).toBe(
-				expected.sizes,
-			);
+			expect(readPngSize(await readPublicAsset(expected.src))).toBe(expected.sizes);
 		}
 	});
 
 	test("screenshot metadata matches the checked-in PNG asset", async () => {
 		const manifest = await readManifest();
-		const screenshot = manifest.screenshots?.find(
-			(entry) => entry.src === "/mikumikucrawler.png",
-		);
+		const screenshot = manifest.screenshots?.find((entry) => entry.src === "/mikumikucrawler.png");
 
 		expect(screenshot?.type).toBe("image/png");
-		expect(screenshot?.sizes).toBe(
-			readPngSize(await readPublicAsset("/mikumikucrawler.png")),
-		);
+		expect(screenshot?.sizes).toBe(readPngSize(await readPublicAsset("/mikumikucrawler.png")));
 	});
 });

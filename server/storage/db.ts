@@ -3,15 +3,12 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { config } from "../config/env.js";
-import type {
-	CrawlOptions,
-	CrawlStatus,
-} from "../../shared/contracts/index.js";
+import type { CrawlOptions, CrawlStatus } from "../../shared/contracts/index.js";
 import { isResumableCrawlStatus } from "../../shared/contracts/index.js";
-import { createCrawlQueueRepo } from "./repos/crawlQueueRepo.js";
-import { createCrawlItemPersistence } from "./repos/crawlItemPersistence.js";
+import { config } from "../config/env.js";
 import { createCrawlDomainStateRepo } from "./repos/crawlDomainStateRepo.js";
+import { createCrawlItemPersistence } from "./repos/crawlItemPersistence.js";
+import { createCrawlQueueRepo } from "./repos/crawlQueueRepo.js";
 import { createCrawlRunRepo } from "./repos/crawlRunRepo.js";
 import { createPageRepo } from "./repos/pageRepo.js";
 import { createSearchRepo } from "./repos/searchRepo.js";
@@ -58,10 +55,7 @@ function migrationChecksum(sql: string): string {
 	return createHash("sha256").update(sql).digest("hex");
 }
 
-export function applyMigrations(
-	db: Database,
-	migrationDirectory = migrationsDirectory,
-): void {
+export function applyMigrations(db: Database, migrationDirectory = migrationsDirectory): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			id TEXT PRIMARY KEY,
@@ -70,22 +64,16 @@ export function applyMigrations(
 		)
 	`);
 
-	const columns = db
-		.query("PRAGMA table_info(schema_migrations)")
-		.all() as Array<{
+	const columns = db.query("PRAGMA table_info(schema_migrations)").all() as Array<{
 		name: string;
 	}>;
 	if (!columns.some((column) => column.name === "checksum")) {
-		throw new Error(
-			"schema_migrations is missing checksum; delete the database and recreate it",
-		);
+		throw new Error("schema_migrations is missing checksum; delete the database and recreate it");
 	}
 
 	const applied = new Map(
 		(
-			db
-				.query("SELECT id, checksum FROM schema_migrations ORDER BY id")
-				.all() as Array<{
+			db.query("SELECT id, checksum FROM schema_migrations ORDER BY id").all() as Array<{
 				id: string;
 				checksum: string | null;
 			}>
@@ -100,9 +88,7 @@ export function applyMigrations(
 		}),
 	);
 
-	const insertMigration = db.prepare(
-		"INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)",
-	);
+	const insertMigration = db.prepare("INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)");
 
 	for (const fileName of readdirSync(migrationDirectory).sort()) {
 		if (!fileName.endsWith(".sql")) {

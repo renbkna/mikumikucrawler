@@ -60,9 +60,7 @@ export function isConsentWallText(text: string): boolean {
 	return CONSENT_WALL_MARKERS.some((marker) => normalized.includes(marker));
 }
 
-export function isConsentActionText(
-	...values: Array<string | null | undefined>
-): boolean {
+export function isConsentActionText(...values: Array<string | null | undefined>): boolean {
 	return values.some((value) => {
 		if (!value) return false;
 		const normalized = normalizeText(value);

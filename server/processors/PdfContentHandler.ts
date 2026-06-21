@@ -14,24 +14,17 @@ async function getPDFJS() {
 export class PdfContentHandler {
 	constructor(private readonly logger: Logger) {}
 
-	async process(
-		content: string | Buffer,
-		result: ProcessedContent,
-	): Promise<void> {
+	async process(content: string | Buffer, result: ProcessedContent): Promise<void> {
 		try {
 			const contentSizeMB =
-				(typeof content === "string"
-					? Buffer.byteLength(content)
-					: content.length) /
-				(1024 * 1024);
+				(typeof content === "string" ? Buffer.byteLength(content) : content.length) / (1024 * 1024);
 			if (contentSizeMB > PDF_CONSTANTS.MAX_FILE_SIZE_MB) {
 				throw new Error(
 					`PDF file too large (${contentSizeMB.toFixed(1)}MB). Maximum allowed: ${PDF_CONSTANTS.MAX_FILE_SIZE_MB}MB`,
 				);
 			}
 
-			const pdfBuffer =
-				typeof content === "string" ? Buffer.from(content) : content;
+			const pdfBuffer = typeof content === "string" ? Buffer.from(content) : content;
 			const data = new Uint8Array(pdfBuffer);
 			const pdfjs = await getPDFJS();
 			const loadingTask = pdfjs.getDocument({ data });
@@ -63,9 +56,7 @@ export class PdfContentHandler {
 					const page = await pdfDocument.getPage(pageNum);
 					const textContent = await page.getTextContent();
 					const pageText = (textContent.items as Array<{ str?: string }>)
-						.filter(
-							(item): item is { str: string } => typeof item.str === "string",
-						)
+						.filter((item): item is { str: string } => typeof item.str === "string")
 						.map((item) => item.str)
 						.join(" ");
 					textParts.push(pageText);
@@ -87,10 +78,7 @@ export class PdfContentHandler {
 			try {
 				const metadataResult = await pdfDocument.getMetadata();
 				if (metadataResult?.info && typeof metadataResult.info === "object") {
-					const info = metadataResult.info as Record<
-						string,
-						string | undefined
-					>;
+					const info = metadataResult.info as Record<string, string | undefined>;
 					metadata = {
 						title: info.Title,
 						author: info.Author,
@@ -122,10 +110,7 @@ export class PdfContentHandler {
 					contentLength: wordCount,
 					pageCount: pdfDocument.numPages,
 				},
-				issues:
-					wordCount < 50
-						? ["PDF content appears to be minimal or image-based"]
-						: [],
+				issues: wordCount < 50 ? ["PDF content appears to be minimal or image-based"] : [],
 			};
 
 			await pdfDocument.destroy();

@@ -5,8 +5,8 @@ import type { CrawlState } from "./CrawlState.js";
 import type { RobotsService } from "./RobotsService.js";
 import {
 	type NormalizedDiscoveredLink,
-	type UrlRejectionReason,
 	normalizeDiscoveredLink,
+	type UrlRejectionReason,
 } from "./UrlPolicy.js";
 
 export type AdmissionRejectionReason =
@@ -42,16 +42,9 @@ export class CrawlAdmissionPolicy {
 		private readonly robotsService: RobotsService,
 	) {}
 
-	normalizeDiscoveredLinks(
-		parent: QueueItem,
-		links: ExtractedLink[],
-	): NormalizedDiscoveredLink[] {
+	normalizeDiscoveredLinks(parent: QueueItem, links: ExtractedLink[]): NormalizedDiscoveredLink[] {
 		return links.flatMap((link) => {
-			const normalized = normalizeDiscoveredLink(
-				link,
-				this.options,
-				parent.url,
-			);
+			const normalized = normalizeDiscoveredLink(link, this.options, parent.url);
 			return "error" in normalized ? [] : [normalized];
 		});
 	}
@@ -64,11 +57,7 @@ export class CrawlAdmissionPolicy {
 		const results: LinkAdmissionResult[] = [];
 		for (const link of links) {
 			throwIfAborted(signal);
-			const normalized = normalizeDiscoveredLink(
-				link,
-				this.options,
-				parent.url,
-			);
+			const normalized = normalizeDiscoveredLink(link, this.options, parent.url);
 			if ("error" in normalized) {
 				results.push({
 					type: "rejected",
@@ -78,11 +67,7 @@ export class CrawlAdmissionPolicy {
 				continue;
 			}
 
-			const [result] = await this.admitNormalizedDiscoveredLinks(
-				parent,
-				[normalized],
-				signal,
-			);
+			const [result] = await this.admitNormalizedDiscoveredLinks(parent, [normalized], signal);
 			if (result) results.push(result);
 		}
 		return results;
@@ -114,10 +99,7 @@ export class CrawlAdmissionPolicy {
 			}
 
 			if (this.options.respectRobots) {
-				const linkPolicy = await this.robotsService.evaluateIdentity(
-					normalized.identity,
-					signal,
-				);
+				const linkPolicy = await this.robotsService.evaluateIdentity(normalized.identity, signal);
 				if (linkPolicy.type === "disallowed") {
 					results.push({
 						type: "rejected",
@@ -127,14 +109,8 @@ export class CrawlAdmissionPolicy {
 					continue;
 				}
 
-				if (
-					linkPolicy.type !== "unavailable" &&
-					linkPolicy.crawlDelayMs !== undefined
-				) {
-					this.state.setDomainDelay(
-						linkPolicy.delayKey,
-						linkPolicy.crawlDelayMs,
-					);
+				if (linkPolicy.type !== "unavailable" && linkPolicy.crawlDelayMs !== undefined) {
+					this.state.setDomainDelay(linkPolicy.delayKey, linkPolicy.crawlDelayMs);
 				}
 			}
 

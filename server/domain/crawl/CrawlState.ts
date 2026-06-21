@@ -1,7 +1,4 @@
-import type {
-	CrawlCounters,
-	CrawlOptions,
-} from "../../../shared/contracts/index.js";
+import type { CrawlCounters, CrawlOptions } from "../../../shared/contracts/index.js";
 import type { QueueStats } from "../../../shared/types.js";
 import { shouldAdaptDomainDelay } from "./httpStatusPolicy.js";
 
@@ -73,9 +70,7 @@ export class CrawlState {
 	}
 
 	canScheduleMore(): boolean {
-		return (
-			!this.stopRequested && this.counters.pagesScanned < this.options.maxPages
-		);
+		return !this.stopRequested && this.counters.pagesScanned < this.options.maxPages;
 	}
 
 	hasVisited(url: string): boolean {
@@ -144,29 +139,17 @@ export class CrawlState {
 	}
 
 	canAdmitUrl(url: string): boolean {
-		return (
-			this.admittedUrls.has(url) ||
-			this.admittedUrls.size < this.options.maxPages
-		);
+		return this.admittedUrls.has(url) || this.admittedUrls.size < this.options.maxPages;
 	}
 
-	requestStop(
-		reason: string,
-		options: { overrideReason?: boolean } = {},
-	): void {
+	requestStop(reason: string, options: { overrideReason?: boolean } = {}): void {
 		this.stopRequested = true;
-		this.stopReason =
-			options.overrideReason || this.stopReason === null
-				? reason
-				: this.stopReason;
+		this.stopReason = options.overrideReason || this.stopReason === null ? reason : this.stopReason;
 	}
 
 	setDomainDelay(domain: string, delayMs: number, now = Date.now()): void {
 		this.domainDelays.set(domain, delayMs);
-		const nextAllowedAt = Math.max(
-			this.domainNextAllowedAt.get(domain) ?? 0,
-			now + delayMs,
-		);
+		const nextAllowedAt = Math.max(this.domainNextAllowedAt.get(domain) ?? 0, now + delayMs);
 		this.domainNextAllowedAt.set(domain, nextAllowedAt);
 		this.emitDomainState(domain);
 	}
@@ -189,11 +172,7 @@ export class CrawlState {
 		this.emitDomainState(domain);
 	}
 
-	adaptDomainDelay(
-		domain: string,
-		statusCode: number,
-		retryAfterMs?: number,
-	): void {
+	adaptDomainDelay(domain: string, statusCode: number, retryAfterMs?: number): void {
 		if (!shouldAdaptDomainDelay(statusCode)) {
 			return;
 		}
@@ -207,17 +186,11 @@ export class CrawlState {
 	}
 
 	recordDomainPage(domain: string): void {
-		this.domainPageCounts.set(
-			domain,
-			(this.domainPageCounts.get(domain) ?? 0) + 1,
-		);
+		this.domainPageCounts.set(domain, (this.domainPageCounts.get(domain) ?? 0) + 1);
 	}
 
 	restoreDomainAdmission(domain: string): void {
-		this.domainAdmissionCounts.set(
-			domain,
-			(this.domainAdmissionCounts.get(domain) ?? 0) + 1,
-		);
+		this.domainAdmissionCounts.set(domain, (this.domainAdmissionCounts.get(domain) ?? 0) + 1);
 	}
 
 	tryAdmitDomain(domain: string): boolean {
@@ -271,10 +244,7 @@ export class CrawlState {
 		switch (outcome) {
 			case "success":
 				this.counters.successCount += 1;
-				this.counters.totalDataKb += Math.max(
-					Math.floor(options.dataKb ?? 0),
-					0,
-				);
+				this.counters.totalDataKb += Math.max(Math.floor(options.dataKb ?? 0), 0);
 				this.consecutiveFailures = 0;
 				break;
 			case "failure":
@@ -305,14 +275,9 @@ export class CrawlState {
 
 	buildProgress(queue: QueueSnapshot, counters?: CrawlCounters) {
 		const snapshot = counters ?? this.counters;
-		const elapsedSeconds = Math.max(
-			Math.floor((Date.now() - this.startedAtMs) / 1000),
-			0,
-		);
+		const elapsedSeconds = Math.max(Math.floor((Date.now() - this.startedAtMs) / 1000), 0);
 		const pagesPerSecond =
-			elapsedSeconds > 0
-				? Number((snapshot.pagesScanned / elapsedSeconds).toFixed(2))
-				: 0;
+			elapsedSeconds > 0 ? Number((snapshot.pagesScanned / elapsedSeconds).toFixed(2)) : 0;
 		const queueStats: QueueStats = {
 			...queue,
 			elapsedTime: elapsedSeconds,

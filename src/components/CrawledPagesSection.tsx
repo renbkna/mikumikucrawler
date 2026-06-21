@@ -1,20 +1,5 @@
-import {
-	AlertCircle,
-	ChevronDown,
-	ChevronUp,
-	Code,
-	ExternalLink,
-	Filter,
-	X,
-} from "lucide-react";
-import {
-	type ChangeEvent,
-	memo,
-	useCallback,
-	useEffect,
-	useMemo,
-	useState,
-} from "react";
+import { AlertCircle, ChevronDown, ChevronUp, Code, ExternalLink, Filter, X } from "lucide-react";
+import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useState } from "react";
 import { Virtuoso } from "react-virtuoso";
 import type { CrawledPage } from "../../shared/types.js";
 import { getPageContent } from "../api/pages";
@@ -23,8 +8,11 @@ import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 const PageLimitFooter = memo(function PageLimitFooter({
 	pageLimit,
 }: {
-	pageLimit: number;
+	pageLimit: number | undefined;
 }) {
+	if (pageLimit === undefined) {
+		return null;
+	}
 	return (
 		<div className="text-center text-xs font-bold text-miku-text/30 py-4 uppercase tracking-widest flex items-center justify-center gap-2">
 			<NoteIcon className="text-miku-teal/50" size={10} />
@@ -34,25 +22,15 @@ const PageLimitFooter = memo(function PageLimitFooter({
 	);
 });
 
-const VirtuosoFooter = ({
-	context,
-}: {
-	context?: { pageLimit?: number; showFooter: boolean };
-}) => {
+const VirtuosoFooter = ({ context }: { context?: { pageLimit?: number; showFooter: boolean } }) => {
 	if (!context?.showFooter || !context.pageLimit) return null;
 	return <PageLimitFooter pageLimit={context.pageLimit} />;
 };
 
-const CrawledPageCard = memo(function CrawledPageCard({
-	page,
-}: {
-	page: CrawledPage;
-}) {
+const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledPage }) {
 	const [isExpanded, setIsExpanded] = useState(false);
 	const [showSource, setShowSource] = useState(false);
-	const [fetchedContent, setFetchedContent] = useState<string | null>(
-		page.content ?? null,
-	);
+	const [fetchedContent, setFetchedContent] = useState<string | null>(page.content ?? null);
 	const [isLoadingContent, setIsLoadingContent] = useState(false);
 	const [fetchError, setFetchError] = useState<string | null>(null);
 
@@ -76,9 +54,7 @@ const CrawledPageCard = memo(function CrawledPageCard({
 				throw new Error(result.error);
 			}
 		} catch (err) {
-			setFetchError(
-				err instanceof Error ? err.message : "Failed to fetch content",
-			);
+			setFetchError(err instanceof Error ? err.message : "Failed to fetch content");
 		} finally {
 			setIsLoadingContent(false);
 		}
@@ -103,8 +79,7 @@ const CrawledPageCard = memo(function CrawledPageCard({
 		: showSource
 			? "Hide Source"
 			: "View Source";
-	const sourceContent =
-		fetchedContent ?? "(no content stored - metadata-only mode)";
+	const sourceContent = fetchedContent ?? "(no content stored - metadata-only mode)";
 	const analysis = processedData?.analysis;
 	const hasSummaryMetrics =
 		typeof analysis?.wordCount === "number" ||
@@ -173,11 +148,7 @@ const CrawledPageCard = memo(function CrawledPageCard({
 					</a>
 				</div>
 				<span className="p-2 rounded-full bg-miku-pink/10 text-miku-pink/50 group-hover:text-miku-pink transition-colors">
-					{isExpanded ? (
-						<ChevronUp className="w-4 h-4" />
-					) : (
-						<ChevronDown className="w-4 h-4" />
-					)}
+					{isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
 				</span>
 			</button>
 
@@ -248,13 +219,9 @@ const CrawledPageCard = memo(function CrawledPageCard({
 					{showSource && (
 						<div className="bg-slate-800 rounded-xl p-4 overflow-hidden relative">
 							<div className="flex items-center justify-between mb-2">
-								<span className="text-xs font-bold text-slate-400">
-									HTML Source
-								</span>
+								<span className="text-xs font-bold text-slate-400">HTML Source</span>
 								<span className="text-xs text-slate-500">
-									{fetchedContent !== null
-										? `${fetchedContent.length} chars`
-										: "0 chars"}
+									{fetchedContent !== null ? `${fetchedContent.length} chars` : "0 chars"}
 								</span>
 							</div>
 
@@ -269,12 +236,9 @@ const CrawledPageCard = memo(function CrawledPageCard({
 
 CrawledPageCard.displayName = "CrawledPageCard";
 
-const renderPageItem = (_index: number, page: CrawledPage) => (
-	<CrawledPageCard page={page} />
-);
+const renderPageItem = (_index: number, page: CrawledPage) => <CrawledPageCard page={page} />;
 
-const getPageItemKey = (_index: number, page: CrawledPage) =>
-	page.id ?? page.url;
+const getPageItemKey = (_index: number, page: CrawledPage) => page.id ?? page.url;
 
 interface CrawledPagesSectionProps {
 	crawledPages: CrawledPage[];
@@ -323,14 +287,10 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 		if (crawledPages.length === 0) {
 			return (
 				<div className="h-full flex flex-col items-center justify-center text-miku-text/40">
-					<NoteIcon
-						className="text-miku-teal/30 mb-4 animate-float"
-						size={48}
-					/>
+					<NoteIcon className="text-miku-teal/30 mb-4 animate-float" size={48} />
 					<p className="font-bold text-lg">No pages crawled yet...</p>
 					<p className="text-sm mt-1 font-medium flex items-center gap-1">
-						Start the Miku Beam to begin!{" "}
-						<HeartIcon className="text-miku-pink" size={12} />
+						Start the Miku Beam to begin! <HeartIcon className="text-miku-pink" size={12} />
 					</p>
 				</div>
 			);

@@ -1,5 +1,5 @@
-import type { Logger } from "../../config/logging.js";
 import type { CrawlOptions } from "../../../shared/contracts/index.js";
+import type { Logger } from "../../config/logging.js";
 import type { CrawlState } from "./CrawlState.js";
 import { getCrawlUrlIdentity } from "./UrlPolicy.js";
 
@@ -167,9 +167,7 @@ export class CrawlQueue {
 
 		return {
 			item: null,
-			waitMs: Number.isFinite(minimumWait)
-				? minimumWait
-				: this.options.crawlDelay,
+			waitMs: Number.isFinite(minimumWait) ? minimumWait : this.options.crawlDelay,
 		};
 	}
 

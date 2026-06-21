@@ -72,9 +72,7 @@ export const ToastNotification = memo(function ToastNotification({
 			className={`${
 				TOAST_STYLES[toast.type]
 			} px-4 py-3 rounded-2xl shadow-lg backdrop-blur-sm flex items-center justify-between max-w-xs sm:max-w-md transition-all duration-300 transform ${
-				isLeaving
-					? "translate-x-full opacity-0 scale-95"
-					: "translate-x-0 opacity-100 scale-100"
+				isLeaving ? "translate-x-full opacity-0 scale-95" : "translate-x-0 opacity-100 scale-100"
 			} animate-in slide-in-from-right-full`}
 		>
 			<div className="mr-3 text-sm font-bold leading-relaxed flex items-center gap-2">

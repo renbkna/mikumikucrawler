@@ -1,10 +1,4 @@
-import {
-	AlertCircle,
-	AlertTriangle,
-	CheckCircle2,
-	Info,
-	Terminal,
-} from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, Info, Terminal } from "lucide-react";
 
 export interface ParsedLog {
 	raw: string;
@@ -66,16 +60,18 @@ export function parseLog(log: string): ParsedLog {
 			throw new Error("Not an object log");
 		}
 		const record = parsed as Record<string, unknown>;
+		const rawLevel = record["level"];
+		const rawMessage = record["message"];
+		const rawTimestamp = record["timestamp"];
 		const level =
-			typeof record.level === "string" && record.level in LOG_LEVELS
-				? (record.level as ParsedLog["level"])
+			typeof rawLevel === "string" && rawLevel in LOG_LEVELS
+				? (rawLevel as ParsedLog["level"])
 				: "unknown";
 		return {
 			raw: log,
 			level,
-			message: typeof record.message === "string" ? record.message : log,
-			timestamp:
-				typeof record.timestamp === "string" ? record.timestamp : undefined,
+			message: typeof rawMessage === "string" ? rawMessage : log,
+			...(typeof rawTimestamp === "string" ? { timestamp: rawTimestamp } : {}),
 			metadata: record,
 		};
 	} catch {
@@ -148,16 +144,14 @@ export function highlightUrls(text: string): React.ReactNode {
 export function getLogCategory(message: string): string {
 	const lowerMsg = message.toLowerCase();
 	if (lowerMsg.includes("fetch")) return "🌐 Network";
-	if (lowerMsg.includes("crawl") || lowerMsg.includes("session"))
-		return "🕷️ Crawler";
+	if (lowerMsg.includes("crawl") || lowerMsg.includes("session")) return "🕷️ Crawler";
 	if (
 		lowerMsg.includes("puppeteer") ||
 		lowerMsg.includes("playwright") ||
 		lowerMsg.includes("chrome")
 	)
 		return "🎭 Browser";
-	if (lowerMsg.includes("client") || lowerMsg.includes("socket"))
-		return "🔌 Connection";
+	if (lowerMsg.includes("client") || lowerMsg.includes("socket")) return "🔌 Connection";
 	if (lowerMsg.includes("retry")) return "🔄 Retry";
 	if (lowerMsg.includes("page")) return "📄 Page";
 	return "📝 System";

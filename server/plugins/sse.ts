@@ -44,11 +44,7 @@ export function createEventStreamResponse(options: {
 				}
 			};
 
-			unsubscribe = options.eventStream.subscribe(
-				options.crawlId,
-				write,
-				options.afterSequence,
-			);
+			unsubscribe = options.eventStream.subscribe(options.crawlId, write, options.afterSequence);
 			keepAlive = setInterval(() => {
 				if (closed) return;
 				try {

@@ -28,22 +28,15 @@ const createMockLogger = (): Logger =>
 		debug: mock(() => {}),
 	}) as unknown as Logger;
 
-const processTestContent = (
-	content: string | Buffer,
-	url: string,
-	contentType: string,
-) => processContent(content, url, contentType, createMockLogger());
+const processTestContent = (content: string | Buffer, url: string, contentType: string) =>
+	processContent(content, url, contentType, createMockLogger());
 
 describe("ContentProcessor dispatch contract", () => {
 	test("HTML → extracts main content and populates analysis", async () => {
 		const html = `<html><head><title>Test</title></head>
 			<body><main><h1>Hello World</h1><p>Crawler test content here.</p></main></body></html>`;
 
-		const result = await processTestContent(
-			html,
-			"https://example.com/test",
-			"text/html",
-		);
+		const result = await processTestContent(html, "https://example.com/test", "text/html");
 
 		expect(result.errors).toHaveLength(0);
 		expect(result.extractedData.mainContent).toContain("Hello World");
@@ -63,9 +56,7 @@ describe("ContentProcessor dispatch contract", () => {
 
 		expect(result.errors).toHaveLength(0);
 		expect(result.extractedData.mainContent).toBe("XHTML content");
-		expect(result.links.map((link) => link.url)).toEqual([
-			"https://example.com/next",
-		]);
+		expect(result.links.map((link) => link.url)).toEqual(["https://example.com/next"]);
 		expect(result.analysis.wordCount).toBeGreaterThan(0);
 	});
 
@@ -99,21 +90,9 @@ describe("ContentProcessor dispatch contract", () => {
 
 	test("JSON primitives preserve parsed values instead of truthy fallback", async () => {
 		const [zero, bool, nil] = await Promise.all([
-			processTestContent(
-				"0",
-				"https://api.example.com/zero",
-				"application/json",
-			),
-			processTestContent(
-				"false",
-				"https://api.example.com/false",
-				"application/json",
-			),
-			processTestContent(
-				"null",
-				"https://api.example.com/null",
-				"application/json",
-			),
+			processTestContent("0", "https://api.example.com/zero", "application/json"),
+			processTestContent("false", "https://api.example.com/false", "application/json"),
+			processTestContent("null", "https://api.example.com/null", "application/json"),
 		]);
 
 		expect(zero.extractedData.mainContent).toBe("0");
@@ -123,16 +102,8 @@ describe("ContentProcessor dispatch contract", () => {
 
 	test("JSON string roots and invalid JSON fallback do not gain extra quotes", async () => {
 		const [stringRoot, invalid] = await Promise.all([
-			processTestContent(
-				'"hello"',
-				"https://api.example.com/string",
-				"application/json",
-			),
-			processTestContent(
-				"not-json",
-				"https://api.example.com/invalid",
-				"application/json",
-			),
+			processTestContent('"hello"', "https://api.example.com/string", "application/json"),
+			processTestContent("not-json", "https://api.example.com/invalid", "application/json"),
 		]);
 
 		expect(stringRoot.extractedData.mainContent).toBe("hello");

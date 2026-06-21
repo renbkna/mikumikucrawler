@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-	OperationTimeoutError,
-	runWithTimeout,
-	runWithTimeoutFallback,
-} from "../timeout.js";
+import { OperationTimeoutError, runWithTimeout, runWithTimeoutFallback } from "../timeout.js";
 
 describe("runWithTimeout", () => {
 	test("aborts the operation signal when the timeout expires", async () => {

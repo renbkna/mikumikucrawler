@@ -16,10 +16,7 @@ function readNumericStatus(value: unknown): number | null {
 	return null;
 }
 
-function readStringField(
-	error: unknown,
-	key: "message" | "summary",
-): string | null {
+function readStringField(error: unknown, key: "message" | "summary"): string | null {
 	if (!error || typeof error !== "object" || !(key in error)) {
 		return null;
 	}

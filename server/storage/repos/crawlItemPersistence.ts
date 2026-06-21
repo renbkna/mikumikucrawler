@@ -83,14 +83,14 @@ export function createCrawlItemPersistence(db: Database) {
 				input.crawlId,
 			);
 
-			return { pageId };
+			return {
+				...(pageId !== undefined ? { pageId } : {}),
+			};
 		},
 	);
 
 	return {
-		commitCompletedItem(
-			input: CommitCompletedItemInput,
-		): CommitCompletedItemResult {
+		commitCompletedItem(input: CommitCompletedItemInput): CommitCompletedItemResult {
 			return commitCompletedTransaction(input);
 		},
 		listTerminalUrls(crawlId: string): TerminalUrlRecord[] {

@@ -140,12 +140,7 @@ export function createPageWriter(db: Database) {
 
 		clearLinks.run(pageRow.id);
 		for (const link of input.links) {
-			insertLink.run(
-				pageRow.id,
-				link.url,
-				link.text ?? "",
-				link.nofollow ? 1 : 0,
-			);
+			insertLink.run(pageRow.id, link.url, link.text ?? "", link.nofollow ? 1 : 0);
 		}
 
 		return pageRow.id;
@@ -169,9 +164,7 @@ export function createPageRepo(db: Database) {
 			url: string,
 		): { lastModified: string | null; etag: string | null } | null {
 			const row = db
-				.query(
-					"SELECT last_modified, etag FROM pages WHERE crawl_id = ? AND url = ? LIMIT 1",
-				)
+				.query("SELECT last_modified, etag FROM pages WHERE crawl_id = ? AND url = ? LIMIT 1")
 				.get(crawlId, url) as {
 				last_modified: string | null;
 				etag: string | null;
@@ -185,15 +178,15 @@ export function createPageRepo(db: Database) {
 				: null;
 		},
 		getVisitedUrls(crawlId: string): string[] {
-			const rows = db
-				.query("SELECT url FROM pages WHERE crawl_id = ?")
-				.all(crawlId) as Array<{ url: string }>;
+			const rows = db.query("SELECT url FROM pages WHERE crawl_id = ?").all(crawlId) as Array<{
+				url: string;
+			}>;
 			return rows.map((row) => row.url);
 		},
 		getContentById(id: number): string | null | undefined {
-			const row = db
-				.query("SELECT content FROM pages WHERE id = ? LIMIT 1")
-				.get(id) as { content: string | null } | null;
+			const row = db.query("SELECT content FROM pages WHERE id = ? LIMIT 1").get(id) as {
+				content: string | null;
+			} | null;
 			if (row === null) return undefined;
 			return row.content;
 		},
@@ -218,10 +211,7 @@ export function createPageRepo(db: Database) {
 				nofollow: row.nofollow === 1,
 			}));
 		},
-		getDiscoveredLinkCountByPageUrl(
-			crawlId: string,
-			pageUrl: string,
-		): number | null {
+		getDiscoveredLinkCountByPageUrl(crawlId: string, pageUrl: string): number | null {
 			const row = db
 				.query(
 					`

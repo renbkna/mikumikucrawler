@@ -11,8 +11,6 @@ describe("resolveStaticFilePath", () => {
 	});
 
 	test("rejects traversal outside the dist directory", () => {
-		expect(
-			resolveStaticFilePath("/tmp/dist", "/../../server/config/env.ts"),
-		).toBeNull();
+		expect(resolveStaticFilePath("/tmp/dist", "/../../server/config/env.ts")).toBeNull();
 	});
 });

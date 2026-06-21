@@ -8,11 +8,7 @@ interface ExportDialogProps {
 	onExport: (format: string) => void;
 }
 
-export function ExportDialog({
-	isOpen,
-	onClose,
-	onExport,
-}: Readonly<ExportDialogProps>) {
+export function ExportDialog({ isOpen, onClose, onExport }: Readonly<ExportDialogProps>) {
 	const { dialogRef } = useDialogModal({ isOpen });
 
 	if (!isOpen) return null;

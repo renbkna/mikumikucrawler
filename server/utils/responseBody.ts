@@ -21,9 +21,7 @@ export async function readLimitedResponseBody(
 	response: Response,
 	maxBytes: number,
 ): Promise<LimitedResponseBody> {
-	const declaredLength = parseContentLength(
-		response.headers.get("content-length"),
-	);
+	const declaredLength = parseContentLength(response.headers.get("content-length"));
 	if (declaredLength !== null && declaredLength > maxBytes) {
 		await response.body?.cancel().catch(() => undefined);
 		return { type: "tooLarge" };

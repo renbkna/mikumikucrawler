@@ -24,8 +24,6 @@ export function shouldAdaptDomainDelay(statusCode: number): boolean {
 	return isRateLimitedStatus(statusCode) || statusCode === 403;
 }
 
-export function shouldTreatRobotsResponseAsNoRules(
-	statusCode: number,
-): boolean {
+export function shouldTreatRobotsResponseAsNoRules(statusCode: number): boolean {
 	return ROBOTS_NO_RULES_STATUS_CODES.has(statusCode);
 }

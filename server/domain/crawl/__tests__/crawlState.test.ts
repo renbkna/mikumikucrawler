@@ -45,9 +45,7 @@ describe("CrawlState", () => {
 			});
 
 			const c = state.counters;
-			expect(c.pagesScanned).toBe(
-				c.successCount + c.failureCount + c.skippedCount,
-			);
+			expect(c.pagesScanned).toBe(c.successCount + c.failureCount + c.skippedCount);
 			expect(c.pagesScanned).toBe(4);
 			expect(c.successCount).toBe(2);
 			expect(c.failureCount).toBe(1);
@@ -60,9 +58,7 @@ describe("CrawlState", () => {
 			const state = new CrawlState(makeOptions());
 
 			expect(state.recordTerminal("https://a.example/1", "success")).toBe(true);
-			expect(state.recordTerminal("https://a.example/1", "success")).toBe(
-				false,
-			);
+			expect(state.recordTerminal("https://a.example/1", "success")).toBe(false);
 
 			expect(state.counters.pagesScanned).toBe(1);
 			expect(state.counters.successCount).toBe(1);
@@ -126,9 +122,7 @@ describe("CrawlState", () => {
 			);
 
 			expect(state.isStopRequested).toBe(true);
-			expect(state.stopReason).toBe(
-				"Circuit breaker tripped after 20 consecutive failures",
-			);
+			expect(state.stopReason).toBe("Circuit breaker tripped after 20 consecutive failures");
 		});
 	});
 
@@ -258,13 +252,9 @@ describe("CrawlState", () => {
 
 		test("setDomainDelay seeds a durable next-ready watermark", () => {
 			const changes: unknown[] = [];
-			const state = new CrawlState(
-				makeOptions({ crawlDelay: 100 }),
-				undefined,
-				{
-					onDomainStateChanged: (record) => changes.push(record),
-				},
-			);
+			const state = new CrawlState(makeOptions({ crawlDelay: 100 }), undefined, {
+				onDomainStateChanged: (record) => changes.push(record),
+			});
 
 			state.setDomainDelay("https://example.com", 750, 2000);
 

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import type { CrawlEventEnvelope } from "../contracts/index.js";
 import { createEventStreamResponse } from "../../server/plugins/sse.js";
 import { EventStream } from "../../server/runtime/EventStream.js";
 import { parseCrawlEventEnvelope } from "../../src/api/crawlEvents.js";
+import type { CrawlEventEnvelope } from "../contracts/index.js";
 
 /**
  * Round-trip contract test: verifies that events published by EventStream pass
@@ -14,9 +14,11 @@ describe("SSE round-trip: EventStream → SSE response → parseCrawlEventEnvelo
 
 	async function readFirstSsePayload(response: Response): Promise<string> {
 		expect(response.headers.get("content-type")).toContain("text/event-stream");
-		expect(response.body).not.toBeNull();
+		if (response.body === null) {
+			throw new Error("Expected SSE response body");
+		}
 
-		const reader = response.body!.getReader();
+		const reader = response.body.getReader();
 		try {
 			const { value, done } = await reader.read();
 			expect(done).toBe(false);
@@ -27,11 +29,12 @@ describe("SSE round-trip: EventStream → SSE response → parseCrawlEventEnvelo
 			expect(wire).toContain("id: ");
 			expect(wire).toContain("event: ");
 
-			const dataLine = wire
-				.split("\n")
-				.find((line) => line.startsWith("data: "));
+			const dataLine = wire.split("\n").find((line) => line.startsWith("data: "));
 			expect(dataLine).toBeDefined();
-			return dataLine!.slice("data: ".length);
+			if (dataLine === undefined) {
+				throw new Error("Expected SSE data frame payload");
+			}
+			return dataLine.slice("data: ".length);
 		} finally {
 			await reader.cancel();
 		}
@@ -59,7 +62,11 @@ describe("SSE round-trip: EventStream → SSE response → parseCrawlEventEnvelo
 		type: T,
 	): Extract<CrawlEventEnvelope, { type: T }> {
 		expect(envelope).not.toBeNull();
-		expect(envelope!.type).toBe(type);
+		if (envelope === null) {
+			throw new Error(`Expected envelope of type: ${type}`);
+		}
+
+		expect(envelope.type).toBe(type);
 		return envelope as Extract<CrawlEventEnvelope, { type: T }>;
 	}
 
@@ -153,9 +160,7 @@ describe("SSE round-trip: EventStream → SSE response → parseCrawlEventEnvelo
 			"crawl.log",
 		);
 
-		expect(parsed.payload.message).toBe(
-			"[Fetch] GET https://example.com → 200 (1.2s)",
-		);
+		expect(parsed.payload.message).toBe("[Fetch] GET https://example.com → 200 (1.2s)");
 	});
 
 	test("crawl.completed survives round-trip", async () => {
@@ -202,9 +207,7 @@ describe("SSE round-trip: EventStream → SSE response → parseCrawlEventEnvelo
 			"crawl.failed",
 		);
 
-		expect(parsed.payload.error).toBe(
-			"Circuit breaker tripped: 20 consecutive failures",
-		);
+		expect(parsed.payload.error).toBe("Circuit breaker tripped: 20 consecutive failures");
 	});
 
 	test("crawl.stopped survives round-trip", async () => {
@@ -270,8 +273,12 @@ describe("SSE round-trip: EventStream → SSE response → parseCrawlEventEnvelo
 			url: "https://example.com",
 		});
 
-		expect(e1!.sequence).toBe(1);
-		expect(e2!.sequence).toBe(2);
-		expect(e3!.sequence).toBe(3);
+		if (e1 === null || e2 === null || e3 === null) {
+			throw new Error("Expected crawl events for sequence test");
+		}
+
+		expect(e1.sequence).toBe(1);
+		expect(e2.sequence).toBe(2);
+		expect(e3.sequence).toBe(3);
 	});
 });

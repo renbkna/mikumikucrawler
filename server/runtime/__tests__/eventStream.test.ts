@@ -40,9 +40,7 @@ describe("event stream contract", () => {
 			},
 		});
 
-		expect([first.sequence, second.sequence, third.sequence]).toEqual([
-			1, 2, 3,
-		]);
+		expect([first.sequence, second.sequence, third.sequence]).toEqual([1, 2, 3]);
 	});
 
 	test("replays ordered history to late subscribers", () => {

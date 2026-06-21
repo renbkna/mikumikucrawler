@@ -20,10 +20,7 @@ function cloneValue<T>(value: T): T {
 
 export class EventStream {
 	private readonly streams = new Map<string, StreamState>();
-	private readonly cleanupTimers = new Map<
-		string,
-		ReturnType<typeof setTimeout>
-	>();
+	private readonly cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 	private cancelCleanup(crawlId: string): void {
 		const timer = this.cleanupTimers.get(crawlId);
@@ -35,10 +32,7 @@ export class EventStream {
 		this.cleanupTimers.delete(crawlId);
 	}
 
-	private getState(
-		crawlId: string,
-		options: { cancelCleanup?: boolean } = {},
-	): StreamState {
+	private getState(crawlId: string, options: { cancelCleanup?: boolean } = {}): StreamState {
 		if (options.cancelCleanup) {
 			this.cancelCleanup(crawlId);
 		}

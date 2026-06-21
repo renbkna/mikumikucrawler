@@ -1,4 +1,5 @@
 import type { CrawlOptions } from "./contracts/crawl.js";
+
 export type {
 	ContentAnalysis,
 	CrawledPage,

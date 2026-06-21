@@ -54,8 +54,7 @@ describe("page pipeline contract", () => {
 				fetch: async () => ({
 					type: "blocked",
 					statusCode: 403,
-					reason:
-						"Consent wall could not be bypassed for https://www.youtube.com/watch?v=test",
+					reason: "Consent wall could not be bypassed for https://www.youtube.com/watch?v=test",
 				}),
 			} as never,
 			{
@@ -73,10 +72,7 @@ describe("page pipeline contract", () => {
 			retries: 0,
 		});
 
-		expect(state.adaptDomainDelay).toHaveBeenCalledWith(
-			"https://www.youtube.com",
-			403,
-		);
+		expect(state.adaptDomainDelay).toHaveBeenCalledWith("https://www.youtube.com", 403);
 		expect(state.recordTerminal).toHaveBeenCalledWith(
 			"https://www.youtube.com/watch?v=test",
 			"failure",
@@ -93,8 +89,6 @@ describe("page pipeline contract", () => {
 			page: mock(() => undefined),
 		};
 		const recordTerminal = mock(() => true);
-		const recordDomainPage = mock(() => undefined);
-		const recordDiscoveredLinks = mock(() => undefined);
 		const pipeline = new PagePipeline(
 			"crawl-1",
 			{
@@ -134,10 +128,7 @@ describe("page pipeline contract", () => {
 			retries: 0,
 		});
 
-		expect(recordTerminal).toHaveBeenCalledWith(
-			"https://example.com/overflow",
-			"skip",
-		);
+		expect(recordTerminal).toHaveBeenCalledWith("https://example.com/overflow", "skip");
 		expect(eventSink.log).toHaveBeenCalledWith(
 			"[Limit] Max pages reached: https://example.com/overflow",
 		);
@@ -198,10 +189,7 @@ describe("page pipeline contract", () => {
 			retries: 0,
 		});
 
-		expect(recordTerminal).toHaveBeenCalledWith(
-			"https://example.com/cached",
-			"success",
-		);
+		expect(recordTerminal).toHaveBeenCalledWith("https://example.com/cached", "success");
 		expect(recordDomainPage).toHaveBeenCalledWith("example.com");
 		expect(eventSink.log).toHaveBeenCalledWith(
 			"[Crawler] Unchanged: https://example.com/cached (304)",
@@ -245,8 +233,7 @@ describe("page pipeline contract", () => {
 			{
 				fetch: async () => ({
 					type: "success",
-					content:
-						'<html><body><main>XHTML</main><a href="/next">Next</a></body></html>',
+					content: '<html><body><main>XHTML</main><a href="/next">Next</a></body></html>',
 					statusCode: 200,
 					contentType: "application/xhtml+xml; charset=utf-8",
 					contentLength: 75,
@@ -319,11 +306,7 @@ describe("page pipeline contract", () => {
 				save,
 			} as never,
 			{
-				fetch: async (
-					_crawlId: string,
-					_item: unknown,
-					signal?: AbortSignal,
-				) => {
+				fetch: async (signal?: AbortSignal) => {
 					controller.abort(new Error("timeout"));
 					if (!signal) {
 						throw new Error("Expected signal");
@@ -373,7 +356,6 @@ describe("page pipeline contract", () => {
 		const save = mock(() => 11);
 		const recordTerminal = mock(() => true);
 		const recordDomainPage = mock(() => undefined);
-		const recordDiscoveredLinks = mock(() => undefined);
 		const pipeline = new PagePipeline(
 			"crawl-1",
 			{
@@ -435,9 +417,7 @@ describe("page pipeline contract", () => {
 			"success",
 			expect.objectContaining({ dataKb: 0, mediaFiles: 0 }),
 		);
-		expect(eventSink.log).toHaveBeenCalledWith(
-			"[Crawler] Crawled https://example.com/",
-		);
+		expect(eventSink.log).toHaveBeenCalledWith("[Crawler] Crawled https://example.com/");
 	});
 
 	test("rendered client error shells are terminal failures and are not persisted", async () => {
@@ -502,10 +482,7 @@ describe("page pipeline contract", () => {
 			terminalOutcome: "failure",
 			domainBudgetCharged: true,
 		});
-		expect(recordTerminal).toHaveBeenCalledWith(
-			"https://example.com/crashed-app",
-			"failure",
-		);
+		expect(recordTerminal).toHaveBeenCalledWith("https://example.com/crashed-app", "failure");
 		expect(recordDomainPage).toHaveBeenCalledWith("example.com");
 		expect(result.page).toBeUndefined();
 		expect(eventSink.log).toHaveBeenCalledWith(
@@ -577,10 +554,7 @@ describe("page pipeline contract", () => {
 			terminalOutcome: "skip",
 			domainBudgetCharged: true,
 		});
-		expect(recordTerminal).toHaveBeenCalledWith(
-			"https://example.com/noindex",
-			"skip",
-		);
+		expect(recordTerminal).toHaveBeenCalledWith("https://example.com/noindex", "skip");
 		expect(recordDomainPage).toHaveBeenCalledWith("example.com");
 		expect(recordDiscoveredLinks).toHaveBeenCalledWith(1);
 	});
@@ -891,10 +865,6 @@ describe("page pipeline contract", () => {
 			rescheduled: true,
 		});
 		expect(scheduleRetry).toHaveBeenCalledWith(item, 2000);
-		expect(adaptDomainDelay).toHaveBeenCalledWith(
-			"https://example.com",
-			429,
-			2000,
-		);
+		expect(adaptDomainDelay).toHaveBeenCalledWith("https://example.com", 429, 2000);
 	});
 });

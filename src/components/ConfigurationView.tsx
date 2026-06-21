@@ -12,15 +12,9 @@ interface ConfigurationViewProps {
 	onSave: () => void;
 }
 
-function clampCrawlOption(
-	key: keyof typeof CRAWL_OPTION_BOUNDS,
-	rawValue: string,
-): number {
+function clampCrawlOption(key: keyof typeof CRAWL_OPTION_BOUNDS, rawValue: string): number {
 	const bounds = CRAWL_OPTION_BOUNDS[key];
-	return Math.min(
-		bounds.max,
-		Math.max(bounds.min, Number(rawValue) || bounds.min),
-	);
+	return Math.min(bounds.max, Math.max(bounds.min, Number(rawValue) || bounds.min));
 }
 
 export function ConfigurationView({
@@ -35,10 +29,8 @@ export function ConfigurationView({
 	if (!isOpen) return null;
 
 	const crawlMethodDesc = {
-		links:
-			"Follows internal HTML links and skips media metadata in saved results",
-		media:
-			"Follows internal HTML links and keeps extracted image, video, and audio metadata",
+		links: "Follows internal HTML links and skips media metadata in saved results",
+		media: "Follows internal HTML links and keeps extracted image, video, and audio metadata",
 		full: "Follows internal and external HTML links and keeps extracted media metadata",
 	}[options.crawlMethod];
 	const mediaRetentionDisabled = options.crawlMethod === "links";
@@ -107,25 +99,18 @@ export function ConfigurationView({
 										onOptionsChange({
 											...options,
 											crawlMethod: nextMethod,
-											saveMedia:
-												nextMethod === "links" ? false : options.saveMedia,
+											saveMedia: nextMethod === "links" ? false : options.saveMedia,
 										});
 									}}
 									className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
 								>
-									<option value="links">
-										Links — internal links, no saved media metadata
-									</option>
-									<option value="media">
-										Media — internal links + saved media metadata
-									</option>
+									<option value="links">Links — internal links, no saved media metadata</option>
+									<option value="media">Media — internal links + saved media metadata</option>
 									<option value="full">
 										Full — internal + external links + saved media metadata
 									</option>
 								</select>
-								<p className="mt-2 text-xs text-miku-text/50 font-medium">
-									{crawlMethodDesc}
-								</p>
+								<p className="mt-2 text-xs text-miku-text/50 font-medium">{crawlMethodDesc}</p>
 							</div>
 
 							{/* Crawl Depth — full-width with deep-crawl warning */}
@@ -141,10 +126,7 @@ export function ConfigurationView({
 									type="number"
 									value={options.crawlDepth}
 									onChange={(e) => {
-										const value = clampCrawlOption(
-											"crawlDepth",
-											e.target.value,
-										);
+										const value = clampCrawlOption("crawlDepth", e.target.value);
 										onOptionsChange({ ...options, crawlDepth: value });
 									}}
 									className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
@@ -177,10 +159,7 @@ export function ConfigurationView({
 										type="number"
 										value={options.maxPages}
 										onChange={(e) => {
-											const value = clampCrawlOption(
-												"maxPages",
-												e.target.value,
-											);
+											const value = clampCrawlOption("maxPages", e.target.value);
 											onOptionsChange({ ...options, maxPages: value });
 										}}
 										className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
@@ -204,10 +183,7 @@ export function ConfigurationView({
 										type="number"
 										value={options.maxPagesPerDomain}
 										onChange={(e) => {
-											const value = clampCrawlOption(
-												"maxPagesPerDomain",
-												e.target.value,
-											);
+											const value = clampCrawlOption("maxPagesPerDomain", e.target.value);
 											onOptionsChange({
 												...options,
 												maxPagesPerDomain: value,
@@ -274,10 +250,7 @@ export function ConfigurationView({
 										type="number"
 										value={options.maxConcurrentRequests}
 										onChange={(e) => {
-											const value = clampCrawlOption(
-												"maxConcurrentRequests",
-												e.target.value,
-											);
+											const value = clampCrawlOption("maxConcurrentRequests", e.target.value);
 											onOptionsChange({
 												...options,
 												maxConcurrentRequests: value,
@@ -304,10 +277,7 @@ export function ConfigurationView({
 										type="number"
 										value={options.retryLimit}
 										onChange={(e) => {
-											const value = clampCrawlOption(
-												"retryLimit",
-												e.target.value,
-											);
+											const value = clampCrawlOption("retryLimit", e.target.value);
 											onOptionsChange({ ...options, retryLimit: value });
 										}}
 										className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
@@ -380,15 +350,10 @@ export function ConfigurationView({
 										/>
 									</div>
 									<div className="ml-3 text-sm">
-										<label
-											htmlFor={item.id}
-											className="font-bold text-miku-text cursor-pointer"
-										>
+										<label htmlFor={item.id} className="font-bold text-miku-text cursor-pointer">
 											{item.label}
 										</label>
-										<p className="text-miku-text/50 font-medium text-xs mt-0.5">
-											{item.desc}
-										</p>
+										<p className="text-miku-text/50 font-medium text-xs mt-0.5">{item.desc}</p>
 									</div>
 								</div>
 							))}

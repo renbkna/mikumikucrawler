@@ -8,9 +8,7 @@ interface SpaStaticPluginOptions {
 }
 
 function isImmutableAsset(requestPath: string): boolean {
-	return /\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$/i.test(
-		requestPath,
-	);
+	return /\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$/i.test(requestPath);
 }
 
 function isAssetRequest(requestPath: string): boolean {
@@ -37,10 +35,7 @@ function ifNoneMatchIncludes(ifNoneMatch: string | undefined, etag: string) {
 export function spaStaticPlugin({ distPath }: SpaStaticPluginOptions) {
 	return new Elysia({ name: "spa-static-plugin" }).get(
 		"*",
-		async (context: {
-			path: string;
-			headers: Record<string, string | undefined>;
-		}) => {
+		async (context: { path: string; headers: Record<string, string | undefined> }) => {
 			const requestPath = context.path;
 			const headers = context.headers;
 			if (isApiRequest(requestPath) || requestPath === API_PATHS.health) {

@@ -18,9 +18,7 @@ export function StatsVisualizer({ stats }: Readonly<StatsVisualizerProps>) {
 					<div>
 						<div className="flex justify-between mb-2 text-sm text-miku-text font-medium">
 							<span>Success Rate ✧</span>
-							<span className="text-emerald-500 font-bold">
-								{stats.successRate}
-							</span>
+							<span className="text-emerald-500 font-bold">{stats.successRate}</span>
 						</div>
 						<div className="h-3 bg-miku-pink/10 rounded-full overflow-hidden border-2 border-miku-pink/20">
 							<div
@@ -35,9 +33,7 @@ export function StatsVisualizer({ stats }: Readonly<StatsVisualizerProps>) {
 					<div>
 						<div className="flex justify-between mb-2 text-sm text-miku-text font-medium">
 							<span>Speed ♥</span>
-							<span className="text-miku-teal font-bold">
-								{stats.pagesPerSecond} pages/sec
-							</span>
+							<span className="text-miku-teal font-bold">{stats.pagesPerSecond} pages/sec</span>
 						</div>
 						<div className="h-3 bg-miku-teal/10 rounded-full overflow-hidden border-2 border-miku-teal/20">
 							<div
@@ -57,8 +53,7 @@ export function StatsVisualizer({ stats }: Readonly<StatsVisualizerProps>) {
 					<div className="inline-block cute-badge">
 						⏱ Time elapsed:{" "}
 						<span className="text-miku-teal font-bold">
-							{stats.elapsedTime.hours}h {stats.elapsedTime.minutes}m{" "}
-							{stats.elapsedTime.seconds}s
+							{stats.elapsedTime.hours}h {stats.elapsedTime.minutes}m {stats.elapsedTime.seconds}s
 						</span>
 					</div>
 				</div>

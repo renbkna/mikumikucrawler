@@ -1,6 +1,9 @@
 export class OperationTimeoutError extends Error {
-	constructor(operationName: string, timeoutMs: number) {
-		super(`Timeout: ${operationName} exceeded ${timeoutMs}ms`);
+	constructor(operationName: string, timeoutMs: number, cause?: unknown) {
+		super(
+			`Timeout: ${operationName} exceeded ${timeoutMs}ms`,
+			cause !== undefined ? { cause } : undefined,
+		);
 		this.name = "OperationTimeoutError";
 	}
 }
@@ -24,13 +27,11 @@ function getAbortError(
 	timeoutMs: number,
 ): Error {
 	if (timeoutSignal.aborted && !externalSignal?.aborted) {
-		return new OperationTimeoutError(operationName, timeoutMs);
+		return new OperationTimeoutError(operationName, timeoutMs, operationSignal.reason);
 	}
 
 	const reason = externalSignal?.reason ?? operationSignal.reason;
-	return reason instanceof Error
-		? reason
-		: new Error(`${operationName} aborted`);
+	return reason instanceof Error ? reason : new Error(`${operationName} aborted`);
 }
 
 /**
@@ -47,23 +48,13 @@ export async function runWithTimeout<T>({
 	run,
 }: RunWithTimeoutOptions<T>): Promise<T> {
 	const timeoutSignal = AbortSignal.timeout(timeoutMs);
-	const operationSignal = signal
-		? AbortSignal.any([signal, timeoutSignal])
-		: timeoutSignal;
+	const operationSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 
 	let removeAbortListener = () => {};
 	const abortPromise = new Promise<never>((_, reject) => {
 		const rejectWithAbort = () => {
 			removeAbortListener();
-			reject(
-				getAbortError(
-					operationSignal,
-					timeoutSignal,
-					signal,
-					operationName,
-					timeoutMs,
-				),
-			);
+			reject(getAbortError(operationSignal, timeoutSignal, signal, operationName, timeoutMs));
 		};
 
 		if (operationSignal.aborted) {
@@ -86,7 +77,7 @@ export async function runWithTimeout<T>({
 		return await Promise.race([operationPromise, abortPromise]);
 	} catch (error) {
 		if (timeoutSignal.aborted && !signal?.aborted) {
-			throw new OperationTimeoutError(operationName, timeoutMs);
+			throw getAbortError(operationSignal, timeoutSignal, signal, operationName, timeoutMs);
 		}
 		throw error;
 	} finally {

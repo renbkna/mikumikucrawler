@@ -1,8 +1,8 @@
 import type { Logger } from "../../config/logging.js";
 import {
 	FETCH_HEADERS,
-	RETRY_CONSTANTS,
 	REQUEST_CONSTANTS,
+	RETRY_CONSTANTS,
 	TIMEOUT_CONSTANTS,
 } from "../../constants.js";
 import type { HttpClient } from "../../plugins/security.js";
@@ -61,18 +61,12 @@ export type FetchResult =
 function parseRetryAfter(value: string | null): number | undefined {
 	if (!value) return undefined;
 	if (/^\d+$/.test(value.trim())) {
-		return Math.min(
-			Number.parseInt(value, 10) * 1000,
-			RETRY_CONSTANTS.MAX_DELAY,
-		);
+		return Math.min(Number.parseInt(value, 10) * 1000, RETRY_CONSTANTS.MAX_DELAY);
 	}
 
 	const parsedDate = Date.parse(value);
 	if (!Number.isNaN(parsedDate)) {
-		return Math.min(
-			Math.max(parsedDate - Date.now(), 0),
-			RETRY_CONSTANTS.MAX_DELAY,
-		);
+		return Math.min(Math.max(parsedDate - Date.now(), 0), RETRY_CONSTANTS.MAX_DELAY);
 	}
 
 	return undefined;
@@ -82,13 +76,9 @@ async function readResponseContent(
 	response: Response,
 	contentType: string,
 ): Promise<
-	| { type: "content"; content: string | Buffer; contentLength: number }
-	| { type: "tooLarge" }
+	{ type: "content"; content: string | Buffer; contentLength: number } | { type: "tooLarge" }
 > {
-	const body = await readLimitedResponseBody(
-		response,
-		REQUEST_CONSTANTS.MAX_RESPONSE_BYTES,
-	);
+	const body = await readLimitedResponseBody(response, REQUEST_CONSTANTS.MAX_RESPONSE_BYTES);
 	if (body.type === "tooLarge") {
 		return { type: "tooLarge" };
 	}
@@ -156,20 +146,14 @@ export class FetchService {
 		private readonly logger: Logger,
 	) {}
 
-	async fetch(
-		crawlId: string,
-		item: QueueItem,
-		signal?: AbortSignal,
-	): Promise<FetchResult> {
+	async fetch(crawlId: string, item: QueueItem, signal?: AbortSignal): Promise<FetchResult> {
 		let dynamicResult: Awaited<ReturnType<DynamicRenderer["render"]>> = null;
 		if (this.dynamicRenderer.isEnabled()) {
 			try {
 				dynamicResult = await this.dynamicRenderer.render(item, signal);
 			} catch (error) {
 				if (signal?.aborted) {
-					throw signal.reason instanceof Error
-						? signal.reason
-						: new Error("Fetch aborted");
+					throw signal.reason instanceof Error ? signal.reason : new Error("Fetch aborted");
 				}
 				this.logger.warn(
 					`[Fetch] Dynamic render failed for ${item.url}; falling back to static crawl: ${error instanceof Error ? error.message : String(error)}`,
@@ -178,16 +162,12 @@ export class FetchService {
 		}
 
 		if (signal?.aborted) {
-			throw signal.reason instanceof Error
-				? signal.reason
-				: new Error("Fetch aborted");
+			throw signal.reason instanceof Error ? signal.reason : new Error("Fetch aborted");
 		}
 
 		if (dynamicResult) {
 			if (signal?.aborted) {
-				throw signal.reason instanceof Error
-					? signal.reason
-					: new Error("Fetch aborted");
+				throw signal.reason instanceof Error ? signal.reason : new Error("Fetch aborted");
 			}
 			if (dynamicResult.type === "consentBlocked") {
 				this.logger.warn(dynamicResult.message);
@@ -199,14 +179,11 @@ export class FetchService {
 			}
 
 			const renderedPage = dynamicResult.result;
-			const classifiedDynamicStatus = classifyFetchStatus(
-				renderedPage.statusCode,
-				{
-					retryAfterMs: parseRetryAfter(renderedPage.retryAfter ?? null),
-					blockedStatuses: [],
-					blockedReason: `Access blocked for ${item.url}`,
-				},
-			);
+			const classifiedDynamicStatus = classifyFetchStatus(renderedPage.statusCode, {
+				retryAfterMs: parseRetryAfter(renderedPage.retryAfter ?? null),
+				blockedStatuses: [],
+				blockedReason: `Access blocked for ${item.url}`,
+			});
 			if (classifiedDynamicStatus) {
 				return classifiedDynamicStatus;
 			}
@@ -267,17 +244,12 @@ export class FetchService {
 				},
 				signal:
 					signal && "any" in AbortSignal
-						? AbortSignal.any([
-								signal,
-								AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH),
-							])
+						? AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH)])
 						: AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH),
 			});
 		} catch (error) {
 			if (signal?.aborted) {
-				throw signal.reason instanceof Error
-					? signal.reason
-					: new Error("Fetch aborted");
+				throw signal.reason instanceof Error ? signal.reason : new Error("Fetch aborted");
 			}
 			this.logger.warn(
 				`[Fetch] Transient fetch failure for ${item.url}: ${error instanceof Error ? error.message : String(error)}`,
@@ -289,9 +261,7 @@ export class FetchService {
 			};
 		}
 		if (signal?.aborted) {
-			throw signal.reason instanceof Error
-				? signal.reason
-				: new Error("Fetch aborted");
+			throw signal.reason instanceof Error ? signal.reason : new Error("Fetch aborted");
 		}
 
 		if (response.status === 304) {

@@ -1,9 +1,9 @@
+import type { CrawlExportFormat } from "../../../shared/contracts/index.js";
 import {
 	CSV_EXPORT_PAGE_FIELDS,
 	EXPORT_PAGE_FIELDS,
 	type ExportPageRow,
 } from "../../storage/repos/pageRepo.js";
-import type { CrawlExportFormat } from "../../../shared/contracts/index.js";
 
 export interface CrawlExportResult {
 	body: string;
@@ -15,10 +15,7 @@ export interface CrawlExportResult {
 const CSV_INJECTION_PREFIX = /^[=+\-@|\t]/;
 const CSV_HEADERS = CSV_EXPORT_PAGE_FIELDS;
 
-function safeExportFilename(
-	crawlId: string,
-	format: CrawlExportFormat,
-): string {
+function safeExportFilename(crawlId: string, format: CrawlExportFormat): string {
 	return `${crawlId.replace(/[^a-zA-Z0-9_-]/g, "_")}.${format}`;
 }
 
@@ -38,14 +35,10 @@ export function exportPages(
 	if (format === "csv") {
 		const rows = [
 			CSV_HEADERS,
-			...pages.map((page) =>
-				CSV_EXPORT_PAGE_FIELDS.map((field) => String(page[field] ?? "")),
-			),
+			...pages.map((page) => CSV_EXPORT_PAGE_FIELDS.map((field) => String(page[field] ?? ""))),
 		];
 		return {
-			body: rows
-				.map((row) => row.map((cell) => escapeCsvCell(cell)).join(","))
-				.join("\n"),
+			body: rows.map((row) => row.map((cell) => escapeCsvCell(cell)).join(",")).join("\n"),
 			contentType: "text/csv; charset=utf-8",
 			contentDisposition: `attachment; filename="${filename}"`,
 			filename,
@@ -55,9 +48,7 @@ export function exportPages(
 	return {
 		body: JSON.stringify(
 			pages.map((page) =>
-				Object.fromEntries(
-					EXPORT_PAGE_FIELDS.map((field) => [field, page[field]]),
-				),
+				Object.fromEntries(EXPORT_PAGE_FIELDS.map((field) => [field, page[field]])),
 			),
 			null,
 			2,

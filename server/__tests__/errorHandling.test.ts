@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { Elysia, t } from "elysia";
-import type { LoggerLike } from "../types.js";
 import { handleAppError } from "../errorHandling.js";
+import type { LoggerLike } from "../types.js";
 
 function createLogger(): LoggerLike & {
 	error: ReturnType<typeof mock>;

@@ -1,24 +1,22 @@
 import type {
+	CrawlEventEnvelope,
+	CrawlExportFormat,
+	CrawlOptions,
 	CrawlSummary,
 	ResumableSessionSummary,
 	StopCrawlMode,
 } from "../../shared/contracts/index.js";
 import {
+	CrawlEventTypeValues,
 	isCrawlListResponse,
 	toResumableSessionSummary,
 } from "../../shared/contracts/index.js";
-import type { CrawlEventEnvelope } from "../../shared/contracts/index.js";
-import { CrawlEventTypeValues } from "../../shared/contracts/index.js";
-import type { CrawlOptions } from "../../shared/contracts/index.js";
 import { api, createCrawlEventSource, downloadCrawlExport } from "./client";
-import type { CrawlExportFormat } from "../../shared/contracts/index.js";
-import { getApiErrorMessage } from "./errors";
 import { parseCrawlEventEnvelope } from "./crawlEvents";
+import { getApiErrorMessage } from "./errors";
 import type { ApiResult } from "./result";
 
-export async function createCrawl(
-	options: CrawlOptions,
-): Promise<ApiResult<CrawlSummary>> {
+export async function createCrawl(options: CrawlOptions): Promise<ApiResult<CrawlSummary>> {
 	const response = await api.api.crawls.post(options);
 	if (response.error || !response.data) {
 		return { ok: false, error: getApiErrorMessage(response.error?.value) };
@@ -37,9 +35,7 @@ export async function stopCrawl(
 	return { ok: true, data: response.data };
 }
 
-export async function resumeCrawl(
-	crawlId: string,
-): Promise<ApiResult<CrawlSummary>> {
+export async function resumeCrawl(crawlId: string): Promise<ApiResult<CrawlSummary>> {
 	const response = await api.api.crawls({ id: crawlId }).resume.post();
 	if (response.error || !response.data) {
 		return { ok: false, error: getApiErrorMessage(response.error?.value) };
@@ -47,9 +43,7 @@ export async function resumeCrawl(
 	return { ok: true, data: response.data };
 }
 
-export async function listResumableCrawls(): Promise<
-	ApiResult<ResumableSessionSummary[]>
-> {
+export async function listResumableCrawls(): Promise<ApiResult<ResumableSessionSummary[]>> {
 	const response = await api.api.crawls.resumable.get();
 	if (response.error || !response.data) {
 		return { ok: false, error: getApiErrorMessage(response.error?.value) };
@@ -92,9 +86,7 @@ export interface CrawlEventSubscription {
 	close(): void;
 }
 
-function createEnvelopeListener(
-	handler: (event: CrawlEventEnvelope) => void,
-): EventListener {
+function createEnvelopeListener(handler: (event: CrawlEventEnvelope) => void): EventListener {
 	return (event) => {
 		if (!(event instanceof MessageEvent) || typeof event.data !== "string") {
 			return;

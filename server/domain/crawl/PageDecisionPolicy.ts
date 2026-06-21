@@ -5,9 +5,7 @@ export interface RobotsDirectives {
 	nofollow: boolean;
 }
 
-export function parseRobotsDirectives(
-	value: string | null | undefined,
-): RobotsDirectives {
+export function parseRobotsDirectives(value: string | null | undefined): RobotsDirectives {
 	const result = { noindex: false, nofollow: false };
 	if (!value) return result;
 
@@ -34,11 +32,7 @@ export function mergeRobotsDirectives(
 	};
 }
 
-export function isSoft404(
-	title: string,
-	mainContent: string,
-	contentLength: number,
-): boolean {
+export function isSoft404(title: string, mainContent: string, contentLength: number): boolean {
 	const trimmedMainContent = mainContent.trim();
 	if (
 		contentLength > 0 &&
@@ -49,19 +43,13 @@ export function isSoft404(
 	}
 
 	const titleLower = title.toLowerCase();
-	if (
-		SOFT_404_CONSTANTS.KEYWORDS.some((keyword) => titleLower.includes(keyword))
-	) {
+	if (SOFT_404_CONSTANTS.KEYWORDS.some((keyword) => titleLower.includes(keyword))) {
 		return true;
 	}
 
 	if (contentLength < SOFT_404_CONSTANTS.SHORT_CONTENT_BYTES) {
 		const contentLower = trimmedMainContent.toLowerCase().slice(0, 1000);
-		if (
-			SOFT_404_CONSTANTS.KEYWORDS.some((keyword) =>
-				contentLower.includes(keyword),
-			)
-		) {
+		if (SOFT_404_CONSTANTS.KEYWORDS.some((keyword) => contentLower.includes(keyword))) {
 			return true;
 		}
 	}
@@ -69,22 +57,14 @@ export function isSoft404(
 	return false;
 }
 
-export function isClientErrorShell(
-	title: string,
-	mainContent: string,
-): boolean {
-	const combined = `${title} ${mainContent}`
-		.toLowerCase()
-		.replace(/\s+/g, " ")
-		.trim();
+export function isClientErrorShell(title: string, mainContent: string): boolean {
+	const combined = `${title} ${mainContent}`.toLowerCase().replace(/\s+/g, " ").trim();
 
 	if (!combined) {
 		return false;
 	}
 
-	if (
-		combined.includes("application error: a client-side exception has occurred")
-	) {
+	if (combined.includes("application error: a client-side exception has occurred")) {
 		return true;
 	}
 

@@ -1,4 +1,3 @@
-import type { Logger } from "../config/logging.js";
 import type {
 	CrawlCounters,
 	CrawlOptions,
@@ -12,10 +11,10 @@ import {
 	isResumableCrawlStatus,
 	isTerminalCrawlStatus,
 } from "../../shared/contracts/index.js";
-import type { HttpClient, Resolver } from "../plugins/security.js";
-import type { CrawlRunRecord } from "../storage/db.js";
-import type { StorageRepos } from "../storage/db.js";
+import type { Logger } from "../config/logging.js";
 import type { DomainStateRecord } from "../domain/crawl/CrawlState.js";
+import type { HttpClient, Resolver } from "../plugins/security.js";
+import type { CrawlRunRecord, StorageRepos } from "../storage/db.js";
 import { CrawlRuntime } from "./CrawlRuntime.js";
 import type { EventStream } from "./EventStream.js";
 
@@ -83,10 +82,14 @@ export class CrawlManager {
 			eventStream: this.deps.eventStream,
 			resolver: this.deps.resolver,
 			httpClient: this.deps.httpClient,
-			initialSequence: config.initialSequence,
-			initialCounters: config.initialCounters,
-			initialStartedAtMs: config.initialStartedAtMs,
-			initialDomainStates: config.initialDomainStates,
+			...(config.initialSequence !== undefined ? { initialSequence: config.initialSequence } : {}),
+			...(config.initialCounters !== undefined ? { initialCounters: config.initialCounters } : {}),
+			...(config.initialStartedAtMs !== undefined
+				? { initialStartedAtMs: config.initialStartedAtMs }
+				: {}),
+			...(config.initialDomainStates !== undefined
+				? { initialDomainStates: config.initialDomainStates }
+				: {}),
 			resume: config.resume,
 			onInactive: () => {
 				this.deps.registry.delete(crawlId);
@@ -101,20 +104,13 @@ export class CrawlManager {
 
 	create(options: CrawlOptions) {
 		const crawlId = crypto.randomUUID();
-		const record = this.deps.repos.crawlRuns.createRun(
-			crawlId,
-			options.target,
-			options,
-		);
+		const record = this.deps.repos.crawlRuns.createRun(crawlId, options.target, options);
 		const runtime = this.createRuntime(crawlId, options);
 		void runtime.start();
 		return this.deps.repos.crawlRuns.getById(crawlId) ?? record;
 	}
 
-	async stop(
-		crawlId: string,
-		mode: StopCrawlMode = "pause",
-	): Promise<StopCrawlResult> {
+	async stop(crawlId: string, mode: StopCrawlMode = "pause"): Promise<StopCrawlResult> {
 		const record = this.deps.repos.crawlRuns.getById(crawlId);
 		if (!record) return { type: "not-found" };
 		if (isTerminalCrawlStatus(record.status)) {
@@ -159,16 +155,10 @@ export class CrawlManager {
 			resume: true,
 			initialSequence: record.eventSequence,
 			initialCounters: record.counters,
-			initialStartedAtMs:
-				record.startedAt === null ? undefined : Date.parse(record.startedAt),
-			initialDomainStates:
-				this.deps.repos.crawlDomainState.listByCrawlId(crawlId),
+			initialStartedAtMs: record.startedAt === null ? undefined : Date.parse(record.startedAt),
+			initialDomainStates: this.deps.repos.crawlDomainState.listByCrawlId(crawlId),
 		});
-		this.deps.repos.crawlRuns.markStarting(
-			crawlId,
-			record.counters,
-			record.eventSequence,
-		);
+		this.deps.repos.crawlRuns.markStarting(crawlId, record.counters, record.eventSequence);
 		void runtime.start();
 		return {
 			type: "resumed",
@@ -180,12 +170,7 @@ export class CrawlManager {
 		return this.deps.repos.crawlRuns.getById(crawlId);
 	}
 
-	list(filters: {
-		status?: CrawlStatus;
-		from?: string;
-		to?: string;
-		limit?: number;
-	}) {
+	list(filters: { status?: CrawlStatus; from?: string; to?: string; limit?: number }) {
 		return this.deps.repos.crawlRuns.list(filters);
 	}
 
@@ -217,8 +202,6 @@ export class CrawlManager {
 		}
 
 		await Promise.allSettled(interruptions);
-		await Promise.allSettled(
-			runtimes.map((runtime) => runtime.waitUntilSettled()),
-		);
+		await Promise.allSettled(runtimes.map((runtime) => runtime.waitUntilSettled()));
 	}
 }

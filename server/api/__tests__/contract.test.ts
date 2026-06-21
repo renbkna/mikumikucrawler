@@ -92,11 +92,10 @@ describe("api contract", () => {
 				}),
 		});
 
-		storage.repos.crawlRuns.createRun(
-			"injected-storage-crawl",
-			"https://injected.example",
-			{ ...crawlBody, target: "https://injected.example" },
-		);
+		storage.repos.crawlRuns.createRun("injected-storage-crawl", "https://injected.example", {
+			...crawlBody,
+			target: "https://injected.example",
+		});
 		storage.repos.pages.save({
 			crawlId: "injected-storage-crawl",
 			url: "https://injected.example/page",
@@ -121,9 +120,7 @@ describe("api contract", () => {
 			links: [],
 		});
 
-		const response = await app.handle(
-			new Request("http://localhost/api/search?q=injected"),
-		);
+		const response = await app.handle(new Request("http://localhost/api/search?q=injected"));
 
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual(
@@ -223,9 +220,7 @@ describe("api contract", () => {
 		expect(response.status).toBe(404);
 
 		for (let index = 0; index < 101; index += 1) {
-			response = await app.handle(
-				new Request(`http://localhost/api/search?q=/events&n=${index}`),
-			);
+			response = await app.handle(new Request(`http://localhost/api/search?q=/events&n=${index}`));
 		}
 
 		expect(response.status).toBe(429);
@@ -378,9 +373,7 @@ describe("api contract", () => {
 			(run) => run?.status === "completed",
 		);
 
-		const getResponse = await app.handle(
-			new Request(`http://localhost/api/crawls/${created.id}`),
-		);
+		const getResponse = await app.handle(new Request(`http://localhost/api/crawls/${created.id}`));
 		expect(getResponse.status).toBe(200);
 
 		const listResponse = await app.handle(
@@ -397,9 +390,7 @@ describe("api contract", () => {
 		const pageContent = await pageContentResponse.json();
 		expect(pageContent.content).toContain("Hello api contract");
 
-		const searchResponse = await app.handle(
-			new Request("http://localhost/api/search?q=contract"),
-		);
+		const searchResponse = await app.handle(new Request("http://localhost/api/search?q=contract"));
 		expect(searchResponse.status).toBe(200);
 		const search = await searchResponse.json();
 		expect(search.count).toBeGreaterThan(0);
@@ -526,21 +517,15 @@ describe("api contract", () => {
 				}),
 		});
 
-		const response = await app.handle(
-			new Request("http://localhost/openapi/json"),
-		);
+		const response = await app.handle(new Request("http://localhost/openapi/json"));
 
 		expect(response.status).toBe(200);
 		const spec = await response.json();
-		const lastEventIdParameter = spec.paths[
-			"/api/crawls/{id}/events"
-		].get.parameters.find(
+		const lastEventIdParameter = spec.paths["/api/crawls/{id}/events"].get.parameters.find(
 			(parameter: { name?: string }) => parameter.name === "Last-Event-ID",
 		);
-		const eventContent =
-			spec.paths["/api/crawls/{id}/events"].get.responses["200"].content;
-		const exportContent =
-			spec.paths["/api/crawls/{id}/export"].get.responses["200"].content;
+		const eventContent = spec.paths["/api/crawls/{id}/events"].get.responses["200"].content;
+		const exportContent = spec.paths["/api/crawls/{id}/export"].get.responses["200"].content;
 		const findParameter = (path: string, name: string) =>
 			spec.paths[path].get.parameters.find(
 				(parameter: { name?: string }) => parameter.name === name,
@@ -550,13 +535,9 @@ describe("api contract", () => {
 			type: "string",
 			pattern: "^(0|[1-9]\\d*)$",
 		});
-		expect(lastEventIdParameter?.description).toContain(
-			"Bounded live replay cursor",
-		);
+		expect(lastEventIdParameter?.description).toContain("Bounded live replay cursor");
 		expect(findParameter("/api/crawls/", "limit")?.schema.default).toBe(25);
-		expect(
-			findParameter("/api/crawls/resumable", "limit")?.schema.default,
-		).toBe(25);
+		expect(findParameter("/api/crawls/resumable", "limit")?.schema.default).toBe(25);
 		expect(findParameter("/api/search", "limit")?.schema.default).toBe(20);
 		expect(eventContent).toHaveProperty("text/event-stream");
 		expect(eventContent).not.toHaveProperty("text/plain");
@@ -610,16 +591,15 @@ describe("api contract", () => {
 			});
 		}
 
-		const response = await app.handle(
-			new Request("http://localhost/api/search?q=alpha%20beta"),
-		);
+		const response = await app.handle(new Request("http://localhost/api/search?q=alpha%20beta"));
 
 		expect(response.status).toBe(200);
 		const search = await response.json();
 		expect(search.count).toBe(2);
-		expect(
-			search.results.map((result: { url: string }) => result.url).sort(),
-		).toEqual(["https://example.com/phrase", "https://example.com/separated"]);
+		expect(search.results.map((result: { url: string }) => result.url).sort()).toEqual([
+			"https://example.com/phrase",
+			"https://example.com/separated",
+		]);
 	});
 
 	test("search returns string snippets for content-only pages", async () => {
@@ -809,16 +789,14 @@ describe("api contract", () => {
 				}),
 		});
 
-		const paused = storage.repos.crawlRuns.createRun(
-			"paused-crawl",
-			"https://paused.example",
-			{ ...crawlBody, target: "https://paused.example" },
-		);
-		const pausing = storage.repos.crawlRuns.createRun(
-			"pausing-crawl",
-			"https://pausing.example",
-			{ ...crawlBody, target: "https://pausing.example" },
-		);
+		const paused = storage.repos.crawlRuns.createRun("paused-crawl", "https://paused.example", {
+			...crawlBody,
+			target: "https://paused.example",
+		});
+		const pausing = storage.repos.crawlRuns.createRun("pausing-crawl", "https://pausing.example", {
+			...crawlBody,
+			target: "https://pausing.example",
+		});
 		const interrupted = storage.repos.crawlRuns.createRun(
 			"interrupted-crawl",
 			"https://interrupted.example",
@@ -841,35 +819,19 @@ describe("api contract", () => {
 			"Shutdown still settling",
 			0,
 		);
-		storage.repos.crawlRuns.markPausing(
-			pausing.id,
-			pausing.counters,
-			"Pause requested",
-			0,
-		);
-		storage.repos.crawlRuns.markInterrupted(
-			interrupted.id,
-			interrupted.counters,
-			"Shutdown",
-			0,
-		);
-		storage.repos.crawlRuns.markCompleted(
-			completed.id,
-			completed.counters,
-			null,
-			0,
-		);
+		storage.repos.crawlRuns.markPausing(pausing.id, pausing.counters, "Pause requested", 0);
+		storage.repos.crawlRuns.markInterrupted(interrupted.id, interrupted.counters, "Shutdown", 0);
+		storage.repos.crawlRuns.markCompleted(completed.id, completed.counters, null, 0);
 		registry.set(activePaused.id, {} as CrawlRuntime);
 
-		const response = await app.handle(
-			new Request("http://localhost/api/crawls/resumable"),
-		);
+		const response = await app.handle(new Request("http://localhost/api/crawls/resumable"));
 
 		expect(response.status).toBe(200);
 		const listed = await response.json();
-		expect(
-			listed.crawls.map((crawl: { id: string }) => crawl.id).sort(),
-		).toEqual(["interrupted-crawl", "paused-crawl"]);
+		expect(listed.crawls.map((crawl: { id: string }) => crawl.id).sort()).toEqual([
+			"interrupted-crawl",
+			"paused-crawl",
+		]);
 	});
 
 	test("sse delivers ordered events and disconnect does not stop the crawl", async () => {
@@ -907,9 +869,7 @@ describe("api contract", () => {
 
 		releaseFetch();
 		const firstChunk = await reader.read();
-		expect(new TextDecoder().decode(firstChunk.value)).toContain(
-			"event: crawl.started",
-		);
+		expect(new TextDecoder().decode(firstChunk.value)).toContain("event: crawl.started");
 		await reader.cancel();
 
 		const completed = await waitFor(

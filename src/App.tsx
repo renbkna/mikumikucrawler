@@ -1,5 +1,6 @@
 import { Heart, History, Music } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { shouldResetTheatreStatus, type TheatreStatus } from "../shared/theatreStatus.js";
 import {
 	ActionButtons,
 	ConfigurationView,
@@ -20,7 +21,6 @@ import { MikuBanner } from "./components/MikuBanner";
 import { TheatreOverlay } from "./components/TheatreOverlay";
 import { UI_LIMITS } from "./constants";
 import { useCrawlController, useToast } from "./hooks";
-import { type TheatreStatus, shouldResetTheatreStatus } from "./theatreStatus";
 
 function App() {
 	const [theatreStatus, setTheatreStatus] = useState<TheatreStatus>("idle");
@@ -126,8 +126,7 @@ function App() {
 		setTheatreStatus("live");
 	}, []);
 
-	const isUIHidden =
-		theatreStatus === "blackout" || theatreStatus === "counting";
+	const isUIHidden = theatreStatus === "blackout" || theatreStatus === "counting";
 	const isModalOpen = openedConfig || openExportDialog || openResumePanel;
 
 	return (
@@ -155,11 +154,7 @@ function App() {
 
 				<div className="fixed top-4 right-4 z-50 space-y-2">
 					{toasts.map((toast: (typeof toasts)[number]) => (
-						<ToastNotification
-							key={toast.id}
-							toast={toast}
-							onDismiss={dismissToast}
-						/>
+						<ToastNotification key={toast.id} toast={toast} onDismiss={dismissToast} />
 					))}
 				</div>
 
@@ -184,10 +179,7 @@ function App() {
 							</div>
 
 							<div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-miku-pink to-miku-accent flex items-center justify-center shadow-md">
-								<Heart
-									className="w-5 h-5 text-white animate-heart-beat"
-									fill="white"
-								/>
+								<Heart className="w-5 h-5 text-white animate-heart-beat" fill="white" />
 							</div>
 						</div>
 					</header>
@@ -233,16 +225,9 @@ function App() {
 						</div>
 					)}
 
-					<section
-						aria-label="Statistics"
-						className="grid grid-cols-1 lg:grid-cols-3 gap-6"
-					>
+					<section aria-label="Statistics" className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 						<div className="lg:col-span-2 glass-panel p-6">
-							<StatsGrid
-								stats={stats}
-								queueStats={queueStats}
-								isAttacking={isAttacking}
-							/>
+							<StatsGrid stats={stats} queueStats={queueStats} isAttacking={isAttacking} />
 						</div>
 						<div className="glass-panel p-6 flex flex-col justify-center">
 							<ProgressBar progress={progress} />
@@ -284,8 +269,7 @@ function App() {
 									className="text-lg font-bold text-miku-pink-dark flex items-center gap-2"
 								>
 									<span className="w-2 h-2 rounded-full bg-miku-pink animate-pulse" />
-									Captured Data{" "}
-									<HeartIcon className="text-miku-pink" size={14} />
+									Captured Data <HeartIcon className="text-miku-pink" size={14} />
 								</h2>
 								<span className="cute-badge flex items-center gap-1">
 									<SparkleIcon className="text-miku-teal" size={12} />
@@ -307,13 +291,9 @@ function App() {
 				<footer className="mt-12 pb-8 text-center">
 					<div className="inline-block glass-panel px-8 py-4 rounded-full">
 						<div className="flex items-center gap-4">
-							<HeartIcon
-								className="text-miku-pink animate-heart-beat"
-								size={14}
-							/>
+							<HeartIcon className="text-miku-pink animate-heart-beat" size={14} />
 							<span className="text-sm text-miku-text font-bold">
-								Miku Miku Crawler{" "}
-								<span className="text-miku-teal-dark">v3.0.0</span>
+								Miku Miku Crawler <span className="text-miku-teal-dark">v3.0.0</span>
 							</span>
 							<HeartIcon
 								className="text-miku-teal animate-heart-beat"
@@ -325,24 +305,18 @@ function App() {
 
 							<div className="flex items-center gap-2">
 								<NoteIcon className="text-miku-teal" size={12} />
-								<span className="text-xs text-miku-teal-dark font-bold">
-									VOL
-								</span>
+								<span className="text-xs text-miku-teal-dark font-bold">VOL</span>
 								<input
 									type="range"
 									min="0"
 									max="100"
 									value={audioVol}
-									onChange={(e) =>
-										setAudioVol(Number.parseInt(e.target.value, 10))
-									}
+									onChange={(e) => setAudioVol(Number.parseInt(e.target.value, 10))}
 									aria-label="Volume control"
 									title={`Volume: ${audioVol}%`}
 									className="w-24 h-2 bg-miku-pink/20 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-gradient-to-r [&::-webkit-slider-thumb]:from-miku-teal [&::-webkit-slider-thumb]:to-miku-pink [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-md"
 								/>
-								<span className="text-xs text-miku-pink-dark font-bold w-8">
-									{audioVol}%
-								</span>
+								<span className="text-xs text-miku-pink-dark font-bold w-8">{audioVol}%</span>
 							</div>
 						</div>
 					</div>

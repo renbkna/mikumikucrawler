@@ -1,64 +1,45 @@
+import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "bun:test";
 import { spaStaticPlugin } from "../spaStatic.js";
 
 describe("spa static plugin", () => {
 	test("serves SPA navigations but returns 404 for missing asset paths", async () => {
 		const distPath = mkdtempSync(path.join(tmpdir(), "miku-spa-static-"));
-		writeFileSync(
-			path.join(distPath, "index.html"),
-			"<!doctype html><main>Miku app</main>",
-		);
+		writeFileSync(path.join(distPath, "index.html"), "<!doctype html><main>Miku app</main>");
 		try {
 			const app = spaStaticPlugin({ distPath });
 
-			const navigation = await app.handle(
-				new Request("http://localhost/missing-route"),
-			);
+			const navigation = await app.handle(new Request("http://localhost/missing-route"));
 			expect(navigation.status).toBe(200);
 			expect(await navigation.text()).toContain("Miku app");
 
-			const dottedNavigation = await app.handle(
-				new Request("http://localhost/reports.v2"),
-			);
+			const dottedNavigation = await app.handle(new Request("http://localhost/reports.v2"));
 			expect(dottedNavigation.status).toBe(200);
 			expect(await dottedNavigation.text()).toContain("Miku app");
 
-			const apiPrefixNavigation = await app.handle(
-				new Request("http://localhost/apiary"),
-			);
+			const apiPrefixNavigation = await app.handle(new Request("http://localhost/apiary"));
 			expect(apiPrefixNavigation.status).toBe(200);
 			expect(await apiPrefixNavigation.text()).toContain("Miku app");
 
-			const missingApiRoute = await app.handle(
-				new Request("http://localhost/api/missing"),
-			);
+			const missingApiRoute = await app.handle(new Request("http://localhost/api/missing"));
 			expect(missingApiRoute.status).toBe(404);
 			expect(await missingApiRoute.json()).toEqual({ error: "Not Found" });
 
-			const missingAsset = await app.handle(
-				new Request("http://localhost/missing.js"),
-			);
+			const missingAsset = await app.handle(new Request("http://localhost/missing.js"));
 			expect(missingAsset.status).toBe(404);
 			expect(await missingAsset.json()).toEqual({ error: "Not Found" });
 
-			const missingManifest = await app.handle(
-				new Request("http://localhost/manifest-v2.json"),
-			);
+			const missingManifest = await app.handle(new Request("http://localhost/manifest-v2.json"));
 			expect(missingManifest.status).toBe(404);
 			expect(await missingManifest.json()).toEqual({ error: "Not Found" });
 
-			const missingRobots = await app.handle(
-				new Request("http://localhost/robots.txt"),
-			);
+			const missingRobots = await app.handle(new Request("http://localhost/robots.txt"));
 			expect(missingRobots.status).toBe(404);
 			expect(await missingRobots.json()).toEqual({ error: "Not Found" });
 
-			const missingSitemap = await app.handle(
-				new Request("http://localhost/sitemap.xml"),
-			);
+			const missingSitemap = await app.handle(new Request("http://localhost/sitemap.xml"));
 			expect(missingSitemap.status).toBe(404);
 			expect(await missingSitemap.json()).toEqual({ error: "Not Found" });
 		} finally {
@@ -96,9 +77,7 @@ describe("spa static plugin", () => {
 			);
 			expect(wildcardRevalidated.status).toBe(304);
 			expect(wildcardRevalidated.headers.get("etag")).toBe(etag);
-			expect(wildcardRevalidated.headers.get("cache-control")).toBe(
-				cacheControl,
-			);
+			expect(wildcardRevalidated.headers.get("cache-control")).toBe(cacheControl);
 
 			const listedRevalidated = await app.handle(
 				new Request("http://localhost/app.js", {

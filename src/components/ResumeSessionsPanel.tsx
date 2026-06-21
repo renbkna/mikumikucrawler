@@ -40,9 +40,7 @@ function shortenUrl(url: string, maxLength = 45): string {
 	try {
 		const { hostname, pathname } = new URL(url);
 		const display = `${hostname}${pathname}`;
-		return display.length > maxLength
-			? `${display.slice(0, maxLength)}…`
-			: display;
+		return display.length > maxLength ? `${display.slice(0, maxLength)}…` : display;
 	} catch {
 		return url.length > maxLength ? `${url.slice(0, maxLength)}…` : url;
 	}
@@ -123,9 +121,7 @@ export function ResumeSessionsPanel({
 							aria-label="Refresh session list"
 							title="Refresh"
 						>
-							<RefreshCw
-								className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`}
-							/>
+							<RefreshCw className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
 						</button>
 						<button
 							type="button"
@@ -151,10 +147,7 @@ export function ResumeSessionsPanel({
 					{isLoading && sessions.length === 0 && (
 						<div className="space-y-2">
 							{[1, 2].map((n) => (
-								<div
-									key={n}
-									className="h-20 rounded-2xl bg-miku-teal/5 animate-pulse"
-								/>
+								<div key={n} className="h-20 rounded-2xl bg-miku-teal/5 animate-pulse" />
 							))}
 						</div>
 					)}
@@ -163,9 +156,7 @@ export function ResumeSessionsPanel({
 					{!isLoading && sessions.length === 0 && !fetchError && (
 						<div className="py-12 text-center">
 							<HeartIcon className="text-miku-pink/30 mx-auto mb-3" size={40} />
-							<p className="text-miku-text/40 font-medium text-sm">
-								No resumable crawls found.
-							</p>
+							<p className="text-miku-text/40 font-medium text-sm">No resumable crawls found.</p>
 							<p className="text-miku-text/30 text-xs mt-1">
 								Paused and interrupted crawls appear here.
 							</p>
@@ -181,10 +172,7 @@ export function ResumeSessionsPanel({
 							<div className="flex items-start justify-between gap-3">
 								{/* Session info */}
 								<div className="min-w-0 flex-1">
-									<p
-										className="font-bold text-miku-text text-sm truncate"
-										title={session.target}
-									>
+									<p className="font-bold text-miku-text text-sm truncate" title={session.target}>
 										{shortenUrl(session.target)}
 									</p>
 									<div className="flex items-center gap-3 mt-1 flex-wrap">
@@ -233,8 +221,8 @@ export function ResumeSessionsPanel({
 				{/* ── Footer note ────────────────────────────────────────────────── */}
 				{sessions.length > 0 && (
 					<p className="mt-4 text-xs text-miku-text/30 text-center font-medium">
-						Resume continues from the saved queue and restores the saved crawl
-						settings for that session.
+						Resume continues from the saved queue and restores the saved crawl settings for that
+						session.
 					</p>
 				)}
 			</div>

@@ -113,9 +113,7 @@ Disallow: /private
 			`);
 
 			expect(invalidCrawlDelay.isAllowed("/private/page", "AnyBot")).toBe(true);
-			expect(invalidCrawlDelay.isAllowed("/private/page", "BadBot")).toBe(
-				false,
-			);
+			expect(invalidCrawlDelay.isAllowed("/private/page", "BadBot")).toBe(false);
 		});
 
 		test("matches wildcard user-agent", () => {
@@ -210,9 +208,7 @@ Disallow: /*.pdf$
 			const parser = new NativeRobotsParser(robotsTxt);
 
 			expect(parser.isAllowed("https://example.com/document.pdf")).toBe(false);
-			expect(parser.isAllowed("https://example.com/document.pdf?query")).toBe(
-				true,
-			);
+			expect(parser.isAllowed("https://example.com/document.pdf?query")).toBe(true);
 		});
 	});
 
@@ -223,12 +219,8 @@ User-agent: *
 Disallow: /search?sort=
 			`);
 
-			expect(parser.isAllowed("https://example.com/search?sort=asc")).toBe(
-				false,
-			);
-			expect(parser.isAllowed("https://example.com/searchxsort=asc")).toBe(
-				true,
-			);
+			expect(parser.isAllowed("https://example.com/search?sort=asc")).toBe(false);
+			expect(parser.isAllowed("https://example.com/searchxsort=asc")).toBe(true);
 		});
 
 		test("query-string allow rules participate in longest-match precedence", () => {
@@ -238,9 +230,7 @@ Disallow: /
 Allow: /search?sort=
 			`);
 
-			expect(parser.isAllowed("https://example.com/search?sort=asc")).toBe(
-				true,
-			);
+			expect(parser.isAllowed("https://example.com/search?sort=asc")).toBe(true);
 			expect(parser.isAllowed("https://example.com/other")).toBe(false);
 		});
 	});

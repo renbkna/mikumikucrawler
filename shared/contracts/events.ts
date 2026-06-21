@@ -33,10 +33,8 @@ export const SETTLED_CRAWL_EVENT_TYPE_VALUES = [
 ] as const;
 
 export type LiveCrawlEventType = (typeof LIVE_CRAWL_EVENT_TYPE_VALUES)[number];
-export type TerminalCrawlEventType =
-	(typeof TERMINAL_CRAWL_EVENT_TYPE_VALUES)[number];
-export type SettledCrawlEventType =
-	(typeof SETTLED_CRAWL_EVENT_TYPE_VALUES)[number];
+export type TerminalCrawlEventType = (typeof TERMINAL_CRAWL_EVENT_TYPE_VALUES)[number];
+export type SettledCrawlEventType = (typeof SETTLED_CRAWL_EVENT_TYPE_VALUES)[number];
 
 export interface CrawlStartedPayload {
 	target: string;
@@ -100,30 +98,17 @@ export type CrawlEventEnvelope = {
 }[CrawlEventType];
 
 export function isCrawlEventType(value: unknown): value is CrawlEventType {
-	return (
-		typeof value === "string" &&
-		CrawlEventTypeValues.includes(value as CrawlEventType)
-	);
+	return typeof value === "string" && CrawlEventTypeValues.includes(value as CrawlEventType);
 }
 
-export function isLiveCrawlEventType(
-	value: CrawlEventType,
-): value is LiveCrawlEventType {
+export function isLiveCrawlEventType(value: CrawlEventType): value is LiveCrawlEventType {
 	return LIVE_CRAWL_EVENT_TYPE_VALUES.includes(value as LiveCrawlEventType);
 }
 
-export function isTerminalCrawlEventType(
-	value: CrawlEventType,
-): value is TerminalCrawlEventType {
-	return TERMINAL_CRAWL_EVENT_TYPE_VALUES.includes(
-		value as TerminalCrawlEventType,
-	);
+export function isTerminalCrawlEventType(value: CrawlEventType): value is TerminalCrawlEventType {
+	return TERMINAL_CRAWL_EVENT_TYPE_VALUES.includes(value as TerminalCrawlEventType);
 }
 
-export function isSettledCrawlEventType(
-	value: CrawlEventType,
-): value is SettledCrawlEventType {
-	return SETTLED_CRAWL_EVENT_TYPE_VALUES.includes(
-		value as SettledCrawlEventType,
-	);
+export function isSettledCrawlEventType(value: CrawlEventType): value is SettledCrawlEventType {
+	return SETTLED_CRAWL_EVENT_TYPE_VALUES.includes(value as SettledCrawlEventType);
 }
