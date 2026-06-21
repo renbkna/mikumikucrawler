@@ -1,12 +1,9 @@
 import type { CrawlOptions } from "../../../shared/contracts/index.js";
-import {
-	normalizeCanonicalHttpUrl,
-	normalizeRobotsMatchHttpUrl,
-} from "../../../shared/url.js";
+import { isPrivateOrReservedIpAddressLiteral } from "../../../shared/ipPolicy.js";
 import type { ExtractedLink } from "../../../shared/types.js";
+import { normalizeCanonicalHttpUrl, normalizeRobotsMatchHttpUrl } from "../../../shared/url.js";
 
-const SKIPPED_EXTENSIONS =
-	/\.(css|js|json|xml|txt|md|csv|svg|ico|git|gitignore)$/i;
+const SKIPPED_EXTENSIONS = /\.(css|js|json|xml|txt|md|csv|svg|ico|git|gitignore)$/i;
 
 export interface CrawlUrlIdentity {
 	canonicalUrl: string;
@@ -24,7 +21,8 @@ export type UrlRejectionReason =
 	| "missing-url"
 	| "invalid-url"
 	| "resource-extension"
-	| "external-link";
+	| "external-link"
+	| "ssrf-blocked";
 
 export type NormalizedDiscoveredLink = {
 	link: ExtractedLink & {
@@ -92,11 +90,7 @@ export function filterDiscoveredLinks(
 	currentUrlOrDomain: string,
 ): ExtractedLink[] {
 	return links.flatMap((link) => {
-		const normalized = normalizeDiscoveredLink(
-			link,
-			options,
-			currentUrlOrDomain,
-		);
+		const normalized = normalizeDiscoveredLink(link, options, currentUrlOrDomain);
 		return "error" in normalized ? [] : [normalized.link];
 	});
 }
@@ -114,6 +108,16 @@ export function normalizeDiscoveredLink(
 	const identity = classifyCrawlUrl(link.url, currentOriginKey);
 	if ("error" in identity) {
 		return { ...identity, reason: "invalid-url" };
+	}
+
+	if (
+		identity.hostname.toLowerCase() === "localhost" ||
+		isPrivateOrReservedIpAddressLiteral(identity.hostname)
+	) {
+		return {
+			error: "Localhost and private IP targets are not allowed in discovered links",
+			reason: "ssrf-blocked",
+		};
 	}
 
 	if (identity.skippedByExtension) {
