@@ -6,9 +6,7 @@ interface ProgressBarProps {
 	progress: number;
 }
 
-export const ProgressBar = memo(function ProgressBar({
-	progress,
-}: ProgressBarProps) {
+export const ProgressBar = memo(function ProgressBar({ progress }: ProgressBarProps) {
 	return (
 		<div className="mb-8 relative">
 			<div className="flex items-center justify-between mb-3 px-2">
@@ -21,9 +19,7 @@ export const ProgressBar = memo(function ProgressBar({
 					</span>
 				</div>
 				<div className="flex items-center gap-2">
-					<span className="text-2xl font-black text-miku-teal">
-						{progress.toFixed(0)}%
-					</span>
+					<span className="text-2xl font-black text-miku-teal">{progress.toFixed(0)}%</span>
 				</div>
 			</div>
 

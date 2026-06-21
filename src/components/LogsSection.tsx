@@ -17,11 +17,7 @@ interface LogItemProps {
 	onCopy: (text: string) => void;
 }
 
-const LogItem = memo(function LogItem({
-	log,
-	stableIndex,
-	onCopy,
-}: LogItemProps) {
+const LogItem = memo(function LogItem({ log, stableIndex, onCopy }: LogItemProps) {
 	const config = getLogLevelConfig(log.level);
 	const Icon = config.icon;
 	const category = getLogCategory(log.message);
@@ -59,9 +55,7 @@ const LogItem = memo(function LogItem({
 						</span>
 
 						{timestamp && (
-							<span className="text-[10px] text-miku-text/40 font-mono">
-								{timestamp}
-							</span>
+							<span className="text-[10px] text-miku-text/40 font-mono">{timestamp}</span>
 						)}
 
 						<span className="text-[10px] text-miku-text/30">{category}</span>
@@ -96,9 +90,7 @@ export const LogsSection = memo(function LogsSection({
 	logs,
 	clearLogs,
 }: Readonly<LogsSectionProps>) {
-	const [filterLevel, setFilterLevel] = useState<ParsedLog["level"] | "all">(
-		"all",
-	);
+	const [filterLevel, setFilterLevel] = useState<ParsedLog["level"] | "all">("all");
 	const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
 	const parsedLogs = useMemo(() => {
@@ -116,10 +108,7 @@ export const LogsSection = memo(function LogsSection({
 			.then(() => {
 				const index = Date.now();
 				setCopiedIndex(index);
-				setTimeout(
-					() => setCopiedIndex((prev) => (prev === index ? null : prev)),
-					2000,
-				);
+				setTimeout(() => setCopiedIndex((prev) => (prev === index ? null : prev)), 2000);
 			})
 			.catch(() => undefined);
 	}, []);
@@ -131,9 +120,7 @@ export const LogsSection = memo(function LogsSection({
 	const renderLogItem = useCallback(
 		(index: number, log: ParsedLog) => {
 			const stableIndex = filteredLogs.length - index;
-			return (
-				<LogItem log={log} stableIndex={stableIndex} onCopy={handleCopy} />
-			);
+			return <LogItem log={log} stableIndex={stableIndex} onCopy={handleCopy} />;
 		},
 		[filteredLogs.length, handleCopy],
 	);
@@ -186,9 +173,7 @@ export const LogsSection = memo(function LogsSection({
 									{logs.length} total
 								</span>
 							</span>
-							<span className="text-[10px] text-miku-text/40">
-								{filteredLogs.length} shown
-							</span>
+							<span className="text-[10px] text-miku-text/40">{filteredLogs.length} shown</span>
 						</div>
 					</div>
 
@@ -208,9 +193,7 @@ export const LogsSection = memo(function LogsSection({
 									}`}
 								>
 									{option.label}
-									{option.count > 0 && (
-										<span className="ml-1 opacity-60">({option.count})</span>
-									)}
+									{option.count > 0 && <span className="ml-1 opacity-60">({option.count})</span>}
 								</button>
 							))}
 						</div>
@@ -238,8 +221,7 @@ export const LogsSection = memo(function LogsSection({
 				{filterLevel !== "all" && (
 					<div className="px-4 py-2 bg-miku-teal/5 border-b border-miku-teal/10 flex items-center justify-between">
 						<span className="text-xs text-miku-text/60">
-							Filtering by:{" "}
-							<span className="font-medium text-miku-teal">{filterLevel}</span>
+							Filtering by: <span className="font-medium text-miku-teal">{filterLevel}</span>
 						</span>
 						<button
 							type="button"
@@ -275,16 +257,9 @@ export const LogsSection = memo(function LogsSection({
 						</div>
 					) : (
 						<div className="h-full flex flex-col items-center justify-center text-miku-text/40">
-							<NoteIcon
-								className="text-miku-teal/30 mb-4 animate-bounce-slow"
-								size={48}
-							/>
-							<p className="font-medium">
-								Waiting for Miku to start writing...
-							</p>
-							<p className="text-xs mt-1 opacity-60">
-								Logs will appear here when crawling begins
-							</p>
+							<NoteIcon className="text-miku-teal/30 mb-4 animate-bounce-slow" size={48} />
+							<p className="font-medium">Waiting for Miku to start writing...</p>
+							<p className="text-xs mt-1 opacity-60">Logs will appear here when crawling begins</p>
 						</div>
 					)}
 				</div>

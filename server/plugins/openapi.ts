@@ -16,8 +16,7 @@ export function openapiPlugin() {
 				info: {
 					title: "MikuMikuCrawler API",
 					version: "3.0.0",
-					description:
-						"HTTP + SSE backend for crawl execution, persistence, and search.",
+					description: "HTTP + SSE backend for crawl execution, persistence, and search.",
 				},
 				tags: [
 					{ name: "Crawls", description: "Crawl lifecycle control and state" },

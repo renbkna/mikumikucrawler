@@ -1,54 +1,51 @@
+import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, test } from "bun:test";
+import { API_LIST_LIMIT_BOUNDS } from "../../../shared/contracts/http.js";
 import {
+	ACTIVE_CRAWL_STATUS_VALUES,
 	API_PATHS,
 	buildCrawlEventsPath,
 	buildCrawlExportPath,
 	buildPageContentPath,
 	CRAWL_EXPORT_FORMAT_VALUES,
 	CRAWL_ROUTE_SEGMENTS,
-	isApiPath,
-	isCrawlEventsPath,
-	OPENAPI_CRAWL_EVENTS_PATH,
-	OPENAPI_CRAWL_EXPORT_PATH,
-	PAGE_ROUTE_SEGMENTS,
-	ACTIVE_CRAWL_STATUS_VALUES,
 	type CrawlCounters,
+	type CrawlEventEnvelope,
+	CrawlEventTypeValues,
 	type CrawlOptions,
 	CrawlStatusValues,
 	isActiveCrawlStatus,
+	isApiPath,
+	isCrawlEventEnvelope,
+	isCrawlEventsPath,
 	isCrawlListResponse,
 	isCrawlOptions,
+	isLiveCrawlEventType,
 	isPendingCrawlStatus,
 	isResumableCrawlStatus,
-	isTerminalCrawlStatus,
-	PENDING_CRAWL_STATUS_VALUES,
-	RESUMABLE_CRAWL_STATUS_VALUES,
-	TERMINAL_CRAWL_STATUS_VALUES,
-	toResumableSessionSummary,
-	type CrawlEventEnvelope,
-	CrawlEventTypeValues,
-	isCrawlEventEnvelope,
-	isLiveCrawlEventType,
 	isSettledCrawlEventType,
 	isTerminalCrawlEventType,
+	isTerminalCrawlStatus,
 	LIVE_CRAWL_EVENT_TYPE_VALUES,
+	OPENAPI_CRAWL_EVENTS_PATH,
+	OPENAPI_CRAWL_EXPORT_PATH,
+	PAGE_ROUTE_SEGMENTS,
+	PENDING_CRAWL_STATUS_VALUES,
+	RESUMABLE_CRAWL_STATUS_VALUES,
 	SETTLED_CRAWL_EVENT_TYPE_VALUES,
 	TERMINAL_CRAWL_EVENT_TYPE_VALUES,
+	TERMINAL_CRAWL_STATUS_VALUES,
+	toResumableSessionSummary,
 } from "../../../shared/contracts/index.js";
-import { API_LIST_LIMIT_BOUNDS } from "../../../shared/contracts/http.js";
 import {
 	CrawlEventEnvelopeSchema,
 	CrawlListQuerySchema,
 	ResumableCrawlListQuerySchema,
 } from "../../../shared/contracts/schemas.js";
-import {
-	shouldResetTheatreStatus,
-	THEATRE_STATUS_VALUES,
-} from "../../../src/theatreStatus.js";
+import { shouldResetTheatreStatus, THEATRE_STATUS_VALUES } from "../../../shared/theatreStatus.js";
 import { createApp } from "../../app.js";
 import type { AppLogger } from "../../config/logging.js";
 import { createDynamicBrowserContextOptions } from "../../domain/crawl/DynamicRenderer.js";
@@ -84,10 +81,7 @@ const COUNTERS: CrawlCounters = {
 	totalDataKb: 3,
 };
 
-const SERVER_CONTRACTS_DIR = join(
-	dirname(fileURLToPath(import.meta.url)),
-	"..",
-);
+const SERVER_CONTRACTS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 function createLogger(): AppLogger {
 	const noop = () => undefined;
@@ -145,9 +139,7 @@ function buildBoundaryApp() {
 	};
 }
 
-function buildEnvelope(
-	type: (typeof CrawlEventTypeValues)[number],
-): CrawlEventEnvelope {
+function buildEnvelope(type: (typeof CrawlEventTypeValues)[number]): CrawlEventEnvelope {
 	const base = {
 		type,
 		crawlId: "crawl-boundary",
@@ -254,9 +246,7 @@ describe("cross-boundary invariants", () => {
 		for (const status of CrawlStatusValues) {
 			expect(isPendingCrawlStatus(status)).toBe(status === "pending");
 			expect(isActiveCrawlStatus(status)).toBe(
-				ACTIVE_CRAWL_STATUS_VALUES.includes(
-					status as (typeof ACTIVE_CRAWL_STATUS_VALUES)[number],
-				),
+				ACTIVE_CRAWL_STATUS_VALUES.includes(status as (typeof ACTIVE_CRAWL_STATUS_VALUES)[number]),
 			);
 			expect(isResumableCrawlStatus(status)).toBe(
 				RESUMABLE_CRAWL_STATUS_VALUES.includes(
@@ -272,10 +262,7 @@ describe("cross-boundary invariants", () => {
 	});
 
 	test("crawl events are classified as live or settled and terminal events carry counters", () => {
-		const eventPartitions = [
-			LIVE_CRAWL_EVENT_TYPE_VALUES,
-			SETTLED_CRAWL_EVENT_TYPE_VALUES,
-		];
+		const eventPartitions = [LIVE_CRAWL_EVENT_TYPE_VALUES, SETTLED_CRAWL_EVENT_TYPE_VALUES];
 		const flattened = eventPartitions.flat();
 
 		expect(new Set(flattened).size).toBe(flattened.length);
@@ -308,9 +295,7 @@ describe("cross-boundary invariants", () => {
 
 			if (isTerminalCrawlEventType(type)) {
 				expect("counters" in envelope.payload).toBe(true);
-				expect(
-					(envelope.payload as { counters: CrawlCounters }).counters,
-				).toEqual(COUNTERS);
+				expect((envelope.payload as { counters: CrawlCounters }).counters).toEqual(COUNTERS);
 			}
 		}
 	});
@@ -327,9 +312,7 @@ describe("cross-boundary invariants", () => {
 
 		expect(isCrawlOptions({ ...VALID_OPTIONS, crawlDepth: 1.5 })).toBe(false);
 		expect(isCrawlOptions({ ...VALID_OPTIONS, maxPages: 0 })).toBe(false);
-		expect(
-			isCrawlOptions({ ...VALID_OPTIONS, maxConcurrentRequests: "2" }),
-		).toBe(false);
+		expect(isCrawlOptions({ ...VALID_OPTIONS, maxConcurrentRequests: "2" })).toBe(false);
 	});
 
 	test("manual transports use the same route-builder contract as backend route templates", async () => {
@@ -341,9 +324,7 @@ describe("cross-boundary invariants", () => {
 		expect(templateExportPath).toBe(OPENAPI_CRAWL_EXPORT_PATH);
 		expect(templatePageContentPath).toBe("/api/pages/{id}/content");
 
-		expect(buildCrawlEventsPath("crawl 1/2")).toBe(
-			"/api/crawls/crawl%201%2F2/events",
-		);
+		expect(buildCrawlEventsPath("crawl 1/2")).toBe("/api/crawls/crawl%201%2F2/events");
 		expect(buildCrawlExportPath("crawl 1/2", "csv")).toBe(
 			"/api/crawls/crawl%201%2F2/export?format=csv",
 		);
@@ -358,11 +339,7 @@ describe("cross-boundary invariants", () => {
 
 		const { app, eventStream, storage } = buildBoundaryApp();
 		const crawlId = "route-contract";
-		storage.repos.crawlRuns.createRun(
-			crawlId,
-			VALID_OPTIONS.target,
-			VALID_OPTIONS,
-		);
+		storage.repos.crawlRuns.createRun(crawlId, VALID_OPTIONS.target, VALID_OPTIONS);
 		const pageId = storage.repos.pages.save({
 			crawlId,
 			url: `${VALID_OPTIONS.target}/page`,
@@ -405,10 +382,11 @@ describe("cross-boundary invariants", () => {
 			}),
 		);
 		expect(eventsResponse.status).toBe(200);
-		expect(eventsResponse.headers.get("content-type")).toContain(
-			"text/event-stream",
-		);
-		const reader = eventsResponse.body!.getReader();
+		expect(eventsResponse.headers.get("content-type")).toContain("text/event-stream");
+		if (!eventsResponse.body) {
+			throw new Error("Expected crawl event response to include a stream body");
+		}
+		const reader = eventsResponse.body.getReader();
 		const { value, done } = await reader.read();
 		expect(done).toBe(false);
 		expect(new TextDecoder().decode(value)).toContain("data: ");
@@ -451,9 +429,7 @@ describe("cross-boundary invariants", () => {
 
 	test("high-risk UI, rendering, and content gates keep their deny-by-default edges", () => {
 		expect(isHtmlLikeContentType("text/html; charset=utf-8")).toBe(true);
-		expect(isHtmlLikeContentType("application/xhtml+xml; charset=utf-8")).toBe(
-			true,
-		);
+		expect(isHtmlLikeContentType("application/xhtml+xml; charset=utf-8")).toBe(true);
 		expect(isHtmlLikeContentType("application/json")).toBe(false);
 
 		expect(createDynamicBrowserContextOptions()).toMatchObject({

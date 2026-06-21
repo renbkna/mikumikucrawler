@@ -20,9 +20,7 @@ describe("crawl export service contract", () => {
 
 		expect(result.body).toBe(JSON.stringify(pages, null, 2));
 		expect(result.contentType).toBe("application/json; charset=utf-8");
-		expect(result.contentDisposition).toBe(
-			'attachment; filename="crawl_unsafe_id.json"',
-		);
+		expect(result.contentDisposition).toBe('attachment; filename="crawl_unsafe_id.json"');
 	});
 
 	test("CSV export preserves header order and row mapping", () => {
@@ -32,9 +30,7 @@ describe("crawl export service contract", () => {
 			'"id","url","title","description","contentType","domain","crawledAt"',
 		);
 		expect(result.body.split("\n")[1]).toContain('"7"');
-		expect(result.body.split("\n")[1]).toContain(
-			'"https://example.com/a?x=1,2"',
-		);
+		expect(result.body.split("\n")[1]).toContain('"https://example.com/a?x=1,2"');
 		expect(result.body.split("\n")[1]).toContain('"text/html"');
 		expect(result.contentType).toBe("text/csv; charset=utf-8");
 	});
@@ -47,13 +43,11 @@ describe("crawl export service contract", () => {
 	});
 
 	test("CSV prefixes dangerous cells", () => {
-		const dangerousRows = ["=x", "+x", "-x", "@x", "|x", "\tx"].map(
-			(value, index) => ({
-				...pages[0],
-				id: index + 1,
-				description: value,
-			}),
-		);
+		const dangerousRows = ["=x", "+x", "-x", "@x", "|x", "\tx"].map((value, index) => ({
+			...pages[0],
+			id: index + 1,
+			description: value,
+		}));
 
 		const result = exportPages("crawl-1", dangerousRows, "csv");
 
@@ -66,8 +60,6 @@ describe("crawl export service contract", () => {
 		const result = exportPages("crawl:/unsafe id", [], "csv");
 
 		expect(result.filename).toBe("crawl__unsafe_id.csv");
-		expect(result.contentDisposition).toBe(
-			'attachment; filename="crawl__unsafe_id.csv"',
-		);
+		expect(result.contentDisposition).toBe('attachment; filename="crawl__unsafe_id.csv"');
 	});
 });

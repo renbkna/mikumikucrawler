@@ -1,8 +1,5 @@
 import { Elysia, t } from "elysia";
-import {
-	API_PATHS,
-	CRAWL_ROUTE_SEGMENTS,
-} from "../../shared/contracts/index.js";
+import { API_PATHS, CRAWL_ROUTE_SEGMENTS } from "../../shared/contracts/index.js";
 import { CrawlIdParamsSchema } from "../../shared/contracts/schemas.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
 import { SseHeadersSchema } from "../contracts/http.js";
@@ -13,18 +10,14 @@ export function sseApi() {
 	return new Elysia({ name: "sse-api", prefix: API_PATHS.crawls }).get(
 		CRAWL_ROUTE_SEGMENTS.events,
 		(context) => {
-			const { crawlManager, eventStream, headers, params, request, set } =
-				routeServices(context);
+			const { crawlManager, eventStream, headers, params, request, set } = routeServices(context);
 			const crawl = crawlManager.get(params.id);
 			if (!crawl) {
 				set.status = 404;
 				return { error: "Crawl not found" };
 			}
 
-			const requestedSequence = Number.parseInt(
-				headers["last-event-id"] ?? "0",
-				10,
-			);
+			const requestedSequence = Number.parseInt(headers["last-event-id"] ?? "0", 10);
 			return createEventStreamResponse({
 				crawlId: params.id,
 				eventStream,

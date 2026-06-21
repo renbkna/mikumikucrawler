@@ -29,16 +29,12 @@ describe("RobotsService", () => {
 		});
 		const service = new RobotsService({ fetch }, createLogger());
 
-		await expect(
-			service.evaluate("https://example.com/private"),
-		).resolves.toEqual({
+		await expect(service.evaluate("https://example.com/private")).resolves.toEqual({
 			type: "unavailable",
 			delayKey: "https://example.com",
 			reason: "temporary outage",
 		});
-		await expect(
-			service.evaluate("https://example.com/private"),
-		).resolves.toEqual({
+		await expect(service.evaluate("https://example.com/private")).resolves.toEqual({
 			type: "disallowed",
 			delayKey: "https://example.com",
 			crawlDelayMs: undefined,
@@ -51,14 +47,10 @@ describe("RobotsService", () => {
 		const service = new RobotsService({ fetch }, createLogger());
 
 		await expect(
-			service
-				.evaluate("https://example.com/anything")
-				.then((policy) => policy.type),
+			service.evaluate("https://example.com/anything").then((policy) => policy.type),
 		).resolves.toBe("allowed");
 		await expect(
-			service
-				.evaluate("https://example.com/anything-else")
-				.then((policy) => policy.type),
+			service.evaluate("https://example.com/anything-else").then((policy) => policy.type),
 		).resolves.toBe("allowed");
 		expect(fetch).toHaveBeenCalledTimes(1);
 	});
@@ -68,14 +60,10 @@ describe("RobotsService", () => {
 		const service = new RobotsService({ fetch }, createLogger());
 
 		await expect(
-			service
-				.evaluate("https://example.com/anything")
-				.then((policy) => policy.type),
+			service.evaluate("https://example.com/anything").then((policy) => policy.type),
 		).resolves.toBe("unavailable");
 		await expect(
-			service
-				.evaluate("https://example.com/anything-else")
-				.then((policy) => policy.type),
+			service.evaluate("https://example.com/anything-else").then((policy) => policy.type),
 		).resolves.toBe("unavailable");
 		expect(fetch).toHaveBeenCalledTimes(2);
 	});
@@ -92,10 +80,7 @@ describe("RobotsService", () => {
 		);
 		const service = new RobotsService({ fetch }, createLogger());
 
-		const evaluation = service.evaluate(
-			"https://example.com/private",
-			controller.signal,
-		);
+		const evaluation = service.evaluate("https://example.com/private", controller.signal);
 		controller.abort(new Error("force stop"));
 
 		await expect(evaluation).rejects.toThrow("force stop");
@@ -111,9 +96,7 @@ describe("RobotsService", () => {
 		const service = new RobotsService({ fetch }, createLogger());
 
 		await expect(
-			service
-				.evaluate("https://example.com/search?b=2&a=1")
-				.then((policy) => policy.type),
+			service.evaluate("https://example.com/search?b=2&a=1").then((policy) => policy.type),
 		).resolves.toBe("disallowed");
 	});
 

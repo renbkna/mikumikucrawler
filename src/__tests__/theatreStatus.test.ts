@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { shouldResetTheatreStatus } from "../theatreStatus";
+import { shouldResetTheatreStatus } from "../../shared/theatreStatus";
 
 describe("theatre status contract", () => {
 	test("any non-idle overlay state clears when crawl activity ends", () => {

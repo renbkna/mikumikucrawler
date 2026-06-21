@@ -65,9 +65,7 @@ describe("CrawlQueue", () => {
 			availableAt: 100,
 		});
 
-		queue.deferPendingByDelayKey((delayKey) =>
-			delayKey === "https://example.com" ? 500 : 50,
-		);
+		queue.deferPendingByDelayKey((delayKey) => (delayKey === "https://example.com" ? 500 : 50));
 
 		expect(reschedule).toHaveBeenCalledTimes(1);
 		expect(reschedule).toHaveBeenCalledWith(
@@ -79,7 +77,7 @@ describe("CrawlQueue", () => {
 	});
 
 	test("uses origin delay keys for scheduling while preserving host budget domains", () => {
-		const timeUntilDomainReady = mock((delayKey: string, now: number) =>
+		const timeUntilDomainReady = mock((delayKey: string) =>
 			delayKey === "http://example.com:8080" ? 300 : 0,
 		);
 		const reserveDomain = mock(() => undefined);
@@ -119,10 +117,7 @@ describe("CrawlQueue", () => {
 		const ready = queue.nextReady(100);
 
 		expect(ready.item?.url).toBe("https://example.com/ready");
-		expect(timeUntilDomainReady).toHaveBeenCalledWith(
-			"http://example.com:8080",
-			100,
-		);
+		expect(timeUntilDomainReady).toHaveBeenCalledWith("http://example.com:8080", 100);
 		expect(reserveDomain).toHaveBeenCalledWith("https://example.com", 100);
 	});
 

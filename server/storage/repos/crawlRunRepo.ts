@@ -1,18 +1,10 @@
 import type { Database } from "bun:sqlite";
-import type {
-	CrawlCounters,
-	CrawlOptions,
-	CrawlStatus,
-} from "../../../shared/contracts/index.js";
+import type { CrawlCounters, CrawlOptions, CrawlStatus } from "../../../shared/contracts/index.js";
 import {
 	DEFAULT_CRAWL_LIST_LIMIT,
 	RESUMABLE_CRAWL_STATUS_VALUES,
 } from "../../../shared/contracts/index.js";
-import {
-	type CrawlRunRecord,
-	type CrawlRunRow,
-	mapCrawlRunRow,
-} from "../db.js";
+import { type CrawlRunRecord, type CrawlRunRow, mapCrawlRunRow } from "../db.js";
 
 const ZERO_COUNTERS: CrawlCounters = {
 	pagesScanned: 0,
@@ -72,11 +64,7 @@ export function createCrawlRunRepo(db: Database) {
 		return row ? mapCrawlRunRow(row) : null;
 	}
 
-	function createRun(
-		id: string,
-		target: string,
-		options: CrawlOptions,
-	): CrawlRunRecord {
+	function createRun(id: string, target: string, options: CrawlOptions): CrawlRunRecord {
 		insertRun.run(id, target, "pending", JSON.stringify(options));
 		const created = getById(id);
 		if (!created) {
@@ -131,11 +119,7 @@ export function createCrawlRunRepo(db: Database) {
 		return getById(id);
 	}
 
-	function updateProgress(
-		id: string,
-		counters: CrawlCounters,
-		eventSequence?: number,
-	): void {
+	function updateProgress(id: string, counters: CrawlCounters, eventSequence?: number): void {
 		db.query(
 			`
 			UPDATE crawl_runs
@@ -183,14 +167,11 @@ export function createCrawlRunRepo(db: Database) {
 			params.push(toSqliteDateTime(options.to));
 		}
 
-		const whereClause =
-			clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+		const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
 		const limit = options.limit ?? DEFAULT_CRAWL_LIST_LIMIT;
 
 		const rows = db
-			.query(
-				`SELECT * FROM crawl_runs ${whereClause} ORDER BY updated_at DESC LIMIT ?`,
-			)
+			.query(`SELECT * FROM crawl_runs ${whereClause} ORDER BY updated_at DESC LIMIT ?`)
 			.all(...params, limit) as CrawlRunRow[];
 
 		return rows.map(mapCrawlRunRow);
@@ -210,26 +191,16 @@ export function createCrawlRunRepo(db: Database) {
 			return list({ status: "interrupted", limit });
 		},
 		getResumableRuns(limit = DEFAULT_CRAWL_LIST_LIMIT): CrawlRunRecord[] {
-			return RESUMABLE_CRAWL_STATUS_VALUES.flatMap((status) =>
-				list({ status, limit }),
-			)
+			return RESUMABLE_CRAWL_STATUS_VALUES.flatMap((status) => list({ status, limit }))
 				.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 				.slice(0, limit);
 		},
-		markStarting(
-			id: string,
-			counters: CrawlCounters = ZERO_COUNTERS,
-			eventSequence?: number,
-		) {
+		markStarting(id: string, counters: CrawlCounters = ZERO_COUNTERS, eventSequence?: number) {
 			return updateStatus(id, "starting", counters, null, eventSequence, {
 				started: true,
 			});
 		},
-		markRunning(
-			id: string,
-			counters: CrawlCounters = ZERO_COUNTERS,
-			eventSequence?: number,
-		) {
+		markRunning(id: string, counters: CrawlCounters = ZERO_COUNTERS, eventSequence?: number) {
 			return updateStatus(id, "running", counters, null, eventSequence, {
 				started: true,
 			});
@@ -266,17 +237,10 @@ export function createCrawlRunRepo(db: Database) {
 			stopReason: string | null,
 			eventSequence?: number,
 		) {
-			return updateStatus(
-				id,
-				"completed",
-				counters,
-				stopReason,
-				eventSequence,
-				{
-					started: true,
-					completed: true,
-				},
-			);
+			return updateStatus(id, "completed", counters, stopReason, eventSequence, {
+				started: true,
+				completed: true,
+			});
 		},
 		markStopped(
 			id: string,
@@ -306,16 +270,9 @@ export function createCrawlRunRepo(db: Database) {
 			stopReason: string | null,
 			eventSequence?: number,
 		) {
-			return updateStatus(
-				id,
-				"interrupted",
-				counters,
-				stopReason,
-				eventSequence,
-				{
-					started: true,
-				},
-			);
+			return updateStatus(id, "interrupted", counters, stopReason, eventSequence, {
+				started: true,
+			});
 		},
 		updateProgress,
 	};

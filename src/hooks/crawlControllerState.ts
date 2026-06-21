@@ -1,8 +1,10 @@
-import type { CrawlEventEnvelope } from "../../shared/contracts/index.js";
-import type { ResumableSessionSummary } from "../../shared/contracts/index.js";
-import { CRAWLER_DEFAULTS, TOAST_DEFAULTS, UI_LIMITS } from "../constants";
-import type { CrawlOptions } from "../../shared/contracts/index.js";
+import type {
+	CrawlEventEnvelope,
+	CrawlOptions,
+	ResumableSessionSummary,
+} from "../../shared/contracts/index.js";
 import type { CrawledPage, QueueStats, Stats } from "../../shared/types.js";
+import { CRAWLER_DEFAULTS, TOAST_DEFAULTS, UI_LIMITS } from "../constants";
 
 export type ConnectionState = "connecting" | "connected" | "disconnected";
 
@@ -18,15 +20,7 @@ export type RunPhase =
 	| "stopped";
 
 export interface CommandStatus {
-	kind:
-		| "none"
-		| "start"
-		| "stop"
-		| "forceStop"
-		| "resume"
-		| "export"
-		| "refresh"
-		| "delete";
+	kind: "none" | "start" | "stop" | "forceStop" | "resume" | "export" | "refresh" | "delete";
 	status: "idle" | "pending" | "success" | "error";
 	error: string | null;
 }
@@ -198,22 +192,17 @@ function buildStats(
 		successCount: counters.successCount,
 		failureCount: counters.failureCount,
 		skippedCount: counters.skippedCount,
-		elapsedTime:
-			extras?.elapsedSeconds !== undefined
-				? toElapsedTime(extras.elapsedSeconds)
-				: undefined,
-		pagesPerSecond:
-			extras?.pagesPerSecond !== undefined
-				? extras.pagesPerSecond.toFixed(2)
-				: undefined,
+		...(extras?.elapsedSeconds !== undefined
+			? { elapsedTime: toElapsedTime(extras.elapsedSeconds) }
+			: {}),
+		...(extras?.pagesPerSecond !== undefined
+			? { pagesPerSecond: extras.pagesPerSecond.toFixed(2) }
+			: {}),
 		successRate,
 	};
 }
 
-function appendLog(
-	state: CrawlControllerState,
-	message: string,
-): ControllerStateTransition {
+function appendLog(state: CrawlControllerState, message: string): ControllerStateTransition {
 	const nextLogs = [message, ...state.logs].slice(0, UI_LIMITS.MAX_LOGS);
 	const effects: ControllerEffect[] = [];
 
@@ -224,8 +213,7 @@ function appendLog(
 		effects.push({
 			type: "toast",
 			level: "warning",
-			message:
-				"Tip: Try disabling JavaScript crawling in settings for better performance",
+			message: "Tip: Try disabling JavaScript crawling in settings for better performance",
 			timeout: TOAST_DEFAULTS.LONG_TIMEOUT,
 		});
 	}
@@ -257,8 +245,7 @@ export function getCrawlCommandAvailability(
 	const commandPending = isAnyCommandPending(state);
 	const canEscalateStop = canStartCommand(state, "forceStop");
 	const forceStopPending =
-		state.lastCommand.kind === "forceStop" &&
-		state.lastCommand.status === "pending";
+		state.lastCommand.kind === "forceStop" && state.lastCommand.status === "pending";
 
 	return {
 		canStart:
@@ -282,9 +269,7 @@ export function getCrawlCommandAvailability(
 	};
 }
 
-export function isAnyCommandPending(
-	state: Pick<CrawlControllerState, "lastCommand">,
-): boolean {
+export function isAnyCommandPending(state: Pick<CrawlControllerState, "lastCommand">): boolean {
 	return state.lastCommand.status === "pending";
 }
 
@@ -292,10 +277,7 @@ export function canStartCommand(
 	state: Pick<CrawlControllerState, "lastCommand">,
 	kind: CommandKind,
 ): boolean {
-	return (
-		!isAnyCommandPending(state) ||
-		(kind === "forceStop" && state.lastCommand.kind === "stop")
-	);
+	return !isAnyCommandPending(state) || (kind === "forceStop" && state.lastCommand.kind === "stop");
 }
 
 function computeProgress(
@@ -303,10 +285,8 @@ function computeProgress(
 	nextStats: Stats,
 	nextQueue: QueueStats | null,
 ): number {
-	const queueSize =
-		nextQueue?.queueLength ?? state.queueStats?.queueLength ?? 0;
-	const activeSize =
-		nextQueue?.activeRequests ?? state.queueStats?.activeRequests ?? 0;
+	const queueSize = nextQueue?.queueLength ?? state.queueStats?.queueLength ?? 0;
+	const activeSize = nextQueue?.activeRequests ?? state.queueStats?.activeRequests ?? 0;
 	const scanned = nextStats.pagesScanned ?? 0;
 	const totalWork = scanned + queueSize + activeSize;
 	const effectiveTotal = Math.max(
@@ -435,9 +415,7 @@ function applyPausedEvent(
 					{
 						type: "toast",
 						level: "info",
-						message:
-							envelope.payload.stopReason ??
-							"Crawl paused. Resume it from saved sessions.",
+						message: envelope.payload.stopReason ?? "Crawl paused. Resume it from saved sessions.",
 					},
 				];
 
@@ -445,11 +423,7 @@ function applyPausedEvent(
 		state: {
 			...state,
 			stats: buildStats(envelope.payload.counters),
-			progress: computeProgress(
-				state,
-				buildStats(envelope.payload.counters),
-				state.queueStats,
-			),
+			progress: computeProgress(state, buildStats(envelope.payload.counters), state.queueStats),
 			connectionState: "disconnected",
 			runPhase: "paused",
 			lastCommand: createIdleCommandStatus(),
@@ -493,8 +467,7 @@ function applySseEvent(
 				{
 					...nextStateBase,
 					runPhase:
-						nextStateBase.runPhase === "stopping" ||
-						nextStateBase.runPhase === "pausing"
+						nextStateBase.runPhase === "stopping" || nextStateBase.runPhase === "pausing"
 							? nextStateBase.runPhase
 							: "running",
 				},
@@ -531,8 +504,7 @@ function applySseEvent(
 					stats: nextStats,
 					progress: computeProgress(nextStateBase, nextStats, nextQueue),
 					runPhase:
-						nextStateBase.runPhase === "stopping" ||
-						nextStateBase.runPhase === "pausing"
+						nextStateBase.runPhase === "stopping" || nextStateBase.runPhase === "pausing"
 							? nextStateBase.runPhase
 							: "running",
 				},
@@ -628,10 +600,7 @@ export function crawlControllerReducer(
 				effects: [],
 			};
 		case "commandSucceeded":
-			if (
-				state.lastCommand.kind !== action.kind ||
-				state.lastCommand.status !== "pending"
-			) {
+			if (state.lastCommand.kind !== action.kind || state.lastCommand.status !== "pending") {
 				return { state, effects: [] };
 			}
 
@@ -651,10 +620,7 @@ export function crawlControllerReducer(
 				effects: [],
 			};
 		case "commandFailed":
-			if (
-				state.lastCommand.kind !== action.kind ||
-				state.lastCommand.status !== "pending"
-			) {
+			if (state.lastCommand.kind !== action.kind || state.lastCommand.status !== "pending") {
 				return { state, effects: [] };
 			}
 
@@ -741,10 +707,7 @@ export function crawlControllerReducer(
 				effects: [],
 			};
 		case "resumableSessionDeleting":
-			if (
-				state.resumableSessions.deletingId ||
-				state.resumableSessions.resumingId
-			) {
+			if (state.resumableSessions.deletingId || state.resumableSessions.resumingId) {
 				return { state, effects: [] };
 			}
 
@@ -760,10 +723,7 @@ export function crawlControllerReducer(
 				effects: [],
 			};
 		case "resumableSessionResuming":
-			if (
-				state.resumableSessions.deletingId ||
-				state.resumableSessions.resumingId
-			) {
+			if (state.resumableSessions.deletingId || state.resumableSessions.resumingId) {
 				return { state, effects: [] };
 			}
 

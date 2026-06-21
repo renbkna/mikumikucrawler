@@ -35,10 +35,7 @@ export function buildCrawlEventsPath(crawlId: string): string {
 	return `${API_PATHS.crawls}/${encodePathSegment(crawlId)}/events`;
 }
 
-export function buildCrawlExportPath(
-	crawlId: string,
-	format: CrawlExportFormat = "json",
-): string {
+export function buildCrawlExportPath(crawlId: string, format: CrawlExportFormat = "json"): string {
 	const query = new URLSearchParams({ format });
 	return `${API_PATHS.crawls}/${encodePathSegment(crawlId)}/export?${query}`;
 }
@@ -48,9 +45,7 @@ export function buildPageContentPath(pageId: number): string {
 }
 
 export function isApiPath(pathname: string): boolean {
-	return (
-		pathname === API_PATHS.root || pathname.startsWith(`${API_PATHS.root}/`)
-	);
+	return pathname === API_PATHS.root || pathname.startsWith(`${API_PATHS.root}/`);
 }
 
 export function isCrawlEventsPath(pathname: string): boolean {

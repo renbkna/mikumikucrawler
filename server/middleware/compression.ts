@@ -189,10 +189,7 @@ function parseAcceptEncoding(header: string): Map<string, number> {
 	return accepted;
 }
 
-function acceptedQuality(
-	accepted: Map<string, number>,
-	encoding: "br" | "gzip",
-): number {
+function acceptedQuality(accepted: Map<string, number>, encoding: "br" | "gzip"): number {
 	return accepted.get(encoding) ?? accepted.get("*") ?? 0;
 }
 
@@ -219,10 +216,7 @@ async function compressResponse(
 	const contentType = response.headers.get("content-type") || "";
 
 	// Skip compression for streaming, already compressed, or binary formats.
-	if (
-		isNeverCompressedContentType(contentType) ||
-		!isCompressibleContentType(contentType)
-	) {
+	if (isNeverCompressedContentType(contentType) || !isCompressibleContentType(contentType)) {
 		return undefined;
 	}
 

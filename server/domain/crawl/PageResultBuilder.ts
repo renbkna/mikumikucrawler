@@ -1,7 +1,6 @@
-import type { CrawlOptions } from "../../../shared/contracts/index.js";
-import type { CrawlPagePayload } from "../../../shared/contracts/index.js";
-import type { ProcessedContent } from "../../types.js";
+import type { CrawlOptions, CrawlPagePayload } from "../../../shared/contracts/index.js";
 import type { SavePageInput } from "../../storage/repos/pageRepo.js";
+import type { ProcessedContent } from "../../types.js";
 import type { QueueItem } from "./CrawlQueue.js";
 import type { FetchResult } from "./FetchService.js";
 import { mergeRobotsDirectives } from "./PageDecisionPolicy.js";
@@ -11,9 +10,7 @@ export type PendingCrawlPagePayload = Omit<CrawlPagePayload, "id">;
 type SuccessfulFetchResult = Extract<FetchResult, { type: "success" }>;
 
 function omitUndefined<T extends Record<string, unknown>>(value: T): T {
-	return Object.fromEntries(
-		Object.entries(value).filter(([, entry]) => entry !== undefined),
-	) as T;
+	return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
 }
 
 export interface BuiltPageResult {
@@ -36,8 +33,7 @@ export function buildPageResult(
 	processedContent: ProcessedContent,
 	crawlLinks: SavePageInput["links"],
 ): BuiltPageResult {
-	const resolvedTitle =
-		fetchResult.title || processedContent.metadata?.title || "";
+	const resolvedTitle = fetchResult.title || processedContent.metadata?.title || "";
 	const resolvedDescription =
 		fetchResult.description || processedContent.metadata?.description || "";
 	const robotsDirectives = mergeRobotsDirectives(
@@ -45,8 +41,7 @@ export function buildPageResult(
 		fetchResult.xRobotsTag,
 	);
 	const retainedMedia =
-		options.saveMedia &&
-		(options.crawlMethod === "media" || options.crawlMethod === "full")
+		options.saveMedia && (options.crawlMethod === "media" || options.crawlMethod === "full")
 			? (processedContent.media ?? [])
 			: [];
 	const mainContent = processedContent.extractedData?.mainContent ?? "";
@@ -74,9 +69,7 @@ export function buildPageResult(
 			title: resolvedTitle,
 			description: resolvedDescription,
 			content:
-				options.contentOnly || typeof fetchResult.content !== "string"
-					? null
-					: fetchResult.content,
+				options.contentOnly || typeof fetchResult.content !== "string" ? null : fetchResult.content,
 			isDynamic: fetchResult.isDynamic,
 			lastModified: fetchResult.lastModified,
 			etag: fetchResult.etag,

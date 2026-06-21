@@ -9,10 +9,7 @@ interface ErrorBoundaryState {
 	error: Error | null;
 }
 
-export class ErrorBoundary extends Component<
-	ErrorBoundaryProps,
-	ErrorBoundaryState
-> {
+export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
 	constructor(props: ErrorBoundaryProps) {
 		super(props);
 		this.state = { hasError: false, error: null };
@@ -22,7 +19,7 @@ export class ErrorBoundary extends Component<
 		return { hasError: true, error };
 	}
 
-	componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
+	override componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
 		// biome-ignore lint/suspicious/noConsole: Error boundary should log errors
 		console.error("ErrorBoundary caught an error:", error, errorInfo);
 	}
@@ -31,24 +28,19 @@ export class ErrorBoundary extends Component<
 		this.setState({ hasError: false, error: null });
 	};
 
-	render(): ReactNode {
+	override render(): ReactNode {
 		if (this.state.hasError) {
 			return (
 				<div className="fixed inset-0 flex items-center justify-center bg-white">
 					<div className="glass-panel p-8 max-w-md text-center space-y-6">
 						<div className="text-6xl animate-bounce-slow">😿</div>
-						<h1 className="text-2xl font-black text-miku-teal">
-							Oops! Something went wrong
-						</h1>
+						<h1 className="text-2xl font-black text-miku-teal">Oops! Something went wrong</h1>
 						<p className="text-slate-600">
-							Miku encountered an unexpected error. Don't worry, it happens to
-							the best of us!
+							Miku encountered an unexpected error. Don't worry, it happens to the best of us!
 						</p>
 						{this.state.error && (
 							<details className="text-left bg-slate-100 rounded-xl p-4 text-xs">
-								<summary className="cursor-pointer font-bold text-slate-500">
-									Error Details
-								</summary>
+								<summary className="cursor-pointer font-bold text-slate-500">Error Details</summary>
 								<pre className="mt-2 text-rose-500 whitespace-pre-wrap break-all">
 									{this.state.error.message}
 								</pre>

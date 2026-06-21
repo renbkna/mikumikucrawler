@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -71,9 +71,7 @@ describe("storage contract", () => {
 		applyMigrations(db, migrationDir);
 
 		const row = db
-			.query(
-				"SELECT discovered_links_count FROM pages WHERE crawl_id = 'legacy-crawl'",
-			)
+			.query("SELECT discovered_links_count FROM pages WHERE crawl_id = 'legacy-crawl'")
 			.get() as { discovered_links_count: number };
 		expect(row.discovered_links_count).toBe(0);
 	});
@@ -81,22 +79,14 @@ describe("storage contract", () => {
 	test("fails startup when an applied migration file changes", () => {
 		const migrationDir = mkdtempSync(path.join(tmpdir(), "miku-migrations-"));
 		const migrationPath = path.join(migrationDir, "0001_test.sql");
-		writeFileSync(
-			migrationPath,
-			"CREATE TABLE test_table (id TEXT PRIMARY KEY);",
-		);
+		writeFileSync(migrationPath, "CREATE TABLE test_table (id TEXT PRIMARY KEY);");
 
 		const db = new Database(":memory:");
 		applyMigrations(db, migrationDir);
 
-		writeFileSync(
-			migrationPath,
-			"CREATE TABLE test_table (id TEXT PRIMARY KEY, changed TEXT);",
-		);
+		writeFileSync(migrationPath, "CREATE TABLE test_table (id TEXT PRIMARY KEY, changed TEXT);");
 
-		expect(() => applyMigrations(db, migrationDir)).toThrow(
-			"checksum mismatch",
-		);
+		expect(() => applyMigrations(db, migrationDir)).toThrow("checksum mismatch");
 	});
 
 	test("fails startup for legacy migration tables without checksum support", () => {
@@ -138,24 +128,20 @@ describe("storage contract", () => {
 
 	test("crawl run persistence rejects invalid lifecycle state at the database boundary", () => {
 		const storage = createInMemoryStorage();
-		storage.repos.crawlRuns.createRun(
-			"crawl-constraints",
-			"https://db.example",
-			{
-				target: "https://db.example",
-				crawlMethod: "links",
-				crawlDepth: 1,
-				crawlDelay: 200,
-				maxPages: 5,
-				maxPagesPerDomain: 0,
-				maxConcurrentRequests: 1,
-				retryLimit: 0,
-				dynamic: false,
-				respectRobots: false,
-				contentOnly: false,
-				saveMedia: false,
-			},
-		);
+		storage.repos.crawlRuns.createRun("crawl-constraints", "https://db.example", {
+			target: "https://db.example",
+			crawlMethod: "links",
+			crawlDepth: 1,
+			crawlDelay: 200,
+			maxPages: 5,
+			maxPagesPerDomain: 0,
+			maxConcurrentRequests: 1,
+			retryLimit: 0,
+			dynamic: false,
+			respectRobots: false,
+			contentOnly: false,
+			saveMedia: false,
+		});
 
 		expect(() =>
 			storage.db
@@ -183,54 +169,34 @@ describe("storage contract", () => {
 
 	test("runtime persistence tables reject impossible queue, page, and domain values", () => {
 		const storage = createInMemoryStorage();
-		storage.repos.crawlRuns.createRun(
-			"crawl-runtime-constraints",
-			"https://db.example",
-			{
-				target: "https://db.example",
-				crawlMethod: "links",
-				crawlDepth: 1,
-				crawlDelay: 200,
-				maxPages: 5,
-				maxPagesPerDomain: 0,
-				maxConcurrentRequests: 1,
-				retryLimit: 0,
-				dynamic: false,
-				respectRobots: false,
-				contentOnly: false,
-				saveMedia: false,
-			},
-		);
+		storage.repos.crawlRuns.createRun("crawl-runtime-constraints", "https://db.example", {
+			target: "https://db.example",
+			crawlMethod: "links",
+			crawlDepth: 1,
+			crawlDelay: 200,
+			maxPages: 5,
+			maxPagesPerDomain: 0,
+			maxConcurrentRequests: 1,
+			retryLimit: 0,
+			dynamic: false,
+			respectRobots: false,
+			contentOnly: false,
+			saveMedia: false,
+		});
 
 		expect(() =>
 			storage.db
 				.query(
 					"INSERT INTO crawl_queue_items (crawl_id, url, depth, retries, domain, available_at) VALUES (?, ?, ?, ?, ?, ?)",
 				)
-				.run(
-					"crawl-runtime-constraints",
-					"https://db.example/bad-depth",
-					-1,
-					0,
-					"db.example",
-					0,
-				),
+				.run("crawl-runtime-constraints", "https://db.example/bad-depth", -1, 0, "db.example", 0),
 		).toThrow();
 		expect(() =>
 			storage.db
 				.query(
 					"INSERT INTO pages (crawl_id, url, domain, is_dynamic, media_count, internal_links_count, external_links_count, discovered_links_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 				)
-				.run(
-					"crawl-runtime-constraints",
-					"https://db.example/page",
-					"db.example",
-					2,
-					0,
-					0,
-					0,
-					0,
-				),
+				.run("crawl-runtime-constraints", "https://db.example/page", "db.example", 2, 0, 0, 0, 0),
 		).toThrow();
 		expect(() =>
 			storage.repos.crawlDomainState.upsert("crawl-runtime-constraints", {
@@ -343,9 +309,7 @@ describe("storage contract", () => {
 			nextAllowedAt: 5678,
 		});
 
-		expect(
-			storage.repos.crawlDomainState.listByCrawlId("crawl-domain-a"),
-		).toEqual([
+		expect(storage.repos.crawlDomainState.listByCrawlId("crawl-domain-a")).toEqual([
 			{
 				delayKey: "https://a.example",
 				delayMs: 750,
@@ -356,24 +320,20 @@ describe("storage contract", () => {
 
 	test("typed counters are read from columns without JSON reparsing", () => {
 		const storage = createInMemoryStorage();
-		const created = storage.repos.crawlRuns.createRun(
-			"crawl-typed",
-			"https://typed.example",
-			{
-				target: "https://typed.example",
-				crawlMethod: "links",
-				crawlDepth: 1,
-				crawlDelay: 200,
-				maxPages: 5,
-				maxPagesPerDomain: 0,
-				maxConcurrentRequests: 1,
-				retryLimit: 0,
-				dynamic: false,
-				respectRobots: false,
-				contentOnly: false,
-				saveMedia: false,
-			},
-		);
+		const created = storage.repos.crawlRuns.createRun("crawl-typed", "https://typed.example", {
+			target: "https://typed.example",
+			crawlMethod: "links",
+			crawlDepth: 1,
+			crawlDelay: 200,
+			maxPages: 5,
+			maxPagesPerDomain: 0,
+			maxConcurrentRequests: 1,
+			retryLimit: 0,
+			dynamic: false,
+			respectRobots: false,
+			contentOnly: false,
+			saveMedia: false,
+		});
 
 		storage.repos.crawlRuns.markCompleted(
 			"crawl-typed",
@@ -404,52 +364,42 @@ describe("storage contract", () => {
 
 	test("date filters accept API ISO timestamps without dropping matching rows", () => {
 		const storage = createInMemoryStorage();
-		const created = storage.repos.crawlRuns.createRun(
-			"crawl-filter",
-			"https://filter.example",
-			{
-				target: "https://filter.example",
-				crawlMethod: "links",
-				crawlDepth: 1,
-				crawlDelay: 200,
-				maxPages: 5,
-				maxPagesPerDomain: 0,
-				maxConcurrentRequests: 1,
-				retryLimit: 0,
-				dynamic: false,
-				respectRobots: false,
-				contentOnly: false,
-				saveMedia: false,
-			},
-		);
+		const created = storage.repos.crawlRuns.createRun("crawl-filter", "https://filter.example", {
+			target: "https://filter.example",
+			crawlMethod: "links",
+			crawlDepth: 1,
+			crawlDelay: 200,
+			maxPages: 5,
+			maxPagesPerDomain: 0,
+			maxConcurrentRequests: 1,
+			retryLimit: 0,
+			dynamic: false,
+			respectRobots: false,
+			contentOnly: false,
+			saveMedia: false,
+		});
 
 		expect(
-			storage.repos.crawlRuns
-				.list({ from: created.createdAt })
-				.map((run) => run.id),
+			storage.repos.crawlRuns.list({ from: created.createdAt }).map((run) => run.id),
 		).toContain("crawl-filter");
 	});
 
 	test("export rows expose camelCase fields expected by the API layer", () => {
 		const storage = createInMemoryStorage();
-		const created = storage.repos.crawlRuns.createRun(
-			"crawl-export",
-			"https://export.example",
-			{
-				target: "https://export.example",
-				crawlMethod: "links",
-				crawlDepth: 1,
-				crawlDelay: 200,
-				maxPages: 5,
-				maxPagesPerDomain: 0,
-				maxConcurrentRequests: 1,
-				retryLimit: 0,
-				dynamic: false,
-				respectRobots: false,
-				contentOnly: false,
-				saveMedia: false,
-			},
-		);
+		const created = storage.repos.crawlRuns.createRun("crawl-export", "https://export.example", {
+			target: "https://export.example",
+			crawlMethod: "links",
+			crawlDepth: 1,
+			crawlDelay: 200,
+			maxPages: 5,
+			maxPagesPerDomain: 0,
+			maxConcurrentRequests: 1,
+			retryLimit: 0,
+			dynamic: false,
+			respectRobots: false,
+			contentOnly: false,
+			saveMedia: false,
+		});
 
 		storage.repos.pages.save({
 			crawlId: created.id,
@@ -487,24 +437,20 @@ describe("storage contract", () => {
 
 	test("page updates replace stale FTS terms for search", () => {
 		const storage = createInMemoryStorage();
-		const created = storage.repos.crawlRuns.createRun(
-			"crawl-fts-update",
-			"https://fts.example",
-			{
-				target: "https://fts.example",
-				crawlMethod: "links",
-				crawlDepth: 1,
-				crawlDelay: 200,
-				maxPages: 5,
-				maxPagesPerDomain: 0,
-				maxConcurrentRequests: 1,
-				retryLimit: 0,
-				dynamic: false,
-				respectRobots: false,
-				contentOnly: false,
-				saveMedia: false,
-			},
-		);
+		const created = storage.repos.crawlRuns.createRun("crawl-fts-update", "https://fts.example", {
+			target: "https://fts.example",
+			crawlMethod: "links",
+			crawlDepth: 1,
+			crawlDelay: 200,
+			maxPages: 5,
+			maxPagesPerDomain: 0,
+			maxConcurrentRequests: 1,
+			retryLimit: 0,
+			dynamic: false,
+			respectRobots: false,
+			contentOnly: false,
+			saveMedia: false,
+		});
 		const pageInput = {
 			crawlId: created.id,
 			url: "https://fts.example/page",
@@ -590,10 +536,7 @@ describe("storage contract", () => {
 		});
 
 		expect(storage.repos.search.count('"uniquecontentonlyneedle"*')).toBe(1);
-		const results = storage.repos.search.search(
-			'"uniquecontentonlyneedle"*',
-			10,
-		);
+		const results = storage.repos.search.search('"uniquecontentonlyneedle"*', 10);
 		expect(results).toHaveLength(1);
 		expect(results[0]?.snippet).toContain("uniquecontentonlyneedle");
 		expect(storage.repos.pages.listForExport(created.id)[0]?.content).toBe(
@@ -766,16 +709,12 @@ describe("storage contract", () => {
 			links: [],
 		});
 
-		expect(
-			storage.repos.search.search('"uniquetitleonlyneedle"*', 10)[0],
-		).toEqual(
+		expect(storage.repos.search.search('"uniquetitleonlyneedle"*', 10)[0]).toEqual(
 			expect.objectContaining({
 				snippet: "uniquetitleonlyneedle",
 			}),
 		);
-		expect(
-			storage.repos.search.search('"uniquedescriptiononlyneedle"*', 10)[0],
-		).toEqual(
+		expect(storage.repos.search.search('"uniquedescriptiononlyneedle"*', 10)[0]).toEqual(
 			expect.objectContaining({
 				snippet: "uniquedescriptiononlyneedle",
 			}),
@@ -829,10 +768,7 @@ describe("storage contract", () => {
 			links: [],
 		});
 
-		const result = storage.repos.search.search(
-			'"uniquetitlesnippetneedle"*',
-			10,
-		)[0];
+		const result = storage.repos.search.search('"uniquetitlesnippetneedle"*', 10)[0];
 
 		expect(result?.snippet).toContain("uniquetitlesnippetneedle");
 		expect(result?.snippet).not.toContain("unrelated body text");
@@ -894,23 +830,20 @@ describe("storage contract", () => {
 			],
 		});
 
-		expect(
-			storage.repos.pages.getLinksByPageUrl(
-				created.id,
-				"https://links.example/page",
-			),
-		).toEqual([
-			{
-				url: "https://links.example/follow",
-				text: "Follow",
-				nofollow: false,
-			},
-			{
-				url: "https://links.example/nofollow",
-				text: "No follow",
-				nofollow: true,
-			},
-		]);
+		expect(storage.repos.pages.getLinksByPageUrl(created.id, "https://links.example/page")).toEqual(
+			[
+				{
+					url: "https://links.example/follow",
+					text: "Follow",
+					nofollow: false,
+				},
+				{
+					url: "https://links.example/nofollow",
+					text: "No follow",
+					nofollow: true,
+				},
+			],
+		);
 	});
 
 	test("item completion commits page, terminal, queue removal, counters, and event sequence atomically", () => {
@@ -989,31 +922,25 @@ describe("storage contract", () => {
 			},
 		]);
 		expect(storage.repos.crawlQueue.listPending("crawl-item")).toEqual([]);
-		expect(storage.repos.crawlRuns.getById("crawl-item")?.eventSequence).toBe(
-			7,
-		);
+		expect(storage.repos.crawlRuns.getById("crawl-item")?.eventSequence).toBe(7);
 	});
 
 	test("terminal URL restore order follows insertion sequence inside one timestamp", () => {
 		const storage = createInMemoryStorage();
-		storage.repos.crawlRuns.createRun(
-			"crawl-terminal-order",
-			"https://order.example",
-			{
-				target: "https://order.example",
-				crawlMethod: "links",
-				crawlDepth: 1,
-				crawlDelay: 200,
-				maxPages: 5,
-				maxPagesPerDomain: 0,
-				maxConcurrentRequests: 1,
-				retryLimit: 0,
-				dynamic: false,
-				respectRobots: false,
-				contentOnly: false,
-				saveMedia: false,
-			},
-		);
+		storage.repos.crawlRuns.createRun("crawl-terminal-order", "https://order.example", {
+			target: "https://order.example",
+			crawlMethod: "links",
+			crawlDepth: 1,
+			crawlDelay: 200,
+			maxPages: 5,
+			maxPagesPerDomain: 0,
+			maxConcurrentRequests: 1,
+			retryLimit: 0,
+			dynamic: false,
+			respectRobots: false,
+			contentOnly: false,
+			saveMedia: false,
+		});
 
 		const counters = {
 			pagesScanned: 0,
@@ -1041,9 +968,7 @@ describe("storage contract", () => {
 			eventSequence: 2,
 		});
 
-		expect(
-			storage.repos.crawlItems.listTerminalUrls("crawl-terminal-order"),
-		).toEqual([
+		expect(storage.repos.crawlItems.listTerminalUrls("crawl-terminal-order")).toEqual([
 			{
 				url: "https://order.example/z-success",
 				outcome: "success",
@@ -1059,24 +984,20 @@ describe("storage contract", () => {
 
 	test("item completion rolls back page save when terminal persistence fails", () => {
 		const storage = createInMemoryStorage();
-		storage.repos.crawlRuns.createRun(
-			"crawl-item-rollback",
-			"https://rollback.example",
-			{
-				target: "https://rollback.example",
-				crawlMethod: "links",
-				crawlDepth: 1,
-				crawlDelay: 200,
-				maxPages: 5,
-				maxPagesPerDomain: 0,
-				maxConcurrentRequests: 1,
-				retryLimit: 0,
-				dynamic: false,
-				respectRobots: false,
-				contentOnly: false,
-				saveMedia: false,
-			},
-		);
+		storage.repos.crawlRuns.createRun("crawl-item-rollback", "https://rollback.example", {
+			target: "https://rollback.example",
+			crawlMethod: "links",
+			crawlDepth: 1,
+			crawlDelay: 200,
+			maxPages: 5,
+			maxPagesPerDomain: 0,
+			maxConcurrentRequests: 1,
+			retryLimit: 0,
+			dynamic: false,
+			respectRobots: false,
+			contentOnly: false,
+			saveMedia: false,
+		});
 
 		expect(() =>
 			storage.repos.crawlItems.commitCompletedItem({
@@ -1120,14 +1041,8 @@ describe("storage contract", () => {
 			}),
 		).toThrow();
 
-		expect(storage.repos.pages.listForExport("crawl-item-rollback")).toEqual(
-			[],
-		);
-		expect(
-			storage.repos.crawlItems.listTerminalUrls("crawl-item-rollback"),
-		).toEqual([]);
-		expect(
-			storage.repos.crawlRuns.getById("crawl-item-rollback")?.eventSequence,
-		).toBe(0);
+		expect(storage.repos.pages.listForExport("crawl-item-rollback")).toEqual([]);
+		expect(storage.repos.crawlItems.listTerminalUrls("crawl-item-rollback")).toEqual([]);
+		expect(storage.repos.crawlRuns.getById("crawl-item-rollback")?.eventSequence).toBe(0);
 	});
 });

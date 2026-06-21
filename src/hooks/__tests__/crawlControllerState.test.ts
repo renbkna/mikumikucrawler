@@ -1,9 +1,9 @@
+import { describe, expect, test } from "bun:test";
 import type {
+	CrawlEventEnvelope,
 	CrawlSummary,
 	ResumableSessionSummary,
 } from "../../../shared/contracts/index.js";
-import { describe, expect, test } from "bun:test";
-import type { CrawlEventEnvelope } from "../../../shared/contracts/index.js";
 import { UI_LIMITS } from "../../constants";
 import {
 	type CrawlControllerAction,
@@ -12,18 +12,14 @@ import {
 	createInitialCrawlControllerState,
 	getCrawlCommandAvailability,
 } from "../crawlControllerState";
-import {
-	getResumeHydrationActions,
-	shouldSettleActiveSubscription,
-} from "../useCrawlController";
+import { getResumeHydrationActions, shouldSettleActiveSubscription } from "../useCrawlController";
 
 function reduce(
 	state: CrawlControllerState,
 	...actions: CrawlControllerAction[]
 ): CrawlControllerState {
 	return actions.reduce(
-		(currentState, action) =>
-			crawlControllerReducer(currentState, action).state,
+		(currentState, action) => crawlControllerReducer(currentState, action).state,
 		state,
 	);
 }
@@ -55,9 +51,7 @@ describe("crawlControllerReducer", () => {
 			},
 		};
 
-		expect(shouldSettleActiveSubscription("new-crawl", oldTerminal)).toBe(
-			false,
-		);
+		expect(shouldSettleActiveSubscription("new-crawl", oldTerminal)).toBe(false);
 		expect(shouldSettleActiveSubscription("old-crawl", oldTerminal)).toBe(true);
 	});
 
@@ -596,8 +590,7 @@ describe("crawlControllerReducer", () => {
 
 		const repeatedFallback = crawlControllerReducer(state, {
 			type: "logAppended",
-			message:
-				"[Fetch] Falling back to static crawling for https://example.com",
+			message: "[Fetch] Falling back to static crawling for https://example.com",
 		});
 
 		expect(state.logs).toHaveLength(UI_LIMITS.MAX_LOGS);
@@ -622,9 +615,7 @@ describe("crawlControllerReducer", () => {
 
 		expect(transition.state.runPhase).toBe("running");
 		expect(transition.state.logs).toHaveLength(1);
-		expect(transition.state.logs[0]).toContain(
-			"Crawl started for https://example.com",
-		);
+		expect(transition.state.logs[0]).toContain("Crawl started for https://example.com");
 	});
 
 	test("crawl.started preserves a pause requested during startup", () => {
@@ -643,9 +634,7 @@ describe("crawlControllerReducer", () => {
 		});
 
 		expect(transition.state.runPhase).toBe("pausing");
-		expect(transition.state.logs[0]).toContain(
-			"Crawl started for https://example.com",
-		);
+		expect(transition.state.logs[0]).toContain("Crawl started for https://example.com");
 	});
 
 	test("crawl.started with resume flag produces resume-specific log", () => {
@@ -690,8 +679,9 @@ describe("crawlControllerReducer", () => {
 
 		expect(t2.state.crawledPages).toHaveLength(2);
 		// Most recent page is first (prepended)
-		expect(t2.state.crawledPages[0].url).toBe("https://example.com/b");
-		expect(t2.state.crawledPages[1].url).toBe("https://example.com/a");
+		const [firstPage, secondPage] = t2.state.crawledPages;
+		expect(firstPage?.url).toBe("https://example.com/b");
+		expect(secondPage?.url).toBe("https://example.com/a");
 	});
 
 	test("crawl.progress updates stats, queue, and progress", () => {
@@ -926,7 +916,7 @@ describe("crawlControllerReducer", () => {
 			sessionId: "s-1",
 		}).state;
 		expect(state.resumableSessions.items).toHaveLength(1);
-		expect(state.resumableSessions.items[0].id).toBe("s-2");
+		expect(state.resumableSessions.items[0]?.id).toBe("s-2");
 		expect(state.resumableSessions.deletingId).toBeNull();
 	});
 
@@ -980,9 +970,7 @@ describe("crawlControllerReducer", () => {
 			sessionId: "s-1",
 		}).state;
 		expect(state.resumableSessions.deletingId).toBeNull();
-		expect(state.resumableSessions.items.map((session) => session.id)).toEqual([
-			"s-2",
-		]);
+		expect(state.resumableSessions.items.map((session) => session.id)).toEqual(["s-2"]);
 	});
 
 	test("deleting the active paused resumable session clears selected crawl state", () => {
@@ -1213,9 +1201,7 @@ describe("crawlControllerReducer", () => {
 			{ type: "resumableSessionsLoaded", requestId: 2, sessions: latest },
 		);
 
-		expect(state.resumableSessions.items.map((session) => session.id)).toEqual([
-			"latest",
-		]);
+		expect(state.resumableSessions.items.map((session) => session.id)).toEqual(["latest"]);
 		expect(state.resumableSessions.isLoading).toBe(false);
 	});
 
@@ -1346,11 +1332,7 @@ describe("crawlControllerReducer", () => {
 		expect(completed.state.progress).toBe(100);
 		expect(completed.state.connectionState).toBe("disconnected");
 		expect(completed.state.crawledPages).toHaveLength(1); // pages preserved
-		expect(
-			completed.effects.some(
-				(e) => e.type === "toast" && e.level === "success",
-			),
-		).toBe(true);
+		expect(completed.effects.some((e) => e.type === "toast" && e.level === "success")).toBe(true);
 	});
 
 	test("resume hydration replaces local form state with persisted crawl settings", () => {

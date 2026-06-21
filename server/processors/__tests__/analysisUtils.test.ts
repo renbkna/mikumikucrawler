@@ -65,9 +65,7 @@ describe("analyzeContent", () => {
 	describe("reference: Flesch Reading Ease formula", () => {
 		test("simple short sentences score higher than complex long ones", () => {
 			// Simple: short words, short sentences
-			const simple = analyzeContent(
-				"The cat sat. The dog ran. The sun set. The bird sang.",
-			);
+			const simple = analyzeContent("The cat sat. The dog ran. The sun set. The bird sang.");
 			// Complex: long words, long sentences
 			const complex = analyzeContent(
 				"The telecommunications infrastructure fundamentally necessitates comprehensive organizational restructuring throughout the establishment.",
@@ -86,9 +84,7 @@ describe("analyzeContent", () => {
 
 	describe("invariant: keywords", () => {
 		test("max 10 items", () => {
-			const text = Array.from({ length: 15 }, (_, i) =>
-				`uniqueword${i} `.repeat(3),
-			).join(" ");
+			const text = Array.from({ length: 15 }, (_, i) => `uniqueword${i} `.repeat(3)).join(" ");
 			const result = analyzeContent(text);
 			expect(result.keywords.length).toBeLessThanOrEqual(10);
 		});
@@ -96,9 +92,7 @@ describe("analyzeContent", () => {
 		test("sorted by count descending", () => {
 			const result = analyzeContent("apple apple apple banana banana cherry");
 			for (let i = 1; i < result.keywords.length; i++) {
-				expect(result.keywords[i - 1].count).toBeGreaterThanOrEqual(
-					result.keywords[i].count,
-				);
+				expect(result.keywords[i - 1].count).toBeGreaterThanOrEqual(result.keywords[i].count);
 			}
 		});
 
@@ -136,25 +130,19 @@ describe("analyzeContent", () => {
 		});
 
 		test("detects negative sentiment", () => {
-			const result = analyzeContent(
-				"This is terrible. I hate this awful product. Bad experience!",
-			);
+			const result = analyzeContent("This is terrible. I hate this awful product. Bad experience!");
 			expect(result.sentiment).toBe("negative");
 		});
 
 		test("detects neutral sentiment", () => {
-			const result = analyzeContent(
-				"The document contains information about the project.",
-			);
+			const result = analyzeContent("The document contains information about the project.");
 			expect(result.sentiment).toBe("neutral");
 		});
 	});
 
 	describe("language detection", () => {
 		test("detects English", () => {
-			const result = analyzeContent(
-				"The quick brown fox jumps over the lazy dog.",
-			);
+			const result = analyzeContent("The quick brown fox jumps over the lazy dog.");
 			expect(result.language).toBe("en");
 		});
 	});

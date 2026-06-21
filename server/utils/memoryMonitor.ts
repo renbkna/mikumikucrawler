@@ -48,8 +48,6 @@ function getMemoryStatus(): MemoryStatus {
 export function logMemoryStatus(logger: Logger): MemoryStatus {
 	const status = getMemoryStatus();
 	const icon = status.isLowMemory ? "⚠️" : "✅";
-	logger.info(
-		`${icon} Memory: ${status.totalEstimated} | ${status.recommendation}`,
-	);
+	logger.info(`${icon} Memory: ${status.totalEstimated} | ${status.recommendation}`);
 	return status;
 }

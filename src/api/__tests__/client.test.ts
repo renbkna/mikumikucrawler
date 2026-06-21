@@ -1,14 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import {
-	buildCrawlEventsPath,
-	buildCrawlExportPath,
-} from "../../../shared/contracts/index.js";
+import { buildCrawlEventsPath, buildCrawlExportPath } from "../../../shared/contracts/index.js";
+import { downloadCrawlExport, getBackendUrl, resolveBackendUrl } from "../client";
 import { subscribeToCrawlEvents } from "../crawls";
-import {
-	downloadCrawlExport,
-	getBackendUrl,
-	resolveBackendUrl,
-} from "../client";
 
 const originalFetch = globalThis.fetch;
 const originalEventSource = globalThis.EventSource;
@@ -29,9 +22,7 @@ describe("API client backend URL resolution", () => {
 	});
 
 	test("defaults Vite dev builds to the Bun backend port", () => {
-		expect(resolveBackendUrl({ DEV: true }, "http://localhost:5173")).toBe(
-			"http://localhost:3000",
-		);
+		expect(resolveBackendUrl({ DEV: true }, "http://localhost:5173")).toBe("http://localhost:3000");
 	});
 
 	test("uses same origin outside Vite dev for backend-served static builds", () => {
@@ -77,8 +68,6 @@ describe("API client backend URL resolution", () => {
 		});
 		subscription.close();
 
-		expect(constructedUrls).toEqual([
-			`${getBackendUrl()}${buildCrawlEventsPath("crawl-2")}`,
-		]);
+		expect(constructedUrls).toEqual([`${getBackendUrl()}${buildCrawlEventsPath("crawl-2")}`]);
 	});
 });

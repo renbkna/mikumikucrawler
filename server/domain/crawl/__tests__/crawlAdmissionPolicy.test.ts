@@ -44,25 +44,17 @@ describe("CrawlAdmissionPolicy", () => {
 			{ url: "https://example.com/app.css" },
 		]);
 
-		expect(normalized.map((link) => link.link.url)).toEqual([
-			"https://example.com/page?a=1&b=2",
-		]);
+		expect(normalized.map((link) => link.link.url)).toEqual(["https://example.com/page?a=1&b=2"]);
 	});
 
 	test("applies URL filtering, nofollow, robots, delay, and queue admission in one boundary", async () => {
 		const setDomainDelay = mock(() => undefined);
 		const enqueueNormalized = mock(() => true);
-		const evaluateIdentity = mock(
-			async (identity: { canonicalUrl: string }) => ({
-				type: identity.canonicalUrl.endsWith("/blocked")
-					? "disallowed"
-					: "allowed",
-				delayKey: "https://example.com",
-				crawlDelayMs: identity.canonicalUrl.endsWith("/allowed")
-					? 500
-					: undefined,
-			}),
-		);
+		const evaluateIdentity = mock(async (identity: { canonicalUrl: string }) => ({
+			type: identity.canonicalUrl.endsWith("/blocked") ? "disallowed" : "allowed",
+			delayKey: "https://example.com",
+			crawlDelayMs: identity.canonicalUrl.endsWith("/allowed") ? 500 : undefined,
+		}));
 		const policy = new CrawlAdmissionPolicy(
 			makeOptions(),
 			{ setDomainDelay } as never,
@@ -131,14 +123,9 @@ describe("CrawlAdmissionPolicy", () => {
 			} as never,
 		);
 
-		await policy.admitDiscoveredLinks(parent, [
-			{ url: "http://example.com:8080/slow" },
-		]);
+		await policy.admitDiscoveredLinks(parent, [{ url: "http://example.com:8080/slow" }]);
 
-		expect(setDomainDelay).toHaveBeenCalledWith(
-			"http://example.com:8080",
-			1200,
-		);
+		expect(setDomainDelay).toHaveBeenCalledWith("http://example.com:8080", 1200);
 		expect(enqueueNormalized).toHaveBeenCalledWith(
 			expect.objectContaining({
 				url: "http://example.com:8080/slow",

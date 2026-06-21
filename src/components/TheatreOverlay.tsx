@@ -1,12 +1,5 @@
-import {
-	Fragment,
-	memo,
-	useCallback,
-	useEffect,
-	useRef,
-	useState,
-} from "react";
 import { CircleStop } from "lucide-react";
+import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
 import { SEQUENCE_TIMINGS } from "../constants";
 
 const RIPPLE_ANIMATION_DURATION_MS = 1500;
@@ -216,10 +209,7 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 			</div>
 
 			{count && (
-				<div
-					key={count}
-					className="relative z-10 flex flex-col items-center justify-center"
-				>
+				<div key={count} className="relative z-10 flex flex-col items-center justify-center">
 					<div className="text-9xl font-black text-white tracking-tight animate-pop">
 						<span className="drop-shadow-[0_0_30px_rgba(255,183,197,0.8)] text-transparent bg-clip-text bg-gradient-to-br from-miku-pink to-white">
 							{count}

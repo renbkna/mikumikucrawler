@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { CrawlOptions } from "../../../../shared/contracts/index.js";
 import type { ProcessedContent } from "../../../types.js";
-import { buildPageResult } from "../PageResultBuilder.js";
 import type { QueueItem } from "../CrawlQueue.js";
 import type { FetchResult } from "../FetchService.js";
+import { buildPageResult } from "../PageResultBuilder.js";
 
 const baseOptions: CrawlOptions = {
 	target: "https://example.com",

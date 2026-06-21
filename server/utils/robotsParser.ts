@@ -81,7 +81,12 @@ export class NativeRobotsParser implements RobotsResult {
 			const { userAgents, allow, disallow, crawlDelay } = currentRule;
 			for (const userAgent of userAgents) {
 				this.rules.push(
-					this.compileRule({ userAgent, allow, disallow, crawlDelay }),
+					this.compileRule({
+						userAgent,
+						allow,
+						disallow,
+						...(crawlDelay === undefined ? {} : { crawlDelay }),
+					}),
 				);
 			}
 		};
@@ -160,7 +165,7 @@ export class NativeRobotsParser implements RobotsResult {
 			userAgent: raw.userAgent,
 			allow: compile(raw.allow),
 			disallow: compile(raw.disallow),
-			crawlDelay: raw.crawlDelay,
+			...(raw.crawlDelay === undefined ? {} : { crawlDelay: raw.crawlDelay }),
 		};
 	}
 
@@ -182,9 +187,7 @@ export class NativeRobotsParser implements RobotsResult {
 		const exact = this.rules.filter((r) => r.userAgent === ua);
 		if (exact.length > 0) return exact;
 
-		const partial = this.rules.filter(
-			(r) => r.userAgent !== "*" && ua.includes(r.userAgent),
-		);
+		const partial = this.rules.filter((r) => r.userAgent !== "*" && ua.includes(r.userAgent));
 		if (partial.length > 0) return partial;
 
 		return this.rules.filter((r) => r.userAgent === "*");
@@ -223,9 +226,8 @@ export class NativeRobotsParser implements RobotsResult {
 	}
 
 	getCrawlDelay(userAgent?: string): number | undefined {
-		return this.findMatchingRules(userAgent).find(
-			(rule) => rule.crawlDelay !== undefined,
-		)?.crawlDelay;
+		return this.findMatchingRules(userAgent).find((rule) => rule.crawlDelay !== undefined)
+			?.crawlDelay;
 	}
 
 	getSitemaps(): string[] {

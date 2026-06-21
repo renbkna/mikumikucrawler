@@ -68,10 +68,7 @@ interface DynamicRenderSuccess {
 	result: DynamicRenderResult;
 }
 
-type DynamicRenderAttempt =
-	| DynamicRenderSuccess
-	| DynamicRenderConsentBlocked
-	| null;
+type DynamicRenderAttempt = DynamicRenderSuccess | DynamicRenderConsentBlocked | null;
 
 interface ConsentBypassResult {
 	detected: boolean;
@@ -112,9 +109,7 @@ function isRecoverableBrowserError(err: unknown): boolean {
 	);
 }
 
-function normalizeCookieSameSite(
-	value: string | undefined,
-): BrowserCookie["sameSite"] {
+function normalizeCookieSameSite(value: string | undefined): BrowserCookie["sameSite"] {
 	if (value === "Lax" || value === "None" || value === "Strict") {
 		return value;
 	}
@@ -122,11 +117,7 @@ function normalizeCookieSameSite(
 }
 
 function shouldSkipSecurityValidation(url: string): boolean {
-	return (
-		url.startsWith("data:") ||
-		url.startsWith("blob:") ||
-		url.startsWith("about:")
-	);
+	return url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("about:");
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -160,9 +151,7 @@ export async function fulfillRouteWithPinnedHttpClient(
 		return;
 	}
 
-	if (
-		["image", "stylesheet", "font", "media"].includes(request.resourceType())
-	) {
+	if (["image", "stylesheet", "font", "media"].includes(request.resourceType())) {
 		await route.abort();
 		return;
 	}
@@ -174,16 +163,12 @@ export async function fulfillRouteWithPinnedHttpClient(
 			url: requestUrl,
 			headers: request.headers(),
 			method,
-			body:
-				postData && method !== "GET" && method !== "HEAD"
-					? new Uint8Array(postData)
-					: undefined,
+			...(postData && method !== "GET" && method !== "HEAD"
+				? { body: new Uint8Array(postData) }
+				: {}),
 			signal,
 		});
-		const body = await readLimitedResponseBody(
-			response,
-			REQUEST_CONSTANTS.MAX_RESPONSE_BYTES,
-		);
+		const body = await readLimitedResponseBody(response, REQUEST_CONSTANTS.MAX_RESPONSE_BYTES);
 		if (body.type === "tooLarge") {
 			await route.abort();
 			return;
@@ -278,8 +263,7 @@ export class DynamicRenderer {
 
 		const memoryStatus = logMemoryStatus(this.logger);
 		const constrainedEnvironment =
-			memoryStatus.isLowMemory ||
-			(config.isRender && memoryStatus.heapUsed > 50);
+			memoryStatus.isLowMemory || (config.isRender && memoryStatus.heapUsed > 50);
 
 		if (constrainedEnvironment) {
 			this.disableDynamic("Skipping Playwright due to constrained memory");
@@ -300,13 +284,10 @@ export class DynamicRenderer {
 			return { dynamicEnabled: this.isEnabled() };
 		} catch (err) {
 			throwIfAborted(signal);
-			this.disableDynamic(
-				`Failed to launch Playwright: ${getErrorMessage(err)}`,
-			);
+			this.disableDynamic(`Failed to launch Playwright: ${getErrorMessage(err)}`);
 			return {
 				dynamicEnabled: false,
-				fallbackLog:
-					"Falling back to static crawling: dynamic renderer failed to start",
+				fallbackLog: "Falling back to static crawling: dynamic renderer failed to start",
 			};
 		} finally {
 			signal?.removeEventListener("abort", closeOnAbort);
@@ -353,7 +334,6 @@ export class DynamicRenderer {
 					useIncognitoPages: true,
 					launchOptions: {
 						headless: true,
-						executablePath,
 						args: [
 							"--no-sandbox",
 							"--disable-setuid-sandbox",
@@ -363,6 +343,7 @@ export class DynamicRenderer {
 							"--disable-extensions",
 							"--disable-background-networking",
 						],
+						...(executablePath !== undefined ? { executablePath } : {}),
 					},
 				}),
 			],
@@ -393,12 +374,8 @@ export class DynamicRenderer {
 		signal?: AbortSignal,
 	): Promise<void> {
 		await page.setViewportSize(DYNAMIC_RENDERER_CONSTANTS.VIEWPORT);
-		page.setDefaultTimeout(
-			DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.STANDARD_NAVIGATION,
-		);
-		page.setDefaultNavigationTimeout(
-			DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.STANDARD_NAVIGATION,
-		);
+		page.setDefaultTimeout(DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.STANDARD_NAVIGATION);
+		page.setDefaultNavigationTimeout(DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.STANDARD_NAVIGATION);
 		await page.setExtraHTTPHeaders({
 			Accept: FETCH_HEADERS.Accept,
 			"Accept-Language": FETCH_HEADERS["Accept-Language"],
@@ -407,11 +384,7 @@ export class DynamicRenderer {
 			DNT: "1",
 		});
 
-		await configurePinnedBrowserContext(
-			page.context(),
-			this.httpClient,
-			signal,
-		);
+		await configurePinnedBrowserContext(page.context(), this.httpClient, signal);
 
 		page.on("dialog", (dialog) => {
 			dialog.dismiss().catch((err) => {
@@ -445,9 +418,7 @@ export class DynamicRenderer {
 					page.evaluate(() => {
 						const title = document.title || "";
 						const description =
-							document
-								.querySelector('meta[name="description"]')
-								?.getAttribute("content") || "";
+							document.querySelector('meta[name="description"]')?.getAttribute("content") || "";
 						return { title, description };
 					}),
 			});
@@ -459,9 +430,7 @@ export class DynamicRenderer {
 			};
 		} catch (err) {
 			if (isRecoverableBrowserError(err)) {
-				this.logger.debug(
-					`Content extraction failed for page: ${getErrorMessage(err)}`,
-				);
+				this.logger.debug(`Content extraction failed for page: ${getErrorMessage(err)}`);
 				return null;
 			}
 
@@ -469,14 +438,9 @@ export class DynamicRenderer {
 		}
 	}
 
-	async render(
-		item: QueueItem,
-		signal?: AbortSignal,
-	): Promise<DynamicRenderAttempt> {
+	async render(item: QueueItem, signal?: AbortSignal): Promise<DynamicRenderAttempt> {
 		if (signal?.aborted) {
-			throw signal.reason instanceof Error
-				? signal.reason
-				: new Error("Dynamic render aborted");
+			throw signal.reason instanceof Error ? signal.reason : new Error("Dynamic render aborted");
 		}
 		if (!this.isEnabled()) {
 			return null;
@@ -487,9 +451,7 @@ export class DynamicRenderer {
 				await this.launchBrowser(signal);
 			} catch (err) {
 				throwIfAborted(signal);
-				this.disableDynamic(
-					`Failed to relaunch Playwright: ${getErrorMessage(err)}`,
-				);
+				this.disableDynamic(`Failed to relaunch Playwright: ${getErrorMessage(err)}`);
 				return null;
 			}
 		}
@@ -510,13 +472,11 @@ export class DynamicRenderer {
 		try {
 			await this.configurePage(page, item.url, session, signal);
 			if (signal?.aborted) {
-				throw signal.reason instanceof Error
-					? signal.reason
-					: new Error("Dynamic render aborted");
+				throw signal.reason instanceof Error ? signal.reason : new Error("Dynamic render aborted");
 			}
 
-			const isComplex = DYNAMIC_RENDERER_CONSTANTS.COMPLEX_JS_SITES.some(
-				(site) => item.url.includes(site),
+			const isComplex = DYNAMIC_RENDERER_CONSTANTS.COMPLEX_JS_SITES.some((site) =>
+				item.url.includes(site),
 			);
 			const navigationTimeout = isComplex
 				? DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.COMPLEX_NAVIGATION
@@ -531,7 +491,7 @@ export class DynamicRenderer {
 			const headers = response?.headers() ?? {};
 			const contentType = headers["content-type"] || "";
 			const lastModified = headers["last-modified"];
-			const etag = headers.etag;
+			const etag = headers["etag"];
 			const xRobotsTag = headers["x-robots-tag"] ?? null;
 			const retryAfter = headers["retry-after"] ?? null;
 
@@ -541,9 +501,7 @@ export class DynamicRenderer {
 
 			const consentBypass = await this.handleConsentModals(page, item.url);
 			if (signal?.aborted) {
-				throw signal.reason instanceof Error
-					? signal.reason
-					: new Error("Dynamic render aborted");
+				throw signal.reason instanceof Error ? signal.reason : new Error("Dynamic render aborted");
 			}
 			if (
 				consentBypass.detected &&
@@ -584,8 +542,7 @@ export class DynamicRenderer {
 				timeoutMs: 5_000,
 				operationName: "Rendered HTML size check",
 				fallback: 0,
-				run: () =>
-					page.evaluate(() => document.documentElement?.outerHTML.length ?? 0),
+				run: () => page.evaluate(() => document.documentElement?.outerHTML.length ?? 0),
 			});
 			if (htmlLength > REQUEST_CONSTANTS.MAX_RESPONSE_BYTES) {
 				// ponytail: char preflight avoids transferring huge DOM; static fetch owns the exact byte cap.
@@ -597,9 +554,7 @@ export class DynamicRenderer {
 
 			const extracted = await this.safeExtractContent(page);
 			if (signal?.aborted) {
-				throw signal.reason instanceof Error
-					? signal.reason
-					: new Error("Dynamic render aborted");
+				throw signal.reason instanceof Error ? signal.reason : new Error("Dynamic render aborted");
 			}
 			if (!extracted || navigationOccurred) {
 				page.off("framenavigated", navigationHandler);
@@ -632,8 +587,8 @@ export class DynamicRenderer {
 					contentLength,
 					title: extracted.title,
 					description: extracted.description || "",
-					lastModified,
-					etag,
+					...(lastModified !== undefined ? { lastModified } : {}),
+					...(etag !== undefined ? { etag } : {}),
 					xRobotsTag,
 					retryAfter,
 				},
@@ -657,13 +612,9 @@ export class DynamicRenderer {
 		}
 	}
 
-	async handleConsentModals(
-		page: Page,
-		url: string,
-	): Promise<ConsentBypassResult> {
+	async handleConsentModals(page: Page, url: string): Promise<ConsentBypassResult> {
 		const EVAL_TIMEOUT_MS = DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.CONSENT_EVAL;
-		const NAV_TIMEOUT_MS =
-			DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.CONSENT_NAVIGATION;
+		const NAV_TIMEOUT_MS = DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.CONSENT_NAVIGATION;
 
 		try {
 			const bodyText = await runWithTimeoutFallback({
@@ -677,9 +628,7 @@ export class DynamicRenderer {
 				return { detected: false, clicked: false };
 			}
 
-			this.logger.info(
-				`Consent wall detected on ${url}. Attempting to bypass...`,
-			);
+			this.logger.info(`Consent wall detected on ${url}. Attempting to bypass...`);
 
 			let clicked = false;
 			for (const frame of page.frames()) {
@@ -689,35 +638,22 @@ export class DynamicRenderer {
 					fallback: false,
 					run: () =>
 						frame.evaluate(
-							({
-								selectors,
-								actionMarkers,
-							}: {
-								selectors: string[];
-								actionMarkers: string[];
-							}) => {
+							({ selectors, actionMarkers }: { selectors: string[]; actionMarkers: string[] }) => {
 								const interactiveSelector =
 									"button, input[type='submit'], a[role='button'], [role='button']";
 
-								function collectInteractiveElements(
-									root: ParentNode,
-								): HTMLElement[] {
+								function collectInteractiveElements(root: ParentNode): HTMLElement[] {
 									const elements = Array.from(
 										root.querySelectorAll(interactiveSelector),
 									) as HTMLElement[];
-									const walker = document.createTreeWalker(
-										root,
-										NodeFilter.SHOW_ELEMENT,
-									);
+									const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
 									const shadowElements: HTMLElement[] = [];
 
 									while (walker.nextNode()) {
 										const node = walker.currentNode;
 										if (!(node instanceof Element)) continue;
 										if (node.shadowRoot) {
-											shadowElements.push(
-												...collectInteractiveElements(node.shadowRoot),
-											);
+											shadowElements.push(...collectInteractiveElements(node.shadowRoot));
 										}
 									}
 
@@ -739,9 +675,7 @@ export class DynamicRenderer {
 								const exactMatch = buttons.find(
 									(button) =>
 										isVisible(button) &&
-										selectors.some((selector: string) =>
-											button.matches(selector),
-										),
+										selectors.some((selector: string) => button.matches(selector)),
 								);
 								if (exactMatch) {
 									exactMatch.click();
@@ -750,14 +684,10 @@ export class DynamicRenderer {
 
 								const normalize = (value: string | null | undefined) =>
 									(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
-								const matchesAction = (
-									...values: Array<string | null | undefined>
-								) =>
+								const matchesAction = (...values: Array<string | null | undefined>) =>
 									values.some((value) => {
 										const normalized = normalize(value);
-										return actionMarkers.some((marker: string) =>
-											normalized.includes(marker),
-										);
+										return actionMarkers.some((marker: string) => normalized.includes(marker));
 									});
 
 								const textMatch = buttons.find((button) => {
@@ -791,33 +721,26 @@ export class DynamicRenderer {
 				return { detected: true, clicked: false };
 			}
 
-			this.logger.info(
-				`Consent bypass clicked on ${url}, waiting for navigation...`,
-			);
+			this.logger.info(`Consent bypass clicked on ${url}, waiting for navigation...`);
 
 			try {
 				await page.waitForLoadState("domcontentloaded", {
 					timeout: NAV_TIMEOUT_MS,
 				});
 			} catch {
-				this.logger.debug(
-					`Consent navigation wait completed/timed out for ${url}`,
-				);
+				this.logger.debug(`Consent navigation wait completed/timed out for ${url}`);
 			}
 
 			await Bun.sleep(1000);
 			return { detected: true, clicked: true };
 		} catch (error) {
-			this.logger.info(
-				`Consent bypass attempt failed: ${getErrorMessage(error)}`,
-			);
+			this.logger.info(`Consent bypass attempt failed: ${getErrorMessage(error)}`);
 			return { detected: true, clicked: false };
 		}
 	}
 
 	async waitForComplexContent(page: Page, url: string): Promise<void> {
-		const additionalWaitTime =
-			DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.ADDITIONAL_WAIT;
+		const additionalWaitTime = DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.ADDITIONAL_WAIT;
 		const selectorToWait = Object.entries(SITE_SELECTORS).find(([pattern]) =>
 			url.includes(pattern),
 		)?.[1];
@@ -831,9 +754,7 @@ export class DynamicRenderer {
 				selectorMatched = true;
 				this.logger.debug(`Waited for selector: ${selectorToWait} on ${url}`);
 			} catch (error_) {
-				this.logger.debug(
-					`Preferred selector not found for ${url}: ${getErrorMessage(error_)}`,
-				);
+				this.logger.debug(`Preferred selector not found for ${url}: ${getErrorMessage(error_)}`);
 			}
 		}
 
@@ -847,9 +768,7 @@ export class DynamicRenderer {
 			},
 			run: () =>
 				page.evaluate(() => {
-					const bodyText = (document.body?.innerText ?? "")
-						.replace(/\s+/g, " ")
-						.trim();
+					const bodyText = (document.body?.innerText ?? "").replace(/\s+/g, " ").trim();
 					const hasPrimaryCandidate = Boolean(
 						document.querySelector(
 							"main, article, [role='main'], shreddit-post, [data-testid='post-container'], ytd-watch-flexy, ytd-page-manager",
@@ -863,11 +782,7 @@ export class DynamicRenderer {
 				}),
 		});
 
-		if (
-			!selectorMatched &&
-			!readiness.hasPrimaryCandidate &&
-			readiness.bodyLength < 300
-		) {
+		if (!selectorMatched && !readiness.hasPrimaryCandidate && readiness.bodyLength < 300) {
 			this.logger.warn(
 				`Complex site readiness weak for ${url}: selector missing and content not yet meaningful`,
 			);
@@ -876,11 +791,7 @@ export class DynamicRenderer {
 		await Bun.sleep(additionalWaitTime);
 	}
 
-	private async setCookiesForPage(
-		page: Page,
-		url: string,
-		session: Session,
-	): Promise<void> {
+	private async setCookiesForPage(page: Page, url: string, session: Session): Promise<void> {
 		try {
 			const sessionCookies = session.getCookies(url).map((cookie) => ({
 				name: cookie.name,
@@ -925,11 +836,7 @@ export class DynamicRenderer {
 		}
 	}
 
-	private async persistSessionCookies(
-		session: Session,
-		page: Page,
-		url: string,
-	): Promise<void> {
+	private async persistSessionCookies(session: Session, page: Page, url: string): Promise<void> {
 		try {
 			const cookies = await page.context().cookies([url]);
 			session.setCookies(
@@ -946,9 +853,7 @@ export class DynamicRenderer {
 				url,
 			);
 		} catch (error_) {
-			this.logger.debug(
-				`Session cookie persistence failed: ${getErrorMessage(error_)}`,
-			);
+			this.logger.debug(`Session cookie persistence failed: ${getErrorMessage(error_)}`);
 		}
 	}
 

@@ -342,23 +342,14 @@ export function analyzeContent(text: string): AnalysisResult {
 	const sentimentResult = analyzeSentiment(cleanText);
 	const sentimentLabel = sentimentResult.label;
 
-	const sentences = cleanText
-		.split(/[.!?]+/)
-		.filter((s) => s.trim().length > 0);
-	const avgWordsPerSentence =
-		sentences.length > 0 ? wordCount / sentences.length : 0;
-	const syllableCount = words.reduce(
-		(sum, word) => sum + countSyllables(word),
-		0,
-	);
+	const sentences = cleanText.split(/[.!?]+/).filter((s) => s.trim().length > 0);
+	const avgWordsPerSentence = sentences.length > 0 ? wordCount / sentences.length : 0;
+	const syllableCount = words.reduce((sum, word) => sum + countSyllables(word), 0);
 	const avgSyllablesPerWord = wordCount > 0 ? syllableCount / wordCount : 0;
 	// Flesch Reading Ease formula
 	const readabilityScore = Math.max(
 		0,
-		Math.min(
-			100,
-			206.835 - 1.015 * avgWordsPerSentence - 84.6 * avgSyllablesPerWord,
-		),
+		Math.min(100, 206.835 - 1.015 * avgWordsPerSentence - 84.6 * avgSyllablesPerWord),
 	);
 
 	return {
@@ -419,8 +410,7 @@ export function assessContentQuality(
 		score -= 5;
 	}
 
-	const description =
-		cheerioInstance('meta[name="description"]').attr("content") || "";
+	const description = cheerioInstance('meta[name="description"]').attr("content") || "";
 	factors.hasDescription = description.length > 0;
 	if (!factors.hasDescription) {
 		issues.push("Missing meta description");

@@ -282,10 +282,7 @@ describe("extractStructuredData CONTRACT", () => {
 		const data = extractStructuredData($);
 
 		// INVARIANT: Microdata extracted with correct itemType key and property values
-		const personItems = data.microdata["https://schema.org/Person"] as Record<
-			string,
-			string
-		>[];
+		const personItems = data.microdata["https://schema.org/Person"] as Record<string, string>[];
 		expect(personItems).toBeDefined();
 		expect(personItems.length).toBe(1);
 		expect(personItems[0].name).toBe("John Doe");
@@ -351,8 +348,7 @@ describe("extractMainContent CONTRACT", () => {
 	});
 
 	test("extracts content from article element", () => {
-		const html =
-			"<html><body><article><p>Article content</p></article></body></html>";
+		const html = "<html><body><article><p>Article content</p></article></body></html>";
 		const $ = cheerio.load(html);
 		const content = extractMainContent($);
 
@@ -412,8 +408,7 @@ describe("extractMainContent CONTRACT", () => {
 	});
 
 	test("strips script tags", () => {
-		const html =
-			'<html><body><p>Content</p><script>alert("xss")</script></body></html>';
+		const html = '<html><body><p>Content</p><script>alert("xss")</script></body></html>';
 		const $ = cheerio.load(html);
 		const content = extractMainContent($);
 
@@ -422,8 +417,7 @@ describe("extractMainContent CONTRACT", () => {
 	});
 
 	test("strips style tags", () => {
-		const html =
-			"<html><body><p>Content</p><style>body{color:red}</style></body></html>";
+		const html = "<html><body><p>Content</p><style>body{color:red}</style></body></html>";
 		const $ = cheerio.load(html);
 		const content = extractMainContent($);
 
@@ -432,8 +426,7 @@ describe("extractMainContent CONTRACT", () => {
 	});
 
 	test("strips nav tags", () => {
-		const html =
-			'<html><body><nav><a href="#">Nav</a></nav><p>Content</p></body></html>';
+		const html = '<html><body><nav><a href="#">Nav</a></nav><p>Content</p></body></html>';
 		const $ = cheerio.load(html);
 		const content = extractMainContent($);
 
@@ -668,8 +661,7 @@ describe("processLinks CONTRACT", () => {
 	});
 
 	test("classifies links resolved through external base href as external to the page", () => {
-		const html =
-			'<base href="https://cdn.example.net/assets/"><a href="/page">Page</a>';
+		const html = '<base href="https://cdn.example.net/assets/"><a href="/page">Page</a>';
 		const $ = cheerio.load(html);
 		const links = processLinks($, "https://example.com/start");
 
@@ -804,9 +796,7 @@ describe("processLinks CONTRACT", () => {
 		const $ = cheerio.load(html);
 		const links = processLinks($, "https://example.com");
 
-		expect(links.map((link) => link.url)).toEqual([
-			"https://example.com/page?a=1&b=2",
-		]);
+		expect(links.map((link) => link.url)).toEqual(["https://example.com/page?a=1&b=2"]);
 	});
 
 	test("keeps duplicate link crawlable when any occurrence is followable", () => {
@@ -886,8 +876,7 @@ describe("extractMetadata CONTRACT", () => {
 	});
 
 	test("extracts publish date", () => {
-		const html =
-			'<meta property="article:published_time" content="2023-01-01">';
+		const html = '<meta property="article:published_time" content="2023-01-01">';
 		const $ = cheerio.load(html);
 		const metadata = extractMetadata($);
 

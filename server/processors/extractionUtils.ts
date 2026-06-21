@@ -1,13 +1,9 @@
 import { URL } from "node:url";
 import type { CheerioAPI } from "cheerio";
 import type { Element } from "domhandler";
-import type {
-	ExtractedLink,
-	MediaInfo,
-	PageMetadata,
-} from "../../shared/types.js";
-import type { LoggerLike } from "../types.js";
+import type { ExtractedLink, MediaInfo, PageMetadata } from "../../shared/types.js";
 import { normalizeCanonicalHttpUrl } from "../../shared/url.js";
+import type { LoggerLike } from "../types.js";
 import { getErrorMessage } from "../utils/helpers.js";
 
 /** Pre-compiled regex for downloadable file extensions */
@@ -74,23 +70,14 @@ function jsonLdRecordsFrom(value: unknown): Record<string, unknown>[] {
 	return [];
 }
 
-function appendJsonLdRecord(
-	structured: StructuredData,
-	record: Record<string, unknown>,
-): void {
+function appendJsonLdRecord(structured: StructuredData, record: Record<string, unknown>): void {
 	structured.jsonLd.push(record);
 	for (const schemaType of schemaTypesFrom(record["@type"])) {
-		structured.schema[schemaType] = appendSchemaValue(
-			structured.schema[schemaType],
-			record,
-		);
+		structured.schema[schemaType] = appendSchemaValue(structured.schema[schemaType], record);
 	}
 }
 
-function resolveDocumentBase(
-	cheerioInstance: CheerioAPI,
-	baseUrl: string,
-): string {
+function resolveDocumentBase(cheerioInstance: CheerioAPI, baseUrl: string): string {
 	const baseTagHref = cheerioInstance("base[href]").first().attr("href");
 	if (!baseTagHref) {
 		return baseUrl;
@@ -116,10 +103,7 @@ function normalizeResolvedResourceUrl(url: URL): string | null {
 	return "error" in normalized ? null : normalized.url;
 }
 
-function chooseMainContentCandidate(
-	candidates: MainContentCandidate[],
-	bodyText: string,
-): string {
+function chooseMainContentCandidate(candidates: MainContentCandidate[], bodyText: string): string {
 	const bestCandidate = [...candidates].sort((left, right) => {
 		const lengthDifference = right.text.length - left.text.length;
 		if (lengthDifference !== 0) {
@@ -140,8 +124,7 @@ function chooseMainContentCandidate(
 	if (
 		bestCandidate.kind === "broad" &&
 		bestCandidate.text.length < SUBSTANTIAL_MAIN_CONTENT_LENGTH &&
-		bodyText.length >=
-			bestCandidate.text.length + BODY_FALLBACK_ADVANTAGE_LENGTH
+		bodyText.length >= bestCandidate.text.length + BODY_FALLBACK_ADVANTAGE_LENGTH
 	) {
 		return bodyText;
 	}
@@ -171,9 +154,7 @@ export function extractStructuredData(
 	logger?: LoggerLike,
 ): StructuredData {
 	if (typeof cheerioInstance !== "function") {
-		throw new TypeError(
-			"Invalid Cheerio instance passed to extractStructuredData",
-		);
+		throw new TypeError("Invalid Cheerio instance passed to extractStructuredData");
 	}
 
 	const structured: StructuredData = {
@@ -184,41 +165,35 @@ export function extractStructuredData(
 		schema: {},
 	};
 
-	cheerioInstance('script[type="application/ld+json"]').each(
-		(_: number, element: Element) => {
-			try {
-				const html = cheerioInstance(element).html();
-				if (html) {
-					const jsonData = JSON.parse(html);
-					for (const record of jsonLdRecordsFrom(jsonData)) {
-						appendJsonLdRecord(structured, record);
-					}
+	cheerioInstance('script[type="application/ld+json"]').each((_: number, element: Element) => {
+		try {
+			const html = cheerioInstance(element).html();
+			if (html) {
+				const jsonData = JSON.parse(html);
+				for (const record of jsonLdRecordsFrom(jsonData)) {
+					appendJsonLdRecord(structured, record);
 				}
-			} catch (err) {
-				logger?.debug(`Malformed JSON-LD: ${getErrorMessage(err)}`);
 			}
-		},
-	);
+		} catch (err) {
+			logger?.debug(`Malformed JSON-LD: ${getErrorMessage(err)}`);
+		}
+	});
 
-	cheerioInstance('meta[property^="og:"]').each(
-		(_: number, element: Element) => {
-			const property = cheerioInstance(element).attr("property");
-			const content = cheerioInstance(element).attr("content");
-			if (property && content) {
-				structured.openGraph[property.replace("og:", "")] = content;
-			}
-		},
-	);
+	cheerioInstance('meta[property^="og:"]').each((_: number, element: Element) => {
+		const property = cheerioInstance(element).attr("property");
+		const content = cheerioInstance(element).attr("content");
+		if (property && content) {
+			structured.openGraph[property.replace("og:", "")] = content;
+		}
+	});
 
-	cheerioInstance('meta[name^="twitter:"]').each(
-		(_: number, element: Element) => {
-			const name = cheerioInstance(element).attr("name");
-			const content = cheerioInstance(element).attr("content");
-			if (name && content) {
-				structured.twitterCards[name.replace("twitter:", "")] = content;
-			}
-		},
-	);
+	cheerioInstance('meta[name^="twitter:"]').each((_: number, element: Element) => {
+		const name = cheerioInstance(element).attr("name");
+		const content = cheerioInstance(element).attr("content");
+		if (name && content) {
+			structured.twitterCards[name.replace("twitter:", "")] = content;
+		}
+	});
 
 	cheerioInstance("[itemscope]").each((_: number, element: Element) => {
 		const itemType = cheerioInstance(element).attr("itemtype");
@@ -229,10 +204,7 @@ export function extractStructuredData(
 			structured.microdata[itemType] = [];
 		}
 		structured.microdata[itemType].push(microItem);
-		structured.schema[itemType] = appendSchemaArrayValue(
-			structured.schema[itemType],
-			microItem,
-		);
+		structured.schema[itemType] = appendSchemaArrayValue(structured.schema[itemType], microItem);
 	});
 
 	return structured;
@@ -248,9 +220,7 @@ export function extractStructuredData(
  */
 export function extractMainContent(cheerioInstance: CheerioAPI): string {
 	if (typeof cheerioInstance !== "function") {
-		throw new TypeError(
-			"Invalid Cheerio instance passed to extractMainContent",
-		);
+		throw new TypeError("Invalid Cheerio instance passed to extractMainContent");
 	}
 
 	let mainContent = "";
@@ -287,10 +257,7 @@ export function extractMainContent(cheerioInstance: CheerioAPI): string {
 
 	const bodyClone = cheerioInstance("body").clone();
 	bodyClone.find(MAIN_CONTENT_NOISE_SELECTOR).remove();
-	mainContent = chooseMainContentCandidate(
-		candidates,
-		cleanText(bodyClone.text()),
-	);
+	mainContent = chooseMainContentCandidate(candidates, cleanText(bodyClone.text()));
 
 	return mainContent;
 }
@@ -337,9 +304,7 @@ export function extractMediaInfo(
 		if (!src) return;
 
 		try {
-			const normalizedUrl = normalizeResolvedResourceUrl(
-				new URL(src, resolveBase),
-			);
+			const normalizedUrl = normalizeResolvedResourceUrl(new URL(src, resolveBase));
 			if (!normalizedUrl) return;
 			pushMedia({
 				type: "image",
@@ -354,33 +319,27 @@ export function extractMediaInfo(
 		}
 	});
 
-	cheerioInstance("picture source[srcset]").each(
-		(_: number, element: Element) => {
-			const srcset = cheerioInstance(element).attr("srcset");
-			if (!srcset) return;
+	cheerioInstance("picture source[srcset]").each((_: number, element: Element) => {
+		const srcset = cheerioInstance(element).attr("srcset");
+		if (!srcset) return;
 
-			const src = firstSrcsetUrl(srcset);
-			if (!src) return;
+		const src = firstSrcsetUrl(srcset);
+		if (!src) return;
 
-			try {
-				const normalizedUrl = normalizeResolvedResourceUrl(
-					new URL(src, resolveBase),
-				);
-				if (!normalizedUrl) return;
-				pushMedia({ type: "image", url: normalizedUrl });
-			} catch (err) {
-				logger?.debug(`Malformed picture source URL: ${getErrorMessage(err)}`);
-			}
-		},
-	);
+		try {
+			const normalizedUrl = normalizeResolvedResourceUrl(new URL(src, resolveBase));
+			if (!normalizedUrl) return;
+			pushMedia({ type: "image", url: normalizedUrl });
+		} catch (err) {
+			logger?.debug(`Malformed picture source URL: ${getErrorMessage(err)}`);
+		}
+	});
 
 	const pushMediaSource = (type: "audio" | "video", element: Element): void => {
 		const src = cheerioInstance(element).attr("src");
 		if (src) {
 			try {
-				const normalizedUrl = normalizeResolvedResourceUrl(
-					new URL(src, resolveBase),
-				);
+				const normalizedUrl = normalizeResolvedResourceUrl(new URL(src, resolveBase));
 				if (!normalizedUrl) return;
 				pushMedia({ type, url: normalizedUrl });
 			} catch (err) {
@@ -389,17 +348,13 @@ export function extractMediaInfo(
 		}
 	};
 
-	cheerioInstance("video[src], video source[src]").each(
-		(_: number, element: Element) => {
-			pushMediaSource("video", element);
-		},
-	);
+	cheerioInstance("video[src], video source[src]").each((_: number, element: Element) => {
+		pushMediaSource("video", element);
+	});
 
-	cheerioInstance("audio[src], audio source[src]").each(
-		(_: number, element: Element) => {
-			pushMediaSource("audio", element);
-		},
-	);
+	cheerioInstance("audio[src], audio source[src]").each((_: number, element: Element) => {
+		pushMediaSource("audio", element);
+	});
 
 	return media;
 }
@@ -502,50 +457,30 @@ export function extractMetadata(cheerioInstance: CheerioAPI): PageMetadata {
 
 	metadata.title =
 		cheerioInstance("title").text().trim() ||
-		cleanMetadataValue(
-			cheerioInstance('meta[property="og:title"]').attr("content"),
-		) ||
+		cleanMetadataValue(cheerioInstance('meta[property="og:title"]').attr("content")) ||
 		cheerioInstance("h1").first().text().trim();
 
 	metadata.description =
-		cleanMetadataValue(
-			cheerioInstance('meta[name="description"]').attr("content"),
-		) ||
-		cleanMetadataValue(
-			cheerioInstance('meta[property="og:description"]').attr("content"),
-		);
+		cleanMetadataValue(cheerioInstance('meta[name="description"]').attr("content")) ||
+		cleanMetadataValue(cheerioInstance('meta[property="og:description"]').attr("content"));
 
 	metadata.author =
-		cleanMetadataValue(
-			cheerioInstance('meta[name="author"]').attr("content"),
-		) ||
-		cleanMetadataValue(
-			cheerioInstance('meta[property="article:author"]').attr("content"),
-		);
+		cleanMetadataValue(cheerioInstance('meta[name="author"]').attr("content")) ||
+		cleanMetadataValue(cheerioInstance('meta[property="article:author"]').attr("content"));
 
 	metadata.publishDate =
 		cleanMetadataValue(
-			cheerioInstance('meta[property="article:published_time"]').attr(
-				"content",
-			),
+			cheerioInstance('meta[property="article:published_time"]').attr("content"),
 		) || cleanMetadataValue(cheerioInstance("time[datetime]").attr("datetime"));
 
 	metadata.modifiedDate = cleanMetadataValue(
 		cheerioInstance('meta[property="article:modified_time"]').attr("content"),
 	);
 
-	metadata.canonical = cleanMetadataValue(
-		cheerioInstance('link[rel="canonical"]').attr("href"),
-	);
-	metadata.robots = cleanMetadataValue(
-		cheerioInstance('meta[name="robots"]').attr("content"),
-	);
-	metadata.viewport = cleanMetadataValue(
-		cheerioInstance('meta[name="viewport"]').attr("content"),
-	);
-	metadata.charset = cleanMetadataValue(
-		cheerioInstance("meta[charset]").attr("charset"),
-	);
+	metadata.canonical = cleanMetadataValue(cheerioInstance('link[rel="canonical"]').attr("href"));
+	metadata.robots = cleanMetadataValue(cheerioInstance('meta[name="robots"]').attr("content"));
+	metadata.viewport = cleanMetadataValue(cheerioInstance('meta[name="viewport"]').attr("content"));
+	metadata.charset = cleanMetadataValue(cheerioInstance("meta[charset]").attr("charset"));
 	metadata.generator = cleanMetadataValue(
 		cheerioInstance('meta[name="generator"]').attr("content"),
 	);
@@ -574,8 +509,7 @@ function extractMicrodataItem(
 
 		const value = cheerioInstance(child).is("[itemscope]")
 			? extractMicrodataItem(cheerioInstance, child)
-			: cheerioInstance(child).attr("content") ||
-				cheerioInstance(child).text().trim();
+			: cheerioInstance(child).attr("content") || cheerioInstance(child).text().trim();
 
 		const existing = item[prop];
 		if (Array.isArray(existing)) {

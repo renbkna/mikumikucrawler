@@ -15,10 +15,7 @@ describe("Type Consistency", () => {
 		// errors: Array<{ type: string; message: string; timestamp?: string }>;
 
 		// Check that the core processing fields (minus server-specific fields) are compatible
-		type ProcessedContentCore = Omit<
-			ProcessedContent,
-			"url" | "links" | "contentType"
-		>;
+		type ProcessedContentCore = Omit<ProcessedContent, "url" | "links" | "contentType">;
 		expectTypeOf<ProcessedContentCore>().toMatchTypeOf<
 			Omit<ProcessedPageData, "qualityScore" | "language">
 		>();

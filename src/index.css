@@ -24,10 +24,8 @@ html {
 	--miku-text-soft: #718096;
 	--miku-text-light: #a0aec0;
 
-	--shadow-cute:
-		0 4px 20px rgba(57, 197, 187, 0.15), 0 2px 8px rgba(255, 183, 197, 0.1);
-	--shadow-hover:
-		0 8px 30px rgba(57, 197, 187, 0.2), 0 4px 12px rgba(255, 183, 197, 0.15);
+	--shadow-cute: 0 4px 20px rgba(57, 197, 187, 0.15), 0 2px 8px rgba(255, 183, 197, 0.1);
+	--shadow-hover: 0 8px 30px rgba(57, 197, 187, 0.2), 0 4px 12px rgba(255, 183, 197, 0.15);
 
 	--font-sans: "Varela Round", "M PLUS Rounded 1c", system-ui, sans-serif;
 }
@@ -148,11 +146,7 @@ body::after {
 body::before {
 	width: 300px;
 	height: 300px;
-	background: radial-gradient(
-		circle,
-		var(--miku-teal-pale) 0%,
-		transparent 70%
-	);
+	background: radial-gradient(circle, var(--miku-teal-pale) 0%, transparent 70%);
 	top: -100px;
 	right: -100px;
 	animation: float 8s ease-in-out infinite;
@@ -161,11 +155,7 @@ body::before {
 body::after {
 	width: 250px;
 	height: 250px;
-	background: radial-gradient(
-		circle,
-		var(--miku-pink-pale) 0%,
-		transparent 70%
-	);
+	background: radial-gradient(circle, var(--miku-pink-pale) 0%, transparent 70%);
 	bottom: -50px;
 	left: -50px;
 	animation: float 10s ease-in-out infinite reverse;
@@ -203,12 +193,7 @@ body::after {
 	left: 0;
 	right: 0;
 	height: 4px;
-	background: linear-gradient(
-		90deg,
-		var(--miku-teal),
-		var(--miku-pink),
-		var(--miku-teal)
-	);
+	background: linear-gradient(90deg, var(--miku-teal), var(--miku-pink), var(--miku-teal));
 	border-radius: 20px 20px 0 0;
 }
 
@@ -275,12 +260,7 @@ body::after {
 }
 
 .energy-bar {
-	background: linear-gradient(
-		90deg,
-		var(--miku-teal),
-		var(--miku-pink),
-		var(--miku-teal)
-	);
+	background: linear-gradient(90deg, var(--miku-teal), var(--miku-pink), var(--miku-teal));
 	background-size: 200% 100%;
 	animation: gradient-shift 2s ease infinite;
 	border-radius: 50px;

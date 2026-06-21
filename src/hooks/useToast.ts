@@ -15,18 +15,12 @@ export function useToast(): UseToastReturn {
 	const idCounterRef = useRef(0);
 
 	const addToast = useCallback(
-		(
-			type: Toast["type"],
-			message: string,
-			timeout: number = TOAST_DEFAULTS.DEFAULT_TIMEOUT,
-		) => {
+		(type: Toast["type"], message: string, timeout: number = TOAST_DEFAULTS.DEFAULT_TIMEOUT) => {
 			idCounterRef.current += 1;
 			const id = idCounterRef.current;
 			setToasts((prevToasts) => {
 				const newToasts = [...prevToasts, { id, type, message, timeout }];
-				return newToasts.length > MAX_TOASTS
-					? newToasts.slice(-MAX_TOASTS)
-					: newToasts;
+				return newToasts.length > MAX_TOASTS ? newToasts.slice(-MAX_TOASTS) : newToasts;
 			});
 		},
 		[],

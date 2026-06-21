@@ -1,6 +1,6 @@
 import type { CrawlManager } from "../runtime/CrawlManager.js";
-import type { EventStream } from "../runtime/EventStream.js";
 import type { CrawlRuntime } from "../runtime/CrawlRuntime.js";
+import type { EventStream } from "../runtime/EventStream.js";
 import type { StorageRepos } from "../storage/db.js";
 
 export interface RouteServices {
@@ -13,7 +13,7 @@ export interface RouteServices {
 interface RouteContextBase {
 	body: unknown;
 	query: Record<string, unknown>;
-	params: Record<string, string>;
+	params: { id: string } & Record<string, string>;
 	headers: Record<string, string | undefined>;
 	request: Request;
 	set: {
@@ -25,7 +25,5 @@ interface RouteContextBase {
 export function routeServices<TExtra = object>(
 	context: unknown,
 ): Omit<RouteContextBase, keyof TExtra> & RouteServices & TExtra {
-	return context as Omit<RouteContextBase, keyof TExtra> &
-		RouteServices &
-		TExtra;
+	return context as Omit<RouteContextBase, keyof TExtra> & RouteServices & TExtra;
 }

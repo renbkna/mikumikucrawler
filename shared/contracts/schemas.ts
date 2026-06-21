@@ -1,17 +1,13 @@
 import { t } from "elysia/type-system";
 import { CRAWL_METHODS, CRAWL_OPTION_BOUNDS } from "../crawl.js";
 import { CRAWL_EXPORT_FORMAT_VALUES } from "./api.js";
+import { CrawlStatusValues, DEFAULT_CRAWL_LIST_LIMIT, StopCrawlModeValues } from "./crawl.js";
 import {
 	CrawlEventTypeValues,
 	LIVE_CRAWL_EVENT_TYPE_VALUES,
 	SETTLED_CRAWL_EVENT_TYPE_VALUES,
 	TERMINAL_CRAWL_EVENT_TYPE_VALUES,
 } from "./events.js";
-import {
-	DEFAULT_CRAWL_LIST_LIMIT,
-	CrawlStatusValues,
-	StopCrawlModeValues,
-} from "./crawl.js";
 import { optionalBoundedListLimitSchema } from "./http.js";
 import { MediaTypeValues } from "./pageData.js";
 
@@ -123,9 +119,7 @@ export const CrawlIdParamsSchema = t.Object({
 });
 
 export const ExportQuerySchema = t.Object({
-	format: t.Optional(
-		t.Union(CRAWL_EXPORT_FORMAT_VALUES.map((value) => t.Literal(value))),
-	),
+	format: t.Optional(t.Union(CRAWL_EXPORT_FORMAT_VALUES.map((value) => t.Literal(value)))),
 });
 
 export const PageContentResponseSchema = t.Object({
@@ -247,9 +241,7 @@ export const CrawlPausedPayloadSchema = t.Object({
 	counters: CrawlCountersSchema,
 });
 
-export const CrawlEventTypeSchema = t.Union(
-	CrawlEventTypeValues.map((value) => t.Literal(value)),
-);
+export const CrawlEventTypeSchema = t.Union(CrawlEventTypeValues.map((value) => t.Literal(value)));
 
 const EventEnvelopeBaseSchema = {
 	crawlId: t.String(),

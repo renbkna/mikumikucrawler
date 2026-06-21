@@ -1,5 +1,9 @@
-import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+
+function warn(message: string) {
+	process.stderr.write(`${message}\n`);
+}
 
 const hasGitMetadata = existsSync(".git");
 if (!hasGitMetadata) {
@@ -11,9 +15,7 @@ const gitCheck = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
 });
 
 if (gitCheck.error || gitCheck.status !== 0) {
-	console.warn(
-		"Skipping lefthook install: this is not an active Git checkout.",
-	);
+	warn("Skipping lefthook install: this is not an active Git checkout.");
 	process.exit(0);
 }
 
@@ -22,14 +24,12 @@ const lefthookInstall = spawnSync("lefthook", ["install", "--force"], {
 });
 
 if (lefthookInstall.error) {
-	console.warn(`Skipping lefthook install: ${lefthookInstall.error.message}`);
+	warn(`Skipping lefthook install: ${lefthookInstall.error.message}`);
 	process.exit(0);
 }
 
 if (lefthookInstall.status !== 0) {
-	console.warn(
-		"Skipping lefthook install: lefthook could not update local hooks.",
-	);
+	warn("Skipping lefthook install: lefthook could not update local hooks.");
 }
 
 process.exit(0);

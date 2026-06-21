@@ -1,27 +1,22 @@
-import type { Logger } from "../config/logging.js";
-import { CRAWL_QUEUE_CONSTANTS } from "../constants.js";
 import type {
 	CrawlCounters,
-	CrawlOptions,
-} from "../../shared/contracts/index.js";
-import type {
 	CrawlEventMap,
 	CrawlEventType,
+	CrawlOptions,
 } from "../../shared/contracts/index.js";
+import type { Logger } from "../config/logging.js";
+import { CRAWL_QUEUE_CONSTANTS } from "../constants.js";
 import { CrawlQueue, type QueueItem } from "../domain/crawl/CrawlQueue.js";
+import type { DomainStateRecord } from "../domain/crawl/CrawlState.js";
 import { CrawlState } from "../domain/crawl/CrawlState.js";
 import { DynamicRenderer } from "../domain/crawl/DynamicRenderer.js";
 import { FetchService } from "../domain/crawl/FetchService.js";
-import {
-	PagePipeline,
-	type PageProcessResult,
-} from "../domain/crawl/PagePipeline.js";
-import type { DomainStateRecord } from "../domain/crawl/CrawlState.js";
+import { PagePipeline, type PageProcessResult } from "../domain/crawl/PagePipeline.js";
 import { RobotsService } from "../domain/crawl/RobotsService.js";
 import type { HttpClient, Resolver } from "../plugins/security.js";
 import type { StorageRepos } from "../storage/db.js";
-import type { EventStream } from "./EventStream.js";
 import { runWithTimeout } from "../utils/timeout.js";
+import type { EventStream } from "./EventStream.js";
 
 export interface CrawlRuntimeDependencies {
 	crawlId: string;
@@ -79,19 +74,13 @@ export class CrawlRuntime {
 			deps.options,
 			deps.initialCounters,
 			{
-				onTerminal: undefined,
-				onDomainStateChanged: (record) =>
-					deps.repos.crawlDomainState.upsert(deps.crawlId, record),
+				onDomainStateChanged: (record) => deps.repos.crawlDomainState.upsert(deps.crawlId, record),
 			},
 			deps.initialStartedAtMs,
 			deps.initialDomainStates,
 		);
 		this.lastDurableCounters = this.state.snapshotCounters();
-		this.dynamicRenderer = new DynamicRenderer(
-			deps.options,
-			deps.logger,
-			deps.httpClient,
-		);
+		this.dynamicRenderer = new DynamicRenderer(deps.options, deps.logger, deps.httpClient);
 		this.fetchService = new FetchService(
 			deps.repos.pages,
 			deps.httpClient,
@@ -99,23 +88,15 @@ export class CrawlRuntime {
 			deps.logger,
 		);
 		this.robotsService = new RobotsService(deps.httpClient, deps.logger);
-		const toPersistedQueueItem = (
-			item: QueueItem,
-		): QueueItem & { availableAt: number } => ({
+		const toPersistedQueueItem = (item: QueueItem): QueueItem & { availableAt: number } => ({
 			...item,
 			availableAt: item.availableAt ?? 0,
 		});
 		this.queue = new CrawlQueue(deps.options, this.state, deps.logger, {
 			enqueueMany: (items) =>
-				deps.repos.crawlQueue.enqueueMany(
-					deps.crawlId,
-					items.map(toPersistedQueueItem),
-				),
+				deps.repos.crawlQueue.enqueueMany(deps.crawlId, items.map(toPersistedQueueItem)),
 			reschedule: (item) =>
-				deps.repos.crawlQueue.reschedule(
-					deps.crawlId,
-					toPersistedQueueItem(item),
-				),
+				deps.repos.crawlQueue.reschedule(deps.crawlId, toPersistedQueueItem(item)),
 			remove: (url) => deps.repos.crawlQueue.remove(deps.crawlId, url),
 			clear: () => deps.repos.crawlQueue.clear(deps.crawlId),
 		});
@@ -141,10 +122,7 @@ export class CrawlRuntime {
 		}
 	}
 
-	private publish<TType extends CrawlEventType>(
-		type: TType,
-		payload: CrawlEventMap[TType],
-	) {
+	private publish<TType extends CrawlEventType>(type: TType, payload: CrawlEventMap[TType]) {
 		return this.deps.eventStream.publish(this.deps.crawlId, type, payload);
 	}
 
@@ -153,9 +131,7 @@ export class CrawlRuntime {
 	}
 
 	private get stopSignalReason(): Error {
-		return new RuntimeStopSignalError(
-			this.state.stopReason ?? "Runtime stop requested",
-		);
+		return new RuntimeStopSignalError(this.state.stopReason ?? "Runtime stop requested");
 	}
 
 	private throwIfForceStopped(): void {
@@ -190,25 +166,15 @@ export class CrawlRuntime {
 		});
 	}
 
-	private persistProgress(
-		status?: "starting" | "running" | "pausing" | "stopping",
-	) {
+	private persistProgress(status?: "starting" | "running" | "pausing" | "stopping") {
 		const eventSequence = this.getCurrentSequence();
 		if (status === "starting") {
-			this.deps.repos.crawlRuns.markStarting(
-				this.deps.crawlId,
-				this.state.counters,
-				eventSequence,
-			);
+			this.deps.repos.crawlRuns.markStarting(this.deps.crawlId, this.state.counters, eventSequence);
 			return;
 		}
 
 		if (status === "running") {
-			this.deps.repos.crawlRuns.markRunning(
-				this.deps.crawlId,
-				this.state.counters,
-				eventSequence,
-			);
+			this.deps.repos.crawlRuns.markRunning(this.deps.crawlId, this.state.counters, eventSequence);
 			return;
 		}
 
@@ -232,21 +198,13 @@ export class CrawlRuntime {
 			return;
 		}
 
-		this.deps.repos.crawlRuns.updateProgress(
-			this.deps.crawlId,
-			this.state.counters,
-			eventSequence,
-		);
+		this.deps.repos.crawlRuns.updateProgress(this.deps.crawlId, this.state.counters, eventSequence);
 	}
 
 	private emitProgress() {
 		const counters = this.state.snapshotCounters();
 		const eventSequence = this.getCurrentSequence() + 1;
-		this.deps.repos.crawlRuns.updateProgress(
-			this.deps.crawlId,
-			counters,
-			eventSequence,
-		);
+		this.deps.repos.crawlRuns.updateProgress(this.deps.crawlId, counters, eventSequence);
 		this.publish(
 			"crawl.progress",
 			this.state.buildProgress(
@@ -260,16 +218,12 @@ export class CrawlRuntime {
 	}
 
 	private deferPendingToDelayWatermarks(): void {
-		this.queue.deferPendingByDelayKey((delayKey) =>
-			this.state.nextAllowedAtForDomain(delayKey),
-		);
+		this.queue.deferPendingByDelayKey((delayKey) => this.state.nextAllowedAtForDomain(delayKey));
 	}
 
 	private async seedInitialQueue(): Promise<void> {
 		if (this.deps.resume) {
-			const terminalUrls = this.deps.repos.crawlItems.listTerminalUrls(
-				this.deps.crawlId,
-			);
+			const terminalUrls = this.deps.repos.crawlItems.listTerminalUrls(this.deps.crawlId);
 			this.state.restoreTerminals(terminalUrls);
 			const pending = this.deps.repos.crawlQueue.listPending(this.deps.crawlId);
 			this.queue.restore(pending);
@@ -355,9 +309,7 @@ export class CrawlRuntime {
 		this.interruptionPersisted = true;
 	}
 
-	private async launchWork(
-		item: Parameters<PagePipeline["process"]>[0],
-	): Promise<void> {
+	private async launchWork(item: Parameters<PagePipeline["process"]>[0]): Promise<void> {
 		const controller = new AbortController();
 		this.activeControllers.set(item.url, controller);
 		let finalized = false;
@@ -394,7 +346,7 @@ export class CrawlRuntime {
 			return await runWithTimeout({
 				timeoutMs: CRAWL_QUEUE_CONSTANTS.ITEM_PROCESSING_TIMEOUT_MS,
 				operationName: `Processing ${item.url}`,
-				signal: externalSignal,
+				...(externalSignal ? { signal: externalSignal } : {}),
 				run: (signal) => this.pipeline.process(item, signal),
 			});
 		} catch (error) {
@@ -405,10 +357,7 @@ export class CrawlRuntime {
 			this.deps.logger.error(
 				`[Runtime] Failed to process ${item.url}: ${error instanceof Error ? error.message : String(error)}`,
 			);
-			const domainBudgetCharged = this.state.recordTerminal(
-				item.url,
-				"failure",
-			);
+			const domainBudgetCharged = this.state.recordTerminal(item.url, "failure");
 			if (domainBudgetCharged) {
 				this.state.recordDomainPage(item.domain);
 			}
@@ -432,11 +381,7 @@ export class CrawlRuntime {
 			return;
 		}
 
-		if (
-			options.interrupted &&
-			!processResult.terminalOutcome &&
-			!processResult.page
-		) {
+		if (options.interrupted && !processResult.terminalOutcome && !processResult.page) {
 			this.queue.markInterrupted(item);
 			return;
 		}
@@ -445,9 +390,11 @@ export class CrawlRuntime {
 		const itemCommit = this.deps.repos.crawlItems.commitCompletedItem({
 			crawlId: this.deps.crawlId,
 			url: item.url,
-			outcome: processResult.terminalOutcome,
+			...(processResult.terminalOutcome !== undefined
+				? { outcome: processResult.terminalOutcome }
+				: {}),
 			domainBudgetCharged: processResult.domainBudgetCharged ?? false,
-			page: processResult.page?.saveInput,
+			...(processResult.page?.saveInput ? { page: processResult.page.saveInput } : {}),
 			counters: this.state.snapshotCounters(),
 			eventSequence: this.getCurrentSequence() + pendingPageEvent,
 		});
@@ -465,9 +412,7 @@ export class CrawlRuntime {
 	private async initializeRuntime(): Promise<void> {
 		this.persistProgress("starting");
 		await this.awaitStartupStep(
-			this.deps.resolver.assertPublicHostname(
-				new URL(this.deps.options.target).hostname,
-			),
+			this.deps.resolver.assertPublicHostname(new URL(this.deps.options.target).hostname),
 		);
 		this.throwIfForceStopped();
 		const initResult = await this.awaitStartupStep(
@@ -480,10 +425,7 @@ export class CrawlRuntime {
 
 		if (this.deps.options.respectRobots) {
 			const targetPolicy = await this.awaitStartupStep(
-				this.robotsService.evaluate(
-					this.deps.options.target,
-					this.lifecycleController.signal,
-				),
+				this.robotsService.evaluate(this.deps.options.target, this.lifecycleController.signal),
 			);
 			this.throwIfForceStopped();
 			if (targetPolicy.type === "disallowed") {
@@ -495,14 +437,8 @@ export class CrawlRuntime {
 				});
 			}
 
-			if (
-				targetPolicy.type !== "unavailable" &&
-				targetPolicy.crawlDelayMs !== undefined
-			) {
-				this.state.setDomainDelay(
-					targetPolicy.delayKey,
-					targetPolicy.crawlDelayMs,
-				);
+			if (targetPolicy.type !== "unavailable" && targetPolicy.crawlDelayMs !== undefined) {
+				this.state.setDomainDelay(targetPolicy.delayKey, targetPolicy.crawlDelayMs);
 			}
 		}
 
@@ -561,9 +497,7 @@ export class CrawlRuntime {
 					const { item, waitMs } = this.queue.nextReady();
 					if (!item) {
 						if (waitMs > 0) {
-							await sleep(
-								Math.min(waitMs, CRAWL_QUEUE_CONSTANTS.DEFAULT_SLEEP_MS),
-							);
+							await sleep(Math.min(waitMs, CRAWL_QUEUE_CONSTANTS.DEFAULT_SLEEP_MS));
 						}
 						break;
 					}
@@ -638,9 +572,7 @@ export class CrawlRuntime {
 		} catch (error) {
 			this.terminalizing = true;
 			for (const controller of this.activeControllers.values()) {
-				controller.abort(
-					error instanceof Error ? error : new Error("Runtime failed"),
-				);
+				controller.abort(error instanceof Error ? error : new Error("Runtime failed"));
 			}
 			await Promise.allSettled(this.activeTasks.values());
 			this.queue.clearRetryTimers();

@@ -22,12 +22,7 @@ export function createCrawlDomainStateRepo(db: Database) {
 
 	return {
 		upsert(crawlId: string, record: CrawlDomainStateRecord): void {
-			upsert.run(
-				crawlId,
-				record.delayKey,
-				record.delayMs,
-				record.nextAllowedAt,
-			);
+			upsert.run(crawlId, record.delayKey, record.delayMs, record.nextAllowedAt);
 		},
 		listByCrawlId(crawlId: string): CrawlDomainStateRecord[] {
 			const rows = db

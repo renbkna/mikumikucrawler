@@ -40,21 +40,19 @@ export function createCrawlQueueRepo(db: Database) {
 			created_at = CURRENT_TIMESTAMP
 	`);
 
-	const insertManyTransaction = db.transaction(
-		(crawlId: string, items: QueueItemRecord[]) => {
-			for (const item of items) {
-				insertItem.run(
-					crawlId,
-					item.url,
-					item.depth,
-					item.retries,
-					item.parentUrl ?? null,
-					item.domain,
-					item.availableAt ?? 0,
-				);
-			}
-		},
-	);
+	const insertManyTransaction = db.transaction((crawlId: string, items: QueueItemRecord[]) => {
+		for (const item of items) {
+			insertItem.run(
+				crawlId,
+				item.url,
+				item.depth,
+				item.retries,
+				item.parentUrl ?? null,
+				item.domain,
+				item.availableAt ?? 0,
+			);
+		}
+	});
 
 	return {
 		enqueueMany(crawlId: string, items: QueueItemRecord[]): void {
@@ -85,9 +83,9 @@ export function createCrawlQueueRepo(db: Database) {
 				url: row.url,
 				depth: row.depth,
 				retries: row.retries,
-				parentUrl: row.parent_url ?? undefined,
 				domain: row.domain,
 				availableAt: row.available_at,
+				...(row.parent_url === null ? {} : { parentUrl: row.parent_url }),
 			}));
 		},
 		reschedule(crawlId: string, item: QueueItemRecord): void {
@@ -102,9 +100,7 @@ export function createCrawlQueueRepo(db: Database) {
 			);
 		},
 		remove(crawlId: string, url: string): void {
-			db.query(
-				"DELETE FROM crawl_queue_items WHERE crawl_id = ? AND url = ?",
-			).run(crawlId, url);
+			db.query("DELETE FROM crawl_queue_items WHERE crawl_id = ? AND url = ?").run(crawlId, url);
 		},
 		clear(crawlId: string): void {
 			db.query("DELETE FROM crawl_queue_items WHERE crawl_id = ?").run(crawlId);

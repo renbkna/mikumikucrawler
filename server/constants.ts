@@ -20,8 +20,7 @@ export const RETRY_CONSTANTS = {
 /** Standard HTTP headers for crawling requests */
 export const FETCH_HEADERS = {
 	"User-Agent": config.userAgent,
-	Accept:
-		"text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+	Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
 	"Accept-Language": "en-US,en;q=0.5",
 	"Accept-Encoding": "gzip, deflate",
 } as const;
@@ -116,8 +115,7 @@ export const SITE_SELECTORS: Record<string, string> = {
 	"x.com": '[data-testid="tweet"]',
 	"linkedin.com": ".feed-container-theme",
 	"instagram.com": '[role="main"]',
-	"reddit.com":
-		'shreddit-post, [data-testid="post-container"], article, [role="main"]',
+	"reddit.com": 'shreddit-post, [data-testid="post-container"], article, [role="main"]',
 	"facebook.com": '[role="main"]',
 	"meta.com": '[role="main"]',
 	"github.com": ".js-repo-root, .repository-content",
@@ -129,10 +127,7 @@ export const SITE_SELECTORS: Record<string, string> = {
  * Site-specific cookies to set before navigation.
  * Used to bypass consent dialogs, age verification, etc.
  */
-export const SITE_COOKIES: Record<
-	string,
-	Array<{ name: string; value: string }>
-> = {
+export const SITE_COOKIES: Record<string, Array<{ name: string; value: string }>> = {
 	"youtube.com": [
 		{ name: "CONSENT", value: "YES+" },
 		{ name: "PREF", value: "tz=UTC" },

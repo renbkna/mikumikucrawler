@@ -42,25 +42,19 @@ describe("analyzeSentiment", () => {
 		});
 
 		test("no sentiment words → neutral", () => {
-			const result = analyzeSentiment(
-				"The document contains information about procedures",
-			);
+			const result = analyzeSentiment("The document contains information about procedures");
 			expect(result.label).toBe("neutral");
 		});
 	});
 
 	describe("invariant: negation window", () => {
 		test("negation flips positive to negative within 3 words", () => {
-			const result = analyzeSentiment(
-				"I think this product is not great or amazing for anyone",
-			);
+			const result = analyzeSentiment("I think this product is not great or amazing for anyone");
 			expect(result.label).toBe("negative");
 		});
 
 		test("negation flips negative to positive within 3 words", () => {
-			const result = analyzeSentiment(
-				"This is not terrible or bad in any way, it is really great",
-			);
+			const result = analyzeSentiment("This is not terrible or bad in any way, it is really great");
 			expect(result.label).toBe("positive");
 		});
 
@@ -75,19 +69,13 @@ describe("analyzeSentiment", () => {
 
 	describe("confidence scaling", () => {
 		test("pure positive text → confidence above 0.5", () => {
-			const result = analyzeSentiment(
-				"Amazing wonderful excellent fantastic brilliant",
-			);
+			const result = analyzeSentiment("Amazing wonderful excellent fantastic brilliant");
 			expect(result.confidence).toBeGreaterThan(0.5);
 		});
 
 		test("mixed sentiment → lower confidence than pure", () => {
-			const pure = analyzeSentiment(
-				"Amazing wonderful excellent fantastic brilliant",
-			);
-			const mixed = analyzeSentiment(
-				"Amazing wonderful but terrible and awful too",
-			);
+			const pure = analyzeSentiment("Amazing wonderful excellent fantastic brilliant");
+			const mixed = analyzeSentiment("Amazing wonderful but terrible and awful too");
 			expect(mixed.confidence).toBeLessThan(pure.confidence);
 		});
 	});

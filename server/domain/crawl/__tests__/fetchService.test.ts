@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { Logger } from "../../../config/logging.js";
 import { config } from "../../../config/env.js";
+import type { Logger } from "../../../config/logging.js";
 import { REQUEST_CONSTANTS } from "../../../constants.js";
 import { FetchService } from "../FetchService.js";
 
@@ -30,8 +30,7 @@ describe("fetch service contract", () => {
 				isEnabled: () => true,
 				render: async () => ({
 					type: "consentBlocked",
-					message:
-						"Consent wall could not be bypassed for https://www.youtube.com/watch?v=test",
+					message: "Consent wall could not be bypassed for https://www.youtube.com/watch?v=test",
 					statusCode: 403,
 				}),
 			} as never,
@@ -48,8 +47,7 @@ describe("fetch service contract", () => {
 		expect(result).toEqual({
 			type: "blocked",
 			statusCode: 403,
-			reason:
-				"Consent wall could not be bypassed for https://www.youtube.com/watch?v=test",
+			reason: "Consent wall could not be bypassed for https://www.youtube.com/watch?v=test",
 		});
 		expect(httpFetch).not.toHaveBeenCalled();
 	});
@@ -309,15 +307,13 @@ describe("fetch service contract", () => {
 
 	test("uses the configured crawler user-agent for static fetches", async () => {
 		const seenHeaders: Array<Record<string, string> | undefined> = [];
-		const httpFetch = mock(
-			async (request: { headers?: Record<string, string> }) => {
-				seenHeaders.push(request.headers);
-				return new Response("<html><main>OK</main></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				});
-			},
-		);
+		const httpFetch = mock(async (request: { headers?: Record<string, string> }) => {
+			seenHeaders.push(request.headers);
+			return new Response("<html><main>OK</main></html>", {
+				status: 200,
+				headers: { "content-type": "text/html" },
+			});
+		});
 		const service = new FetchService(
 			{
 				getHeaders: () => null,

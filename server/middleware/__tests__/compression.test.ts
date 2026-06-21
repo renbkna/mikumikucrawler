@@ -1,5 +1,5 @@
-import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { describe, expect, test } from "bun:test";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { Elysia } from "elysia";
 import { compression } from "../compression.js";
 
@@ -33,9 +33,7 @@ describe("compression middleware", () => {
 
 		const body = await response.arrayBuffer();
 		expect(response.headers.get("content-encoding")).toBe("br");
-		expect(body.byteLength).toBe(
-			Number(response.headers.get("content-length")),
-		);
+		expect(body.byteLength).toBe(Number(response.headers.get("content-length")));
 	});
 
 	test("skips compression for SSE responses without draining the stream", async () => {
@@ -106,9 +104,7 @@ describe("compression middleware", () => {
 		const body = await response.arrayBuffer();
 		expect(response.headers.get("content-encoding")).toBe("gzip");
 		expect(response.headers.get("vary")).toBe("cookie, accept-encoding");
-		expect(body.byteLength).toBe(
-			Number(response.headers.get("content-length")),
-		);
+		expect(body.byteLength).toBe(Number(response.headers.get("content-length")));
 	});
 
 	test("compresses large Elysia object responses after serialization", async () => {
@@ -124,9 +120,7 @@ describe("compression middleware", () => {
 
 		expect(response.headers.get("content-encoding")).toBe("br");
 		expect(response.headers.get("content-type")).toContain("application/json");
-		expect(await decodeResponse(response)).toBe(
-			JSON.stringify({ items: ["miku".repeat(1000)] }),
-		);
+		expect(await decodeResponse(response)).toBe(JSON.stringify({ items: ["miku".repeat(1000)] }));
 	});
 
 	test("preserves named statuses when normalizing object responses", async () => {
