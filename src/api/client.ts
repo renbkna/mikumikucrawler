@@ -1,4 +1,4 @@
-import { treaty } from "@elysiajs/eden";
+import { type Treaty, treaty } from "@elysiajs/eden";
 import type { App } from "../../server/app";
 import {
 	buildCrawlEventsPath,
@@ -30,7 +30,7 @@ export function resolveBackendUrl(
 const backendUrl = resolveBackendUrl(import.meta.env);
 
 /** Type-safe Eden Treaty client for the Miku Crawler API */
-export const api = treaty<App>(backendUrl);
+export const api: Treaty.Create<App> = treaty<App>(backendUrl);
 
 export type { CrawlExportFormat } from "../../shared/contracts/index.js";
 
@@ -50,9 +50,7 @@ export async function downloadCrawlExport(
 	crawlId: string,
 	format: CrawlExportFormat,
 ): Promise<{ blob: Blob; filename: string }> {
-	const response = await fetch(
-		getBackendApiUrl(buildCrawlExportPath(crawlId, format)),
-	);
+	const response = await fetch(getBackendApiUrl(buildCrawlExportPath(crawlId, format)));
 
 	if (!response.ok) {
 		let body: unknown = null;

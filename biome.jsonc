@@ -1,0 +1,86 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.5.0/schema.json",
+	"root": true,
+
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
+
+	"files": {
+		"ignoreUnknown": true,
+		"includes": [
+			"**",
+			"!!**/dist",
+			"!!**/coverage",
+			"!!**/node_modules",
+			"!!**/.turbo",
+			"!!**/.cache"
+		]
+	},
+
+	"formatter": {
+		"enabled": true,
+		"lineWidth": 100
+	},
+	"css": {
+		"parser": {
+			"tailwindDirectives": true
+		}
+	},
+
+	"assist": {
+		"enabled": true,
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	},
+
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"preset": "recommended",
+
+			"correctness": {
+				"noUnusedImports": "error",
+				"noUnusedVariables": "error",
+				"noUnusedFunctionParameters": "error"
+			},
+
+			"suspicious": {
+				"noExplicitAny": "error",
+				"noTsIgnore": "error",
+				"noConsole": "error",
+				"noDebugger": "error",
+				"noNonNullAssertedOptionalChain": "error",
+				"noUnsafeDeclarationMerging": "error",
+				"useErrorMessage": "error"
+			},
+
+			"style": {
+				"noNonNullAssertion": "error",
+				"useThrowOnlyError": "error",
+				"useThrowNewError": "error",
+				"useErrorCause": "warn"
+			},
+
+			"complexity": {
+				"noBannedTypes": "error",
+				"noUselessCatch": "error"
+			},
+
+			"performance": {
+				"noBarrelFile": "warn"
+			},
+
+			"nursery": {
+				"noFloatingPromises": "warn",
+				"noMisusedPromises": "warn",
+				"useExhaustiveSwitchCases": "warn"
+			}
+		}
+	}
+}

@@ -1,8 +1,17 @@
 {
 	"name": "miku-miku-crawler",
-	"private": true,
 	"version": "3.0.0",
+	"private": true,
 	"type": "module",
+	"packageManager": "bun@1.3.14",
+	"workspaces": {
+		"packages": [],
+		"catalog": {
+			"@types/bun": "1.3.14",
+			"@biomejs/biome": "2.5.0",
+			"@typescript/native-preview": "^7.0.0-dev.20260620.1"
+		}
+	},
 	"author": {
 		"name": "renbkna",
 		"url": "https://github.com/renbkna"
@@ -10,19 +19,22 @@
 	"scripts": {
 		"prepare": "bun scripts/install-git-hooks.ts",
 		"hooks:install": "lefthook install --force",
-		"dev": "concurrently --ks SIGKILL -n \"Client,Server\" \"npm run dev:client\" \"npm run dev:server\"",
+		"dev": "concurrently --ks SIGKILL -n \"Client,Server\" \"bun run dev:client\" \"bun run dev:server\"",
 		"dev:server": "bun --watch server/server.ts",
 		"dev:client": "vite",
 		"build": "vite build",
-		"check": "bun run format:check && bun run lint && bun run typecheck && bun test && bun run build",
-		"format:check": "biome format --files-ignore-unknown=true server shared src docs package.json tsconfig.json tsconfig.server.json vite.config.ts biome.json README.md .oxlintrc.json",
-		"format": "biome format --write --files-ignore-unknown=true server shared src docs package.json tsconfig.json tsconfig.server.json vite.config.ts biome.json README.md .oxlintrc.json",
-		"lint": "oxlint --config .oxlintrc.json --deny-warnings --report-unused-disable-directives server shared src vite.config.ts",
-		"lint:type-aware": "bun run lint",
+		"check": "bun run typecheck && bun run lint && bun test && bun run build",
+		"typecheck": "tsgo -b --pretty false --checkers 4 --builders 2",
+		"typecheck:single": "tsgo -b --pretty false --singleThreaded",
+		"format": "biome check --write .",
+		"format:check": "biome format .",
+		"lint": "biome ci .",
+		"fix": "biome check --write .",
+		"fix:unsafe": "biome check --write --unsafe .",
 		"preview": "vite preview",
 		"start": "bun server/server.ts",
 		"test": "bun test",
-		"typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit"
+		"clean": "rm -rf dist coverage node_modules/.tmp"
 	},
 	"dependencies": {
 		"@elysiajs/cors": "^1.4.1",
@@ -49,18 +61,16 @@
 		"tldts": "^7.0.27"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.4.10",
+		"@biomejs/biome": "catalog:",
 		"@tailwindcss/vite": "^4.2.2",
-		"@types/bun": "^1.3.11",
+		"@types/bun": "catalog:",
 		"@types/react": "^19.2.14",
 		"@types/react-dom": "^19.2.3",
+		"@typescript/native-preview": "catalog:",
 		"@vitejs/plugin-react": "^6.0.1",
 		"concurrently": "^9.2.1",
 		"lefthook": "^2.1.4",
-		"oxlint": "1.62.0",
-		"oxlint-tsgolint": "^0.22.1",
 		"tailwindcss": "^4.2.2",
-		"typescript": "^6.0.3",
 		"vite": "^8.0.10"
 	}
 }

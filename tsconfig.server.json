@@ -1,18 +1,16 @@
 {
+	"extends": "./tsconfig.base.json",
 	"compilerOptions": {
-		"target": "ESNext",
+		"composite": true,
+		"rootDir": ".",
+		"tsBuildInfoFile": "./node_modules/.tmp/tsconfig.server.tsbuildinfo",
+		"outDir": "./dist",
 		"module": "nodenext",
 		"moduleResolution": "nodenext",
 		"lib": ["ESNext", "DOM"],
-		"outDir": "./dist",
-		"strict": true,
-		"esModuleInterop": true,
-		"skipLibCheck": true,
-		"forceConsistentCasingInFileNames": true,
-		"noEmit": true,
-		"allowJs": true,
-		"checkJs": false,
-		"types": ["bun"]
+		"types": ["bun"],
+		"noEmit": true
 	},
-	"include": ["server/**/*", "shared/**/*", "server/types/**/*.d.ts"]
+	"include": ["server/**/*", "shared/**/*"],
+	"exclude": ["shared/__tests__/**/*", "shared/__tests__"]
 }
