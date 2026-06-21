@@ -8,15 +8,12 @@ import {
 	useState,
 } from "react";
 import type {
+	CrawlExportFormat,
 	CrawlSummary,
 	ResumableSessionSummary,
 } from "../../shared/contracts/index.js";
-import {
-	isSettledCrawlEventType,
-	type CrawlEventEnvelope,
-} from "../../shared/contracts/index.js";
-import type { CrawlExportFormat } from "../../shared/contracts/index.js";
-import type { ApiResult } from "../api/result";
+import { type CrawlEventEnvelope, isSettledCrawlEventType } from "../../shared/contracts/index.js";
+import { validatePublicHttpUrl } from "../../shared/url";
 import {
 	createCrawl,
 	deleteCrawl,
@@ -26,11 +23,11 @@ import {
 	stopCrawl as stopCrawlRequest,
 	subscribeToCrawlEvents,
 } from "../api/crawls";
-import { validatePublicHttpUrl } from "../../shared/url";
+import type { ApiResult } from "../api/result";
 import type { Toast } from "../types";
 import {
-	type CrawlControllerAction,
 	type CommandKind,
+	type CrawlControllerAction,
 	type CrawlControllerState,
 	canStartCommand,
 	crawlControllerReducer,
@@ -64,16 +61,11 @@ export function shouldSettleActiveSubscription(
 	activeSubscriptionCrawlId: string | null,
 	envelope: CrawlEventEnvelope,
 ): boolean {
-	return (
-		activeSubscriptionCrawlId === envelope.crawlId &&
-		isSettledCrawlEventType(envelope.type)
-	);
+	return activeSubscriptionCrawlId === envelope.crawlId && isSettledCrawlEventType(envelope.type);
 }
 
 function useControllerState({ addToast }: UseCrawlControllerOptions) {
-	const [state, setState] = useState<CrawlControllerState>(
-		createInitialCrawlControllerState,
-	);
+	const [state, setState] = useState<CrawlControllerState>(createInitialCrawlControllerState);
 	const stateRef = useRef(state);
 
 	useEffect(() => {
@@ -99,9 +91,7 @@ function useControllerState({ addToast }: UseCrawlControllerOptions) {
 
 export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 	const { state, stateRef, dispatch } = useControllerState({ addToast });
-	const subscriptionRef = useRef<ReturnType<
-		typeof subscribeToCrawlEvents
-	> | null>(null);
+	const subscriptionRef = useRef<ReturnType<typeof subscribeToCrawlEvents> | null>(null);
 	const activeSubscriptionCrawlIdRef = useRef<string | null>(null);
 	const resumableRefreshRequestIdRef = useRef(0);
 
@@ -146,10 +136,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 	);
 
 	const closeSubscription = useEffectEvent((crawlId?: string) => {
-		if (
-			crawlId !== undefined &&
-			activeSubscriptionCrawlIdRef.current !== crawlId
-		) {
+		if (crawlId !== undefined && activeSubscriptionCrawlIdRef.current !== crawlId) {
 			return;
 		}
 
@@ -163,12 +150,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 			dispatch({ type: "sseEventReceived", envelope });
 		});
 
-		if (
-			shouldSettleActiveSubscription(
-				activeSubscriptionCrawlIdRef.current,
-				envelope,
-			)
-		) {
+		if (shouldSettleActiveSubscription(activeSubscriptionCrawlIdRef.current, envelope)) {
 			closeSubscription(envelope.crawlId);
 			void refreshResumableSessions(false);
 		}
@@ -179,8 +161,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 		dispatch({ type: "connectionChanged", connectionState: "connecting" });
 		activeSubscriptionCrawlIdRef.current = crawlId;
 		subscriptionRef.current = subscribeToCrawlEvents(crawlId, {
-			onOpen: () =>
-				dispatch({ type: "connectionChanged", connectionState: "connected" }),
+			onOpen: () => dispatch({ type: "connectionChanged", connectionState: "connected" }),
 			onError: () =>
 				dispatch({
 					type: "connectionChanged",
@@ -199,7 +180,8 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				addToast("warning", "Another command is already running");
 				return;
 			}
-			const requestId = (resumableRefreshRequestIdRef.current += 1);
+			const requestId = resumableRefreshRequestIdRef.current + 1;
+			resumableRefreshRequestIdRef.current = requestId;
 			if (trackCommand) {
 				dispatch({ type: "commandStarted", kind: "refresh" });
 			}
@@ -267,8 +249,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				| typeof state.crawlOptions
 				| ((previous: typeof state.crawlOptions) => typeof state.crawlOptions),
 		) => {
-			const nextValue =
-				typeof next === "function" ? next(state.crawlOptions) : next;
+			const nextValue = typeof next === "function" ? next(state.crawlOptions) : next;
 			dispatch({ type: "crawlOptionsChanged", crawlOptions: nextValue });
 		},
 		[dispatch, state.crawlOptions],
@@ -285,7 +266,9 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				return false;
 			}
 
-			const validationResult = validatePublicHttpUrl(state.target);
+			const validationResult = validatePublicHttpUrl(state.target, {
+				allowLocalhost: import.meta.env.DEV,
+			});
 			if ("error" in validationResult) {
 				addToast("error", validationResult.error);
 				return false;
@@ -344,20 +327,14 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 	const forceStopCrawl = useCallback(async () => {
 		if (
 			!state.activeCrawlId ||
-			(state.lastCommand.kind === "forceStop" &&
-				state.lastCommand.status === "pending")
+			(state.lastCommand.kind === "forceStop" && state.lastCommand.status === "pending")
 		) {
 			return;
 		}
 		const crawlId = state.activeCrawlId;
 
 		await executeCommand("forceStop", () => stopCrawlRequest(crawlId, "force"));
-	}, [
-		executeCommand,
-		state.activeCrawlId,
-		state.lastCommand.kind,
-		state.lastCommand.status,
-	]);
+	}, [executeCommand, state.activeCrawlId, state.lastCommand.kind, state.lastCommand.status]);
 
 	const resumeCrawl = useCallback(
 		async (sessionId: string, sessionTarget: string) => {
@@ -440,10 +417,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 						URL.revokeObjectURL(url);
 					}, 100);
 
-					addToast(
-						"success",
-						`Data exported successfully as ${format.toUpperCase()}`,
-					);
+					addToast("success", `Data exported successfully as ${format.toUpperCase()}`);
 				},
 			);
 		},
@@ -464,9 +438,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 			}
 
 			dispatch({ type: "resumableSessionDeleting", sessionId });
-			const result = await executeCommand("delete", () =>
-				deleteCrawl(sessionId),
-			);
+			const result = await executeCommand("delete", () => deleteCrawl(sessionId));
 			if (!result.ok) {
 				dispatch({
 					type: "resumableSessionDeleteFailed",
@@ -510,8 +482,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 		logs: state.logs,
 		clearLogs: () => dispatch({ type: "logsCleared" }),
 		filterText: state.filterText,
-		setFilterText: (filterText: string) =>
-			dispatch({ type: "filterChanged", filterText }),
+		setFilterText: (filterText: string) => dispatch({ type: "filterChanged", filterText }),
 		displayedPages,
 		clearFilter: () => dispatch({ type: "filterChanged", filterText: "" }),
 		isAttacking: availability.isAttacking,

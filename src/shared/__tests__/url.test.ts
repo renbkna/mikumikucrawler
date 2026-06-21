@@ -29,18 +29,16 @@ import {
 describe("normalizeCanonicalHttpUrl", () => {
 	test("canonical normalization: lowercase, port strip, param sort, tracking strip, fragment strip", () => {
 		expect(
-			normalizeCanonicalHttpUrl(
-				" Example.COM:80/path/?b=2&utm_source=newsletter&a=1#section ",
-			),
+			normalizeCanonicalHttpUrl(" Example.COM:80/path/?b=2&utm_source=newsletter&a=1#section "),
 		).toEqual({
 			url: "http://example.com/path/?a=1&b=2",
 		});
 	});
 
 	test("strips fragment from URLs", () => {
-		expect(
-			normalizeCanonicalHttpUrl("https://example.com/page#section"),
-		).toEqual({ url: "https://example.com/page" });
+		expect(normalizeCanonicalHttpUrl("https://example.com/page#section")).toEqual({
+			url: "https://example.com/page",
+		});
 	});
 
 	test("removes default port 80 for http", () => {
@@ -111,18 +109,16 @@ describe("normalizeCanonicalHttpUrl", () => {
 describe("normalizeRobotsMatchHttpUrl", () => {
 	test("shares parse invariants but preserves query shape for robots matching", () => {
 		expect(
-			normalizeRobotsMatchHttpUrl(
-				"HTTPS://Example.COM:443/path/?b=2&a=1&utm_source=x#section",
-			),
+			normalizeRobotsMatchHttpUrl("HTTPS://Example.COM:443/path/?b=2&a=1&utm_source=x#section"),
 		).toEqual({
 			url: "https://example.com/path/?b=2&a=1&utm_source=x",
 		});
 	});
 
 	test("preserves trailing slash and non-default ports", () => {
-		expect(
-			normalizeRobotsMatchHttpUrl("http://Example.COM:8080/path/?b=2&a=1"),
-		).toEqual({ url: "http://example.com:8080/path/?b=2&a=1" });
+		expect(normalizeRobotsMatchHttpUrl("http://Example.COM:8080/path/?b=2&a=1")).toEqual({
+			url: "http://example.com:8080/path/?b=2&a=1",
+		});
 	});
 
 	test("rejects the same forbidden schemes as canonical mode", () => {
@@ -142,10 +138,16 @@ describe("validatePublicHttpUrl", () => {
 		});
 	});
 
-	test("rejects localhost, private IP, and IPv4-mapped private literals", () => {
+	test("rejects localhost by default, allows it with allowLocalhost option", () => {
 		expect(validatePublicHttpUrl("http://localhost")).toEqual({
 			error: "Localhost targets are not allowed",
 		});
+		expect(validatePublicHttpUrl("http://localhost", { allowLocalhost: true })).toEqual({
+			url: "http://localhost/",
+		});
+	});
+
+	test("rejects private IP and IPv4-mapped private literals regardless of allowLocalhost", () => {
 		expect(validatePublicHttpUrl("http://127.0.0.1")).toEqual({
 			error: "Private or reserved IP addresses are not allowed",
 		});

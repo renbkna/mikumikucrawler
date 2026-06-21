@@ -19,11 +19,12 @@ import {
 	StopCrawlBodySchema,
 	StopCrawlResponseSchema,
 } from "../../shared/contracts/schemas.js";
+import { validatePublicHttpUrl } from "../../shared/url.js";
+import { config } from "../config/env.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
 import { OkResponseSchema } from "../contracts/http.js";
 import { exportPages } from "../domain/export/CrawlExportService.js";
 import { routeServices } from "./context.js";
-import { validatePublicHttpUrl } from "../../shared/url.js";
 
 export function crawlsApi() {
 	const crawlByIdRoutes = new Elysia().guard(
@@ -136,11 +137,7 @@ export function crawlsApi() {
 						}
 
 						const pages = repos.pages.listForExport(params.id);
-						const exported = exportPages(
-							params.id,
-							pages,
-							query.format ?? "json",
-						);
+						const exported = exportPages(params.id, pages, query.format ?? "json");
 						set.headers["content-type"] = exported.contentType;
 						set.headers["content-disposition"] = exported.contentDisposition;
 						return exported.body;
@@ -195,7 +192,9 @@ export function crawlsApi() {
 				const { body, crawlManager, set } = routeServices<{
 					body: typeof CreateCrawlBodySchema.static;
 				}>(context);
-				const normalizedTarget = validatePublicHttpUrl(body.target);
+				const normalizedTarget = validatePublicHttpUrl(body.target, {
+					allowLocalhost: !config.isProduction,
+				});
 				if ("error" in normalizedTarget) {
 					set.status = 422;
 					return { error: normalizedTarget.error, code: "INVALID_TARGET" };
@@ -225,9 +224,7 @@ export function crawlsApi() {
 					query: typeof ResumableCrawlListQuerySchema.static;
 				}>(context);
 				return {
-					crawls: crawlManager.listResumable(
-						query.limit ?? DEFAULT_CRAWL_LIST_LIMIT,
-					),
+					crawls: crawlManager.listResumable(query.limit ?? DEFAULT_CRAWL_LIST_LIMIT),
 				};
 			},
 			{
@@ -253,12 +250,26 @@ export function crawlsApi() {
 						limit?: number;
 					};
 				}>(context);
+
+				const listFilter: {
+					status?: CrawlStatus;
+					from?: string;
+					to?: string;
+					limit?: number;
+				} = {};
+				if (query.status !== undefined) {
+					listFilter.status = query.status;
+				}
+				if (query.from !== undefined) {
+					listFilter.from = query.from;
+				}
+				if (query.to !== undefined) {
+					listFilter.to = query.to;
+				}
+				listFilter.limit = query.limit ?? DEFAULT_CRAWL_LIST_LIMIT;
 				return {
 					crawls: crawlManager.list({
-						status: query.status,
-						from: query.from,
-						to: query.to,
-						limit: query.limit ?? DEFAULT_CRAWL_LIST_LIMIT,
+						...listFilter,
 					}),
 				};
 			},
