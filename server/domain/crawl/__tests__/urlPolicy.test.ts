@@ -14,6 +14,7 @@ import { filterDiscoveredLinks, getCrawlUrlIdentity } from "../UrlPolicy.js";
  *   3. Rejects external links unless crawlMethod is "full"
  *   4. Sets isInternal based on domain match when not already set
  *   5. Coerces nofollow to boolean
+ *   6. Rejects localhost and private IP targets (SSRF protection for discovered links)
  */
 
 function makeOptions(overrides: Partial<CrawlOptions> = {}): CrawlOptions {
@@ -67,12 +68,10 @@ describe("filterDiscoveredLinks", () => {
 		const root = getCrawlUrlIdentity("https://example.com/page");
 		const subdomain = getCrawlUrlIdentity("https://blog.example.com/page");
 
-		expect("error" in root ? root.error : root.domainBudgetKey).toBe(
-			"example.com",
+		expect("error" in root ? root.error : root.domainBudgetKey).toBe("example.com");
+		expect("error" in subdomain ? subdomain.error : subdomain.domainBudgetKey).toBe(
+			"blog.example.com",
 		);
-		expect(
-			"error" in subdomain ? subdomain.error : subdomain.domainBudgetKey,
-		).toBe("blog.example.com");
 	});
 
 	test("rejects non-http URLs", () => {
@@ -92,17 +91,7 @@ describe("filterDiscoveredLinks", () => {
 	});
 
 	test("rejects resource extensions", () => {
-		const extensions = [
-			".css",
-			".js",
-			".json",
-			".xml",
-			".txt",
-			".md",
-			".csv",
-			".svg",
-			".ico",
-		];
+		const extensions = [".css", ".js", ".json", ".xml", ".txt", ".md", ".csv", ".svg", ".ico"];
 		const links = extensions.map((ext) => ({
 			url: `https://example.com/file${ext}`,
 			domain: "example.com",
@@ -231,5 +220,22 @@ describe("filterDiscoveredLinks", () => {
 
 		expect(result[0].nofollow).toBe(false);
 		expect(result[1].nofollow).toBe(true);
+	});
+
+	test("rejects localhost and private IP targets even in full crawl mode", () => {
+		const result = filterDiscoveredLinks(
+			[
+				{ url: "http://localhost:3000/admin", domain: "localhost" },
+				{ url: "http://127.0.0.1:8080/internal", domain: "127.0.0.1" },
+				{ url: "http://10.0.0.1/api", domain: "10.0.0.1" },
+				{ url: "http://[::1]:9090", domain: "::1" },
+				{ url: "https://example.com/page", domain: "example.com" },
+			],
+			makeOptions({ crawlMethod: "full" }),
+			"example.com",
+		);
+
+		expect(result).toHaveLength(1);
+		expect(result[0].url).toBe("https://example.com/page");
 	});
 });
