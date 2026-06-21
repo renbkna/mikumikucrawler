@@ -6,7 +6,7 @@ pre-commit:
       stage_fixed: true
     lint:
       glob: "*.{ts,tsx,js,jsx}"
-      run: ./node_modules/.bin/oxlint --config .oxlintrc.json --deny-warnings {staged_files}
+      run: ./node_modules/.bin/biome ci {staged_files}
 
 pre-push:
   commands:
