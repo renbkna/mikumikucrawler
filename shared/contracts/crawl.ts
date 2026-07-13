@@ -1,4 +1,5 @@
 import type { CrawlMethod } from "../crawl.js";
+import type { CrawlPageSummary } from "./pageData.js";
 
 export const DEFAULT_CRAWL_LIST_LIMIT = 25;
 
@@ -39,7 +40,13 @@ export function isCrawlStatus(value: unknown): value is CrawlStatus {
 
 export const PENDING_CRAWL_STATUS_VALUES = ["pending"] as const;
 
-export const ACTIVE_CRAWL_STATUS_VALUES = ["starting", "running", "pausing", "stopping"] as const;
+export const ACTIVE_CRAWL_STATUS_VALUES = [
+	"pending",
+	"starting",
+	"running",
+	"pausing",
+	"stopping",
+] as const;
 
 export const RESUMABLE_CRAWL_STATUS_VALUES = ["paused", "interrupted"] as const;
 
@@ -97,6 +104,12 @@ export interface CrawlSummary {
 
 export interface CrawlListResponse {
 	crawls: CrawlSummary[];
+}
+
+export interface ResumeCrawlResponse {
+	crawl: CrawlSummary;
+	pages: CrawlPageSummary[];
+	pageCount: number;
 }
 
 export interface ResumableSessionSummary {

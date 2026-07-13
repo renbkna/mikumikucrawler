@@ -92,7 +92,7 @@ describe("api contract", () => {
 				}),
 		});
 
-		storage.repos.crawlRuns.createRun("injected-storage-crawl", "https://injected.example", {
+		storage.repos.crawlRuns.createRun("injected-storage-crawl", {
 			...crawlBody,
 			target: "https://injected.example",
 		});
@@ -120,7 +120,9 @@ describe("api contract", () => {
 			links: [],
 		});
 
-		const response = await app.handle(new Request("http://localhost/api/search?q=injected"));
+		const response = await app.handle(
+			new Request("http://localhost/api/search?crawlId=injected-storage-crawl&q=injected"),
+		);
 
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual(
@@ -200,6 +202,20 @@ describe("api contract", () => {
 		);
 
 		expect(response.status).toBe(422);
+
+		const unsafeResponse = await app.handle(
+			new Request("http://localhost/api/crawls/example/events", {
+				headers: {
+					"last-event-id": String(Number.MAX_SAFE_INTEGER + 1),
+				},
+			}),
+		);
+
+		expect(unsafeResponse.status).toBe(422);
+		expect(await unsafeResponse.json()).toEqual({
+			error: "Last-Event-ID must be a safe non-negative integer",
+			code: "INVALID_LAST_EVENT_ID",
+		});
 	});
 
 	test("rate-limit exemptions are exact route paths, not query-string substrings", async () => {
@@ -220,7 +236,9 @@ describe("api contract", () => {
 		expect(response.status).toBe(404);
 
 		for (let index = 0; index < 101; index += 1) {
-			response = await app.handle(new Request(`http://localhost/api/search?q=/events&n=${index}`));
+			response = await app.handle(
+				new Request(`http://localhost/api/search?crawlId=missing&q=/events&n=${index}`),
+			);
 		}
 
 		expect(response.status).toBe(429);
@@ -308,6 +326,27 @@ describe("api contract", () => {
 		expect(created.options.target).toBe("http://example.com/path?a=1&b=2");
 	});
 
+	test("rejects create admission after shutdown begins", async () => {
+		const { app, crawlManager } = buildApp({
+			fetch: async () => new Response("unused"),
+		});
+		const shutdown = crawlManager.shutdownAll();
+		const response = await app.handle(
+			new Request("http://localhost/api/crawls", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(crawlBody),
+			}),
+		);
+		await shutdown;
+
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({
+			error: "Crawl service is shutting down",
+			code: "SERVICE_CLOSING",
+		});
+	});
+
 	test("create response matches the persisted startup snapshot", async () => {
 		let releaseFetch!: () => void;
 		const { app, storage } = buildApp({
@@ -382,7 +421,20 @@ describe("api contract", () => {
 		const listed = await listResponse.json();
 		expect(listed.crawls).toHaveLength(1);
 
-		const pages = storage.repos.pages.listForExport(created.id);
+		const pages = Array.from(storage.repos.pages.iterateForExport(created.id));
+		const pageSnapshotResponse = await app.handle(
+			new Request(`http://localhost/api/crawls/${created.id}/pages`),
+		);
+		expect(pageSnapshotResponse.status).toBe(200);
+		expect(await pageSnapshotResponse.json()).toEqual({
+			count: 1,
+			pages: [
+				expect.objectContaining({
+					id: pages[0].id,
+					url: pages[0].url,
+				}),
+			],
+		});
 		const pageContentResponse = await app.handle(
 			new Request(`http://localhost/api/pages/${pages[0].id}/content`),
 		);
@@ -390,7 +442,9 @@ describe("api contract", () => {
 		const pageContent = await pageContentResponse.json();
 		expect(pageContent.content).toContain("Hello api contract");
 
-		const searchResponse = await app.handle(new Request("http://localhost/api/search?q=contract"));
+		const searchResponse = await app.handle(
+			new Request(`http://localhost/api/search?crawlId=${created.id}&q=contract`),
+		);
 		expect(searchResponse.status).toBe(200);
 		const search = await searchResponse.json();
 		expect(search.count).toBeGreaterThan(0);
@@ -404,11 +458,7 @@ describe("api contract", () => {
 					headers: { "content-type": "text/html" },
 				}),
 		});
-		const crawl = storage.repos.crawlRuns.createRun(
-			"crawl-page-content-contract",
-			"https://example.com",
-			crawlBody,
-		);
+		const crawl = storage.repos.crawlRuns.createRun("crawl-page-content-contract", crawlBody);
 		const basePage = {
 			crawlId: crawl.id,
 			domain: "example.com",
@@ -460,11 +510,7 @@ describe("api contract", () => {
 					headers: { "content-type": "text/html" },
 				}),
 		});
-		const crawl = storage.repos.crawlRuns.createRun(
-			"crawl-search-export",
-			"https://example.com",
-			crawlBody,
-		);
+		const crawl = storage.repos.crawlRuns.createRun("crawl-search-export", crawlBody);
 
 		for (const index of [1, 2, 3]) {
 			storage.repos.pages.save({
@@ -500,7 +546,7 @@ describe("api contract", () => {
 		expect(exported[0].content).toContain("needle export body");
 
 		const searchResponse = await app.handle(
-			new Request("http://localhost/api/search?q=needle&limit=2"),
+			new Request(`http://localhost/api/search?crawlId=${crawl.id}&q=needle&limit=2`),
 		);
 		expect(searchResponse.status).toBe(200);
 		const search = await searchResponse.json();
@@ -534,6 +580,7 @@ describe("api contract", () => {
 		expect(lastEventIdParameter?.schema).toEqual({
 			type: "string",
 			pattern: "^(0|[1-9]\\d*)$",
+			maxLength: 16,
 		});
 		expect(lastEventIdParameter?.description).toContain("Bounded live replay cursor");
 		expect(findParameter("/api/crawls/", "limit")?.schema.default).toBe(25);
@@ -555,11 +602,7 @@ describe("api contract", () => {
 					headers: { "content-type": "text/html" },
 				}),
 		});
-		const crawl = storage.repos.crawlRuns.createRun(
-			"crawl-search-terms",
-			"https://example.com",
-			crawlBody,
-		);
+		const crawl = storage.repos.crawlRuns.createRun("crawl-search-terms", crawlBody);
 
 		for (const [slug, mainContent] of [
 			["phrase", "alpha beta"],
@@ -591,7 +634,9 @@ describe("api contract", () => {
 			});
 		}
 
-		const response = await app.handle(new Request("http://localhost/api/search?q=alpha%20beta"));
+		const response = await app.handle(
+			new Request(`http://localhost/api/search?crawlId=${crawl.id}&q=alpha%20beta`),
+		);
 
 		expect(response.status).toBe(200);
 		const search = await response.json();
@@ -610,15 +655,11 @@ describe("api contract", () => {
 					headers: { "content-type": "text/html" },
 				}),
 		});
-		const crawl = storage.repos.crawlRuns.createRun(
-			"crawl-content-only-api-search",
-			"https://content-only.example",
-			{
-				...crawlBody,
-				target: "https://content-only.example",
-				contentOnly: true,
-			},
-		);
+		const crawl = storage.repos.crawlRuns.createRun("crawl-content-only-api-search", {
+			...crawlBody,
+			target: "https://content-only.example",
+			contentOnly: true,
+		});
 		storage.repos.pages.save({
 			crawlId: crawl.id,
 			url: "https://content-only.example/page",
@@ -644,12 +685,61 @@ describe("api contract", () => {
 		});
 
 		const response = await app.handle(
-			new Request("http://localhost/api/search?q=uniquecontentonlyneedle"),
+			new Request(`http://localhost/api/search?crawlId=${crawl.id}&q=uniquecontentonlyneedle`),
 		);
 
 		expect(response.status).toBe(200);
 		const search = await response.json();
 		expect(search.results[0].snippet).toContain("uniquecontentonlyneedle");
+	});
+
+	test("resume returns the durable page snapshot before the new SSE generation", async () => {
+		const { app, storage } = buildApp({
+			fetch: async () =>
+				new Response("<html><body><main>resumed target</main></body></html>", {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				}),
+		});
+		const crawl = storage.repos.crawlRuns.createRun("crawl-resume-snapshot", crawlBody);
+		storage.repos.pages.save({
+			crawlId: crawl.id,
+			url: "https://example.com/prior",
+			domain: "example.com",
+			contentType: "text/html",
+			statusCode: 200,
+			contentLength: 128,
+			title: "Prior durable page",
+			description: "Stored before pause",
+			content: "<main>prior</main>",
+			isDynamic: false,
+			lastModified: null,
+			etag: null,
+			processedContent: {
+				extractedData: { mainContent: "prior" },
+				metadata: {},
+				analysis: {},
+				media: [],
+				links: [],
+				errors: [],
+			},
+			links: [],
+		});
+		storage.repos.crawlRuns.markPaused(crawl.id, crawl.counters, "Paused", 7);
+
+		const response = await app.handle(
+			new Request(`http://localhost/api/crawls/${crawl.id}/resume`, { method: "POST" }),
+		);
+		expect(response.status).toBe(200);
+		const resumed = await response.json();
+		expect(resumed.crawl.id).toBe(crawl.id);
+		expect(resumed.pageCount).toBe(1);
+		expect(resumed.pages).toEqual([
+			expect.objectContaining({
+				url: "https://example.com/prior",
+				title: "Prior durable page",
+			}),
+		]);
 	});
 
 	test("resume rejects terminal crawls", async () => {
@@ -731,11 +821,10 @@ describe("api contract", () => {
 				}),
 		});
 
-		const paused = storage.repos.crawlRuns.createRun(
-			"active-paused-crawl",
-			"https://paused.example",
-			{ ...crawlBody, target: "https://paused.example" },
-		);
+		const paused = storage.repos.crawlRuns.createRun("active-paused-crawl", {
+			...crawlBody,
+			target: "https://paused.example",
+		});
 		storage.repos.crawlRuns.markPaused(paused.id, paused.counters, "Paused", 0);
 		registry.set(paused.id, {} as CrawlRuntime);
 
@@ -760,11 +849,10 @@ describe("api contract", () => {
 				}),
 		});
 
-		const active = storage.repos.crawlRuns.createRun(
-			"orphan-running-crawl",
-			"https://running.example",
-			{ ...crawlBody, target: "https://running.example" },
-		);
+		const active = storage.repos.crawlRuns.createRun("orphan-running-crawl", {
+			...crawlBody,
+			target: "https://running.example",
+		});
 		storage.repos.crawlRuns.markRunning(active.id, active.counters, 0);
 
 		const deleteResponse = await app.handle(
@@ -789,29 +877,26 @@ describe("api contract", () => {
 				}),
 		});
 
-		const paused = storage.repos.crawlRuns.createRun("paused-crawl", "https://paused.example", {
+		const paused = storage.repos.crawlRuns.createRun("paused-crawl", {
 			...crawlBody,
 			target: "https://paused.example",
 		});
-		const pausing = storage.repos.crawlRuns.createRun("pausing-crawl", "https://pausing.example", {
+		const pausing = storage.repos.crawlRuns.createRun("pausing-crawl", {
 			...crawlBody,
 			target: "https://pausing.example",
 		});
-		const interrupted = storage.repos.crawlRuns.createRun(
-			"interrupted-crawl",
-			"https://interrupted.example",
-			{ ...crawlBody, target: "https://interrupted.example" },
-		);
-		const completed = storage.repos.crawlRuns.createRun(
-			"completed-crawl",
-			"https://completed.example",
-			{ ...crawlBody, target: "https://completed.example" },
-		);
-		const activePaused = storage.repos.crawlRuns.createRun(
-			"active-paused-crawl",
-			"https://active-paused.example",
-			{ ...crawlBody, target: "https://active-paused.example" },
-		);
+		const interrupted = storage.repos.crawlRuns.createRun("interrupted-crawl", {
+			...crawlBody,
+			target: "https://interrupted.example",
+		});
+		const completed = storage.repos.crawlRuns.createRun("completed-crawl", {
+			...crawlBody,
+			target: "https://completed.example",
+		});
+		const activePaused = storage.repos.crawlRuns.createRun("active-paused-crawl", {
+			...crawlBody,
+			target: "https://active-paused.example",
+		});
 		storage.repos.crawlRuns.markPaused(paused.id, paused.counters, "Paused", 0);
 		storage.repos.crawlRuns.markPaused(
 			activePaused.id,

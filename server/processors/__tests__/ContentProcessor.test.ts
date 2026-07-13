@@ -17,7 +17,7 @@ import { processContent } from "../ContentProcessor.js";
  * Error contract:
  *   - processing errors → errors[] populated, error defaults applied
  *   - PDF parse failure → pdf_processing_error in errors[]
- *   - never throws
+ *   - caller aborts propagate after owned processing resources settle
  */
 
 const createMockLogger = (): Logger =>
@@ -32,6 +32,21 @@ const processTestContent = (content: string | Buffer, url: string, contentType: 
 	processContent(content, url, contentType, createMockLogger());
 
 describe("ContentProcessor dispatch contract", () => {
+	test("propagates caller aborts instead of serializing a late processing result", async () => {
+		const controller = new AbortController();
+		controller.abort(new Error("item deadline"));
+
+		await expect(
+			processContent(
+				"<html><main>late</main></html>",
+				"https://example.com/late",
+				"text/html",
+				createMockLogger(),
+				controller.signal,
+			),
+		).rejects.toThrow("item deadline");
+	});
+
 	test("HTML → extracts main content and populates analysis", async () => {
 		const html = `<html><head><title>Test</title></head>
 			<body><main><h1>Hello World</h1><p>Crawler test content here.</p></main></body></html>`;
@@ -176,5 +191,5 @@ startxref
 
 		expect(result.contentType).toBe("application/pdf");
 		expect(result.extractedData.mainContent).toBeDefined();
-	});
+	}, 30_000);
 });

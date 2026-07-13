@@ -1,14 +1,14 @@
 import { t } from "elysia/type-system";
 import { CRAWL_METHODS, CRAWL_OPTION_BOUNDS } from "../crawl.js";
+import { MAX_URL_LENGTH } from "../url.js";
 import { CRAWL_EXPORT_FORMAT_VALUES } from "./api.js";
-import { CrawlStatusValues, DEFAULT_CRAWL_LIST_LIMIT, StopCrawlModeValues } from "./crawl.js";
+import { CrawlStatusValues, StopCrawlModeValues } from "./crawl.js";
 import {
 	CrawlEventTypeValues,
 	LIVE_CRAWL_EVENT_TYPE_VALUES,
 	SETTLED_CRAWL_EVENT_TYPE_VALUES,
 	TERMINAL_CRAWL_EVENT_TYPE_VALUES,
 } from "./events.js";
-import { optionalBoundedListLimitSchema } from "./http.js";
 import { MediaTypeValues } from "./pageData.js";
 
 export const CrawlStatusSchema = t.UnionEnum([...CrawlStatusValues]);
@@ -20,7 +20,7 @@ export const CrawlMethodSchema = t.UnionEnum([...CrawlMethodValues]);
 export const StopCrawlModeSchema = t.UnionEnum([...StopCrawlModeValues]);
 
 export const CrawlOptionsSchema = t.Object({
-	target: t.String({ minLength: 1 }),
+	target: t.String({ minLength: 1, maxLength: MAX_URL_LENGTH }),
 	crawlMethod: CrawlMethodSchema,
 	crawlDepth: t.Number({
 		minimum: CRAWL_OPTION_BOUNDS.crawlDepth.min,
@@ -61,13 +61,13 @@ export const CrawlOptionsSchema = t.Object({
 export type CrawlOptions = typeof CrawlOptionsSchema.static;
 
 export const CrawlCountersSchema = t.Object({
-	pagesScanned: t.Number({ minimum: 0 }),
-	successCount: t.Number({ minimum: 0 }),
-	failureCount: t.Number({ minimum: 0 }),
-	skippedCount: t.Number({ minimum: 0 }),
-	linksFound: t.Number({ minimum: 0 }),
-	mediaFiles: t.Number({ minimum: 0 }),
-	totalDataKb: t.Number({ minimum: 0 }),
+	pagesScanned: t.Number({ minimum: 0, multipleOf: 1 }),
+	successCount: t.Number({ minimum: 0, multipleOf: 1 }),
+	failureCount: t.Number({ minimum: 0, multipleOf: 1 }),
+	skippedCount: t.Number({ minimum: 0, multipleOf: 1 }),
+	linksFound: t.Number({ minimum: 0, multipleOf: 1 }),
+	mediaFiles: t.Number({ minimum: 0, multipleOf: 1 }),
+	totalDataKb: t.Number({ minimum: 0, multipleOf: 1 }),
 });
 
 export const CrawlSummarySchema = t.Object({
@@ -84,26 +84,14 @@ export const CrawlSummarySchema = t.Object({
 	resumable: t.Boolean(),
 });
 
-export const CrawlListQuerySchema = t.Object({
-	status: t.Optional(CrawlStatusSchema),
-	from: t.Optional(t.String({ format: "date-time" })),
-	to: t.Optional(t.String({ format: "date-time" })),
-	limit: optionalBoundedListLimitSchema(DEFAULT_CRAWL_LIST_LIMIT),
-});
-
 export const CrawlListResponseSchema = t.Object({
 	crawls: t.Array(CrawlSummarySchema),
-});
-
-export const ResumableCrawlListQuerySchema = t.Object({
-	limit: optionalBoundedListLimitSchema(DEFAULT_CRAWL_LIST_LIMIT),
 });
 
 export const ResumableCrawlListResponseSchema = CrawlListResponseSchema;
 
 export const CreateCrawlResponseSchema = CrawlSummarySchema;
 export const StopCrawlResponseSchema = CrawlSummarySchema;
-export const ResumeCrawlResponseSchema = CrawlSummarySchema;
 export const GetCrawlResponseSchema = CrawlSummarySchema;
 
 export const CreateCrawlBodySchema = CrawlOptionsSchema;
@@ -188,8 +176,8 @@ export const ProcessedPageDataSchema = t.Object({
 });
 
 export const QueueStatsSchema = t.Object({
-	activeRequests: t.Number({ minimum: 0 }),
-	queueLength: t.Number({ minimum: 0 }),
+	activeRequests: t.Number({ minimum: 0, multipleOf: 1 }),
+	queueLength: t.Number({ minimum: 0, multipleOf: 1 }),
 	elapsedTime: t.Number({ minimum: 0 }),
 	pagesPerSecond: t.Number({ minimum: 0 }),
 });
@@ -203,6 +191,26 @@ export const CrawlPagePayloadSchema = t.Object({
 	contentType: t.Optional(t.String()),
 	domain: t.Optional(t.String()),
 	processedData: t.Optional(ProcessedPageDataSchema),
+});
+
+export const CrawlPageSummarySchema = t.Object({
+	id: t.Number({ minimum: 1, multipleOf: 1 }),
+	url: t.String(),
+	title: t.Optional(t.String()),
+	description: t.Optional(t.String()),
+	contentType: t.Optional(t.String()),
+	domain: t.String(),
+});
+
+export const CrawlPagesResponseSchema = t.Object({
+	pages: t.Array(CrawlPageSummarySchema),
+	count: t.Number({ minimum: 0, multipleOf: 1 }),
+});
+
+export const ResumeCrawlResponseSchema = t.Object({
+	crawl: CrawlSummarySchema,
+	pages: t.Array(CrawlPageSummarySchema),
+	pageCount: t.Number({ minimum: 0, multipleOf: 1 }),
 });
 
 export const CrawlStartedPayloadSchema = t.Object({

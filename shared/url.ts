@@ -16,6 +16,9 @@ export type NormalizedUrlResult = { url: string } | { error: string };
 
 export type ValidateUrlOptions = { allowLocalhost?: boolean };
 
+/** Maximum untrusted URL text accepted before parsing or normalization. */
+export const MAX_URL_LENGTH = 2000;
+
 const STRIP_PARAMS = new Set([
 	"utm_source",
 	"utm_medium",
@@ -64,6 +67,9 @@ export function validatePublicHttpUrl(
 function parseHttpUrl(url: string): URL | { error: string } {
 	if (!url || typeof url !== "string") {
 		return { error: "URL is required" };
+	}
+	if (url.length > MAX_URL_LENGTH) {
+		return { error: `URL exceeds maximum length of ${MAX_URL_LENGTH} characters` };
 	}
 
 	let candidate = url.trim();

@@ -7,7 +7,7 @@ import { CrawlAdmissionPolicy } from "./CrawlAdmissionPolicy.js";
 import type { CrawlQueue, QueueItem } from "./CrawlQueue.js";
 import type { CrawlState, TerminalOutcome } from "./CrawlState.js";
 import type { FetchService } from "./FetchService.js";
-import { isClientErrorShell, isSoft404 } from "./PageDecisionPolicy.js";
+import { hasUsablePageContent, isClientErrorShell, isSoft404 } from "./PageDecisionPolicy.js";
 import type { BuiltPageResult } from "./PageResultBuilder.js";
 import { buildPageResult } from "./PageResultBuilder.js";
 import type { RobotsService } from "./RobotsService.js";
@@ -19,7 +19,12 @@ interface EventSink {
 
 export interface PageProcessResult {
 	terminalOutcome?: TerminalOutcome;
-	domainBudgetCharged?: boolean;
+	terminalEffects?: {
+		chargeDomainBudget: boolean;
+		dataKb?: number;
+		mediaFiles?: number;
+		discoveredLinks?: number;
+	};
 	rescheduled?: boolean;
 	aborted?: boolean;
 	page?: Pick<BuiltPageResult, "saveInput" | "eventPayload">;
@@ -76,37 +81,29 @@ export class PagePipeline {
 	}
 
 	private recordTerminal(
-		url: string,
 		outcome: TerminalOutcome,
-		options: { dataKb?: number; mediaFiles?: number } = {},
+		options: { dataKb?: number; mediaFiles?: number; discoveredLinks?: number } = {},
 	): PageProcessResult {
-		if (Object.keys(options).length > 0) {
-			this.state.recordTerminal(url, outcome, options);
-		} else {
-			this.state.recordTerminal(url, outcome);
-		}
-		return { terminalOutcome: outcome };
+		return {
+			terminalOutcome: outcome,
+			terminalEffects: { chargeDomainBudget: false, ...options },
+		};
 	}
 
 	private recordFetchedTerminal(
-		item: QueueItem,
 		outcome: TerminalOutcome,
-		options: { dataKb?: number; mediaFiles?: number } = {},
+		options: { dataKb?: number; mediaFiles?: number; discoveredLinks?: number } = {},
 	): PageProcessResult {
-		const recorded =
-			Object.keys(options).length > 0
-				? this.state.recordTerminal(item.url, outcome, options)
-				: this.state.recordTerminal(item.url, outcome);
-		if (recorded) {
-			this.state.recordDomainPage(item.domain);
-		}
-		return { terminalOutcome: outcome, domainBudgetCharged: recorded };
+		return {
+			terminalOutcome: outcome,
+			terminalEffects: { chargeDomainBudget: true, ...options },
+		};
 	}
 
 	async process(item: QueueItem, signal?: AbortSignal): Promise<PageProcessResult> {
 		throwIfAborted(signal);
 		if (!this.state.canScheduleMore() && !this.state.hasVisited(item.url)) {
-			const result = this.recordTerminal(item.url, "skip");
+			const result = this.recordTerminal("skip");
 			this.eventSink.log(`[Limit] Max pages reached: ${item.url}`);
 			return result;
 		}
@@ -116,7 +113,7 @@ export class PagePipeline {
 		}
 
 		if (this.state.isDomainBudgetExceeded(item.domain)) {
-			const result = this.recordTerminal(item.url, "skip");
+			const result = this.recordTerminal("skip");
 			this.eventSink.log(`[Budget] Domain budget exceeded: ${item.url}`);
 			return result;
 		}
@@ -133,8 +130,9 @@ export class PagePipeline {
 				cachedLinks.length;
 			await this.enqueueLinks(item, cachedLinks, signal);
 			throwIfAborted(signal);
-			this.state.recordDiscoveredLinks(discoveredLinkCount);
-			const result = this.recordFetchedTerminal(item, "success");
+			const result = this.recordFetchedTerminal("success", {
+				discoveredLinks: discoveredLinkCount,
+			});
 			this.eventSink.log(`[Crawler] Unchanged: ${item.url} (304)`);
 			return result;
 		}
@@ -154,7 +152,7 @@ export class PagePipeline {
 				return { rescheduled: true };
 			}
 
-			const result = this.recordFetchedTerminal(item, "failure");
+			const result = this.recordFetchedTerminal("failure");
 			this.eventSink.log(
 				`[Crawler] ${fetchResult.type === "rateLimited" ? "Rate limited" : "Transient failure"} terminal failure: ${item.url}`,
 			);
@@ -163,7 +161,7 @@ export class PagePipeline {
 
 		if (fetchResult.type === "permanentFailure" || fetchResult.type === "blocked") {
 			this.state.adaptDomainDelay(getDelayKey(item), fetchResult.statusCode);
-			const result = this.recordFetchedTerminal(item, "failure");
+			const result = this.recordFetchedTerminal("failure");
 			if (fetchResult.type === "blocked" && fetchResult.reason) {
 				this.eventSink.log(`[Crawler] ${fetchResult.reason}`);
 			} else {
@@ -172,13 +170,27 @@ export class PagePipeline {
 			return result;
 		}
 
+		// Queue/page identity remains the requested item URL. The validated effective URL
+		// is the document base and is retained in processed-content metadata.
 		const processedContent = await processContent(
 			fetchResult.content,
-			item.url,
+			fetchResult.effectiveUrl,
 			fetchResult.contentType,
 			this.logger,
+			signal,
 		);
 		throwIfAborted(signal);
+		if (processedContent.errors.length > 0) {
+			const result = this.recordFetchedTerminal("failure");
+			this.eventSink.log(`[Crawler] Content processing failed: ${item.url}`);
+			return result;
+		}
+		const mainContent = processedContent.extractedData?.mainContent ?? "";
+		if (!hasUsablePageContent(fetchResult.contentType, mainContent)) {
+			const result = this.recordFetchedTerminal("failure");
+			this.eventSink.log(`[Crawler] No usable page content: ${item.url}`);
+			return result;
+		}
 
 		const normalizedCrawlLinks =
 			isHtmlLikeContentType(fetchResult.contentType) && processedContent.links?.length
@@ -194,7 +206,7 @@ export class PagePipeline {
 		);
 
 		if (isClientErrorShell(pageResult.resolvedTitle, pageResult.mainContent)) {
-			const result = this.recordFetchedTerminal(item, "failure");
+			const result = this.recordFetchedTerminal("failure");
 			this.eventSink.log(`[Crawler] Client error shell detected: ${item.url}`);
 			return result;
 		}
@@ -205,13 +217,12 @@ export class PagePipeline {
 				await this.enqueueLinks(item, normalizedCrawlLinks, signal);
 				throwIfAborted(signal);
 			}
-			this.state.recordDiscoveredLinks(processedContent.links?.length ?? 0);
-			const result = this.recordFetchedTerminal(item, "skip");
+			const result = this.recordFetchedTerminal("skip");
 			return result;
 		}
 
 		if (isSoft404(pageResult.resolvedTitle, pageResult.mainContent, fetchResult.contentLength)) {
-			const result = this.recordFetchedTerminal(item, "skip");
+			const result = this.recordFetchedTerminal("skip");
 			this.eventSink.log(`[Crawler] Soft 404 skipped: ${item.url}`);
 			return result;
 		}
@@ -222,10 +233,10 @@ export class PagePipeline {
 			await this.enqueueLinks(item, normalizedCrawlLinks, signal);
 		}
 
-		this.state.recordDiscoveredLinks(processedContent.links?.length ?? 0);
-		const result = this.recordFetchedTerminal(item, "success", {
+		const result = this.recordFetchedTerminal("success", {
 			dataKb: pageResult.dataSizeKb,
 			mediaFiles: pageResult.mediaCount,
+			discoveredLinks: processedContent.links?.length ?? 0,
 		});
 
 		this.eventSink.log(`[Crawler] Crawled ${item.url}`);

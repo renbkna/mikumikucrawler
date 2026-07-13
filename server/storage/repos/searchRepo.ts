@@ -21,20 +21,20 @@ function mapSearchResultRow(row: SearchResultRow): SearchResult {
 
 export function createSearchRepo(db: Database) {
 	return {
-		count(query: string): number {
+		count(crawlId: string, query: string): number {
 			const row = db
 				.query(
 					`
 					SELECT COUNT(*) AS count
 					FROM pages_fts
 					JOIN pages p ON p.id = pages_fts.rowid
-					WHERE pages_fts MATCH ?
+					WHERE p.crawl_id = ? AND pages_fts MATCH ?
 				`,
 				)
-				.get(query) as { count: number };
+				.get(crawlId, query) as { count: number };
 			return row.count;
 		},
-		search(query: string, limit: number): SearchResult[] {
+		search(crawlId: string, query: string, limit: number): SearchResult[] {
 			const rows = db
 				.query(
 					`
@@ -103,12 +103,12 @@ export function createSearchRepo(db: Database) {
 						) AS snippet
 					FROM pages_fts
 					JOIN pages p ON p.id = pages_fts.rowid
-					WHERE pages_fts MATCH ?
+					WHERE p.crawl_id = ? AND pages_fts MATCH ?
 					ORDER BY rank
 					LIMIT ?
 				`,
 				)
-				.all(query, limit) as SearchResultRow[];
+				.all(crawlId, query, limit) as SearchResultRow[];
 			return rows.map(mapSearchResultRow);
 		},
 	};

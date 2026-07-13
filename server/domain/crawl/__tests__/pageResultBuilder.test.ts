@@ -30,6 +30,7 @@ const item: QueueItem = {
 const fetchResult: Extract<FetchResult, { type: "success" }> = {
 	type: "success",
 	content: "<html><main>Body</main></html>",
+	effectiveUrl: "https://example.com/post",
 	statusCode: 200,
 	contentType: "text/html",
 	contentLength: 4096,

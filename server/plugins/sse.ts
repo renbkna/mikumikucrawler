@@ -26,6 +26,7 @@ export function createEventStreamResponse(options: {
 			close = () => {
 				if (closed) return;
 				closed = true;
+				options.requestSignal.removeEventListener("abort", close);
 				if (keepAlive) {
 					clearInterval(keepAlive);
 				}
@@ -44,7 +45,12 @@ export function createEventStreamResponse(options: {
 				}
 			};
 
-			unsubscribe = options.eventStream.subscribe(options.crawlId, write, options.afterSequence);
+			unsubscribe = options.eventStream.subscribe(
+				options.crawlId,
+				write,
+				options.afterSequence,
+				close,
+			);
 			keepAlive = setInterval(() => {
 				if (closed) return;
 				try {
@@ -54,7 +60,11 @@ export function createEventStreamResponse(options: {
 				}
 			}, KEEPALIVE_INTERVAL_MS);
 
-			options.requestSignal.addEventListener("abort", close);
+			if (options.requestSignal.aborted) {
+				close();
+			} else {
+				options.requestSignal.addEventListener("abort", close, { once: true });
+			}
 		},
 		cancel() {
 			// `request.signal` is not guaranteed to fire when the reader cancels.

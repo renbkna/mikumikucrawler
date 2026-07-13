@@ -33,10 +33,17 @@ if (port < 1 || port > 65535) {
 
 const isRender = getEnv("RENDER", "false") === "true";
 const memoryThreshold = requireInt("MEMORY_THRESHOLD_MB", isRender ? 350 : 600);
+const env = getEnv("NODE_ENV", "development");
+
+export function allowsLocalhostTargets(environment: string): boolean {
+	return environment === "development";
+}
 
 export const config = {
-	env: getEnv("NODE_ENV", "development"),
-	isProduction: process.env.NODE_ENV === "production",
+	env,
+	isDevelopment: allowsLocalhostTargets(env),
+	isProduction: env === "production",
+	allowLocalhostTargets: allowsLocalhostTargets(env),
 	port,
 	frontendUrl: getEnv("FRONTEND_URL", "http://localhost:5173"),
 	dbPath: getEnv("DB_PATH", "./data/crawler.db"),

@@ -38,8 +38,12 @@ export function searchApi() {
 				};
 			}
 
-			const results = repos.search.search(ftsQuery, query.limit ?? DEFAULT_SEARCH_LIMIT);
-			const count = repos.search.count(ftsQuery);
+			const results = repos.search.search(
+				query.crawlId,
+				ftsQuery,
+				query.limit ?? DEFAULT_SEARCH_LIMIT,
+			);
+			const count = repos.search.count(query.crawlId, ftsQuery);
 			return {
 				query: query.q,
 				count,

@@ -1,8 +1,8 @@
 import { AlertCircle, ChevronDown, ChevronUp, Code, ExternalLink, Filter, X } from "lucide-react";
-import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso } from "react-virtuoso";
 import type { CrawledPage } from "../../shared/types.js";
-import { getPageContent } from "../api/pages";
+import { createPageContentRequestSignal, getPageContent } from "../api/pages";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 
 const PageLimitFooter = memo(function PageLimitFooter({
@@ -33,6 +33,14 @@ const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledP
 	const [fetchedContent, setFetchedContent] = useState<string | null>(page.content ?? null);
 	const [isLoadingContent, setIsLoadingContent] = useState(false);
 	const [fetchError, setFetchError] = useState<string | null>(null);
+	const contentRequestRef = useRef<AbortController | null>(null);
+
+	useEffect(
+		() => () => {
+			contentRequestRef.current?.abort();
+		},
+		[],
+	);
 
 	const processedData = page.processedData;
 	const hasProcessedData = processedData?.analysis;
@@ -45,18 +53,40 @@ const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledP
 
 		setIsLoadingContent(true);
 		setFetchError(null);
+		contentRequestRef.current?.abort();
+		const lifetimeController = new AbortController();
+		contentRequestRef.current = lifetimeController;
+		const requestSignal = createPageContentRequestSignal(lifetimeController.signal);
 
 		try {
-			const result = await getPageContent(page.id, AbortSignal.timeout(15_000));
+			const result = await getPageContent(page.id, requestSignal);
+			if (lifetimeController.signal.aborted) {
+				return;
+			}
 			if (result.ok) {
 				setFetchedContent(result.data.content);
 			} else {
 				throw new Error(result.error);
 			}
 		} catch (err) {
-			setFetchError(err instanceof Error ? err.message : "Failed to fetch content");
+			if (lifetimeController.signal.aborted) {
+				return;
+			}
+
+			setFetchError(
+				requestSignal.aborted
+					? "Page content request timed out"
+					: err instanceof Error
+						? err.message
+						: "Failed to fetch content",
+			);
 		} finally {
-			setIsLoadingContent(false);
+			if (!lifetimeController.signal.aborted) {
+				setIsLoadingContent(false);
+			}
+			if (contentRequestRef.current === lifetimeController) {
+				contentRequestRef.current = null;
+			}
 		}
 	};
 
@@ -243,38 +273,48 @@ const getPageItemKey = (_index: number, page: CrawledPage) => page.id ?? page.ur
 interface CrawledPagesSectionProps {
 	crawledPages: CrawledPage[];
 	displayedPages: CrawledPage[];
-	filterText: string;
-	onFilterChange: (text: string) => void;
-	onClearFilter: () => void;
+	searchQuery: string;
+	onSearchChange: (text: string) => void;
+	onClearSearch: () => void;
+	searchResultCount: number;
+	isSearching: boolean;
+	searchError: string | null;
 	pageLimit?: number;
 }
 
 export const CrawledPagesSection = memo(function CrawledPagesSection({
 	crawledPages,
 	displayedPages,
-	filterText,
-	onFilterChange,
-	onClearFilter,
+	searchQuery,
+	onSearchChange,
+	onClearSearch,
+	searchResultCount,
+	isSearching,
+	searchError,
 	pageLimit,
 }: Readonly<CrawledPagesSectionProps>) {
-	const [localFilter, setLocalFilter] = useState(filterText);
+	const [localQuery, setLocalQuery] = useState(searchQuery);
 
 	useEffect(() => {
-		setLocalFilter(filterText);
-	}, [filterText]);
+		setLocalQuery(searchQuery);
+	}, [searchQuery]);
 
 	useEffect(() => {
 		const timer = setTimeout(() => {
-			if (localFilter !== filterText) {
-				onFilterChange(localFilter);
+			if (localQuery !== searchQuery) {
+				onSearchChange(localQuery);
 			}
 		}, 200);
 		return () => clearTimeout(timer);
-	}, [localFilter, filterText, onFilterChange]);
+	}, [localQuery, onSearchChange, searchQuery]);
 
-	const handleFilterChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
-		setLocalFilter(e.target.value);
+	const handleSearchChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+		setLocalQuery(e.target.value);
 	}, []);
+	const handleClearSearch = useCallback(() => {
+		setLocalQuery("");
+		onClearSearch();
+	}, [onClearSearch]);
 
 	const virtuosoComponents = useMemo(
 		() => ({
@@ -284,7 +324,27 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 	);
 
 	const listContent = useMemo(() => {
-		if (crawledPages.length === 0) {
+		const hasSearchQuery = searchQuery.trim().length > 0;
+		if (isSearching && displayedPages.length === 0) {
+			return (
+				<div className="h-full flex items-center justify-center text-miku-text/40">
+					<SparkleIcon className="animate-spin text-miku-teal mr-2" size={20} />
+					<p className="font-bold">Searching stored page content...</p>
+				</div>
+			);
+		}
+
+		if (searchError) {
+			return (
+				<div className="h-full flex flex-col items-center justify-center text-rose-400 gap-2 p-4 text-center">
+					<AlertCircle size={24} />
+					<p className="font-bold">Stored-page search failed</p>
+					<p className="text-xs opacity-75">{searchError}</p>
+				</div>
+			);
+		}
+
+		if (!hasSearchQuery && crawledPages.length === 0) {
 			return (
 				<div className="h-full flex flex-col items-center justify-center text-miku-text/40">
 					<NoteIcon className="text-miku-teal/30 mb-4 animate-float" size={48} />
@@ -297,43 +357,65 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 		}
 
 		if (displayedPages.length > 0) {
-			const showFooter = !!(pageLimit && crawledPages.length >= pageLimit);
+			const showFooter = !hasSearchQuery && !!(pageLimit && crawledPages.length >= pageLimit);
 			return (
-				<Virtuoso
-					style={{ height: "100%" }}
-					data={displayedPages}
-					computeItemKey={getPageItemKey}
-					context={{ pageLimit, showFooter }}
-					itemContent={renderPageItem}
-					components={virtuosoComponents}
-				/>
+				<div className="h-full flex flex-col">
+					{hasSearchQuery && (
+						<p className="px-2 pb-2 text-xs font-bold text-miku-text/40">
+							Showing {displayedPages.length} of {searchResultCount} stored-page match
+							{searchResultCount === 1 ? "" : "es"}
+						</p>
+					)}
+					<div className="flex-1 min-h-0">
+						<Virtuoso
+							style={{ height: "100%" }}
+							data={displayedPages}
+							computeItemKey={getPageItemKey}
+							context={{ pageLimit: hasSearchQuery ? undefined : pageLimit, showFooter }}
+							itemContent={renderPageItem}
+							components={virtuosoComponents}
+						/>
+					</div>
+				</div>
 			);
 		}
 
 		return (
 			<div className="text-center py-12 text-miku-text/40">
-				<p className="font-medium">No pages match your filter</p>
+				<p className="font-medium">No stored pages match this search</p>
 			</div>
 		);
-	}, [crawledPages.length, displayedPages, pageLimit, virtuosoComponents]);
+	}, [
+		crawledPages.length,
+		displayedPages,
+		isSearching,
+		pageLimit,
+		searchError,
+		searchQuery,
+		searchResultCount,
+		virtuosoComponents,
+	]);
 
 	return (
 		<div className="space-y-4 h-full flex flex-col">
+			<p className="text-xs font-medium text-miku-text/40 shrink-0">
+				Search uses the durable full-text index for the active crawl.
+			</p>
 			<div className="bg-white rounded-2xl p-2 flex items-center gap-3 border-2 border-miku-pink/20 shrink-0">
 				<div className="p-2 rounded-xl bg-miku-pink/10 text-miku-pink">
 					<Filter className="w-5 h-5" />
 				</div>
 				<input
 					type="text"
-					value={localFilter}
-					onChange={handleFilterChange}
-					placeholder="Filter pages..."
+					value={localQuery}
+					onChange={handleSearchChange}
+					placeholder="Search stored page content..."
 					className="flex-1 bg-transparent border-none outline-none text-miku-text placeholder-miku-text/30 font-bold"
 				/>
-				{localFilter && (
+				{localQuery && (
 					<button
 						type="button"
-						onClick={onClearFilter}
+						onClick={handleClearSearch}
 						className="p-2 rounded-full hover:bg-rose-50 text-miku-text/30 hover:text-rose-400 transition-colors"
 					>
 						<X className="w-4 h-4" />

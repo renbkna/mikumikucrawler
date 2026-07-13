@@ -1,4 +1,5 @@
 import { SOFT_404_CONSTANTS } from "../../constants.js";
+import { isHtmlLikeContentType } from "../../processors/contentTypes.js";
 
 export interface RobotsDirectives {
 	noindex: boolean;
@@ -73,4 +74,9 @@ export function isClientErrorShell(title: string, mainContent: string): boolean 
 		combined.includes("try again") &&
 		combined.includes("reload page")
 	);
+}
+
+/** HTML success requires readable extracted content; non-HTML types retain their explicit representation. */
+export function hasUsablePageContent(contentType: string, mainContent: string): boolean {
+	return !isHtmlLikeContentType(contentType) || mainContent.trim().length > 0;
 }

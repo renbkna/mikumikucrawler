@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { Logger } from "../../../config/logging.js";
+import { DOMAIN_DELAY_CONSTANTS, REQUEST_CONSTANTS } from "../../../constants.js";
 import { RobotsService } from "../RobotsService.js";
 
 function createLogger(): Logger {
@@ -116,5 +117,53 @@ describe("RobotsService", () => {
 			crawlDelayMs: 2000,
 			delayKey: "http://example.com:8080",
 		});
+	});
+
+	test("rejects declared and streamed oversized robots bodies", async () => {
+		let streamedCanceled = false;
+		const responses = [
+			new Response("unused", {
+				headers: { "content-length": String(REQUEST_CONSTANTS.MAX_ROBOTS_RESPONSE_BYTES + 1) },
+			}),
+			new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(new Uint8Array(REQUEST_CONSTANTS.MAX_ROBOTS_RESPONSE_BYTES));
+						controller.enqueue(new Uint8Array(1));
+					},
+					cancel() {
+						streamedCanceled = true;
+					},
+				}),
+			),
+		];
+		const service = new RobotsService(
+			{ fetch: mock(async () => responses.shift() ?? new Response()) },
+			createLogger(),
+		);
+
+		await expect(service.evaluate("https://one.example/page")).resolves.toMatchObject({
+			type: "unavailable",
+		});
+		await expect(service.evaluate("https://two.example/page")).resolves.toMatchObject({
+			type: "unavailable",
+		});
+		expect(streamedCanceled).toBe(true);
+	});
+
+	test("does not emit non-finite or above-ceiling robots delays", async () => {
+		for (const value of ["1e306", String(DOMAIN_DELAY_CONSTANTS.MAX_MS / 1000 + 1)]) {
+			const service = new RobotsService(
+				{
+					fetch: mock(async () => new Response(`User-agent: *\nCrawl-delay: ${value}`)),
+				},
+				createLogger(),
+			);
+
+			await expect(service.evaluate("https://example.com/page")).resolves.toMatchObject({
+				type: "unavailable",
+				reason: `robots.txt crawl-delay exceeds ${DOMAIN_DELAY_CONSTANTS.MAX_MS}ms`,
+			});
+		}
 	});
 });

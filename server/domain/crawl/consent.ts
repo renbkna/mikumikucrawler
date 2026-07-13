@@ -41,14 +41,27 @@ export const CONSENT_ACTION_MARKERS = [
 	"einverstanden",
 ] as const;
 
+export const CONSENT_NEGATIVE_ACTION_MARKERS = [
+	"do not accept",
+	"don't accept",
+	"not accept",
+	"do not agree",
+	"don't agree",
+	"reject",
+	"decline",
+	"necessary only",
+	"essential only",
+	"manage preferences",
+	"nicht akzeptieren",
+	"nicht zustimmen",
+	"ablehnen",
+	"nur notwendige",
+	"einstellungen verwalten",
+] as const;
+
 export const CONSENT_BUTTON_SELECTORS = [
-	'button[aria-label*="Accept"]',
-	'button[aria-label*="agree"]',
-	'button[aria-label*="Akzept"]',
-	'button[aria-label*="Zustimm"]',
 	"ytd-button-renderer#accept-button button",
-	"button.yt-spec-button-shape-next--call-to-action",
-	'#dialog button[aria-label*="Accept all"]',
+	'#dialog button[aria-label="Accept all"]',
 ] as const;
 
 function normalizeText(value: string): string {
@@ -64,7 +77,12 @@ export function isConsentActionText(...values: Array<string | null | undefined>)
 	return values.some((value) => {
 		if (!value) return false;
 		const normalized = normalizeText(value);
-		return CONSENT_ACTION_MARKERS.some((marker) => normalized.includes(marker));
+		if (CONSENT_NEGATIVE_ACTION_MARKERS.some((marker) => normalized.includes(marker))) {
+			return false;
+		}
+		return CONSENT_ACTION_MARKERS.some(
+			(marker) => normalized === marker || normalized.startsWith(`${marker} `),
+		);
 	});
 }
 

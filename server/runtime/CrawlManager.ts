@@ -25,6 +25,7 @@ interface CreateCrawlManagerOptions {
 	registry: Map<string, CrawlRuntime>;
 	resolver: Resolver;
 	httpClient: HttpClient;
+	allowLocalhostSeed?: boolean;
 }
 
 export type ResumeCrawlResult =
@@ -43,7 +44,16 @@ export type DeleteCrawlResult =
 	| { type: "active"; crawl: CrawlRunRecord }
 	| { type: "deleted" };
 
+export class CrawlManagerClosingError extends Error {
+	constructor() {
+		super("Crawl service is shutting down");
+		this.name = "CrawlManagerClosingError";
+	}
+}
+
 export class CrawlManager {
+	private closing = false;
+
 	constructor(private readonly deps: CreateCrawlManagerOptions) {
 		this.recoverOrphanedActiveCrawls();
 	}
@@ -82,6 +92,7 @@ export class CrawlManager {
 			eventStream: this.deps.eventStream,
 			resolver: this.deps.resolver,
 			httpClient: this.deps.httpClient,
+			allowLocalhostSeed: this.deps.allowLocalhostSeed ?? false,
 			...(config.initialSequence !== undefined ? { initialSequence: config.initialSequence } : {}),
 			...(config.initialCounters !== undefined ? { initialCounters: config.initialCounters } : {}),
 			...(config.initialStartedAtMs !== undefined
@@ -103,9 +114,13 @@ export class CrawlManager {
 	}
 
 	create(options: CrawlOptions) {
+		if (this.closing) {
+			throw new CrawlManagerClosingError();
+		}
+
 		const crawlId = crypto.randomUUID();
-		const record = this.deps.repos.crawlRuns.createRun(crawlId, options.target, options);
-		const runtime = this.createRuntime(crawlId, options);
+		const record = this.deps.repos.crawlRuns.createRun(crawlId, options);
+		const runtime = this.createRuntime(crawlId, record.options);
 		void runtime.start();
 		return this.deps.repos.crawlRuns.getById(crawlId) ?? record;
 	}
@@ -150,15 +165,26 @@ export class CrawlManager {
 			return { type: "already-running", crawl: record };
 		}
 
-		this.deps.eventStream.reset(crawlId, record.eventSequence);
-		const runtime = this.createRuntime(crawlId, record.options, {
-			resume: true,
-			initialSequence: record.eventSequence,
-			initialCounters: record.counters,
-			initialStartedAtMs: record.startedAt === null ? undefined : Date.parse(record.startedAt),
-			initialDomainStates: this.deps.repos.crawlDomainState.listByCrawlId(crawlId),
-		});
 		this.deps.repos.crawlRuns.markStarting(crawlId, record.counters, record.eventSequence);
+		this.deps.eventStream.reset(crawlId, record.eventSequence);
+		let runtime: CrawlRuntime;
+		try {
+			runtime = this.createRuntime(crawlId, record.options, {
+				resume: true,
+				initialSequence: record.eventSequence,
+				initialCounters: record.counters,
+				initialStartedAtMs: record.startedAt === null ? undefined : Date.parse(record.startedAt),
+				initialDomainStates: this.deps.repos.crawlDomainState.listByCrawlId(crawlId),
+			});
+		} catch (error) {
+			this.deps.repos.crawlRuns.markInterrupted(
+				crawlId,
+				record.counters,
+				"Resume startup failed before runtime ownership was established",
+				record.eventSequence,
+			);
+			throw error;
+		}
 		void runtime.start();
 		return {
 			type: "resumed",
@@ -195,6 +221,7 @@ export class CrawlManager {
 	}
 
 	async shutdownAll(): Promise<void> {
+		this.closing = true;
 		const runtimes = [...this.deps.registry.values()];
 		const interruptions: Promise<void>[] = [];
 		for (const runtime of runtimes) {

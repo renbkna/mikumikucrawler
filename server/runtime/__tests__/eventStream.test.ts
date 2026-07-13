@@ -108,6 +108,23 @@ describe("event stream contract", () => {
 		expect(resumed.sequence).toBe(13);
 	});
 
+	test("reset closes subscribers from the previous runtime generation", () => {
+		const stream = new EventStream();
+		let closed = 0;
+		stream.subscribe(
+			"crawl-generation",
+			() => {},
+			0,
+			() => {
+				closed += 1;
+			},
+		);
+
+		stream.reset("crawl-generation", 4);
+
+		expect(closed).toBe(1);
+	});
+
 	test("replay history is isolated from later payload mutation", () => {
 		const stream = new EventStream();
 		const counters = {
@@ -193,5 +210,37 @@ describe("event stream contract", () => {
 		})();
 
 		expect(seen).toEqual([]);
+	});
+
+	test("delete closes every live subscriber", () => {
+		const stream = new EventStream();
+		let closed = 0;
+		for (let index = 0; index < 3; index += 1) {
+			stream.subscribe(
+				"crawl-delete",
+				() => {},
+				0,
+				() => {
+					closed += 1;
+				},
+			);
+		}
+
+		stream.delete("crawl-delete");
+
+		expect(closed).toBe(3);
+		expect(stream.hasSubscriberCapacity("crawl-delete")).toBe(true);
+	});
+
+	test("bounds subscriber admission per crawl", () => {
+		const stream = new EventStream();
+		for (let index = 0; index < 10; index += 1) {
+			stream.subscribe("crawl-capacity", () => {});
+		}
+
+		expect(stream.hasSubscriberCapacity("crawl-capacity")).toBe(false);
+		expect(() => stream.subscribe("crawl-capacity", () => {})).toThrow(
+			"SSE subscriber capacity reached",
+		);
 	});
 });

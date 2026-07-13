@@ -2,6 +2,10 @@ export type LimitedResponseBody =
 	| { type: "body"; bytes: Uint8Array; contentLength: number }
 	| { type: "tooLarge" };
 
+export async function disposeResponseBody(response: Response): Promise<void> {
+	await response.body?.cancel().catch(() => undefined);
+}
+
 function parseContentLength(value: string | null): number | null {
 	if (!value || !/^\d+$/.test(value.trim())) return null;
 	return Number.parseInt(value, 10);
@@ -23,7 +27,7 @@ export async function readLimitedResponseBody(
 ): Promise<LimitedResponseBody> {
 	const declaredLength = parseContentLength(response.headers.get("content-length"));
 	if (declaredLength !== null && declaredLength > maxBytes) {
-		await response.body?.cancel().catch(() => undefined);
+		await disposeResponseBody(response);
 		return { type: "tooLarge" };
 	}
 
@@ -34,17 +38,22 @@ export async function readLimitedResponseBody(
 
 	const chunks: Uint8Array[] = [];
 	let totalLength = 0;
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		if (!value) continue;
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			if (!value) continue;
 
-		totalLength += value.byteLength;
-		if (totalLength > maxBytes) {
-			await reader.cancel().catch(() => undefined);
-			return { type: "tooLarge" };
+			totalLength += value.byteLength;
+			if (totalLength > maxBytes) {
+				await reader.cancel().catch(() => undefined);
+				return { type: "tooLarge" };
+			}
+			chunks.push(value);
 		}
-		chunks.push(value);
+	} catch (error) {
+		await reader.cancel().catch(() => undefined);
+		throw error;
 	}
 
 	return {

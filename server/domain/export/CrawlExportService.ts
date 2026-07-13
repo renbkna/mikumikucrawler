@@ -5,15 +5,9 @@ import {
 	type ExportPageRow,
 } from "../../storage/repos/pageRepo.js";
 
-export interface CrawlExportResult {
-	body: string;
-	contentType: string;
-	contentDisposition: string;
-	filename: string;
-}
-
 const CSV_INJECTION_PREFIX = /^[=+\-@|\t]/;
 const CSV_HEADERS = CSV_EXPORT_PAGE_FIELDS;
+const encoder = new TextEncoder();
 
 function safeExportFilename(crawlId: string, format: CrawlExportFormat): string {
 	return `${crawlId.replace(/[^a-zA-Z0-9_-]/g, "_")}.${format}`;
@@ -25,36 +19,87 @@ function escapeCsvCell(value: string | null | undefined): string {
 	return `"${sanitized.replaceAll('"', '""')}"`;
 }
 
-export function exportPages(
+function createJsonExportStream(pages: Iterable<ExportPageRow>): ReadableStream<Uint8Array> {
+	const iterator = pages[Symbol.iterator]();
+	let started = false;
+	let firstRow = true;
+	let finished = false;
+
+	return new ReadableStream({
+		pull(controller) {
+			if (!started) {
+				started = true;
+				controller.enqueue(encoder.encode("["));
+				return;
+			}
+			if (finished) {
+				controller.close();
+				return;
+			}
+
+			const next = iterator.next();
+			if (next.done) {
+				finished = true;
+				controller.enqueue(encoder.encode(firstRow ? "]" : "\n]"));
+				return;
+			}
+
+			const projected = Object.fromEntries(
+				EXPORT_PAGE_FIELDS.map((field) => [field, next.value[field]]),
+			);
+			controller.enqueue(encoder.encode(`${firstRow ? "\n" : ",\n"}${JSON.stringify(projected)}`));
+			firstRow = false;
+		},
+		cancel() {
+			iterator.return?.();
+		},
+	});
+}
+
+function createCsvExportStream(pages: Iterable<ExportPageRow>): ReadableStream<Uint8Array> {
+	const iterator = pages[Symbol.iterator]();
+	let wroteHeader = false;
+
+	return new ReadableStream({
+		pull(controller) {
+			if (!wroteHeader) {
+				wroteHeader = true;
+				controller.enqueue(
+					encoder.encode(CSV_HEADERS.map((cell) => escapeCsvCell(cell)).join(",")),
+				);
+				return;
+			}
+
+			const next = iterator.next();
+			if (next.done) {
+				controller.close();
+				return;
+			}
+
+			const row = CSV_EXPORT_PAGE_FIELDS.map((field) => String(next.value[field] ?? ""));
+			controller.enqueue(encoder.encode(`\n${row.map(escapeCsvCell).join(",")}`));
+		},
+		cancel() {
+			iterator.return?.();
+		},
+	});
+}
+
+export function createCrawlExportResponse(
 	crawlId: string,
-	pages: ExportPageRow[],
+	pages: Iterable<ExportPageRow>,
 	format: CrawlExportFormat = "json",
-): CrawlExportResult {
+): Response {
 	const filename = safeExportFilename(crawlId, format);
-
-	if (format === "csv") {
-		const rows = [
-			CSV_HEADERS,
-			...pages.map((page) => CSV_EXPORT_PAGE_FIELDS.map((field) => String(page[field] ?? ""))),
-		];
-		return {
-			body: rows.map((row) => row.map((cell) => escapeCsvCell(cell)).join(",")).join("\n"),
-			contentType: "text/csv; charset=utf-8",
-			contentDisposition: `attachment; filename="${filename}"`,
-			filename,
-		};
-	}
-
-	return {
-		body: JSON.stringify(
-			pages.map((page) =>
-				Object.fromEntries(EXPORT_PAGE_FIELDS.map((field) => [field, page[field]])),
-			),
-			null,
-			2,
-		),
-		contentType: "application/json; charset=utf-8",
-		contentDisposition: `attachment; filename="${filename}"`,
-		filename,
-	};
+	return new Response(
+		format === "csv" ? createCsvExportStream(pages) : createJsonExportStream(pages),
+		{
+			headers: {
+				"content-type":
+					format === "csv" ? "text/csv; charset=utf-8" : "application/json; charset=utf-8",
+				"content-disposition": `attachment; filename="${filename}"`,
+				"cache-control": "no-transform",
+			},
+		},
+	);
 }

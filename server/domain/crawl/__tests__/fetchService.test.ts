@@ -565,4 +565,170 @@ describe("fetch service contract", () => {
 		expect(result.contentLength).toBe(Buffer.byteLength(content, "utf8"));
 		expect(result.etag).toBe('"dynamic-etag"');
 	});
+
+	test("carries the effective URL from static and dynamic acquisition", async () => {
+		const staticResponse = new Response("<html><main>redirected</main></html>", {
+			headers: { "content-type": "text/html" },
+		});
+		Object.defineProperty(staticResponse, "url", { value: "https://final.example/docs/" });
+		const staticService = new FetchService(
+			{ getHeaders: () => null } as never,
+			{ fetch: async () => staticResponse },
+			{ isEnabled: () => false, render: async () => null } as never,
+			createLogger(),
+		);
+		const dynamicService = new FetchService(
+			{ getHeaders: () => null } as never,
+			{ fetch: mock(async () => new Response("unused")) },
+			{
+				isEnabled: () => true,
+				render: async () => ({
+					type: "success",
+					result: {
+						isDynamic: true,
+						content: "<html><main>dynamic</main></html>",
+						effectiveUrl: "https://dynamic.example/final/",
+						statusCode: 200,
+						contentType: "text/html",
+						contentLength: 33,
+						title: "",
+						description: "",
+						xRobotsTag: null,
+					},
+				}),
+			} as never,
+			createLogger(),
+		);
+		const item = {
+			url: "https://example.com/start",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		};
+
+		await expect(staticService.fetch("crawl-1", item)).resolves.toMatchObject({
+			type: "success",
+			effectiveUrl: "https://final.example/docs/",
+		});
+		await expect(dynamicService.fetch("crawl-1", item)).resolves.toMatchObject({
+			type: "success",
+			effectiveUrl: "https://dynamic.example/final/",
+		});
+	});
+
+	test("refetches one unconditional time when 304 has no cached page", async () => {
+		const requests: Array<{ headers?: Record<string, string> }> = [];
+		const fetch = mock(async (request: { headers?: Record<string, string> }) => {
+			requests.push(request);
+			return fetch.mock.calls.length === 1
+				? new Response(null, { status: 304 })
+				: new Response("<html><main>fresh</main></html>", {
+						headers: { "content-type": "text/html" },
+					});
+		});
+		const service = new FetchService(
+			{ getHeaders: () => null } as never,
+			{ fetch },
+			{ isEnabled: () => false, render: async () => null } as never,
+			createLogger(),
+		);
+
+		await expect(
+			service.fetch("crawl-1", {
+				url: "https://example.com/first",
+				domain: "example.com",
+				depth: 0,
+				retries: 0,
+			}),
+		).resolves.toMatchObject({ type: "success" });
+		expect(fetch).toHaveBeenCalledTimes(2);
+		expect(requests[1]?.headers).not.toHaveProperty("If-None-Match");
+		expect(requests[1]?.headers).not.toHaveProperty("If-Modified-Since");
+	});
+
+	test("classifies repeated cacheless 304 as failure instead of page success", async () => {
+		const fetch = mock(async () => new Response(null, { status: 304 }));
+		const service = new FetchService(
+			{ getHeaders: () => null } as never,
+			{ fetch },
+			{ isEnabled: () => false, render: async () => null } as never,
+			createLogger(),
+		);
+
+		await expect(
+			service.fetch("crawl-1", {
+				url: "https://example.com/first",
+				domain: "example.com",
+				depth: 0,
+				retries: 0,
+			}),
+		).resolves.toMatchObject({
+			type: "blocked",
+			statusCode: 304,
+		});
+		expect(fetch).toHaveBeenCalledTimes(2);
+	});
+
+	test("cancels classified error response bodies", async () => {
+		let canceled = false;
+		const service = new FetchService(
+			{ getHeaders: () => null } as never,
+			{
+				fetch: async () =>
+					new Response(
+						new ReadableStream({
+							cancel() {
+								canceled = true;
+							},
+						}),
+						{ status: 500 },
+					),
+			},
+			{ isEnabled: () => false, render: async () => null } as never,
+			createLogger(),
+		);
+
+		await service.fetch("crawl-1", {
+			url: "https://example.com/error",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(canceled).toBe(true);
+	});
+
+	test("grants local networking only to the configured seed identity", async () => {
+		const requests: Array<{ allowLocalhostOnInitialRequest?: boolean }> = [];
+		const service = new FetchService(
+			{ getHeaders: () => null } as never,
+			{
+				fetch: async (request) => {
+					requests.push(request);
+					return new Response("<html><main>local</main></html>", {
+						headers: { "content-type": "text/html" },
+					});
+				},
+			},
+			{ isEnabled: () => false, render: async () => null } as never,
+			createLogger(),
+			"http://localhost:3000/",
+		);
+
+		await service.fetch("crawl-1", {
+			url: "http://localhost:3000/",
+			domain: "localhost",
+			depth: 0,
+			retries: 0,
+		});
+		await service.fetch("crawl-1", {
+			url: "http://localhost:3000/child",
+			domain: "localhost",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(requests[0]?.allowLocalhostOnInitialRequest).toBe(true);
+		expect(requests[1]?.allowLocalhostOnInitialRequest).toBe(false);
+	});
 });

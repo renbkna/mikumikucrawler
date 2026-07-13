@@ -1,5 +1,9 @@
 import { Coffee, Database, TriangleAlert } from "lucide-react";
-import type { CrawlOptions } from "../../shared/contracts/index.js";
+import {
+	type CrawlOptions,
+	crawlMethodSupportsSavedMedia,
+	normalizeCrawlOptions,
+} from "../../shared/contracts/index.js";
 import { CRAWL_OPTION_BOUNDS, isCrawlMethod } from "../../shared/crawl.js";
 import { useDialogModal } from "../hooks";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
@@ -12,9 +16,14 @@ interface ConfigurationViewProps {
 	onSave: () => void;
 }
 
-function clampCrawlOption(key: keyof typeof CRAWL_OPTION_BOUNDS, rawValue: string): number {
+export function parseCrawlIntegerOption(
+	key: keyof typeof CRAWL_OPTION_BOUNDS,
+	rawValue: string,
+): number {
 	const bounds = CRAWL_OPTION_BOUNDS[key];
-	return Math.min(bounds.max, Math.max(bounds.min, Number(rawValue) || bounds.min));
+	const parsed = Number(rawValue);
+	const integer = Number.isFinite(parsed) ? Math.round(parsed) : bounds.min;
+	return Math.min(bounds.max, Math.max(bounds.min, integer));
 }
 
 export function ConfigurationView({
@@ -33,7 +42,10 @@ export function ConfigurationView({
 		media: "Follows internal HTML links and keeps extracted image, video, and audio metadata",
 		full: "Follows internal and external HTML links and keeps extracted media metadata",
 	}[options.crawlMethod];
-	const mediaRetentionDisabled = options.crawlMethod === "links";
+	const mediaRetentionDisabled = !crawlMethodSupportsSavedMedia(options.crawlMethod);
+	const updateOptions = (patch: Partial<CrawlOptions>) => {
+		onOptionsChange(normalizeCrawlOptions({ ...options, ...patch }));
+	};
 
 	return (
 		<dialog
@@ -96,11 +108,7 @@ export function ConfigurationView({
 											return;
 										}
 
-										onOptionsChange({
-											...options,
-											crawlMethod: nextMethod,
-											saveMedia: nextMethod === "links" ? false : options.saveMedia,
-										});
+										updateOptions({ crawlMethod: nextMethod });
 									}}
 									className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
 								>
@@ -126,12 +134,13 @@ export function ConfigurationView({
 									type="number"
 									value={options.crawlDepth}
 									onChange={(e) => {
-										const value = clampCrawlOption("crawlDepth", e.target.value);
-										onOptionsChange({ ...options, crawlDepth: value });
+										const value = parseCrawlIntegerOption("crawlDepth", e.target.value);
+										updateOptions({ crawlDepth: value });
 									}}
 									className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
 									min={CRAWL_OPTION_BOUNDS.crawlDepth.min}
 									max={CRAWL_OPTION_BOUNDS.crawlDepth.max}
+									step={1}
 								/>
 								<p className="mt-2 text-xs text-miku-text/50 font-medium">
 									How many link-hops deep to crawl from the start URL
@@ -159,12 +168,13 @@ export function ConfigurationView({
 										type="number"
 										value={options.maxPages}
 										onChange={(e) => {
-											const value = clampCrawlOption("maxPages", e.target.value);
-											onOptionsChange({ ...options, maxPages: value });
+											const value = parseCrawlIntegerOption("maxPages", e.target.value);
+											updateOptions({ maxPages: value });
 										}}
 										className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
 										min={CRAWL_OPTION_BOUNDS.maxPages.min}
 										max={CRAWL_OPTION_BOUNDS.maxPages.max}
+										step={1}
 									/>
 									<p className="mt-2 text-xs text-miku-text/50 font-medium">
 										Total pages to crawl across all domains
@@ -183,15 +193,13 @@ export function ConfigurationView({
 										type="number"
 										value={options.maxPagesPerDomain}
 										onChange={(e) => {
-											const value = clampCrawlOption("maxPagesPerDomain", e.target.value);
-											onOptionsChange({
-												...options,
-												maxPagesPerDomain: value,
-											});
+											const value = parseCrawlIntegerOption("maxPagesPerDomain", e.target.value);
+											updateOptions({ maxPagesPerDomain: value });
 										}}
 										className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
 										min={CRAWL_OPTION_BOUNDS.maxPagesPerDomain.min}
 										max={CRAWL_OPTION_BOUNDS.maxPagesPerDomain.max}
+										step={1}
 									/>
 									<p className="mt-2 text-xs text-miku-text/50 font-medium">
 										Pages per domain (0 = unlimited)
@@ -220,15 +228,14 @@ export function ConfigurationView({
 									max={CRAWL_OPTION_BOUNDS.crawlDelay.max}
 									step={CRAWL_OPTION_BOUNDS.crawlDelay.step}
 									onChange={(e) =>
-										onOptionsChange({
-											...options,
-											crawlDelay: Number(e.target.value),
+										updateOptions({
+											crawlDelay: parseCrawlIntegerOption("crawlDelay", e.target.value),
 										})
 									}
 									className="w-full h-2 bg-miku-pink/20 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-gradient-to-r [&::-webkit-slider-thumb]:from-miku-teal [&::-webkit-slider-thumb]:to-teal-400 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-md"
 								/>
 								<div className="flex justify-between mt-1 text-xs text-miku-text/40 font-medium">
-									<span>250ms (fast)</span>
+									<span>{CRAWL_OPTION_BOUNDS.crawlDelay.min}ms (fast)</span>
 									<span>10s (polite)</span>
 								</div>
 								<p className="mt-1 text-xs text-miku-text/50 font-medium">
@@ -250,15 +257,16 @@ export function ConfigurationView({
 										type="number"
 										value={options.maxConcurrentRequests}
 										onChange={(e) => {
-											const value = clampCrawlOption("maxConcurrentRequests", e.target.value);
-											onOptionsChange({
-												...options,
-												maxConcurrentRequests: value,
-											});
+											const value = parseCrawlIntegerOption(
+												"maxConcurrentRequests",
+												e.target.value,
+											);
+											updateOptions({ maxConcurrentRequests: value });
 										}}
 										className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
 										min={CRAWL_OPTION_BOUNDS.maxConcurrentRequests.min}
 										max={CRAWL_OPTION_BOUNDS.maxConcurrentRequests.max}
+										step={1}
 									/>
 									<p className="mt-2 text-xs text-miku-text/50 font-medium">
 										Higher values crawl faster but may overload servers
@@ -277,12 +285,13 @@ export function ConfigurationView({
 										type="number"
 										value={options.retryLimit}
 										onChange={(e) => {
-											const value = clampCrawlOption("retryLimit", e.target.value);
-											onOptionsChange({ ...options, retryLimit: value });
+											const value = parseCrawlIntegerOption("retryLimit", e.target.value);
+											updateOptions({ retryLimit: value });
 										}}
 										className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
 										min={CRAWL_OPTION_BOUNDS.retryLimit.min}
 										max={CRAWL_OPTION_BOUNDS.retryLimit.max}
+										step={1}
 									/>
 									<p className="mt-2 text-xs text-miku-text/50 font-medium">
 										How many times to retry failed requests
@@ -340,12 +349,7 @@ export function ConfigurationView({
 											id={item.id}
 											checked={item.checked}
 											disabled={item.disabled}
-											onChange={(e) =>
-												onOptionsChange({
-													...options,
-													[item.id]: e.target.checked,
-												})
-											}
+											onChange={(e) => updateOptions({ [item.id]: e.target.checked })}
 											className="w-5 h-5 text-miku-teal border-2 border-miku-pink/30 rounded focus:ring-miku-teal focus:ring-offset-0 cursor-pointer accent-miku-teal"
 										/>
 									</div>

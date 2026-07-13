@@ -1,3 +1,4 @@
+import { MAX_URL_LENGTH } from "../shared/url.js";
 import { config } from "./config/env.js";
 
 export const CRAWL_QUEUE_CONSTANTS = {
@@ -15,6 +16,11 @@ export const TIMEOUT_CONSTANTS = {
 export const RETRY_CONSTANTS = {
 	BASE_DELAY: 1000,
 	MAX_DELAY: 30000,
+} as const;
+
+/** Every scheduler delay must remain finite and at or below this liveness ceiling. */
+export const DOMAIN_DELAY_CONSTANTS = {
+	MAX_MS: 60_000,
 } as const;
 
 /** Standard HTTP headers for crawling requests */
@@ -37,8 +43,10 @@ export const MEMORY_CONSTANTS = {
 export const REQUEST_CONSTANTS = {
 	/** Timeout for robots.txt fetch in ms (5 seconds) */
 	ROBOTS_FETCH_TIMEOUT_MS: 5000,
+	/** Maximum robots.txt body size to buffer (512 KiB). */
+	MAX_ROBOTS_RESPONSE_BYTES: 512 * 1024,
 	/** Maximum URL length for validation (2000 characters) */
-	MAX_URL_LENGTH: 2000,
+	MAX_URL_LENGTH,
 	/** Maximum response body size to buffer per crawled page (50 MB) */
 	MAX_RESPONSE_BYTES: 50 * 1024 * 1024,
 } as const;

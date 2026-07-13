@@ -18,8 +18,10 @@ describe("storage contract", () => {
 			"0003_pages_fts.sql",
 			"0004_runtime_persistence.sql",
 			"0005_domain_state_search_content.sql",
+			"0006_canonical_schema.sql",
 		]);
 		expect(rows.every((row) => typeof row.checksum === "string")).toBe(true);
+		expect(storage.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
 	});
 
 	test("0005 leaves legacy discovered link totals unknown instead of inferring from visible links", () => {
@@ -89,7 +91,25 @@ describe("storage contract", () => {
 		expect(() => applyMigrations(db, migrationDir)).toThrow("checksum mismatch");
 	});
 
-	test("fails startup for legacy migration tables without checksum support", () => {
+	test("fails startup when the database ledger names an absent migration", () => {
+		const migrationDir = mkdtempSync(path.join(tmpdir(), "miku-migrations-"));
+		writeFileSync(
+			path.join(migrationDir, "0001_test.sql"),
+			"CREATE TABLE test_table (id TEXT PRIMARY KEY);",
+		);
+		const db = new Database(":memory:");
+		applyMigrations(db, migrationDir);
+		db.query("INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)").run(
+			"9999_missing.sql",
+			"missing",
+		);
+
+		expect(() => applyMigrations(db, migrationDir)).toThrow(
+			"is not present in this release lineage",
+		);
+	});
+
+	test("upgrades legacy migration ledgers without a checksum column", () => {
 		const migrationDir = mkdtempSync(path.join(tmpdir(), "miku-migrations-"));
 		writeFileSync(
 			path.join(migrationDir, "0001_test.sql"),
@@ -104,10 +124,17 @@ describe("storage contract", () => {
 			INSERT INTO schema_migrations (id) VALUES ('0001_test.sql');
 		`);
 
-		expect(() => applyMigrations(db, migrationDir)).toThrow("missing checksum");
+		applyMigrations(db, migrationDir);
+		expect(
+			(
+				db.query("SELECT checksum FROM schema_migrations WHERE id = '0001_test.sql'").get() as {
+					checksum: string;
+				}
+			).checksum,
+		).toBe("legacy-unverified");
 	});
 
-	test("fails startup for applied migration rows with null checksums", () => {
+	test("upgrades known applied migration rows with null checksums", () => {
 		const migrationDir = mkdtempSync(path.join(tmpdir(), "miku-migrations-"));
 		writeFileSync(
 			path.join(migrationDir, "0001_test.sql"),
@@ -123,12 +150,243 @@ describe("storage contract", () => {
 			INSERT INTO schema_migrations (id, checksum) VALUES ('0001_test.sql', NULL);
 		`);
 
-		expect(() => applyMigrations(db, migrationDir)).toThrow("has no checksum");
+		applyMigrations(db, migrationDir);
+		expect(
+			(
+				db.query("SELECT checksum FROM schema_migrations WHERE id = '0001_test.sql'").get() as {
+					checksum: string;
+				}
+			).checksum,
+		).toBe("legacy-unverified");
+	});
+
+	test("accepts a known historical checksum and canonicalizes its schema", () => {
+		const db = new Database(":memory:");
+		db.exec(`
+			CREATE TABLE schema_migrations (
+				id TEXT PRIMARY KEY,
+				applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				checksum TEXT NOT NULL
+			);
+			INSERT INTO schema_migrations (id, checksum)
+			VALUES (
+				'0001_crawl_runs.sql',
+				'8f3a188974f103571720f1976bec802baa5b218b6b4c71549914458d5b57ce65'
+			);
+			CREATE TABLE crawl_runs (
+				id TEXT PRIMARY KEY,
+				target TEXT NOT NULL,
+				status TEXT NOT NULL,
+				stop_reason TEXT,
+				options_json TEXT NOT NULL,
+				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				started_at TEXT,
+				updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				completed_at TEXT,
+				pages_scanned INTEGER NOT NULL DEFAULT 0,
+				success_count INTEGER NOT NULL DEFAULT 0,
+				failure_count INTEGER NOT NULL DEFAULT 0,
+				skipped_count INTEGER NOT NULL DEFAULT 0,
+				links_found INTEGER NOT NULL DEFAULT 0,
+				media_files INTEGER NOT NULL DEFAULT 0,
+				total_data_kb INTEGER NOT NULL DEFAULT 0,
+				event_sequence INTEGER NOT NULL DEFAULT 0
+			);
+			INSERT INTO crawl_runs (id, target, status, options_json)
+			VALUES (
+				'historical-run',
+				'https://wrong.example',
+				'paused',
+				'{"target":"https://historical.example","crawlMethod":"links","crawlDepth":2,"crawlDelay":1000,"maxPagesPerDomain":0,"maxConcurrentRequests":5,"retryLimit":3,"dynamic":true,"respectRobots":true,"contentOnly":false,"saveMedia":true}'
+			);
+		`);
+
+		applyMigrations(db);
+
+		expect(() =>
+			db
+				.query(`
+				INSERT INTO crawl_runs (id, target, status, options_json)
+				VALUES ('invalid', 'https://example.com', 'invented', '{}')
+			`)
+				.run(),
+		).toThrow();
+		expect(
+			(db.query("SELECT COUNT(*) AS count FROM schema_migrations").get() as { count: number })
+				.count,
+		).toBe(6);
+		const migrated = db
+			.query("SELECT target, options_json FROM crawl_runs WHERE id = 'historical-run'")
+			.get() as { target: string; options_json: string };
+		expect(migrated.target).toBe("https://historical.example/");
+		expect(JSON.parse(migrated.options_json)).toMatchObject({
+			target: "https://historical.example/",
+			maxPages: 50,
+			saveMedia: false,
+		});
+	});
+
+	test("migrates the pre-chain schema without discarding pages, links, or resumable sessions", () => {
+		const db = new Database(":memory:");
+		db.exec(`
+			PRAGMA foreign_keys = ON;
+			CREATE TABLE pages (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				url TEXT UNIQUE,
+				domain TEXT,
+				crawled_at TEXT DEFAULT CURRENT_TIMESTAMP,
+				last_modified TEXT,
+				etag TEXT,
+				content_type TEXT,
+				status_code INTEGER,
+				data_length INTEGER,
+				title TEXT,
+				description TEXT,
+				content TEXT,
+				is_dynamic INTEGER DEFAULT 0,
+				main_content TEXT,
+				word_count INTEGER,
+				reading_time INTEGER,
+				language TEXT,
+				keywords TEXT,
+				quality_score INTEGER,
+				structured_data TEXT,
+				media_count INTEGER,
+				internal_links_count INTEGER,
+				external_links_count INTEGER
+			);
+			CREATE TABLE links (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				source_id INTEGER,
+				target_url TEXT,
+				text TEXT,
+				FOREIGN KEY (source_id) REFERENCES pages(id) ON DELETE CASCADE,
+				UNIQUE(source_id, target_url)
+			);
+			CREATE TABLE domain_settings (
+				domain TEXT PRIMARY KEY,
+				robots_txt TEXT,
+				crawl_delay INTEGER DEFAULT 1000,
+				last_crawled TEXT,
+				allowed INTEGER DEFAULT 1
+			);
+			CREATE TABLE crawl_sessions (
+				id TEXT PRIMARY KEY,
+				socket_id TEXT,
+				target TEXT,
+				options TEXT,
+				status TEXT DEFAULT 'running',
+				stats TEXT,
+				created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+				updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+			);
+			CREATE TABLE queue_items (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				session_id TEXT,
+				url TEXT,
+				depth INTEGER DEFAULT 0,
+				retries INTEGER DEFAULT 0,
+				parent_url TEXT,
+				domain TEXT,
+				FOREIGN KEY (session_id) REFERENCES crawl_sessions(id) ON DELETE CASCADE,
+				UNIQUE(session_id, url)
+			);
+
+			INSERT INTO pages (
+				url, domain, content_type, status_code, data_length, title, content,
+				main_content, media_count, internal_links_count, external_links_count
+			) VALUES (
+				'https://legacy.example/page', 'legacy.example', 'text/html', 200, 2048,
+				'Legacy page', '<html>legacy</html>', 'legacy body', 2, 1, 0
+			);
+			INSERT INTO links (source_id, target_url, text)
+			VALUES (1, 'https://legacy.example/next', 'next');
+			INSERT INTO domain_settings (domain, robots_txt, crawl_delay)
+			VALUES ('legacy.example', 'User-agent: *', 1500);
+			INSERT INTO crawl_sessions (id, socket_id, target, options, status)
+			VALUES (
+				'legacy-session',
+				'old-socket',
+				'https://resume.example',
+				'{"target":"https://resume.example","crawlMethod":"links","crawlDepth":2,"crawlDelay":1000,"maxPages":50,"maxPagesPerDomain":0,"maxConcurrentRequests":5,"retryLimit":3,"dynamic":true,"respectRobots":true,"contentOnly":false,"saveMedia":true}',
+				'interrupted'
+			);
+			INSERT INTO queue_items (session_id, url, depth, retries, domain)
+			VALUES ('legacy-session', 'https://resume.example/pending', 1, 0, 'resume.example');
+		`);
+
+		applyMigrations(db);
+
+		const archivedRun = db
+			.query(
+				"SELECT id, pages_scanned, success_count FROM crawl_runs WHERE id LIKE 'legacy-v0-unscoped-pages%'",
+			)
+			.get() as { id: string; pages_scanned: number; success_count: number };
+		expect(archivedRun.pages_scanned).toBe(1);
+		expect(archivedRun.success_count).toBe(1);
+		expect(
+			(
+				db.query("SELECT COUNT(*) AS count FROM pages WHERE crawl_id = ?").get(archivedRun.id) as {
+					count: number;
+				}
+			).count,
+		).toBe(1);
+		expect(
+			(db.query("SELECT COUNT(*) AS count FROM page_links").get() as { count: number }).count,
+		).toBe(1);
+
+		const session = db
+			.query("SELECT status, options_json FROM crawl_runs WHERE id = 'legacy-session'")
+			.get() as { status: string; options_json: string };
+		expect(session.status).toBe("interrupted");
+		expect(JSON.parse(session.options_json).saveMedia).toBe(false);
+		expect(
+			(
+				db
+					.query(
+						"SELECT COUNT(*) AS count FROM crawl_queue_items WHERE crawl_id = 'legacy-session'",
+					)
+					.get() as {
+					count: number;
+				}
+			).count,
+		).toBe(1);
+		expect(
+			(
+				db.query("SELECT COUNT(*) AS count FROM legacy_v0_domain_settings").get() as {
+					count: number;
+				}
+			).count,
+		).toBe(1);
+	});
+
+	test("rolls legacy migration back completely when the release lineage is unknown", () => {
+		const db = new Database(":memory:");
+		db.exec(`
+			CREATE TABLE pages (id INTEGER PRIMARY KEY, url TEXT);
+			INSERT INTO pages (id, url) VALUES (1, 'https://legacy.example');
+			CREATE TABLE schema_migrations (
+				id TEXT PRIMARY KEY,
+				applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				checksum TEXT NOT NULL
+			);
+			INSERT INTO schema_migrations (id, checksum) VALUES ('9999_unknown.sql', 'unknown');
+		`);
+
+		expect(() => applyMigrations(db)).toThrow("is not present in this release lineage");
+		expect((db.query("SELECT COUNT(*) AS count FROM pages").get() as { count: number }).count).toBe(
+			1,
+		);
+		expect(
+			db
+				.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'legacy_v0_pages'")
+				.get(),
+		).toBeNull();
 	});
 
 	test("crawl run persistence rejects invalid lifecycle state at the database boundary", () => {
 		const storage = createInMemoryStorage();
-		storage.repos.crawlRuns.createRun("crawl-constraints", "https://db.example", {
+		storage.repos.crawlRuns.createRun("crawl-constraints", {
 			target: "https://db.example",
 			crawlMethod: "links",
 			crawlDepth: 1,
@@ -162,6 +420,16 @@ describe("storage contract", () => {
 		).toThrow();
 		expect(() =>
 			storage.db
+				.query("UPDATE crawl_runs SET pages_scanned = 1.5, success_count = 1.5 WHERE id = ?")
+				.run("crawl-constraints"),
+		).toThrow();
+		expect(() =>
+			storage.db
+				.query("UPDATE crawl_runs SET target = 'https://other.example/' WHERE id = ?")
+				.run("crawl-constraints"),
+		).toThrow();
+		expect(() =>
+			storage.db
 				.query("UPDATE crawl_runs SET event_sequence = -1 WHERE id = ?")
 				.run("crawl-constraints"),
 		).toThrow();
@@ -169,7 +437,7 @@ describe("storage contract", () => {
 
 	test("runtime persistence tables reject impossible queue, page, and domain values", () => {
 		const storage = createInMemoryStorage();
-		storage.repos.crawlRuns.createRun("crawl-runtime-constraints", "https://db.example", {
+		storage.repos.crawlRuns.createRun("crawl-runtime-constraints", {
 			target: "https://db.example",
 			crawlMethod: "links",
 			crawlDepth: 1,
@@ -205,11 +473,18 @@ describe("storage contract", () => {
 				nextAllowedAt: 0,
 			}),
 		).toThrow();
+		expect(() =>
+			storage.db
+				.query(
+					"INSERT INTO crawl_domain_state (crawl_id, delay_key, delay_ms, next_allowed_at) VALUES (?, ?, ?, ?)",
+				)
+				.run("crawl-runtime-constraints", "https://db.example", 60_001, Date.now()),
+		).toThrow();
 	});
 
 	test("queue items restore only for the requested crawlId", () => {
 		const storage = createInMemoryStorage();
-		storage.repos.crawlRuns.createRun("crawl-a", "https://a.example", {
+		storage.repos.crawlRuns.createRun("crawl-a", {
 			target: "https://a.example",
 			crawlMethod: "links",
 			crawlDepth: 1,
@@ -223,7 +498,7 @@ describe("storage contract", () => {
 			contentOnly: false,
 			saveMedia: false,
 		});
-		storage.repos.crawlRuns.createRun("crawl-b", "https://b.example", {
+		storage.repos.crawlRuns.createRun("crawl-b", {
 			target: "https://b.example",
 			crawlMethod: "links",
 			crawlDepth: 1,
@@ -257,11 +532,17 @@ describe("storage contract", () => {
 
 		expect(storage.repos.crawlQueue.listPending("crawl-a")).toEqual([
 			{
+				url: "https://a.example/",
+				domain: "a.example",
+				depth: 0,
+				retries: 0,
+				availableAt: 0,
+			},
+			{
 				url: "https://a.example/one",
 				domain: "a.example",
 				depth: 1,
 				retries: 0,
-				parentUrl: undefined,
 				availableAt: 0,
 			},
 		]);
@@ -269,7 +550,7 @@ describe("storage contract", () => {
 
 	test("domain delay state restores only for the requested crawlId", () => {
 		const storage = createInMemoryStorage();
-		storage.repos.crawlRuns.createRun("crawl-domain-a", "https://a.example", {
+		storage.repos.crawlRuns.createRun("crawl-domain-a", {
 			target: "https://a.example",
 			crawlMethod: "links",
 			crawlDepth: 1,
@@ -283,7 +564,7 @@ describe("storage contract", () => {
 			contentOnly: false,
 			saveMedia: false,
 		});
-		storage.repos.crawlRuns.createRun("crawl-domain-b", "https://b.example", {
+		storage.repos.crawlRuns.createRun("crawl-domain-b", {
 			target: "https://b.example",
 			crawlMethod: "links",
 			crawlDepth: 1,
@@ -320,7 +601,7 @@ describe("storage contract", () => {
 
 	test("typed counters are read from columns without JSON reparsing", () => {
 		const storage = createInMemoryStorage();
-		const created = storage.repos.crawlRuns.createRun("crawl-typed", "https://typed.example", {
+		const created = storage.repos.crawlRuns.createRun("crawl-typed", {
 			target: "https://typed.example",
 			crawlMethod: "links",
 			crawlDepth: 1,
@@ -364,7 +645,7 @@ describe("storage contract", () => {
 
 	test("date filters accept API ISO timestamps without dropping matching rows", () => {
 		const storage = createInMemoryStorage();
-		const created = storage.repos.crawlRuns.createRun("crawl-filter", "https://filter.example", {
+		const created = storage.repos.crawlRuns.createRun("crawl-filter", {
 			target: "https://filter.example",
 			crawlMethod: "links",
 			crawlDepth: 1,
@@ -386,7 +667,7 @@ describe("storage contract", () => {
 
 	test("export rows expose camelCase fields expected by the API layer", () => {
 		const storage = createInMemoryStorage();
-		const created = storage.repos.crawlRuns.createRun("crawl-export", "https://export.example", {
+		const created = storage.repos.crawlRuns.createRun("crawl-export", {
 			target: "https://export.example",
 			crawlMethod: "links",
 			crawlDepth: 1,
@@ -425,7 +706,7 @@ describe("storage contract", () => {
 			links: [],
 		});
 
-		const rows = storage.repos.pages.listForExport(created.id);
+		const rows = Array.from(storage.repos.pages.iterateForExport(created.id));
 		const rawRow = rows[0] as unknown as Record<string, unknown>;
 		expect(rows).toHaveLength(1);
 		expect(rows[0].contentType).toBe("text/html");
@@ -437,7 +718,7 @@ describe("storage contract", () => {
 
 	test("page updates replace stale FTS terms for search", () => {
 		const storage = createInMemoryStorage();
-		const created = storage.repos.crawlRuns.createRun("crawl-fts-update", "https://fts.example", {
+		const created = storage.repos.crawlRuns.createRun("crawl-fts-update", {
 			target: "https://fts.example",
 			crawlMethod: "links",
 			crawlDepth: 1,
@@ -476,8 +757,8 @@ describe("storage contract", () => {
 		};
 
 		storage.repos.pages.save(pageInput);
-		expect(storage.repos.search.count('"old"*')).toBe(1);
-		expect(storage.repos.search.count('"fresh"*')).toBe(0);
+		expect(storage.repos.search.count(created.id, '"old"*')).toBe(1);
+		expect(storage.repos.search.count(created.id, '"fresh"*')).toBe(0);
 
 		storage.repos.pages.save({
 			...pageInput,
@@ -486,30 +767,39 @@ describe("storage contract", () => {
 			content: "fresh haystack body",
 		});
 
-		expect(storage.repos.search.count('"old"*')).toBe(0);
-		expect(storage.repos.search.count('"fresh"*')).toBe(1);
+		expect(storage.repos.search.count(created.id, '"old"*')).toBe(0);
+		expect(storage.repos.search.count(created.id, '"fresh"*')).toBe(1);
+
+		const other = storage.repos.crawlRuns.createRun("crawl-fts-other", {
+			...created.options,
+			target: "https://other.example",
+		});
+		storage.repos.pages.save({
+			...pageInput,
+			crawlId: other.id,
+			url: "https://other.example/page",
+			domain: "other.example",
+		});
+		expect(storage.repos.search.count(other.id, '"old"*')).toBe(1);
+		expect(storage.repos.search.search(created.id, '"old"*', 10)).toEqual([]);
 	});
 
 	test("content-only pages remain searchable through extracted main content", () => {
 		const storage = createInMemoryStorage();
-		const created = storage.repos.crawlRuns.createRun(
-			"crawl-content-only-search",
-			"https://content-only.example",
-			{
-				target: "https://content-only.example",
-				crawlMethod: "links",
-				crawlDepth: 1,
-				crawlDelay: 200,
-				maxPages: 5,
-				maxPagesPerDomain: 0,
-				maxConcurrentRequests: 1,
-				retryLimit: 0,
-				dynamic: false,
-				respectRobots: false,
-				contentOnly: true,
-				saveMedia: false,
-			},
-		);
+		const created = storage.repos.crawlRuns.createRun("crawl-content-only-search", {
+			target: "https://content-only.example",
+			crawlMethod: "links",
+			crawlDepth: 1,
+			crawlDelay: 200,
+			maxPages: 5,
+			maxPagesPerDomain: 0,
+			maxConcurrentRequests: 1,
+			retryLimit: 0,
+			dynamic: false,
+			respectRobots: false,
+			contentOnly: true,
+			saveMedia: false,
+		});
 
 		storage.repos.pages.save({
 			crawlId: created.id,
@@ -535,35 +825,31 @@ describe("storage contract", () => {
 			links: [],
 		});
 
-		expect(storage.repos.search.count('"uniquecontentonlyneedle"*')).toBe(1);
-		const results = storage.repos.search.search('"uniquecontentonlyneedle"*', 10);
+		expect(storage.repos.search.count(created.id, '"uniquecontentonlyneedle"*')).toBe(1);
+		const results = storage.repos.search.search(created.id, '"uniquecontentonlyneedle"*', 10);
 		expect(results).toHaveLength(1);
 		expect(results[0]?.snippet).toContain("uniquecontentonlyneedle");
-		expect(storage.repos.pages.listForExport(created.id)[0]?.content).toBe(
+		expect(Array.from(storage.repos.pages.iterateForExport(created.id))[0]?.content).toBe(
 			"uniquecontentonlyneedle body",
 		);
 	});
 
 	test("empty raw content does not hide extracted main content from search", () => {
 		const storage = createInMemoryStorage();
-		const created = storage.repos.crawlRuns.createRun(
-			"crawl-empty-content-search",
-			"https://empty-content.example",
-			{
-				target: "https://empty-content.example",
-				crawlMethod: "links",
-				crawlDepth: 1,
-				crawlDelay: 200,
-				maxPages: 5,
-				maxPagesPerDomain: 0,
-				maxConcurrentRequests: 1,
-				retryLimit: 0,
-				dynamic: false,
-				respectRobots: false,
-				contentOnly: false,
-				saveMedia: false,
-			},
-		);
+		const created = storage.repos.crawlRuns.createRun("crawl-empty-content-search", {
+			target: "https://empty-content.example",
+			crawlMethod: "links",
+			crawlDepth: 1,
+			crawlDelay: 200,
+			maxPages: 5,
+			maxPagesPerDomain: 0,
+			maxConcurrentRequests: 1,
+			retryLimit: 0,
+			dynamic: false,
+			respectRobots: false,
+			contentOnly: false,
+			saveMedia: false,
+		});
 
 		storage.repos.pages.save({
 			crawlId: created.id,
@@ -589,29 +875,25 @@ describe("storage contract", () => {
 			links: [],
 		});
 
-		expect(storage.repos.search.count('"uniqueemptycontentneedle"*')).toBe(1);
+		expect(storage.repos.search.count(created.id, '"uniqueemptycontentneedle"*')).toBe(1);
 	});
 
 	test("search indexes canonical main content before raw HTML source", () => {
 		const storage = createInMemoryStorage();
-		const created = storage.repos.crawlRuns.createRun(
-			"crawl-main-content-search",
-			"https://main-content.example",
-			{
-				target: "https://main-content.example",
-				crawlMethod: "links",
-				crawlDepth: 1,
-				crawlDelay: 200,
-				maxPages: 5,
-				maxPagesPerDomain: 0,
-				maxConcurrentRequests: 1,
-				retryLimit: 0,
-				dynamic: false,
-				respectRobots: false,
-				contentOnly: false,
-				saveMedia: false,
-			},
-		);
+		const created = storage.repos.crawlRuns.createRun("crawl-main-content-search", {
+			target: "https://main-content.example",
+			crawlMethod: "links",
+			crawlDepth: 1,
+			crawlDelay: 200,
+			maxPages: 5,
+			maxPagesPerDomain: 0,
+			maxConcurrentRequests: 1,
+			retryLimit: 0,
+			dynamic: false,
+			respectRobots: false,
+			contentOnly: false,
+			saveMedia: false,
+		});
 
 		storage.repos.pages.save({
 			crawlId: created.id,
@@ -637,30 +919,26 @@ describe("storage contract", () => {
 			links: [],
 		});
 
-		expect(storage.repos.search.count('"uniquemainonlyneedle"*')).toBe(1);
-		expect(storage.repos.search.count('"uniquerawonlyneedle"*')).toBe(0);
+		expect(storage.repos.search.count(created.id, '"uniquemainonlyneedle"*')).toBe(1);
+		expect(storage.repos.search.count(created.id, '"uniquerawonlyneedle"*')).toBe(0);
 	});
 
 	test("metadata-only search matches return non-empty snippets", () => {
 		const storage = createInMemoryStorage();
-		const created = storage.repos.crawlRuns.createRun(
-			"crawl-metadata-search",
-			"https://metadata.example",
-			{
-				target: "https://metadata.example",
-				crawlMethod: "links",
-				crawlDepth: 1,
-				crawlDelay: 200,
-				maxPages: 5,
-				maxPagesPerDomain: 0,
-				maxConcurrentRequests: 1,
-				retryLimit: 0,
-				dynamic: false,
-				respectRobots: false,
-				contentOnly: true,
-				saveMedia: false,
-			},
-		);
+		const created = storage.repos.crawlRuns.createRun("crawl-metadata-search", {
+			target: "https://metadata.example",
+			crawlMethod: "links",
+			crawlDepth: 1,
+			crawlDelay: 200,
+			maxPages: 5,
+			maxPagesPerDomain: 0,
+			maxConcurrentRequests: 1,
+			retryLimit: 0,
+			dynamic: false,
+			respectRobots: false,
+			contentOnly: true,
+			saveMedia: false,
+		});
 
 		storage.repos.pages.save({
 			crawlId: created.id,
@@ -709,12 +987,14 @@ describe("storage contract", () => {
 			links: [],
 		});
 
-		expect(storage.repos.search.search('"uniquetitleonlyneedle"*', 10)[0]).toEqual(
+		expect(storage.repos.search.search(created.id, '"uniquetitleonlyneedle"*', 10)[0]).toEqual(
 			expect.objectContaining({
 				snippet: "uniquetitleonlyneedle",
 			}),
 		);
-		expect(storage.repos.search.search('"uniquedescriptiononlyneedle"*', 10)[0]).toEqual(
+		expect(
+			storage.repos.search.search(created.id, '"uniquedescriptiononlyneedle"*', 10)[0],
+		).toEqual(
 			expect.objectContaining({
 				snippet: "uniquedescriptiononlyneedle",
 			}),
@@ -723,24 +1003,20 @@ describe("storage contract", () => {
 
 	test("search snippets prefer matched metadata before unrelated body text", () => {
 		const storage = createInMemoryStorage();
-		const created = storage.repos.crawlRuns.createRun(
-			"crawl-metadata-snippet-priority",
-			"https://metadata-snippet.example",
-			{
-				target: "https://metadata-snippet.example",
-				crawlMethod: "links",
-				crawlDepth: 1,
-				crawlDelay: 200,
-				maxPages: 5,
-				maxPagesPerDomain: 0,
-				maxConcurrentRequests: 1,
-				retryLimit: 0,
-				dynamic: false,
-				respectRobots: false,
-				contentOnly: false,
-				saveMedia: false,
-			},
-		);
+		const created = storage.repos.crawlRuns.createRun("crawl-metadata-snippet-priority", {
+			target: "https://metadata-snippet.example",
+			crawlMethod: "links",
+			crawlDepth: 1,
+			crawlDelay: 200,
+			maxPages: 5,
+			maxPagesPerDomain: 0,
+			maxConcurrentRequests: 1,
+			retryLimit: 0,
+			dynamic: false,
+			respectRobots: false,
+			contentOnly: false,
+			saveMedia: false,
+		});
 
 		storage.repos.pages.save({
 			crawlId: created.id,
@@ -768,7 +1044,7 @@ describe("storage contract", () => {
 			links: [],
 		});
 
-		const result = storage.repos.search.search('"uniquetitlesnippetneedle"*', 10)[0];
+		const result = storage.repos.search.search(created.id, '"uniquetitlesnippetneedle"*', 10)[0];
 
 		expect(result?.snippet).toContain("uniquetitlesnippetneedle");
 		expect(result?.snippet).not.toContain("unrelated body text");
@@ -776,24 +1052,20 @@ describe("storage contract", () => {
 
 	test("page link replay preserves nofollow metadata", () => {
 		const storage = createInMemoryStorage();
-		const created = storage.repos.crawlRuns.createRun(
-			"crawl-link-metadata",
-			"https://links.example",
-			{
-				target: "https://links.example",
-				crawlMethod: "links",
-				crawlDepth: 1,
-				crawlDelay: 200,
-				maxPages: 5,
-				maxPagesPerDomain: 0,
-				maxConcurrentRequests: 1,
-				retryLimit: 0,
-				dynamic: false,
-				respectRobots: false,
-				contentOnly: false,
-				saveMedia: false,
-			},
-		);
+		const created = storage.repos.crawlRuns.createRun("crawl-link-metadata", {
+			target: "https://links.example",
+			crawlMethod: "links",
+			crawlDepth: 1,
+			crawlDelay: 200,
+			maxPages: 5,
+			maxPagesPerDomain: 0,
+			maxConcurrentRequests: 1,
+			retryLimit: 0,
+			dynamic: false,
+			respectRobots: false,
+			contentOnly: false,
+			saveMedia: false,
+		});
 
 		storage.repos.pages.save({
 			crawlId: created.id,
@@ -848,8 +1120,8 @@ describe("storage contract", () => {
 
 	test("item completion commits page, terminal, queue removal, counters, and event sequence atomically", () => {
 		const storage = createInMemoryStorage();
-		storage.repos.crawlRuns.createRun("crawl-item", "https://item.example", {
-			target: "https://item.example",
+		storage.repos.crawlRuns.createRun("crawl-item", {
+			target: "https://item.example/page",
 			crawlMethod: "links",
 			crawlDepth: 1,
 			crawlDelay: 200,
@@ -862,24 +1134,12 @@ describe("storage contract", () => {
 			contentOnly: false,
 			saveMedia: false,
 		});
-		storage.repos.crawlQueue.enqueueMany("crawl-item", [
-			{
-				url: "https://item.example/page",
-				domain: "item.example",
-				depth: 0,
-				retries: 0,
-				availableAt: 0,
-			},
-		]);
-
 		const result = storage.repos.crawlItems.commitCompletedItem({
 			crawlId: "crawl-item",
 			url: "https://item.example/page",
 			outcome: "success",
 			domainBudgetCharged: true,
 			page: {
-				crawlId: "crawl-item",
-				url: "https://item.example/page",
 				domain: "item.example",
 				contentType: "text/html",
 				statusCode: 200,
@@ -913,7 +1173,7 @@ describe("storage contract", () => {
 		});
 
 		expect(typeof result.pageId).toBe("number");
-		expect(storage.repos.pages.listForExport("crawl-item")).toHaveLength(1);
+		expect(Array.from(storage.repos.pages.iterateForExport("crawl-item"))).toHaveLength(1);
 		expect(storage.repos.crawlItems.listTerminalUrls("crawl-item")).toEqual([
 			{
 				url: "https://item.example/page",
@@ -923,11 +1183,35 @@ describe("storage contract", () => {
 		]);
 		expect(storage.repos.crawlQueue.listPending("crawl-item")).toEqual([]);
 		expect(storage.repos.crawlRuns.getById("crawl-item")?.eventSequence).toBe(7);
+
+		storage.repos.crawlItems.commitCompletedItem({
+			crawlId: "crawl-item",
+			url: "https://item.example/page",
+			outcome: "failure",
+			domainBudgetCharged: false,
+			counters: {
+				pagesScanned: 1,
+				successCount: 1,
+				failureCount: 0,
+				skippedCount: 0,
+				linksFound: 0,
+				mediaFiles: 0,
+				totalDataKb: 2,
+			},
+			eventSequence: 8,
+		});
+		expect(storage.repos.crawlItems.listTerminalUrls("crawl-item")).toEqual([
+			{
+				url: "https://item.example/page",
+				outcome: "success",
+				domainBudgetCharged: true,
+			},
+		]);
 	});
 
 	test("terminal URL restore order follows insertion sequence inside one timestamp", () => {
 		const storage = createInMemoryStorage();
-		storage.repos.crawlRuns.createRun("crawl-terminal-order", "https://order.example", {
+		storage.repos.crawlRuns.createRun("crawl-terminal-order", {
 			target: "https://order.example",
 			crawlMethod: "links",
 			crawlDepth: 1,
@@ -984,7 +1268,7 @@ describe("storage contract", () => {
 
 	test("item completion rolls back page save when terminal persistence fails", () => {
 		const storage = createInMemoryStorage();
-		storage.repos.crawlRuns.createRun("crawl-item-rollback", "https://rollback.example", {
+		storage.repos.crawlRuns.createRun("crawl-item-rollback", {
 			target: "https://rollback.example",
 			crawlMethod: "links",
 			crawlDepth: 1,
@@ -1006,8 +1290,6 @@ describe("storage contract", () => {
 				outcome: "invalid" as never,
 				domainBudgetCharged: true,
 				page: {
-					crawlId: "crawl-item-rollback",
-					url: "https://rollback.example/page",
 					domain: "rollback.example",
 					contentType: "text/html",
 					statusCode: 200,
@@ -1041,7 +1323,7 @@ describe("storage contract", () => {
 			}),
 		).toThrow();
 
-		expect(storage.repos.pages.listForExport("crawl-item-rollback")).toEqual([]);
+		expect(Array.from(storage.repos.pages.iterateForExport("crawl-item-rollback"))).toEqual([]);
 		expect(storage.repos.crawlItems.listTerminalUrls("crawl-item-rollback")).toEqual([]);
 		expect(storage.repos.crawlRuns.getById("crawl-item-rollback")?.eventSequence).toBe(0);
 	});

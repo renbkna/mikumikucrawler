@@ -40,11 +40,7 @@ import {
 	TERMINAL_CRAWL_STATUS_VALUES,
 	toResumableSessionSummary,
 } from "../../../shared/contracts/index.js";
-import {
-	CrawlEventEnvelopeSchema,
-	CrawlListQuerySchema,
-	ResumableCrawlListQuerySchema,
-} from "../../../shared/contracts/schemas.js";
+import { CrawlEventEnvelopeSchema } from "../../../shared/contracts/schemas.js";
 import { shouldResetTheatreStatus, THEATRE_STATUS_VALUES } from "../../../shared/theatreStatus.js";
 import { createApp } from "../../app.js";
 import type { AppLogger } from "../../config/logging.js";
@@ -55,6 +51,7 @@ import { CrawlManager } from "../../runtime/CrawlManager.js";
 import type { CrawlRuntime } from "../../runtime/CrawlRuntime.js";
 import { EventStream } from "../../runtime/EventStream.js";
 import { createInMemoryStorage } from "../../storage/db.js";
+import { CrawlListQuerySchema, ResumableCrawlListQuerySchema } from "../crawls.js";
 
 const VALID_OPTIONS: CrawlOptions = {
 	target: "https://example.com",
@@ -221,19 +218,21 @@ describe("cross-boundary invariants", () => {
 		expect(CrawlEventEnvelopeSchema).toBeDefined();
 	});
 
-	test("browser-facing shared validation does not compile schemas with eval", async () => {
-		const validationSource = await readFile(
-			new URL("../../../shared/contracts/validation.ts", import.meta.url),
-			"utf8",
-		);
+	test("browser-facing validation depends only on eval-free wire schemas", async () => {
+		const [validationSource, schemaSource] = await Promise.all([
+			readFile(new URL("../../../shared/contracts/validation.ts", import.meta.url), "utf8"),
+			readFile(new URL("../../../shared/contracts/schemas.ts", import.meta.url), "utf8"),
+		]);
 
 		expect(validationSource).not.toContain("TypeCompiler");
 		expect(validationSource).not.toContain(".Compile(");
+		expect(schemaSource).toContain('from "elysia/type-system"');
+		expect(schemaSource).not.toContain('from "./http.js"');
+		expect(schemaSource).not.toContain("t.Numeric(");
 	});
 
-	test("crawl statuses are classified in one exhaustive partition", () => {
+	test("crawl statuses have one exhaustive ownership partition and pending is active", () => {
 		const partitions = [
-			PENDING_CRAWL_STATUS_VALUES,
 			ACTIVE_CRAWL_STATUS_VALUES,
 			RESUMABLE_CRAWL_STATUS_VALUES,
 			TERMINAL_CRAWL_STATUS_VALUES,
@@ -242,6 +241,9 @@ describe("cross-boundary invariants", () => {
 
 		expect(new Set(flattened).size).toBe(flattened.length);
 		expect([...flattened].sort()).toEqual([...CrawlStatusValues].sort());
+		expect(
+			PENDING_CRAWL_STATUS_VALUES.every((status) => ACTIVE_CRAWL_STATUS_VALUES.includes(status)),
+		).toBe(true);
 
 		for (const status of CrawlStatusValues) {
 			expect(isPendingCrawlStatus(status)).toBe(status === "pending");
@@ -339,7 +341,7 @@ describe("cross-boundary invariants", () => {
 
 		const { app, eventStream, storage } = buildBoundaryApp();
 		const crawlId = "route-contract";
-		storage.repos.crawlRuns.createRun(crawlId, VALID_OPTIONS.target, VALID_OPTIONS);
+		storage.repos.crawlRuns.createRun(crawlId, VALID_OPTIONS);
 		const pageId = storage.repos.pages.save({
 			crawlId,
 			url: `${VALID_OPTIONS.target}/page`,

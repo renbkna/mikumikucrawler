@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { DOMAIN_DELAY_CONSTANTS } from "../../constants.js";
 
 export interface CrawlDomainStateRecord {
 	delayKey: string;
@@ -22,6 +23,15 @@ export function createCrawlDomainStateRepo(db: Database) {
 
 	return {
 		upsert(crawlId: string, record: CrawlDomainStateRecord): void {
+			if (
+				!Number.isSafeInteger(record.delayMs) ||
+				record.delayMs < 0 ||
+				record.delayMs > DOMAIN_DELAY_CONSTANTS.MAX_MS ||
+				!Number.isSafeInteger(record.nextAllowedAt) ||
+				record.nextAllowedAt < 0
+			) {
+				throw new Error(`Cannot persist invalid domain scheduler state for ${crawlId}`);
+			}
 			upsert.run(crawlId, record.delayKey, record.delayMs, record.nextAllowedAt);
 		},
 		listByCrawlId(crawlId: string): CrawlDomainStateRecord[] {

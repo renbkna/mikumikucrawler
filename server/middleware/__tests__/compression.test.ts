@@ -83,6 +83,35 @@ describe("compression middleware", () => {
 		expect(canceled).toBe(true);
 	});
 
+	test("respects no-transform without buffering a streaming export", async () => {
+		let pulled = 0;
+		const stream = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				pulled += 1;
+				controller.enqueue(new TextEncoder().encode("["));
+			},
+		});
+		const app = new Elysia().use(compression()).get(
+			"/export",
+			() =>
+				new Response(stream, {
+					headers: {
+						"content-type": "application/json",
+						"cache-control": "no-transform",
+					},
+				}),
+		);
+
+		const response = await app.handle(
+			new Request("http://localhost/export", {
+				headers: { "accept-encoding": "gzip" },
+			}),
+		);
+		expect(response.headers.get("content-encoding")).toBeNull();
+		expect(pulled).toBeLessThanOrEqual(1);
+		await response.body?.cancel();
+	});
+
 	test("compresses large JSON and preserves vary plus content length", async () => {
 		const app = new Elysia().use(compression()).get(
 			"/api",

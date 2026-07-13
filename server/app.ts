@@ -52,7 +52,7 @@ export interface AppDependencies {
 
 export function createDefaultAppDependencies(logger: AppLogger): AppDependencies {
 	const storage = createStorage();
-	const resolver = new DefaultResolver(lookup, !config.isProduction);
+	const resolver = new DefaultResolver(lookup, config.allowLocalhostTargets);
 	const httpClient = new PinnedHttpClient(resolver);
 	const eventStream = new EventStream();
 	const runtimeRegistry = new Map<string, CrawlRuntime>();
@@ -63,6 +63,7 @@ export function createDefaultAppDependencies(logger: AppLogger): AppDependencies
 		registry: runtimeRegistry,
 		resolver,
 		httpClient,
+		allowLocalhostSeed: config.allowLocalhostTargets,
 	});
 
 	return {
@@ -88,7 +89,7 @@ export function createApp(deps: AppDependencies) {
 			cors({
 				origin: (request) => {
 					const origin = request.headers.get("origin");
-					if (!config.isProduction && origin === "http://localhost:5173") {
+					if (config.isDevelopment && origin === "http://localhost:5173") {
 						return true;
 					}
 					return origin === config.frontendUrl;

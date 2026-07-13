@@ -1,4 +1,5 @@
 export const MediaTypeValues = ["image", "video", "audio"] as const;
+export const CRAWL_PAGE_SNAPSHOT_LIMIT = 200;
 
 export interface MediaInfo {
 	type: (typeof MediaTypeValues)[number];
@@ -69,4 +70,18 @@ export interface CrawledPage {
 	contentType?: string;
 	domain?: string;
 	processedData?: ProcessedPageData;
+}
+
+export interface CrawlPageSummary {
+	id: number;
+	url: string;
+	title?: string;
+	description?: string;
+	contentType?: string;
+	domain: string;
+}
+
+export interface CrawlPagesResponse {
+	pages: CrawlPageSummary[];
+	count: number;
 }

@@ -13,6 +13,7 @@ export const CRAWL_ROUTE_SEGMENTS = {
 	byId: "/:id",
 	stop: "/:id/stop",
 	resume: "/:id/resume",
+	pages: "/:id/pages",
 	export: "/:id/export",
 	events: "/:id/events",
 } as const;
@@ -23,6 +24,7 @@ export const PAGE_ROUTE_SEGMENTS = {
 
 export const OPENAPI_CRAWL_EVENTS_PATH = `${API_PATHS.crawls}/{id}/events`;
 export const OPENAPI_CRAWL_EXPORT_PATH = `${API_PATHS.crawls}/{id}/export`;
+export const OPENAPI_CRAWL_PAGES_PATH = `${API_PATHS.crawls}/{id}/pages`;
 
 export const CRAWL_EXPORT_FORMAT_VALUES = ["json", "csv"] as const;
 export type CrawlExportFormat = (typeof CRAWL_EXPORT_FORMAT_VALUES)[number];
@@ -38,6 +40,10 @@ export function buildCrawlEventsPath(crawlId: string): string {
 export function buildCrawlExportPath(crawlId: string, format: CrawlExportFormat = "json"): string {
 	const query = new URLSearchParams({ format });
 	return `${API_PATHS.crawls}/${encodePathSegment(crawlId)}/export?${query}`;
+}
+
+export function buildCrawlPagesPath(crawlId: string): string {
+	return `${API_PATHS.crawls}/${encodePathSegment(crawlId)}/pages`;
 }
 
 export function buildPageContentPath(pageId: number): string {

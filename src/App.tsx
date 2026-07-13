@@ -43,10 +43,13 @@ function App() {
 		progress,
 		logs,
 		clearLogs,
-		filterText,
-		setFilterText,
+		searchQuery,
+		setSearchQuery,
+		searchResultCount,
+		isSearchingPages,
+		pageSearchError,
 		displayedPages,
-		clearFilter,
+		clearSearch,
 		isAttacking,
 		canStart,
 		canForceStop,
@@ -107,8 +110,8 @@ function App() {
 	);
 
 	const handleResumeSession = useCallback(
-		(sessionId: string, resumedTarget: string) => {
-			return resumeCrawl(sessionId, resumedTarget).then((resumed: boolean) => {
+		(sessionId: string) => {
+			return resumeCrawl(sessionId).then((resumed: boolean) => {
 				if (resumed) {
 					setTheatreStatus("live");
 				}
@@ -117,6 +120,10 @@ function App() {
 		},
 		[resumeCrawl],
 	);
+
+	const handleRefreshResumableSessions = useCallback(() => {
+		void refreshResumableSessions();
+	}, [refreshResumableSessions]);
 
 	const handleBeamStart = useCallback(() => {
 		setTheatreStatus("beam");
@@ -279,9 +286,12 @@ function App() {
 							<CrawledPagesSection
 								crawledPages={crawledPages}
 								displayedPages={displayedPages}
-								filterText={filterText}
-								onFilterChange={setFilterText}
-								onClearFilter={clearFilter}
+								searchQuery={searchQuery}
+								onSearchChange={setSearchQuery}
+								onClearSearch={clearSearch}
+								searchResultCount={searchResultCount}
+								isSearching={isSearchingPages}
+								searchError={pageSearchError}
 								pageLimit={UI_LIMITS.MAX_PAGE_BUFFER}
 							/>
 						</section>
@@ -346,9 +356,7 @@ function App() {
 				fetchError={resumableSessionsError}
 				deletingId={deletingResumableSessionId}
 				resumingId={resumingResumableSessionId}
-				onRefresh={() => {
-					void refreshResumableSessions();
-				}}
+				onRefresh={handleRefreshResumableSessions}
 				onDelete={(sessionId) => {
 					void deleteResumableSession(sessionId);
 				}}

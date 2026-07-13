@@ -42,6 +42,8 @@ describe("CrawlState", () => {
 			state.recordTerminal("https://a.example/3", "skip");
 			state.recordTerminal("https://a.example/4", "success", {
 				dataKb: 10,
+				mediaFiles: 2,
+				discoveredLinks: 3,
 			});
 
 			const c = state.counters;
@@ -50,6 +52,9 @@ describe("CrawlState", () => {
 			expect(c.successCount).toBe(2);
 			expect(c.failureCount).toBe(1);
 			expect(c.skippedCount).toBe(1);
+			expect(c.totalDataKb).toBe(10);
+			expect(c.mediaFiles).toBe(2);
+			expect(c.linksFound).toBe(3);
 		});
 	});
 
@@ -92,6 +97,33 @@ describe("CrawlState", () => {
 			for (let i = 0; i < 19; i++) {
 				state.recordTerminal(`https://a.example/fail-b-${i}`, "failure");
 			}
+			expect(state.isStopRequested).toBe(false);
+		});
+
+		test("a skip resets the consecutive failure count", () => {
+			const state = new CrawlState(makeOptions({ maxPages: 100 }));
+
+			for (let i = 0; i < 19; i++) {
+				state.recordTerminal(`https://a.example/fail-${i}`, "failure");
+			}
+			state.recordTerminal("https://a.example/skipped", "skip");
+			state.recordTerminal("https://a.example/fail-after-skip", "failure");
+
+			expect(state.isStopRequested).toBe(false);
+		});
+
+		test("a restored skip resets the restored failure streak", () => {
+			const state = new CrawlState(makeOptions({ maxPages: 100 }));
+
+			state.restoreTerminals([
+				...Array.from({ length: 19 }, (_, index) => ({
+					url: `https://a.example/restored-fail-${index}`,
+					outcome: "failure" as const,
+				})),
+				{ url: "https://a.example/restored-skip", outcome: "skip" },
+			]);
+			state.recordTerminal("https://a.example/fail-after-restored-skip", "failure");
+
 			expect(state.isStopRequested).toBe(false);
 		});
 
@@ -153,19 +185,40 @@ describe("CrawlState", () => {
 			expect(state.getDomainDelay("slow.example")).toBe(400);
 		});
 
-		test("403 backs off from zero robots delay to the configured crawl delay", () => {
+		test("403 backs off from the configured floor when robots requests zero delay", () => {
 			const state = new CrawlState(makeOptions({ crawlDelay: 200 }));
 			state.setDomainDelay("zero-delay.example", 0);
 
 			state.adaptDomainDelay("zero-delay.example", 403);
 
-			expect(state.getDomainDelay("zero-delay.example")).toBe(200);
+			expect(state.getDomainDelay("zero-delay.example")).toBe(400);
 		});
 
 		test("uses retryAfterMs when provided for 429", () => {
 			const state = new CrawlState(makeOptions({ crawlDelay: 200 }));
 			state.adaptDomainDelay("rate.example", 429, 5000);
 			expect(state.getDomainDelay("rate.example")).toBe(5000);
+		});
+
+		test("robots delay cannot lower the configured crawl delay", () => {
+			const state = new CrawlState(makeOptions({ crawlDelay: 500 }));
+			state.setDomainDelay("robots.example", 100);
+			expect(state.getDomainDelay("robots.example")).toBe(500);
+		});
+
+		test("adaptive delay saturates at the finite scheduler ceiling", () => {
+			const state = new CrawlState(makeOptions({ crawlDelay: 200 }));
+			state.adaptDomainDelay("rate.example", 429, Number.POSITIVE_INFINITY);
+			expect(state.getDomainDelay("rate.example")).toBe(60_000);
+			state.adaptDomainDelay("rate.example", 403);
+			expect(state.getDomainDelay("rate.example")).toBe(60_000);
+		});
+
+		test("rejects non-finite scheduler state", () => {
+			const state = new CrawlState(makeOptions());
+			expect(() => state.setDomainDelay("invalid.example", Number.POSITIVE_INFINITY)).toThrow(
+				"Domain delay must be finite",
+			);
 		});
 
 		test("ignores non-throttle status codes", () => {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	hasUsablePageContent,
 	isClientErrorShell,
 	isSoft404,
 	mergeRobotsDirectives,
@@ -7,6 +8,12 @@ import {
 } from "../PageDecisionPolicy.js";
 
 describe("page decision policy", () => {
+	test("requires readable content for HTML but preserves explicit non-HTML representations", () => {
+		expect(hasUsablePageContent("text/html", "   ")).toBe(false);
+		expect(hasUsablePageContent("text/html", "article")).toBe(true);
+		expect(hasUsablePageContent("application/pdf", "")).toBe(true);
+	});
+
 	test("treats robots none as noindex and nofollow", () => {
 		expect(parseRobotsDirectives("none")).toEqual({
 			noindex: true,
