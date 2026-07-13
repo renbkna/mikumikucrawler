@@ -4,11 +4,14 @@ import type {
 	CrawlOptions,
 	CrawlSummary,
 	ResumableSessionSummary,
+	ResumeCrawlResponse,
 	StopCrawlMode,
 } from "../../shared/contracts/index.js";
 import {
 	CrawlEventTypeValues,
 	isCrawlListResponse,
+	isCrawlSummary,
+	isResumeCrawlResponse,
 	toResumableSessionSummary,
 } from "../../shared/contracts/index.js";
 import { api, createCrawlEventSource, downloadCrawlExport } from "./client";
@@ -21,6 +24,9 @@ export async function createCrawl(options: CrawlOptions): Promise<ApiResult<Craw
 	if (response.error || !response.data) {
 		return { ok: false, error: getApiErrorMessage(response.error?.value) };
 	}
+	if (!isCrawlSummary(response.data)) {
+		return { ok: false, error: "Unexpected crawl response" };
+	}
 	return { ok: true, data: response.data };
 }
 
@@ -32,13 +38,19 @@ export async function stopCrawl(
 	if (response.error || !response.data) {
 		return { ok: false, error: getApiErrorMessage(response.error?.value) };
 	}
+	if (!isCrawlSummary(response.data)) {
+		return { ok: false, error: "Unexpected crawl response" };
+	}
 	return { ok: true, data: response.data };
 }
 
-export async function resumeCrawl(crawlId: string): Promise<ApiResult<CrawlSummary>> {
+export async function resumeCrawl(crawlId: string): Promise<ApiResult<ResumeCrawlResponse>> {
 	const response = await api.api.crawls({ id: crawlId }).resume.post();
 	if (response.error || !response.data) {
 		return { ok: false, error: getApiErrorMessage(response.error?.value) };
+	}
+	if (!isResumeCrawlResponse(response.data)) {
+		return { ok: false, error: "Unexpected crawl response" };
 	}
 	return { ok: true, data: response.data };
 }

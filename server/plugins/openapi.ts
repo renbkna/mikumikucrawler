@@ -6,7 +6,7 @@ import {
 	OPENAPI_CRAWL_EVENTS_PATH,
 	OPENAPI_CRAWL_EXPORT_PATH,
 } from "../../shared/contracts/index.js";
-import { SSE_LAST_EVENT_ID_PATTERN } from "../contracts/http.js";
+import { SSE_LAST_EVENT_ID_MAX_LENGTH, SSE_LAST_EVENT_ID_PATTERN } from "../contracts/http.js";
 
 export function openapiPlugin() {
 	return new Elysia({ name: "openapi-plugin" }).use(
@@ -21,7 +21,7 @@ export function openapiPlugin() {
 				tags: [
 					{ name: "Crawls", description: "Crawl lifecycle control and state" },
 					{ name: "Pages", description: "Stored page content access" },
-					{ name: "Search", description: "Search across stored pages" },
+					{ name: "Search", description: "Run-scoped search across stored pages" },
 					{ name: "Health", description: "Runtime health endpoints" },
 				],
 				paths: {
@@ -45,6 +45,7 @@ export function openapiPlugin() {
 									schema: {
 										type: "string",
 										pattern: SSE_LAST_EVENT_ID_PATTERN,
+										maxLength: SSE_LAST_EVENT_ID_MAX_LENGTH,
 									},
 								},
 							],
@@ -67,6 +68,14 @@ export function openapiPlugin() {
 								},
 								"422": {
 									description: "Validation error",
+									content: {
+										"application/json": {
+											schema: { $ref: "#/components/schemas/ApiError" },
+										},
+									},
+								},
+								"429": {
+									description: "SSE subscriber capacity reached",
 									content: {
 										"application/json": {
 											schema: { $ref: "#/components/schemas/ApiError" },

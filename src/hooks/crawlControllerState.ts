@@ -1,8 +1,10 @@
 import type {
 	CrawlEventEnvelope,
 	CrawlOptions,
+	CrawlSummary,
 	ResumableSessionSummary,
 } from "../../shared/contracts/index.js";
+import { normalizeCrawlOptions } from "../../shared/contracts/index.js";
 import type { CrawledPage, QueueStats, Stats } from "../../shared/types.js";
 import { CRAWLER_DEFAULTS, TOAST_DEFAULTS, UI_LIMITS } from "../constants";
 
@@ -49,7 +51,7 @@ export interface CrawlControllerState {
 	progress: number;
 	logs: string[];
 	hasShownStaticFallbackHint: boolean;
-	filterText: string;
+	searchQuery: string;
 	resumableSessions: ResumableSessionsState;
 	lastSequenceByCrawlId: Record<string, number>;
 	lastCommand: CommandStatus;
@@ -121,14 +123,6 @@ export const INITIAL_CRAWL_OPTIONS: CrawlOptions = {
 	saveMedia: CRAWLER_DEFAULTS.SAVE_MEDIA,
 };
 
-function normalizeCrawlOptions(options: CrawlOptions): CrawlOptions {
-	if (options.crawlMethod !== "links" || !options.saveMedia) {
-		return options;
-	}
-
-	return { ...options, saveMedia: false };
-}
-
 export function createInitialCrawlControllerState(): CrawlControllerState {
 	return {
 		target: "",
@@ -143,7 +137,7 @@ export function createInitialCrawlControllerState(): CrawlControllerState {
 		progress: 0,
 		logs: [],
 		hasShownStaticFallbackHint: false,
-		filterText: "",
+		searchQuery: "",
 		resumableSessions: {
 			items: [],
 			isLoading: false,
@@ -259,7 +253,7 @@ export function getCrawlCommandAvailability(
 			state.runPhase === "running" ||
 			state.runPhase === "pausing" ||
 			state.runPhase === "stopping",
-		canPause: state.runPhase === "running" && !commandPending,
+		canPause: canRequestPause(state.runPhase) && !commandPending,
 		canForceStop:
 			!forceStopPending &&
 			(!commandPending || canEscalateStop) &&
@@ -267,6 +261,10 @@ export function getCrawlCommandAvailability(
 				state.runPhase === "running" ||
 				state.runPhase === "pausing"),
 	};
+}
+
+export function canRequestPause(runPhase: RunPhase): boolean {
+	return runPhase === "starting" || runPhase === "running";
 }
 
 export function isAnyCommandPending(state: Pick<CrawlControllerState, "lastCommand">): boolean {
@@ -300,10 +298,15 @@ function computeProgress(
 export type CrawlControllerAction =
 	| { type: "targetChanged"; target: string }
 	| { type: "crawlOptionsChanged"; crawlOptions: CrawlOptions }
-	| { type: "filterChanged"; filterText: string }
+	| { type: "searchChanged"; searchQuery: string }
 	| { type: "logsCleared" }
 	| { type: "logAppended"; message: string }
 	| { type: "liveStateReset" }
+	| {
+			type: "crawlSnapshotHydrated";
+			crawl: Pick<CrawlSummary, "counters">;
+			pages: CrawledPage[];
+	  }
 	| { type: "connectionChanged"; connectionState: ConnectionState }
 	| { type: "commandStarted"; kind: CommandKind }
 	| { type: "commandSucceeded"; kind: CommandKind }
@@ -483,10 +486,7 @@ function applySseEvent(
 			return {
 				state: {
 					...nextStateBase,
-					crawledPages: [envelope.payload, ...nextStateBase.crawledPages].slice(
-						0,
-						UI_LIMITS.MAX_PAGE_BUFFER,
-					),
+					crawledPages: mergeCrawledPages([envelope.payload], nextStateBase.crawledPages),
 				},
 				effects: [],
 			};
@@ -522,6 +522,23 @@ function applySseEvent(
 	}
 }
 
+function pageIdentity(page: CrawledPage): string {
+	return page.id === null ? `url:${page.url}` : `id:${page.id}`;
+}
+
+function mergeCrawledPages(incoming: CrawledPage[], existing: CrawledPage[]): CrawledPage[] {
+	const identities = new Set<string>();
+	const pages: CrawledPage[] = [];
+	for (const page of [...incoming, ...existing]) {
+		const identity = pageIdentity(page);
+		if (identities.has(identity)) continue;
+		identities.add(identity);
+		pages.push(page);
+		if (pages.length >= UI_LIMITS.MAX_PAGE_BUFFER) break;
+	}
+	return pages;
+}
+
 export function crawlControllerReducer(
 	state: CrawlControllerState,
 	action: CrawlControllerAction,
@@ -544,9 +561,9 @@ export function crawlControllerReducer(
 				},
 				effects: [],
 			};
-		case "filterChanged":
+		case "searchChanged":
 			return {
-				state: { ...state, filterText: action.filterText },
+				state: { ...state, searchQuery: action.searchQuery },
 				effects: [],
 			};
 		case "logsCleared":
@@ -570,10 +587,22 @@ export function crawlControllerReducer(
 					progress: 0,
 					logs: [],
 					hasShownStaticFallbackHint: false,
-					filterText: "",
+					searchQuery: "",
 				},
 				effects: [],
 			};
+		case "crawlSnapshotHydrated": {
+			const stats = buildStats(action.crawl.counters);
+			return {
+				state: {
+					...state,
+					stats,
+					crawledPages: mergeCrawledPages(action.pages, state.crawledPages),
+					progress: computeProgress(state, stats, state.queueStats),
+				},
+				effects: [],
+			};
+		}
 		case "connectionChanged":
 			return {
 				state: {
@@ -651,6 +680,14 @@ export function crawlControllerReducer(
 					activeCrawlOptions: action.crawlOptions ?? state.crawlOptions,
 					runPhase: "starting",
 					connectionState: "connecting",
+					lastSequenceByCrawlId:
+						action.kind === "resume"
+							? Object.fromEntries(
+									Object.entries(state.lastSequenceByCrawlId).filter(
+										([crawlId]) => crawlId !== action.crawlId,
+									),
+								)
+							: state.lastSequenceByCrawlId,
 					lastCommand: createCommandStatus(action.kind, "success"),
 				},
 				effects: [],
@@ -770,7 +807,7 @@ export function crawlControllerReducer(
 								progress: 0,
 								logs: [],
 								hasShownStaticFallbackHint: false,
-								filterText: "",
+								searchQuery: "",
 							}
 						: {}),
 					resumableSessions: {

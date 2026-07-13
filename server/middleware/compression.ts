@@ -209,6 +209,9 @@ async function compressResponse(
 	response: Response,
 ): Promise<Response | undefined> {
 	if (response.headers.get("content-encoding")) return undefined;
+	if (response.headers.get("cache-control")?.toLowerCase().includes("no-transform")) {
+		return undefined;
+	}
 	if (request.headers.has("range")) return undefined;
 	if ([204, 304].includes(response.status)) return undefined;
 

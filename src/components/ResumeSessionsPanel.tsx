@@ -1,5 +1,5 @@
 import { History, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useEffectEvent } from "react";
 import type { ResumableSessionSummary } from "../../shared/contracts/index.js";
 import { useDialogModal } from "../hooks";
 import { HeartIcon, SparkleIcon } from "./KawaiiIcons";
@@ -20,7 +20,7 @@ interface ResumeSessionsPanelProps {
 	 * Called when the user confirms a session resume.
 	 * The panel closes only after this returns success.
 	 */
-	onResume: (sessionId: string, target: string) => boolean | Promise<boolean>;
+	onResume: (sessionId: string) => boolean | Promise<boolean>;
 }
 
 /** Returns a human-readable relative time string, e.g. "3h ago". */
@@ -60,13 +60,14 @@ export function ResumeSessionsPanel({
 }: Readonly<ResumeSessionsPanelProps>) {
 	const { dialogRef } = useDialogModal({ isOpen });
 	const isActionPending = deletingId !== null || resumingId !== null;
+	const refreshOnOpen = useEffectEvent(onRefresh);
 
 	// Fetch whenever the panel opens
 	useEffect(() => {
 		if (isOpen) {
-			onRefresh();
+			refreshOnOpen();
 		}
-	}, [isOpen, onRefresh]);
+	}, [isOpen]);
 
 	// ── Event handlers ─────────────────────────────────────────────────────────
 
@@ -76,7 +77,7 @@ export function ResumeSessionsPanel({
 				return;
 			}
 
-			const resumed = await onResume(session.id, session.target);
+			const resumed = await onResume(session.id);
 			if (resumed) {
 				onClose();
 			}

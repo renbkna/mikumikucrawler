@@ -6,7 +6,9 @@ import {
 	configurePinnedBrowserContext,
 	createDynamicBrowserContextOptions,
 	fulfillRouteWithPinnedHttpClient,
+	matchesOwnedSitePattern,
 	renderedContentByteLength,
+	requiresStaticBinaryFetch,
 } from "../DynamicRenderer.js";
 
 type RouteFulfillOptions = Parameters<Route["fulfill"]>[0];
@@ -47,6 +49,23 @@ describe("dynamic renderer network contract", () => {
 		expect(renderedContentByteLength(content)).toBe(5);
 	});
 
+	test("matches site policies by hostname ownership and optional path", () => {
+		expect(matchesOwnedSitePattern("https://www.youtube.com/watch?v=1", "youtube.com/watch")).toBe(
+			true,
+		);
+		expect(
+			matchesOwnedSitePattern("https://youtube.com.evil.test/watch", "youtube.com/watch"),
+		).toBe(false);
+		expect(
+			matchesOwnedSitePattern("https://evil.test/?next=youtube.com/watch", "youtube.com/watch"),
+		).toBe(false);
+	});
+
+	test("routes dynamic PDF documents back to the bounded binary fetch path", () => {
+		expect(requiresStaticBinaryFetch("application/pdf; charset=binary")).toBe(true);
+		expect(requiresStaticBinaryFetch("text/html")).toBe(false);
+	});
+
 	test("browser contexts block service workers before pages are created", () => {
 		expect(createDynamicBrowserContextOptions()).toEqual({
 			serviceWorkers: "block",
@@ -77,6 +96,28 @@ describe("dynamic renderer network contract", () => {
 
 		expect(route).toHaveBeenCalledWith("**/*", expect.any(Function));
 		expect(routeWebSocket).toHaveBeenCalledWith("**/*", expect.any(Function));
+	});
+
+	test("grants localhost capability only to the exact seed document request", async () => {
+		let handler: ((route: Route) => Promise<void>) | undefined;
+		const context = {
+			route: mock(async (_pattern: string, next: (route: Route) => Promise<void>) => {
+				handler = next;
+			}),
+			routeWebSocket: mock(async () => undefined),
+		} as unknown as BrowserContext;
+		const fetch = mock(async (_request: Parameters<HttpClient["fetch"]>[0]) => new Response("ok"));
+		const httpClient: HttpClient = { fetch };
+		await configurePinnedBrowserContext(context, httpClient, undefined, "http://localhost:3000/");
+		if (!handler) throw new Error("Expected browser route handler");
+
+		await handler(createRoute({ url: "http://localhost:3000/", resourceType: "document" }).route);
+		await handler(
+			createRoute({ url: "http://localhost:3000/app.js", resourceType: "script" }).route,
+		);
+
+		expect(fetch.mock.calls[0]?.[0]).toMatchObject({ allowLocalhostOnInitialRequest: true });
+		expect(fetch.mock.calls[1]?.[0]).not.toHaveProperty("allowLocalhostOnInitialRequest");
 	});
 
 	test("fulfills HTTP browser requests through the pinned HTTP client", async () => {

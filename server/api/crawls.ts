@@ -4,16 +4,16 @@ import {
 	CRAWL_ROUTE_SEGMENTS,
 	type CrawlStatus,
 	DEFAULT_CRAWL_LIST_LIMIT,
+	isCrawlOptions,
 } from "../../shared/contracts/index.js";
 import {
 	CrawlIdParamsSchema,
-	CrawlListQuerySchema,
 	CrawlListResponseSchema,
+	CrawlPagesResponseSchema,
 	CreateCrawlBodySchema,
 	CreateCrawlResponseSchema,
 	ExportQuerySchema,
 	GetCrawlResponseSchema,
-	ResumableCrawlListQuerySchema,
 	ResumableCrawlListResponseSchema,
 	ResumeCrawlResponseSchema,
 	StopCrawlBodySchema,
@@ -21,9 +21,11 @@ import {
 } from "../../shared/contracts/schemas.js";
 import { validatePublicHttpUrl } from "../../shared/url.js";
 import { config } from "../config/env.js";
+import { CrawlListQuerySchema, ResumableCrawlListQuerySchema } from "../contracts/crawls.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
 import { OkResponseSchema } from "../contracts/http.js";
-import { exportPages } from "../domain/export/CrawlExportService.js";
+import { createCrawlExportResponse } from "../domain/export/CrawlExportService.js";
+import { CrawlManagerClosingError } from "../runtime/CrawlManager.js";
 import { routeServices } from "./context.js";
 
 export function crawlsApi() {
@@ -67,7 +69,7 @@ export function crawlsApi() {
 				.post(
 					CRAWL_ROUTE_SEGMENTS.resume,
 					(context) => {
-						const { crawlManager, params, set } = routeServices(context);
+						const { crawlManager, params, repos, set } = routeServices(context);
 						const result = crawlManager.resume(params.id);
 						if (result.type === "not-found") {
 							set.status = 404;
@@ -86,7 +88,12 @@ export function crawlsApi() {
 							return { error: "Crawl is already running" };
 						}
 
-						return result.crawl;
+						const pageSnapshot = repos.pages.listSnapshot(params.id);
+						return {
+							crawl: result.crawl,
+							pages: pageSnapshot.pages,
+							pageCount: pageSnapshot.count,
+						};
 					},
 					{
 						response: {
@@ -98,6 +105,28 @@ export function crawlsApi() {
 						detail: {
 							tags: ["Crawls"],
 							summary: "Resume a paused or interrupted crawl",
+						},
+					},
+				)
+				.get(
+					CRAWL_ROUTE_SEGMENTS.pages,
+					(context) => {
+						const { crawlManager, params, repos, set } = routeServices(context);
+						if (!crawlManager.get(params.id)) {
+							set.status = 404;
+							return { error: "Crawl not found" };
+						}
+						return repos.pages.listSnapshot(params.id);
+					},
+					{
+						response: {
+							200: CrawlPagesResponseSchema,
+							404: ApiErrorSchema,
+							422: ApiErrorSchema,
+						},
+						detail: {
+							tags: ["Crawls"],
+							summary: "List the durable page snapshot for a crawl",
 						},
 					},
 				)
@@ -136,11 +165,11 @@ export function crawlsApi() {
 							return { error: "Crawl not found" };
 						}
 
-						const pages = repos.pages.listForExport(params.id);
-						const exported = exportPages(params.id, pages, query.format ?? "json");
-						set.headers["content-type"] = exported.contentType;
-						set.headers["content-disposition"] = exported.contentDisposition;
-						return exported.body;
+						const format = query.format ?? "json";
+						const pages = repos.pages.iterateForExport(params.id, {
+							includeContent: format === "json",
+						});
+						return createCrawlExportResponse(params.id, pages, format);
 					},
 					{
 						query: ExportQuerySchema,
@@ -193,23 +222,40 @@ export function crawlsApi() {
 					body: typeof CreateCrawlBodySchema.static;
 				}>(context);
 				const normalizedTarget = validatePublicHttpUrl(body.target, {
-					allowLocalhost: !config.isProduction,
+					allowLocalhost: config.allowLocalhostTargets,
 				});
 				if ("error" in normalizedTarget) {
 					set.status = 422;
 					return { error: normalizedTarget.error, code: "INVALID_TARGET" };
 				}
-
-				return crawlManager.create({
+				const normalizedOptions = {
 					...body,
 					target: normalizedTarget.url,
-				});
+				};
+				if (!isCrawlOptions(normalizedOptions)) {
+					set.status = 422;
+					return {
+						error: "Crawl options contain an unsupported combination",
+						code: "INVALID_CRAWL_OPTIONS",
+					};
+				}
+
+				try {
+					return crawlManager.create(normalizedOptions);
+				} catch (error) {
+					if (error instanceof CrawlManagerClosingError) {
+						set.status = 503;
+						return { error: error.message, code: "SERVICE_CLOSING" };
+					}
+					throw error;
+				}
 			},
 			{
 				body: CreateCrawlBodySchema,
 				response: {
 					200: CreateCrawlResponseSchema,
 					422: ApiErrorSchema,
+					503: ApiErrorSchema,
 				},
 				detail: {
 					tags: ["Crawls"],

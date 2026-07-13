@@ -1,8 +1,10 @@
 import { lookup } from "node:dns/promises";
 import net from "node:net";
 import { Elysia } from "elysia";
+import { normalizeRobotsMatchHttpUrl } from "../../shared/url.js";
 import { isInvalidIpAddress } from "../utils/ipValidation.js";
 import { LRUCacheWithTTL } from "../utils/lruCache.js";
+import { disposeResponseBody } from "../utils/responseBody.js";
 
 const RESOLUTION_TTL_MS = 5 * 60 * 1000;
 const RESOLUTION_CACHE_MAX_ENTRIES = 512;
@@ -12,7 +14,7 @@ const ORIGIN_BOUND_HEADERS = new Set(["authorization", "cookie", "host", "proxy-
 const BODY_HEADERS = new Set(["content-length", "content-type"]);
 
 export interface Resolver {
-	resolveHost(hostname: string): Promise<string[]>;
+	resolveHost(hostname: string, options?: { allowLocalhost?: boolean }): Promise<string[]>;
 	assertPublicHostname(hostname: string): Promise<void>;
 }
 
@@ -23,6 +25,8 @@ export interface HttpClientRequest {
 	body?: BodyInit;
 	signal?: AbortSignal;
 	redirect?: RequestRedirect;
+	/** Grants localhost only to this request's first hop; redirects remain public-only. */
+	allowLocalhostOnInitialRequest?: boolean;
 }
 
 export interface HttpClient {
@@ -41,10 +45,13 @@ export class DefaultResolver implements Resolver {
 	) {}
 
 	async assertPublicHostname(hostname: string): Promise<void> {
-		await this.resolveHost(hostname);
+		await this.resolveHost(hostname, { allowLocalhost: false });
 	}
 
-	async resolveHost(hostname: string): Promise<string[]> {
+	async resolveHost(
+		hostname: string,
+		options: { allowLocalhost?: boolean } = {},
+	): Promise<string[]> {
 		if (!hostname) {
 			throw new Error("Target host is empty");
 		}
@@ -53,7 +60,7 @@ export class DefaultResolver implements Resolver {
 			hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
 
 		if (normalizedHost.toLowerCase() === "localhost") {
-			if (this.allowLocalhost) {
+			if (this.allowLocalhost && options.allowLocalhost === true) {
 				return ["127.0.0.1"];
 			}
 			throw new Error("Localhost targets are not allowed");
@@ -101,7 +108,7 @@ export class PinnedHttpClient implements HttpClient {
 
 	async fetch(request: HttpClientRequest): Promise<Response> {
 		const seenUrls = new Set<string>();
-		let currentUrl = request.url;
+		let currentUrl = normalizeOutboundUrl(request.url);
 		let redirectCount = 0;
 		let method = request.method?.toUpperCase() ?? "GET";
 		let body = request.body;
@@ -114,10 +121,9 @@ export class PinnedHttpClient implements HttpClient {
 			seenUrls.add(currentUrl);
 
 			const url = new URL(currentUrl);
-			if (url.protocol !== "http:" && url.protocol !== "https:") {
-				throw new Error(`Disallowed protocol: ${url.protocol}`);
-			}
-			const addresses = await this.resolver.resolveHost(url.hostname);
+			const addresses = await this.resolver.resolveHost(url.hostname, {
+				allowLocalhost: redirectCount === 0 && request.allowLocalhostOnInitialRequest === true,
+			});
 
 			let response: Response | undefined;
 			let lastError: unknown;
@@ -157,36 +163,53 @@ export class PinnedHttpClient implements HttpClient {
 				throw lastError instanceof Error ? lastError : new Error(String(lastError));
 			}
 			if (response.status < 300 || response.status >= 400) {
-				return response;
+				return withEffectiveUrl(response, currentUrl);
 			}
 
 			const location = response.headers.get("location");
 			if (!location) {
-				return response;
+				return withEffectiveUrl(response, currentUrl);
 			}
+			await disposeResponseBody(response);
 
 			if (redirectCount >= MAX_REDIRECT_HOPS) {
 				throw new Error(`Too many redirects for ${request.url}`);
 			}
 
 			const redirectUrl = new URL(location, currentUrl);
-			if (redirectUrl.protocol !== "http:" && redirectUrl.protocol !== "https:") {
-				throw new Error(`Redirect to disallowed protocol: ${redirectUrl.protocol}`);
-			}
+			const normalizedRedirectUrl = normalizeOutboundUrl(redirectUrl.toString());
+			const validatedRedirectUrl = new URL(normalizedRedirectUrl);
 
-			await this.resolver.assertPublicHostname(redirectUrl.hostname);
+			await this.resolver.assertPublicHostname(validatedRedirectUrl.hostname);
 			if (shouldRewriteRedirectToGet(response.status, method)) {
 				method = "GET";
 				body = undefined;
 				headers = sanitizeRequestHeaders(headers, BODY_HEADERS);
 			}
-			if (url.origin !== redirectUrl.origin) {
+			if (url.origin !== validatedRedirectUrl.origin) {
 				headers = sanitizeRequestHeaders(headers, ORIGIN_BOUND_HEADERS);
 			}
-			currentUrl = redirectUrl.toString();
+			currentUrl = normalizedRedirectUrl;
 			redirectCount += 1;
 		}
 	}
+}
+
+function withEffectiveUrl(response: Response, effectiveUrl: string): Response {
+	Object.defineProperty(response, "url", {
+		value: effectiveUrl,
+		configurable: false,
+		enumerable: true,
+	});
+	return response;
+}
+
+function normalizeOutboundUrl(url: string): string {
+	const normalized = normalizeRobotsMatchHttpUrl(url);
+	if ("error" in normalized) {
+		throw new Error(normalized.error);
+	}
+	return normalized.url;
 }
 
 function sanitizeRequestHeaders(

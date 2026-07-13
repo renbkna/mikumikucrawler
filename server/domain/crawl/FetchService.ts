@@ -8,7 +8,7 @@ import {
 import type { HttpClient } from "../../plugins/security.js";
 import { isPdfContentType } from "../../processors/contentTypes.js";
 import type { PageRepo } from "../../storage/repos/pageRepo.js";
-import { readLimitedResponseBody } from "../../utils/responseBody.js";
+import { disposeResponseBody, readLimitedResponseBody } from "../../utils/responseBody.js";
 import type { QueueItem } from "./CrawlQueue.js";
 import type { DynamicRenderer } from "./DynamicRenderer.js";
 import {
@@ -22,6 +22,7 @@ export type FetchResult =
 	| {
 			type: "success";
 			content: string | Buffer;
+			effectiveUrl: string;
 			statusCode: number;
 			contentType: string;
 			contentLength: number;
@@ -144,6 +145,7 @@ export class FetchService {
 		private readonly httpClient: HttpClient,
 		private readonly dynamicRenderer: DynamicRenderer,
 		private readonly logger: Logger,
+		private readonly localSeedUrl?: string,
 	) {}
 
 	async fetch(crawlId: string, item: QueueItem, signal?: AbortSignal): Promise<FetchResult> {
@@ -208,6 +210,7 @@ export class FetchService {
 			return {
 				type: "success",
 				content: renderedPage.content,
+				effectiveUrl: renderedPage.effectiveUrl,
 				statusCode: renderedPage.statusCode,
 				contentType: renderedPage.contentType,
 				contentLength,
@@ -235,42 +238,63 @@ export class FetchService {
 		}
 
 		let response: Response;
-		try {
-			response = await this.httpClient.fetch({
-				url: item.url,
-				headers: {
-					...FETCH_HEADERS,
-					...conditionalHeaders,
-				},
-				signal:
-					signal && "any" in AbortSignal
-						? AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH)])
-						: AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH),
-			});
-		} catch (error) {
+		let effectiveUrl = item.url;
+		let unconditionalRetry = false;
+		for (;;) {
+			try {
+				response = await this.httpClient.fetch({
+					url: item.url,
+					headers: {
+						...FETCH_HEADERS,
+						...(unconditionalRetry ? {} : conditionalHeaders),
+					},
+					signal:
+						signal && "any" in AbortSignal
+							? AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH)])
+							: AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH),
+					allowLocalhostOnInitialRequest:
+						this.localSeedUrl !== undefined && item.url === this.localSeedUrl,
+				});
+				effectiveUrl = response.url || item.url;
+			} catch (error) {
+				if (signal?.aborted) {
+					throw signal.reason instanceof Error ? signal.reason : new Error("Fetch aborted");
+				}
+				this.logger.warn(
+					`[Fetch] Transient fetch failure for ${item.url}: ${error instanceof Error ? error.message : String(error)}`,
+				);
+				return {
+					type: "transientFailure",
+					statusCode: 0,
+					retryAfterMs: RETRY_CONSTANTS.BASE_DELAY,
+				};
+			}
 			if (signal?.aborted) {
+				await disposeResponseBody(response);
 				throw signal.reason instanceof Error ? signal.reason : new Error("Fetch aborted");
 			}
-			this.logger.warn(
-				`[Fetch] Transient fetch failure for ${item.url}: ${error instanceof Error ? error.message : String(error)}`,
-			);
-			return {
-				type: "transientFailure",
-				statusCode: 0,
-				retryAfterMs: RETRY_CONSTANTS.BASE_DELAY,
-			};
-		}
-		if (signal?.aborted) {
-			throw signal.reason instanceof Error ? signal.reason : new Error("Fetch aborted");
-		}
 
-		if (response.status === 304) {
-			return {
-				type: "unchanged",
-				statusCode: 304,
-				lastModified: cachedHeaders?.lastModified ?? null,
-				etag: cachedHeaders?.etag ?? null,
-			};
+			if (response.status !== 304) {
+				break;
+			}
+
+			await disposeResponseBody(response);
+			if (cachedHeaders) {
+				return {
+					type: "unchanged",
+					statusCode: 304,
+					lastModified: cachedHeaders.lastModified ?? null,
+					etag: cachedHeaders.etag ?? null,
+				};
+			}
+			if (unconditionalRetry) {
+				return {
+					type: "blocked",
+					statusCode: 304,
+					reason: `Received 304 without a cached page for ${item.url}`,
+				};
+			}
+			unconditionalRetry = true;
 		}
 
 		const classifiedStaticStatus = classifyFetchStatus(response.status, {
@@ -279,10 +303,12 @@ export class FetchService {
 			blockedReason: `Access blocked for ${item.url}`,
 		});
 		if (classifiedStaticStatus) {
+			await disposeResponseBody(response);
 			return classifiedStaticStatus;
 		}
 
 		if (isAccessBlockedStatus(response.status)) {
+			await disposeResponseBody(response);
 			return {
 				type: "blocked",
 				statusCode: response.status,
@@ -291,6 +317,7 @@ export class FetchService {
 		}
 
 		if (!response.ok) {
+			await disposeResponseBody(response);
 			return {
 				type: "permanentFailure",
 				statusCode: response.status,
@@ -309,6 +336,7 @@ export class FetchService {
 		return {
 			type: "success",
 			content: readContent.content,
+			effectiveUrl,
 			statusCode: response.status,
 			contentType,
 			contentLength: readContent.contentLength,

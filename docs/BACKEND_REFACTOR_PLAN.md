@@ -1,8 +1,17 @@
-# Backend Refactor Plan
+# Backend Refactor Plan (Historical)
 
-## Purpose
+> **Status: historical and non-normative.** This file records the migration plan
+> that produced the current backend. It does not define current directory layout,
+> lifecycle, HTTP inputs, persistence schema, or acceptance criteria. Use the
+> current [crawl runtime specification](architecture/crawl-runtime-spec.md),
+> [frontend crawl controller specification](architecture/frontend-crawl-controller-spec.md),
+> [dynamic rendering specification](architecture/dynamic-rendering-engine-spec.md),
+> and [frontend tooling specification](architecture/frontend-tooling-spec.md),
+> together with executable shared contracts and migrations, for current behavior.
 
-This document is the execution plan for the backend rewrite of MikuMikuCrawler.
+## Historical Purpose
+
+This document was the execution plan for the backend rewrite of MikuMikuCrawler.
 It is intentionally self-contained and assumes a clean-break refactor is allowed
 inside the implementation branch. Temporary breakage during the refactor is
 acceptable. The goal is a lean 2026-style Bun + Elysia backend with fewer

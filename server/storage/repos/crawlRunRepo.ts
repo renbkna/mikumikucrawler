@@ -2,8 +2,11 @@ import type { Database } from "bun:sqlite";
 import type { CrawlCounters, CrawlOptions, CrawlStatus } from "../../../shared/contracts/index.js";
 import {
 	DEFAULT_CRAWL_LIST_LIMIT,
-	RESUMABLE_CRAWL_STATUS_VALUES,
+	isCrawlCounters,
+	isCrawlOptions,
+	isTerminalCrawlStatus,
 } from "../../../shared/contracts/index.js";
+import { normalizeCanonicalHttpUrl } from "../../../shared/url.js";
 import { type CrawlRunRecord, type CrawlRunRow, mapCrawlRunRow } from "../db.js";
 
 const ZERO_COUNTERS: CrawlCounters = {
@@ -52,11 +55,24 @@ export function createCrawlRunRepo(db: Database) {
 
 	const getRun = db.prepare("SELECT * FROM crawl_runs WHERE id = ? LIMIT 1");
 	const deleteRun = db.prepare("DELETE FROM crawl_runs WHERE id = ?");
+	const insertInitialQueueItem = db.prepare(`
+		INSERT INTO crawl_queue_items (
+			crawl_id, url, depth, retries, parent_url, domain, available_at
+		) VALUES (?, ?, 0, 0, NULL, ?, 0)
+	`);
+	const clearQueue = db.prepare("DELETE FROM crawl_queue_items WHERE crawl_id = ?");
 	const listActiveRuns = db.prepare(`
 		SELECT *
 		FROM crawl_runs
-		WHERE status IN ('starting', 'running', 'pausing', 'stopping')
+		WHERE status IN ('pending', 'starting', 'running', 'pausing', 'stopping')
 		ORDER BY updated_at DESC
+	`);
+	const listResumableRuns = db.prepare(`
+		SELECT *
+		FROM crawl_runs
+		WHERE status IN ('paused', 'interrupted')
+		ORDER BY updated_at DESC
+		LIMIT ?
 	`);
 
 	function getById(id: string): CrawlRunRecord | null {
@@ -64,8 +80,21 @@ export function createCrawlRunRepo(db: Database) {
 		return row ? mapCrawlRunRow(row) : null;
 	}
 
-	function createRun(id: string, target: string, options: CrawlOptions): CrawlRunRecord {
-		insertRun.run(id, target, "pending", JSON.stringify(options));
+	const createRunTransaction = db.transaction((id: string, options: CrawlOptions) => {
+		insertRun.run(id, options.target, "pending", JSON.stringify(options));
+		insertInitialQueueItem.run(id, options.target, new URL(options.target).hostname);
+	});
+
+	function createRun(id: string, options: CrawlOptions): CrawlRunRecord {
+		if (!isCrawlOptions(options)) {
+			throw new Error("Cannot persist crawl options outside the current contract");
+		}
+		const normalizedTarget = normalizeCanonicalHttpUrl(options.target);
+		if ("error" in normalizedTarget) {
+			throw new Error(`Cannot persist invalid crawl target: ${normalizedTarget.error}`);
+		}
+		const normalizedOptions = { ...options, target: normalizedTarget.url };
+		createRunTransaction(id, normalizedOptions);
 		const created = getById(id);
 		if (!created) {
 			throw new Error(`Failed to create crawl run ${id}`);
@@ -81,8 +110,13 @@ export function createCrawlRunRepo(db: Database) {
 		eventSequence?: number,
 		timestamps: { started?: boolean; completed?: boolean } = {},
 	): CrawlRunRecord | null {
-		db.query(
-			`
+		if (!isCrawlCounters(counters)) {
+			throw new Error(`Cannot persist invalid counters for crawl ${id}`);
+		}
+
+		db.transaction(() => {
+			db.query(
+				`
 			UPDATE crawl_runs
 			SET
 				status = ?,
@@ -100,26 +134,33 @@ export function createCrawlRunRepo(db: Database) {
 				event_sequence = COALESCE(?, event_sequence)
 			WHERE id = ?
 		`,
-		).run(
-			status,
-			stopReason,
-			timestamps.started ? 1 : 0,
-			timestamps.completed ? 1 : 0,
-			counters.pagesScanned,
-			counters.successCount,
-			counters.failureCount,
-			counters.skippedCount,
-			counters.linksFound,
-			counters.mediaFiles,
-			counters.totalDataKb,
-			eventSequence ?? null,
-			id,
-		);
+			).run(
+				status,
+				stopReason,
+				timestamps.started ? 1 : 0,
+				timestamps.completed ? 1 : 0,
+				counters.pagesScanned,
+				counters.successCount,
+				counters.failureCount,
+				counters.skippedCount,
+				counters.linksFound,
+				counters.mediaFiles,
+				counters.totalDataKb,
+				eventSequence ?? null,
+				id,
+			);
+			if (isTerminalCrawlStatus(status)) {
+				clearQueue.run(id);
+			}
+		})();
 
 		return getById(id);
 	}
 
 	function updateProgress(id: string, counters: CrawlCounters, eventSequence?: number): void {
+		if (!isCrawlCounters(counters)) {
+			throw new Error(`Cannot persist invalid counters for crawl ${id}`);
+		}
 		db.query(
 			`
 			UPDATE crawl_runs
@@ -191,9 +232,7 @@ export function createCrawlRunRepo(db: Database) {
 			return list({ status: "interrupted", limit });
 		},
 		getResumableRuns(limit = DEFAULT_CRAWL_LIST_LIMIT): CrawlRunRecord[] {
-			return RESUMABLE_CRAWL_STATUS_VALUES.flatMap((status) => list({ status, limit }))
-				.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-				.slice(0, limit);
+			return (listResumableRuns.all(limit) as CrawlRunRow[]).map(mapCrawlRunRow);
 		},
 		markStarting(id: string, counters: CrawlCounters = ZERO_COUNTERS, eventSequence?: number) {
 			return updateStatus(id, "starting", counters, null, eventSequence, {

@@ -335,6 +335,7 @@ Required columns:
 - `links_found`
 - `media_files`
 - `total_data_kb`
+- `event_sequence`
 
 Rules:
 
@@ -358,12 +359,15 @@ Required columns:
 - `parent_url`
 - `domain`
 - `created_at`
+- `available_at`
 
 Rules:
 
 - unique key on `(crawl_id, url)`
 - queue restoration is always scoped by `crawl_id`
-- resume restores pending and retryable work from `crawl_queue WHERE crawl_id = ?`
+- `available_at` is the durable retry/delay scheduling time and must survive resume
+- resume restores pending and retryable work from
+  `crawl_queue_items WHERE crawl_id = ?` in `available_at`, creation, and identity order
 
 ### `pages`
 
@@ -374,13 +378,26 @@ Required columns:
 - `url`
 - `domain`
 - `crawled_at`
+- `last_modified`
+- `etag`
 - `status_code`
 - `content_type`
 - `data_length`
 - `title`
 - `description`
 - `content`
-- processed analysis fields
+- `is_dynamic`
+- `main_content`
+- `word_count`
+- `reading_time`
+- `language`
+- `keywords`
+- `quality_score`
+- `structured_data`
+- `media_count`
+- `internal_links_count`
+- `external_links_count`
+- `discovered_links_count`
 
 Rules:
 
@@ -396,6 +413,39 @@ Required columns:
 - `page_id`
 - `target_url`
 - `text`
+- `nofollow`
+
+### `crawl_terminal_urls`
+
+Required columns:
+
+- `terminal_sequence`
+- `crawl_id`
+- `url`
+- `outcome`
+- `domain_budget_charged`
+- `recorded_at`
+
+Rules:
+
+- `outcome` is exactly `success`, `failure`, or `skip`
+- each `(crawl_id, url)` has at most one terminal outcome
+- restoration follows `terminal_sequence` so consecutive-outcome policy is deterministic
+
+### `crawl_domain_state`
+
+Required columns:
+
+- `crawl_id`
+- `delay_key`
+- `delay_ms`
+- `next_allowed_at`
+- `updated_at`
+
+Rules:
+
+- `(crawl_id, delay_key)` is the durable identity
+- resume restores domain-delay scheduling only for the same `crawl_id`
 
 ## Runtime / Domain Boundary
 

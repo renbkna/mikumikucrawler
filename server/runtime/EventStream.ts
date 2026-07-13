@@ -8,11 +8,18 @@ import type {
 interface StreamState {
 	sequence: number;
 	history: CrawlEventEnvelope[];
-	subscribers: Set<(event: CrawlEventEnvelope) => void>;
+	subscribers: Set<StreamSubscriber>;
+}
+
+interface StreamSubscriber {
+	onEvent(event: CrawlEventEnvelope): void;
+	onClose(): void;
 }
 
 const MAX_HISTORY = 500;
 const DEFAULT_CLEANUP_DELAY_MS = 5 * 60 * 1000;
+const MAX_SUBSCRIBERS_PER_CRAWL = 10;
+const MAX_SUBSCRIBERS_TOTAL = 100;
 
 function cloneValue<T>(value: T): T {
 	return structuredClone(value);
@@ -21,6 +28,22 @@ function cloneValue<T>(value: T): T {
 export class EventStream {
 	private readonly streams = new Map<string, StreamState>();
 	private readonly cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	private subscriberCount = 0;
+
+	private removeSubscriber(state: StreamState, subscriber: StreamSubscriber): void {
+		if (state.subscribers.delete(subscriber)) {
+			this.subscriberCount -= 1;
+		}
+	}
+
+	private closeSubscribers(state: StreamState): void {
+		for (const subscriber of Array.from(state.subscribers)) {
+			this.removeSubscriber(state, subscriber);
+			try {
+				subscriber.onClose();
+			} catch {}
+		}
+	}
 
 	private cancelCleanup(crawlId: string): void {
 		const timer = this.cleanupTimers.get(crawlId);
@@ -58,6 +81,7 @@ export class EventStream {
 	reset(crawlId: string, sequence = 0): void {
 		this.cancelCleanup(crawlId);
 		const state = this.getState(crawlId);
+		this.closeSubscribers(state);
 		state.sequence = sequence;
 		state.history = [];
 	}
@@ -84,9 +108,12 @@ export class EventStream {
 
 		for (const subscriber of Array.from(state.subscribers)) {
 			try {
-				subscriber(cloneValue(event as CrawlEventEnvelope));
+				subscriber.onEvent(cloneValue(event as CrawlEventEnvelope));
 			} catch {
-				state.subscribers.delete(subscriber);
+				this.removeSubscriber(state, subscriber);
+				try {
+					subscriber.onClose();
+				} catch {}
 			}
 		}
 
@@ -97,22 +124,46 @@ export class EventStream {
 		crawlId: string,
 		onEvent: (event: CrawlEventEnvelope) => void,
 		afterSequence = 0,
+		onClose: () => void = () => {},
 	): () => void {
 		const state = this.getState(crawlId);
-		for (const event of state.history) {
-			if (event.sequence > afterSequence) {
-				onEvent(cloneValue(event));
-			}
+		if (!this.hasSubscriberCapacity(crawlId)) {
+			throw new Error("SSE subscriber capacity reached");
 		}
 
-		state.subscribers.add(onEvent);
+		const subscriber: StreamSubscriber = { onEvent, onClose };
+		state.subscribers.add(subscriber);
+		this.subscriberCount += 1;
+		try {
+			for (const event of state.history) {
+				if (event.sequence > afterSequence) {
+					onEvent(cloneValue(event));
+				}
+			}
+		} catch (error) {
+			this.removeSubscriber(state, subscriber);
+			throw error;
+		}
+
 		return () => {
-			state.subscribers.delete(onEvent);
+			this.removeSubscriber(state, subscriber);
 		};
+	}
+
+	hasSubscriberCapacity(crawlId: string): boolean {
+		const crawlSubscriberCount = this.streams.get(crawlId)?.subscribers.size ?? 0;
+		return (
+			crawlSubscriberCount < MAX_SUBSCRIBERS_PER_CRAWL &&
+			this.subscriberCount < MAX_SUBSCRIBERS_TOTAL
+		);
 	}
 
 	delete(crawlId: string): void {
 		this.cancelCleanup(crawlId);
+		const state = this.streams.get(crawlId);
+		if (state) {
+			this.closeSubscribers(state);
+		}
 		this.streams.delete(crawlId);
 	}
 

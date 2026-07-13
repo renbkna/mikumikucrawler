@@ -1,9 +1,10 @@
 import { t } from "elysia";
-import { optionalBoundedListLimitSchema } from "./http.js";
+import { optionalBoundedListLimitSchema } from "../../shared/contracts/http.js";
 
 export const DEFAULT_SEARCH_LIMIT = 20;
 
 export const SearchQuerySchema = t.Object({
+	crawlId: t.String({ minLength: 1 }),
 	q: t.String({ minLength: 1 }),
 	limit: optionalBoundedListLimitSchema(DEFAULT_SEARCH_LIMIT),
 });

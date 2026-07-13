@@ -1,5 +1,7 @@
 import type { CrawlCounters, CrawlOptions } from "../../../shared/contracts/index.js";
+import { isCrawlCounters } from "../../../shared/contracts/index.js";
 import type { QueueStats } from "../../../shared/types.js";
+import { DOMAIN_DELAY_CONSTANTS } from "../../constants.js";
 import { shouldAdaptDomainDelay } from "./httpStatusPolicy.js";
 
 export type TerminalOutcome = "success" | "failure" | "skip";
@@ -29,6 +31,12 @@ export interface DomainStateRecord {
 	nextAllowedAt: number;
 }
 
+export interface TerminalCounterEffects {
+	dataKb?: number;
+	mediaFiles?: number;
+	discoveredLinks?: number;
+}
+
 export class CrawlState {
 	private readonly visited = new Map<string, true>();
 	private readonly terminalOutcomes = new Map<string, TerminalOutcome>();
@@ -50,6 +58,9 @@ export class CrawlState {
 		private readonly startedAtMs = Date.now(),
 		initialDomainStates: DomainStateRecord[] = [],
 	) {
+		if (initialCounters !== undefined && !isCrawlCounters(initialCounters)) {
+			throw new Error("Cannot restore crawl state from invalid counters");
+		}
 		this.counters = initialCounters ?? {
 			pagesScanned: 0,
 			successCount: 0,
@@ -60,9 +71,22 @@ export class CrawlState {
 			totalDataKb: 0,
 		};
 		for (const record of initialDomainStates) {
-			this.domainDelays.set(record.delayKey, record.delayMs);
+			const delayMs = this.requireDomainDelay(record.delayMs);
+			if (!Number.isSafeInteger(record.nextAllowedAt) || record.nextAllowedAt < 0) {
+				throw new Error(`Invalid persisted next-allowed timestamp for ${record.delayKey}`);
+			}
+			this.domainDelays.set(record.delayKey, Math.max(delayMs, this.options.crawlDelay));
 			this.domainNextAllowedAt.set(record.delayKey, record.nextAllowedAt);
 		}
+	}
+
+	private requireDomainDelay(delayMs: number): number {
+		if (!Number.isFinite(delayMs) || delayMs < 0 || delayMs > DOMAIN_DELAY_CONSTANTS.MAX_MS) {
+			throw new Error(
+				`Domain delay must be finite and between 0 and ${DOMAIN_DELAY_CONSTANTS.MAX_MS}ms`,
+			);
+		}
+		return Math.floor(delayMs);
 	}
 
 	get isStopRequested(): boolean {
@@ -105,7 +129,7 @@ export class CrawlState {
 						`Circuit breaker tripped after ${this.consecutiveFailures} consecutive failures`,
 					);
 				}
-			} else if (record.outcome === "success") {
+			} else {
 				this.consecutiveFailures = 0;
 			}
 
@@ -148,14 +172,15 @@ export class CrawlState {
 	}
 
 	setDomainDelay(domain: string, delayMs: number, now = Date.now()): void {
-		this.domainDelays.set(domain, delayMs);
-		const nextAllowedAt = Math.max(this.domainNextAllowedAt.get(domain) ?? 0, now + delayMs);
+		const effectiveDelay = Math.max(this.requireDomainDelay(delayMs), this.options.crawlDelay);
+		this.domainDelays.set(domain, effectiveDelay);
+		const nextAllowedAt = Math.max(this.domainNextAllowedAt.get(domain) ?? 0, now + effectiveDelay);
 		this.domainNextAllowedAt.set(domain, nextAllowedAt);
 		this.emitDomainState(domain);
 	}
 
 	getDomainDelay(domain: string): number {
-		return this.domainDelays.get(domain) ?? this.options.crawlDelay;
+		return Math.max(this.domainDelays.get(domain) ?? 0, this.options.crawlDelay);
 	}
 
 	timeUntilDomainReady(domain: string, now = Date.now()): number {
@@ -178,10 +203,13 @@ export class CrawlState {
 		}
 
 		const currentDelay = this.getDomainDelay(domain);
-		const nextDelay =
+		const proposedDelay =
 			statusCode === 403
 				? Math.max(currentDelay * 2, this.options.crawlDelay)
 				: Math.max(currentDelay, retryAfterMs ?? currentDelay * 2);
+		const nextDelay = Number.isFinite(proposedDelay)
+			? Math.min(proposedDelay, DOMAIN_DELAY_CONSTANTS.MAX_MS)
+			: DOMAIN_DELAY_CONSTANTS.MAX_MS;
 		this.setDomainDelay(domain, nextDelay);
 	}
 
@@ -216,39 +244,66 @@ export class CrawlState {
 		});
 	}
 
-	recordDiscoveredLinks(count: number): void {
-		if (count > 0) {
-			this.counters.linksFound += count;
+	private requireCounterIncrement(count: number, label: string): number {
+		if (!Number.isSafeInteger(count) || count < 0) {
+			throw new Error(`${label} counter increment must be a non-negative safe integer`);
 		}
+		return count;
 	}
 
-	recordMedia(count: number): void {
-		if (count > 0) {
-			this.counters.mediaFiles += count;
+	previewTerminalCounters(
+		url: string,
+		outcome: TerminalOutcome,
+		effects: TerminalCounterEffects = {},
+	): CrawlCounters {
+		const counters = this.snapshotCounters();
+		if (this.terminalOutcomes.has(url)) {
+			return counters;
 		}
+
+		const dataKb = this.requireCounterIncrement(effects.dataKb ?? 0, "data KB");
+		const mediaFiles = this.requireCounterIncrement(effects.mediaFiles ?? 0, "media file");
+		const discoveredLinks = this.requireCounterIncrement(
+			effects.discoveredLinks ?? 0,
+			"discovered link",
+		);
+		counters.pagesScanned += 1;
+		counters.linksFound += discoveredLinks;
+		counters.mediaFiles += mediaFiles;
+		switch (outcome) {
+			case "success":
+				counters.successCount += 1;
+				counters.totalDataKb += dataKb;
+				break;
+			case "failure":
+				counters.failureCount += 1;
+				break;
+			case "skip":
+				counters.skippedCount += 1;
+				break;
+		}
+		return counters;
 	}
 
 	recordTerminal(
 		url: string,
 		outcome: TerminalOutcome,
-		options: { dataKb?: number; mediaFiles?: number } = {},
+		options: TerminalCounterEffects = {},
 	): boolean {
 		if (this.terminalOutcomes.has(url)) {
 			return false;
 		}
 
+		const nextCounters = this.previewTerminalCounters(url, outcome, options);
 		this.terminalOutcomes.set(url, outcome);
 		this.markVisited(url);
-		this.counters.pagesScanned += 1;
+		Object.assign(this.counters, nextCounters);
 
 		switch (outcome) {
 			case "success":
-				this.counters.successCount += 1;
-				this.counters.totalDataKb += Math.max(Math.floor(options.dataKb ?? 0), 0);
 				this.consecutiveFailures = 0;
 				break;
 			case "failure":
-				this.counters.failureCount += 1;
 				this.consecutiveFailures += 1;
 				if (this.consecutiveFailures >= FAILURE_CIRCUIT_BREAKER_THRESHOLD) {
 					this.requestStop(
@@ -257,12 +312,8 @@ export class CrawlState {
 				}
 				break;
 			case "skip":
-				this.counters.skippedCount += 1;
+				this.consecutiveFailures = 0;
 				break;
-		}
-
-		if (options.mediaFiles) {
-			this.counters.mediaFiles += options.mediaFiles;
 		}
 
 		this.hooks.onTerminal?.(url, outcome);

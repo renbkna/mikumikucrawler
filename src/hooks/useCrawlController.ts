@@ -9,8 +9,10 @@ import {
 } from "react";
 import type {
 	CrawlExportFormat,
+	CrawledPage,
 	CrawlSummary,
 	ResumableSessionSummary,
+	ResumeCrawlResponse,
 } from "../../shared/contracts/index.js";
 import { type CrawlEventEnvelope, isSettledCrawlEventType } from "../../shared/contracts/index.js";
 import { validatePublicHttpUrl } from "../../shared/url";
@@ -24,11 +26,13 @@ import {
 	subscribeToCrawlEvents,
 } from "../api/crawls";
 import type { ApiResult } from "../api/result";
+import { searchStoredPages } from "../api/search";
 import type { Toast } from "../types";
 import {
 	type CommandKind,
 	type CrawlControllerAction,
 	type CrawlControllerState,
+	canRequestPause,
 	canStartCommand,
 	crawlControllerReducer,
 	createInitialCrawlControllerState,
@@ -45,11 +49,11 @@ interface UseCrawlControllerOptions {
  * visible form reflects the settings the runtime is actually using.
  */
 export function getResumeHydrationActions(
-	crawl: Pick<CrawlSummary, "target" | "options">,
+	crawl: Pick<CrawlSummary, "options">,
 ): CrawlControllerAction[] {
 	return [
 		{ type: "crawlOptionsChanged", crawlOptions: crawl.options },
-		{ type: "targetChanged", target: crawl.target },
+		{ type: "targetChanged", target: crawl.options.target },
 	];
 }
 
@@ -94,6 +98,18 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 	const subscriptionRef = useRef<ReturnType<typeof subscribeToCrawlEvents> | null>(null);
 	const activeSubscriptionCrawlIdRef = useRef<string | null>(null);
 	const resumableRefreshRequestIdRef = useRef(0);
+	const pageSearchRequestIdRef = useRef(0);
+	const [pageSearch, setPageSearch] = useState<{
+		pages: CrawledPage[];
+		count: number;
+		isLoading: boolean;
+		error: string | null;
+	}>({
+		pages: [],
+		count: 0,
+		isLoading: false,
+		error: null,
+	});
 
 	const executeCommand = useCallback(
 		async <T>(
@@ -318,7 +334,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 	);
 
 	const pauseCrawl = useCallback(async () => {
-		if (!state.activeCrawlId || state.runPhase !== "running") return;
+		if (!state.activeCrawlId || !canRequestPause(state.runPhase)) return;
 		const crawlId = state.activeCrawlId;
 
 		await executeCommand("stop", () => stopCrawlRequest(crawlId, "pause"));
@@ -337,7 +353,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 	}, [executeCommand, state.activeCrawlId, state.lastCommand.kind, state.lastCommand.status]);
 
 	const resumeCrawl = useCallback(
-		async (sessionId: string, sessionTarget: string) => {
+		async (sessionId: string) => {
 			if (
 				stateRef.current.resumableSessions.deletingId ||
 				stateRef.current.resumableSessions.resumingId ||
@@ -351,7 +367,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 			dispatch({ type: "resumableSessionResuming", sessionId });
 			dispatch({ type: "commandStarted", kind: "resume" });
 
-			let result: ApiResult<CrawlSummary>;
+			let result: ApiResult<ResumeCrawlResponse>;
 			try {
 				result = await resumeCrawlRequest(sessionId);
 			} catch (error) {
@@ -369,22 +385,26 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 			}
 
 			dispatch({ type: "liveStateReset" });
-			dispatch({ type: "targetChanged", target: sessionTarget });
-			for (const action of getResumeHydrationActions(result.data)) {
+			for (const action of getResumeHydrationActions(result.data.crawl)) {
 				dispatch(action);
 			}
 			dispatch({
+				type: "crawlSnapshotHydrated",
+				crawl: result.data.crawl,
+				pages: result.data.pages,
+			});
+			dispatch({
 				type: "crawlAccepted",
-				crawlId: result.data.id,
+				crawlId: result.data.crawl.id,
 				kind: "resume",
-				crawlOptions: result.data.options,
+				crawlOptions: result.data.crawl.options,
 			});
 			dispatch({
 				type: "resumableSessionRemoved",
 				sessionId,
 			});
 			addToast("info", "Resuming saved crawl...");
-			connectToEvents(result.data.id);
+			connectToEvents(result.data.crawl.id);
 			return true;
 		},
 		[addToast, dispatch, stateRef],
@@ -454,19 +474,67 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 		[addToast, dispatch, executeCommand, stateRef],
 	);
 
-	const displayedPages = useMemo(() => {
-		if (!state.filterText.trim()) {
-			return state.crawledPages;
+	useEffect(() => {
+		const query = state.searchQuery.trim();
+		const crawlId = state.activeCrawlId;
+		const requestId = pageSearchRequestIdRef.current + 1;
+		pageSearchRequestIdRef.current = requestId;
+
+		if (!query || !crawlId) {
+			setPageSearch({ pages: [], count: 0, isLoading: false, error: null });
+			return;
 		}
 
-		const loweredFilter = state.filterText.toLowerCase();
-		return state.crawledPages.filter(
-			(page) =>
-				page.url.toLowerCase().includes(loweredFilter) ||
-				page.title?.toLowerCase().includes(loweredFilter) ||
-				page.description?.toLowerCase().includes(loweredFilter),
-		);
-	}, [state.crawledPages, state.filterText]);
+		const controller = new AbortController();
+		setPageSearch({ pages: [], count: 0, isLoading: true, error: null });
+
+		void searchStoredPages(crawlId, query, controller.signal)
+			.then((result) => {
+				if (controller.signal.aborted || pageSearchRequestIdRef.current !== requestId) {
+					return;
+				}
+
+				if (!result.ok) {
+					setPageSearch({ pages: [], count: 0, isLoading: false, error: result.error });
+					return;
+				}
+
+				setPageSearch({
+					pages: result.data.pages,
+					count: result.data.count,
+					isLoading: false,
+					error: null,
+				});
+			})
+			.catch((error: unknown) => {
+				if (controller.signal.aborted || pageSearchRequestIdRef.current !== requestId) {
+					return;
+				}
+
+				setPageSearch({
+					pages: [],
+					count: 0,
+					isLoading: false,
+					error: formatControllerError(error),
+				});
+			});
+
+		return () => controller.abort();
+	}, [state.activeCrawlId, state.searchQuery]);
+
+	const displayedPages = useMemo(
+		() => (state.searchQuery.trim() ? pageSearch.pages : state.crawledPages),
+		[pageSearch.pages, state.crawledPages, state.searchQuery],
+	);
+	const clearLogs = useCallback(() => dispatch({ type: "logsCleared" }), [dispatch]);
+	const setSearchQuery = useCallback(
+		(searchQuery: string) => dispatch({ type: "searchChanged", searchQuery }),
+		[dispatch],
+	);
+	const clearSearch = useCallback(
+		() => dispatch({ type: "searchChanged", searchQuery: "" }),
+		[dispatch],
+	);
 
 	const availability = getCrawlCommandAvailability(state);
 
@@ -480,11 +548,14 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 		crawledPages: state.crawledPages,
 		progress: state.progress,
 		logs: state.logs,
-		clearLogs: () => dispatch({ type: "logsCleared" }),
-		filterText: state.filterText,
-		setFilterText: (filterText: string) => dispatch({ type: "filterChanged", filterText }),
+		clearLogs,
+		searchQuery: state.searchQuery,
+		setSearchQuery,
+		searchResultCount: pageSearch.count,
+		isSearchingPages: pageSearch.isLoading,
+		pageSearchError: pageSearch.error,
 		displayedPages,
-		clearFilter: () => dispatch({ type: "filterChanged", filterText: "" }),
+		clearSearch,
 		isAttacking: availability.isAttacking,
 		canStart: availability.canStart,
 		canForceStop: availability.canForceStop,

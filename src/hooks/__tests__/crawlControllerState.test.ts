@@ -455,7 +455,7 @@ describe("crawlControllerReducer", () => {
 		]);
 	});
 
-	test("command availability keeps startup force-stop reachable without duplicate pause", () => {
+	test("command availability exposes startup pause and preserves force-stop escalation", () => {
 		const starting = reduce(createInitialCrawlControllerState(), {
 			type: "crawlAccepted",
 			crawlId: "crawl-1",
@@ -464,7 +464,7 @@ describe("crawlControllerReducer", () => {
 		expect(getCrawlCommandAvailability(starting)).toEqual({
 			canStart: false,
 			isAttacking: true,
-			canPause: false,
+			canPause: true,
 			canForceStop: true,
 		});
 
@@ -1396,6 +1396,50 @@ describe("crawlControllerReducer", () => {
 
 		expect(resumed.target).toBe(summary.target);
 		expect(resumed.crawlOptions).toEqual(summary.options);
+	});
+
+	test("resume hydrates durable pages, resets the SSE generation cursor, and deduplicates replay", () => {
+		const initial = {
+			...createInitialCrawlControllerState(),
+			lastSequenceByCrawlId: { "crawl-resume": 99 },
+		};
+		let state = reduce(
+			initial,
+			{
+				type: "crawlSnapshotHydrated",
+				crawl: {
+					counters: {
+						pagesScanned: 2,
+						successCount: 2,
+						failureCount: 0,
+						skippedCount: 0,
+						linksFound: 4,
+						mediaFiles: 0,
+						totalDataKb: 8,
+					},
+				},
+				pages: [
+					{ id: 2, url: "https://resume.example/two", domain: "resume.example" },
+					{ id: 1, url: "https://resume.example/one", domain: "resume.example" },
+				],
+			},
+			{ type: "crawlAccepted", crawlId: "crawl-resume", kind: "resume" },
+		);
+
+		expect(state.stats.pagesScanned).toBe(2);
+		expect(state.crawledPages).toHaveLength(2);
+		expect(state.lastSequenceByCrawlId["crawl-resume"]).toBeUndefined();
+
+		state = applyEvent(state, {
+			type: "crawl.page",
+			crawlId: "crawl-resume",
+			sequence: 100,
+			timestamp: "2026-03-21T12:02:00.000Z",
+			payload: { id: 2, url: "https://resume.example/two", title: "Replayed" },
+		}).state;
+
+		expect(state.crawledPages).toHaveLength(2);
+		expect(state.crawledPages[0]?.title).toBe("Replayed");
 	});
 
 	test("normalizes impossible links plus saveMedia option state", () => {

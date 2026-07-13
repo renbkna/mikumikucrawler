@@ -8,7 +8,7 @@ export interface CommitCompletedItemInput {
 	url: string;
 	outcome?: TerminalOutcome;
 	domainBudgetCharged: boolean;
-	page?: SavePageInput;
+	page?: Omit<SavePageInput, "crawlId" | "url">;
 	counters: CrawlCounters;
 	eventSequence: number;
 }
@@ -25,17 +25,14 @@ export interface TerminalUrlRecord {
 
 export function createCrawlItemPersistence(db: Database) {
 	const pageWriter = createPageWriter(db);
-	const upsertTerminal = db.prepare(`
+	const insertTerminal = db.prepare(`
 		INSERT INTO crawl_terminal_urls (
 				crawl_id,
 				url,
 				outcome,
 				domain_budget_charged
 			) VALUES (?, ?, ?, ?)
-			ON CONFLICT(crawl_id, url) DO UPDATE SET
-				outcome = excluded.outcome,
-				domain_budget_charged = excluded.domain_budget_charged,
-				recorded_at = CURRENT_TIMESTAMP
+			ON CONFLICT(crawl_id, url) DO NOTHING
 	`);
 
 	const removeQueueItem = db.prepare(
@@ -59,10 +56,16 @@ export function createCrawlItemPersistence(db: Database) {
 
 	const commitCompletedTransaction = db.transaction(
 		(input: CommitCompletedItemInput): CommitCompletedItemResult => {
-			const pageId = input.page ? pageWriter.savePage(input.page) : undefined;
+			const pageId = input.page
+				? pageWriter.savePage({
+						...input.page,
+						crawlId: input.crawlId,
+						url: input.url,
+					})
+				: undefined;
 
 			if (input.outcome) {
-				upsertTerminal.run(
+				insertTerminal.run(
 					input.crawlId,
 					input.url,
 					input.outcome,

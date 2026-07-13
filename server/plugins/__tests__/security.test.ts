@@ -29,7 +29,9 @@ describe("security contract", () => {
 
 	test("allows localhost when allowLocalhost is true", async () => {
 		const resolver = new DefaultResolver(lookup, true);
-		await expect(resolver.resolveHost("localhost")).resolves.toEqual(["127.0.0.1"]);
+		await expect(resolver.resolveHost("localhost", { allowLocalhost: true })).resolves.toEqual([
+			"127.0.0.1",
+		]);
 	});
 
 	test("blocks localhost when allowLocalhost is false", async () => {
@@ -74,7 +76,7 @@ describe("security contract", () => {
 			httpClient.fetch({
 				url: "ftp://example.com/file",
 			}),
-		).rejects.toThrow("Disallowed protocol");
+		).rejects.toThrow("Only HTTP and HTTPS URLs are supported");
 		expect(resolver.resolveHost).not.toHaveBeenCalled();
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
@@ -105,6 +107,90 @@ describe("security contract", () => {
 			}),
 		).rejects.toThrow("Private or reserved IP address");
 		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	test("exposes the validated logical URL after redirects", async () => {
+		const resolver: Resolver = {
+			resolveHost: async () => ["93.184.216.34"],
+			assertPublicHostname: async () => {},
+		};
+		const fetchMock = mock(async (url: string) =>
+			url.includes("/start")
+				? new Response(null, {
+						status: 302,
+						headers: { location: "https://final.example/docs/" },
+					})
+				: new Response("ok"),
+		);
+		const client = new PinnedHttpClient(resolver, fetchMock as unknown as typeof fetch);
+
+		const response = await client.fetch({ url: "https://example.com/start" });
+
+		expect(response.url).toBe("https://final.example/docs/");
+	});
+
+	test("cancels redirect bodies before following the next hop", async () => {
+		let canceled = false;
+		const resolver: Resolver = {
+			resolveHost: async () => ["93.184.216.34"],
+			assertPublicHostname: async () => {},
+		};
+		const fetchMock = mock(async (url: string) => {
+			if (!url.includes("/start")) return new Response("ok");
+			return new Response(
+				new ReadableStream({
+					cancel() {
+						canceled = true;
+					},
+				}),
+				{ status: 302, headers: { location: "/final" } },
+			);
+		});
+		const client = new PinnedHttpClient(resolver, fetchMock as unknown as typeof fetch);
+
+		await client.fetch({ url: "https://example.com/start" });
+
+		expect(canceled).toBe(true);
+	});
+
+	test("limits localhost capability to an explicitly marked first hop", async () => {
+		const resolveHost = mock(async (hostname: string, options?: { allowLocalhost?: boolean }) => {
+			if (hostname === "localhost" && options?.allowLocalhost !== true) {
+				throw new Error("Localhost targets are not allowed");
+			}
+			return [hostname === "localhost" ? "127.0.0.1" : "93.184.216.34"];
+		});
+		const resolver: Resolver = {
+			resolveHost,
+			assertPublicHostname: async (hostname) => {
+				if (hostname === "localhost") throw new Error("Localhost targets are not allowed");
+			},
+		};
+		const seedClient = new PinnedHttpClient(
+			resolver,
+			mock(async () => new Response("local seed")) as unknown as typeof fetch,
+		);
+
+		await expect(
+			seedClient.fetch({
+				url: "http://localhost:3000/",
+				allowLocalhostOnInitialRequest: true,
+			}),
+		).resolves.toBeInstanceOf(Response);
+
+		const redirectClient = new PinnedHttpClient(
+			resolver,
+			mock(
+				async () =>
+					new Response(null, { status: 302, headers: { location: "http://localhost/admin" } }),
+			) as unknown as typeof fetch,
+		);
+		await expect(
+			redirectClient.fetch({
+				url: "https://example.com/start",
+				allowLocalhostOnInitialRequest: true,
+			}),
+		).rejects.toThrow("Localhost targets are not allowed");
 	});
 
 	test("cross-origin redirects rewrite unsafe methods and strip origin-bound headers", async () => {

@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import type { Session } from "crawlee";
 import { BrowserPool, PlaywrightPlugin, SessionPool } from "crawlee";
 import {
@@ -9,6 +10,7 @@ import {
 	type WebSocketRoute,
 } from "playwright";
 import type { CrawlOptions } from "../../../shared/contracts/index.js";
+import { normalizeRobotsMatchHttpUrl } from "../../../shared/url.js";
 import { config } from "../../config/env.js";
 import type { Logger } from "../../config/logging.js";
 import {
@@ -19,6 +21,7 @@ import {
 	SITE_SELECTORS,
 } from "../../constants.js";
 import type { HttpClient } from "../../plugins/security.js";
+import { isPdfContentType } from "../../processors/contentTypes.js";
 import { getErrorMessage } from "../../utils/helpers.js";
 import { logMemoryStatus } from "../../utils/memoryMonitor.js";
 import { readLimitedResponseBody } from "../../utils/responseBody.js";
@@ -27,6 +30,7 @@ import type { QueueItem } from "./CrawlQueue.js";
 import {
 	CONSENT_ACTION_MARKERS,
 	CONSENT_BUTTON_SELECTORS,
+	CONSENT_NEGATIVE_ACTION_MARKERS,
 	isConsentWallText,
 	requiresStrictConsentBypass,
 } from "./consent.js";
@@ -46,6 +50,7 @@ interface InitializeResult {
 interface DynamicRenderResult {
 	isDynamic: true;
 	content: string;
+	effectiveUrl: string;
 	statusCode: number;
 	contentType: string;
 	contentLength: number;
@@ -76,7 +81,29 @@ interface ConsentBypassResult {
 }
 
 export function renderedContentByteLength(content: string): number {
-	return Buffer.byteLength(content, "utf8");
+	return new TextEncoder().encode(content).byteLength;
+}
+
+export function requiresStaticBinaryFetch(contentType: string): boolean {
+	return isPdfContentType(contentType);
+}
+
+export function matchesOwnedSitePattern(url: string, pattern: string): boolean {
+	try {
+		const parsed = new URL(url);
+		const separator = pattern.indexOf("/");
+		const patternHostname = (
+			separator === -1 ? pattern : pattern.slice(0, separator)
+		).toLowerCase();
+		const patternPath = separator === -1 ? "" : `/${pattern.slice(separator + 1)}`;
+		const hostname = parsed.hostname.toLowerCase();
+		return (
+			(hostname === patternHostname || hostname.endsWith(`.${patternHostname}`)) &&
+			(patternPath === "" || parsed.pathname.startsWith(patternPath))
+		);
+	} catch {
+		return false;
+	}
 }
 
 interface ReadinessSnapshot {
@@ -137,6 +164,7 @@ export async function fulfillRouteWithPinnedHttpClient(
 	route: Route,
 	httpClient: HttpClient,
 	signal?: AbortSignal,
+	allowLocalhostOnInitialRequest = false,
 ): Promise<void> {
 	const request = route.request();
 	const requestUrl = request.url();
@@ -167,6 +195,7 @@ export async function fulfillRouteWithPinnedHttpClient(
 				? { body: new Uint8Array(postData) }
 				: {}),
 			signal,
+			...(allowLocalhostOnInitialRequest ? { allowLocalhostOnInitialRequest: true } : {}),
 		});
 		const body = await readLimitedResponseBody(response, REQUEST_CONSTANTS.MAX_RESPONSE_BYTES);
 		if (body.type === "tooLarge") {
@@ -198,9 +227,17 @@ export async function configurePinnedBrowserContext(
 	context: BrowserContext,
 	httpClient: HttpClient,
 	signal?: AbortSignal,
+	seedUrl?: string,
 ): Promise<void> {
+	let seedCapabilityAvailable = seedUrl !== undefined;
 	await context.route("**/*", async (route) => {
-		await fulfillRouteWithPinnedHttpClient(route, httpClient, signal);
+		const request = route.request();
+		const useSeedCapability =
+			seedCapabilityAvailable && request.resourceType() === "document" && request.url() === seedUrl;
+		if (useSeedCapability) {
+			seedCapabilityAvailable = false;
+		}
+		await fulfillRouteWithPinnedHttpClient(route, httpClient, signal, useSeedCapability);
 	});
 	await context.routeWebSocket("**/*", abortWebSocketRoute);
 }
@@ -322,54 +359,65 @@ export class DynamicRenderer {
 			return;
 		}
 
-		this.logger.info("Launching Playwright (Chromium)...");
-		await this.createSessionPool(signal);
-		throwIfAborted(signal);
+		const closeOnAbort = () => {
+			void this.close();
+		};
+		signal?.addEventListener("abort", closeOnAbort, { once: true });
+		try {
+			this.logger.info("Launching Playwright (Chromium)...");
+			await this.createSessionPool(signal);
+			throwIfAborted(signal);
 
-		const executablePath = config.browser.executablePath;
+			const executablePath = config.browser.executablePath;
 
-		this.browserPool = new BrowserPool({
-			browserPlugins: [
-				new PlaywrightPlugin(chromium, {
-					useIncognitoPages: true,
-					launchOptions: {
-						headless: true,
-						args: [
-							"--no-sandbox",
-							"--disable-setuid-sandbox",
-							"--disable-dev-shm-usage",
-							"--disable-gpu",
-							"--disable-blink-features=AutomationControlled",
-							"--disable-extensions",
-							"--disable-background-networking",
-						],
-						...(executablePath !== undefined ? { executablePath } : {}),
-					},
-				}),
-			],
-			maxOpenPagesPerBrowser: Math.max(this.options.maxConcurrentRequests, 1),
-			retireBrowserAfterPageCount: config.isRender
-				? DYNAMIC_RENDERER_CONSTANTS.RECYCLE_THRESHOLD.RENDER_ENV
-				: DYNAMIC_RENDERER_CONSTANTS.RECYCLE_THRESHOLD.DEFAULT,
-			closeInactiveBrowserAfterSecs: 30,
-			operationTimeoutSecs: Math.ceil(
-				DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.COMPLEX_NAVIGATION / 1000,
-			),
-		});
-		throwIfAborted(signal);
+			this.browserPool = new BrowserPool({
+				browserPlugins: [
+					new PlaywrightPlugin(chromium, {
+						useIncognitoPages: true,
+						launchOptions: {
+							headless: true,
+							args: [
+								"--no-sandbox",
+								"--disable-setuid-sandbox",
+								"--disable-dev-shm-usage",
+								"--disable-gpu",
+								"--disable-blink-features=AutomationControlled",
+								"--disable-extensions",
+								"--disable-background-networking",
+							],
+							...(executablePath !== undefined ? { executablePath } : {}),
+						},
+					}),
+				],
+				maxOpenPagesPerBrowser: Math.max(this.options.maxConcurrentRequests, 1),
+				retireBrowserAfterPageCount: config.isRender
+					? DYNAMIC_RENDERER_CONSTANTS.RECYCLE_THRESHOLD.RENDER_ENV
+					: DYNAMIC_RENDERER_CONSTANTS.RECYCLE_THRESHOLD.DEFAULT,
+				closeInactiveBrowserAfterSecs: 30,
+				operationTimeoutSecs: Math.ceil(
+					DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.COMPLEX_NAVIGATION / 1000,
+				),
+			});
+			throwIfAborted(signal);
 
-		const warmupPage = (await this.browserPool.newPage({
-			pageOptions: createDynamicBrowserContextOptions(),
-		} as never)) as Page;
-		throwIfAborted(signal);
-		await warmupPage.close();
-		throwIfAborted(signal);
-		this.logger.info("Playwright launched successfully");
+			const warmupPage = (await this.browserPool.newPage({
+				pageOptions: createDynamicBrowserContextOptions(),
+			} as never)) as Page;
+			try {
+				throwIfAborted(signal);
+			} finally {
+				await this.closePageSafely(warmupPage);
+			}
+			throwIfAborted(signal);
+			this.logger.info("Playwright launched successfully");
+		} finally {
+			signal?.removeEventListener("abort", closeOnAbort);
+		}
 	}
 
 	private async configurePage(
 		page: Page,
-		url: string,
+		item: QueueItem,
 		session: Session,
 		signal?: AbortSignal,
 	): Promise<void> {
@@ -384,7 +432,12 @@ export class DynamicRenderer {
 			DNT: "1",
 		});
 
-		await configurePinnedBrowserContext(page.context(), this.httpClient, signal);
+		await configurePinnedBrowserContext(
+			page.context(),
+			this.httpClient,
+			signal,
+			item.url === this.options.target ? item.url : undefined,
+		);
 
 		page.on("dialog", (dialog) => {
 			dialog.dismiss().catch((err) => {
@@ -392,11 +445,12 @@ export class DynamicRenderer {
 			});
 		});
 
-		await this.setCookiesForPage(page, url, session);
+		await this.setCookiesForPage(page, item.url, session);
 	}
 
 	private async safeExtractContent(
 		page: Page,
+		signal?: AbortSignal,
 	): Promise<{ content: string; title: string; description: string } | null> {
 		const EXTRACTION_TIMEOUT_MS = 10_000;
 
@@ -408,12 +462,14 @@ export class DynamicRenderer {
 			const content = await runWithTimeout({
 				timeoutMs: EXTRACTION_TIMEOUT_MS,
 				operationName: "Content extraction",
+				...(signal ? { signal } : {}),
 				run: () => page.content(),
 			});
 
 			const metadata = await runWithTimeout({
 				timeoutMs: EXTRACTION_TIMEOUT_MS,
 				operationName: "Metadata extraction",
+				...(signal ? { signal } : {}),
 				run: () =>
 					page.evaluate(() => {
 						const title = document.title || "";
@@ -439,9 +495,7 @@ export class DynamicRenderer {
 	}
 
 	async render(item: QueueItem, signal?: AbortSignal): Promise<DynamicRenderAttempt> {
-		if (signal?.aborted) {
-			throw signal.reason instanceof Error ? signal.reason : new Error("Dynamic render aborted");
-		}
+		throwIfAborted(signal);
 		if (!this.isEnabled()) {
 			return null;
 		}
@@ -465,27 +519,38 @@ export class DynamicRenderer {
 			pageOptions: createDynamicBrowserContextOptions(),
 		} as never)) as Page;
 		let navigationOccurred = false;
+		let abortCleanup: Promise<void> | undefined;
 		const navigationHandler = () => {
 			navigationOccurred = true;
 		};
+		const closeOnAbort = () => {
+			abortCleanup ??= this.closePageSafely(page);
+		};
+		signal?.addEventListener("abort", closeOnAbort, { once: true });
 
 		try {
-			await this.configurePage(page, item.url, session, signal);
-			if (signal?.aborted) {
-				throw signal.reason instanceof Error ? signal.reason : new Error("Dynamic render aborted");
-			}
+			throwIfAborted(signal);
+			await this.configurePage(page, item, session, signal);
+			throwIfAborted(signal);
 
 			const isComplex = DYNAMIC_RENDERER_CONSTANTS.COMPLEX_JS_SITES.some((site) =>
-				item.url.includes(site),
+				matchesOwnedSitePattern(item.url, site),
 			);
 			const navigationTimeout = isComplex
 				? DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.COMPLEX_NAVIGATION
 				: DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.STANDARD_NAVIGATION;
 
-			const response = await page.goto(item.url, {
-				waitUntil: "domcontentloaded",
-				timeout: navigationTimeout,
+			const response = await runWithTimeout({
+				timeoutMs: navigationTimeout,
+				operationName: `Dynamic navigation for ${item.url}`,
+				...(signal ? { signal } : {}),
+				run: () =>
+					page.goto(item.url, {
+						waitUntil: "domcontentloaded",
+						timeout: navigationTimeout,
+					}),
 			});
+			throwIfAborted(signal);
 
 			const statusCode = response?.status() ?? 0;
 			const headers = response?.headers() ?? {};
@@ -494,23 +559,24 @@ export class DynamicRenderer {
 			const etag = headers["etag"];
 			const xRobotsTag = headers["x-robots-tag"] ?? null;
 			const retryAfter = headers["retry-after"] ?? null;
+			if (requiresStaticBinaryFetch(contentType)) {
+				this.logger.debug(`Dynamic PDF response for ${item.url}; using bounded static bytes`);
+				session.markGood();
+				return null;
+			}
 
 			if (statusCode >= 400) {
 				session.retireOnBlockedStatusCodes(statusCode);
 			}
 
-			const consentBypass = await this.handleConsentModals(page, item.url);
-			if (signal?.aborted) {
-				throw signal.reason instanceof Error ? signal.reason : new Error("Dynamic render aborted");
-			}
+			const consentBypass = await this.handleConsentModals(page, item.url, signal);
+			throwIfAborted(signal);
 			if (
 				consentBypass.detected &&
 				!consentBypass.clicked &&
 				requiresStrictConsentBypass(item.url)
 			) {
 				session.retire();
-				page.off("framenavigated", navigationHandler);
-				await this.closePageSafely(page);
 				return {
 					type: "consentBlocked",
 					message: `Consent wall could not be bypassed for ${item.url}`,
@@ -521,8 +587,9 @@ export class DynamicRenderer {
 			page.on("framenavigated", navigationHandler);
 
 			if (isComplex) {
-				await this.waitForComplexContent(page, item.url);
+				await this.waitForComplexContent(page, item.url, signal);
 			}
+			throwIfAborted(signal);
 
 			if (consentBypass.clicked) {
 				navigationOccurred = false;
@@ -532,56 +599,75 @@ export class DynamicRenderer {
 				this.logger.debug(
 					`Unexpected navigation during rendering of ${item.url}, falling back to static`,
 				);
-				page.off("framenavigated", navigationHandler);
 				session.markBad();
-				await this.closePageSafely(page);
 				return null;
 			}
 
-			const htmlLength = await runWithTimeoutFallback({
+			const renderedWithinLimit = await runWithTimeoutFallback({
 				timeoutMs: 5_000,
 				operationName: "Rendered HTML size check",
-				fallback: 0,
-				run: () => page.evaluate(() => document.documentElement?.outerHTML.length ?? 0),
+				fallback: false,
+				...(signal ? { signal } : {}),
+				run: () =>
+					page.evaluate((maxBytes) => {
+						const html = document.documentElement?.outerHTML ?? "";
+						let byteLength = 0;
+						for (let index = 0; index < html.length; index++) {
+							const codeUnit = html.charCodeAt(index);
+							if (codeUnit <= 0x7f) {
+								byteLength += 1;
+							} else if (codeUnit <= 0x7ff) {
+								byteLength += 2;
+							} else if (
+								codeUnit >= 0xd800 &&
+								codeUnit <= 0xdbff &&
+								index + 1 < html.length &&
+								html.charCodeAt(index + 1) >= 0xdc00 &&
+								html.charCodeAt(index + 1) <= 0xdfff
+							) {
+								byteLength += 4;
+								index += 1;
+							} else {
+								byteLength += 3;
+							}
+							if (byteLength > maxBytes) return false;
+						}
+						return true;
+					}, REQUEST_CONSTANTS.MAX_RESPONSE_BYTES),
 			});
-			if (htmlLength > REQUEST_CONSTANTS.MAX_RESPONSE_BYTES) {
-				// ponytail: char preflight avoids transferring huge DOM; static fetch owns the exact byte cap.
-				page.off("framenavigated", navigationHandler);
+			if (!renderedWithinLimit) {
 				session.markBad();
-				await this.closePageSafely(page);
 				return null;
 			}
 
-			const extracted = await this.safeExtractContent(page);
-			if (signal?.aborted) {
-				throw signal.reason instanceof Error ? signal.reason : new Error("Dynamic render aborted");
-			}
+			const extracted = await this.safeExtractContent(page, signal);
+			throwIfAborted(signal);
 			if (!extracted || navigationOccurred) {
-				page.off("framenavigated", navigationHandler);
 				session.markBad();
-				await this.closePageSafely(page);
 				return null;
 			}
 
 			const contentLength = renderedContentByteLength(extracted.content);
 			if (contentLength > REQUEST_CONSTANTS.MAX_RESPONSE_BYTES) {
-				page.off("framenavigated", navigationHandler);
 				session.markBad();
-				await this.closePageSafely(page);
+				return null;
+			}
+			const normalizedEffectiveUrl = normalizeRobotsMatchHttpUrl(page.url());
+			if ("error" in normalizedEffectiveUrl) {
+				session.markBad();
 				return null;
 			}
 
 			await this.persistSessionCookies(session, page, item.url);
+			throwIfAborted(signal);
 			session.markGood();
-
-			page.off("framenavigated", navigationHandler);
-			await page.close();
 
 			return {
 				type: "success",
 				result: {
 					isDynamic: true,
 					content: extracted.content,
+					effectiveUrl: normalizedEffectiveUrl.url,
 					statusCode,
 					contentType,
 					contentLength,
@@ -594,9 +680,10 @@ export class DynamicRenderer {
 				},
 			};
 		} catch (err) {
-			page.off("framenavigated", navigationHandler);
 			session.markBad();
-			await this.closePageSafely(page);
+			if (signal?.aborted) {
+				throw signal.reason instanceof Error ? signal.reason : new Error("Dynamic render aborted");
+			}
 
 			if (isRecoverableBrowserError(err)) {
 				this.logger.debug(
@@ -609,10 +696,18 @@ export class DynamicRenderer {
 				`Unexpected error during dynamic rendering of ${item.url}: ${getErrorMessage(err)}`,
 			);
 			return null;
+		} finally {
+			page.off("framenavigated", navigationHandler);
+			signal?.removeEventListener("abort", closeOnAbort);
+			await (abortCleanup ?? this.closePageSafely(page));
 		}
 	}
 
-	async handleConsentModals(page: Page, url: string): Promise<ConsentBypassResult> {
+	async handleConsentModals(
+		page: Page,
+		url: string,
+		signal?: AbortSignal,
+	): Promise<ConsentBypassResult> {
 		const EVAL_TIMEOUT_MS = DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.CONSENT_EVAL;
 		const NAV_TIMEOUT_MS = DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.CONSENT_NAVIGATION;
 
@@ -621,6 +716,7 @@ export class DynamicRenderer {
 				timeoutMs: EVAL_TIMEOUT_MS,
 				operationName: "Consent body text extraction",
 				fallback: "",
+				...(signal ? { signal } : {}),
 				run: () => page.evaluate(() => document.body?.textContent ?? ""),
 			});
 
@@ -636,9 +732,18 @@ export class DynamicRenderer {
 					timeoutMs: EVAL_TIMEOUT_MS,
 					operationName: "Consent button evaluation",
 					fallback: false,
+					...(signal ? { signal } : {}),
 					run: () =>
 						frame.evaluate(
-							({ selectors, actionMarkers }: { selectors: string[]; actionMarkers: string[] }) => {
+							({
+								selectors,
+								actionMarkers,
+								negativeActionMarkers,
+							}: {
+								selectors: string[];
+								actionMarkers: string[];
+								negativeActionMarkers: string[];
+							}) => {
 								const interactiveSelector =
 									"button, input[type='submit'], a[role='button'], [role='button']";
 
@@ -687,7 +792,15 @@ export class DynamicRenderer {
 								const matchesAction = (...values: Array<string | null | undefined>) =>
 									values.some((value) => {
 										const normalized = normalize(value);
-										return actionMarkers.some((marker: string) => normalized.includes(marker));
+										if (
+											negativeActionMarkers.some((marker: string) => normalized.includes(marker))
+										) {
+											return false;
+										}
+										return actionMarkers.some(
+											(marker: string) =>
+												normalized === marker || normalized.startsWith(`${marker} `),
+										);
 									});
 
 								const textMatch = buttons.find((button) => {
@@ -709,6 +822,7 @@ export class DynamicRenderer {
 							{
 								selectors: [...CONSENT_BUTTON_SELECTORS],
 								actionMarkers: [...CONSENT_ACTION_MARKERS],
+								negativeActionMarkers: [...CONSENT_NEGATIVE_ACTION_MARKERS],
 							},
 						),
 				});
@@ -724,36 +838,51 @@ export class DynamicRenderer {
 			this.logger.info(`Consent bypass clicked on ${url}, waiting for navigation...`);
 
 			try {
-				await page.waitForLoadState("domcontentloaded", {
-					timeout: NAV_TIMEOUT_MS,
+				await runWithTimeout({
+					timeoutMs: NAV_TIMEOUT_MS,
+					operationName: "Consent navigation wait",
+					...(signal ? { signal } : {}),
+					run: () =>
+						page.waitForLoadState("domcontentloaded", {
+							timeout: NAV_TIMEOUT_MS,
+						}),
 				});
 			} catch {
+				throwIfAborted(signal);
 				this.logger.debug(`Consent navigation wait completed/timed out for ${url}`);
 			}
 
-			await Bun.sleep(1000);
+			await sleep(1000, undefined, signal ? { signal } : undefined);
 			return { detected: true, clicked: true };
 		} catch (error) {
+			throwIfAborted(signal);
 			this.logger.info(`Consent bypass attempt failed: ${getErrorMessage(error)}`);
 			return { detected: true, clicked: false };
 		}
 	}
 
-	async waitForComplexContent(page: Page, url: string): Promise<void> {
+	async waitForComplexContent(page: Page, url: string, signal?: AbortSignal): Promise<void> {
 		const additionalWaitTime = DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.ADDITIONAL_WAIT;
 		const selectorToWait = Object.entries(SITE_SELECTORS).find(([pattern]) =>
-			url.includes(pattern),
+			matchesOwnedSitePattern(url, pattern),
 		)?.[1];
 
 		let selectorMatched = false;
 		if (selectorToWait) {
 			try {
-				await page.waitForSelector(selectorToWait, {
-					timeout: DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.SELECTOR_WAIT,
+				await runWithTimeout({
+					timeoutMs: DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.SELECTOR_WAIT,
+					operationName: `Dynamic selector wait for ${url}`,
+					...(signal ? { signal } : {}),
+					run: () =>
+						page.waitForSelector(selectorToWait, {
+							timeout: DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.SELECTOR_WAIT,
+						}),
 				});
 				selectorMatched = true;
 				this.logger.debug(`Waited for selector: ${selectorToWait} on ${url}`);
 			} catch (error_) {
+				throwIfAborted(signal);
 				this.logger.debug(`Preferred selector not found for ${url}: ${getErrorMessage(error_)}`);
 			}
 		}
@@ -766,6 +895,7 @@ export class DynamicRenderer {
 				hasPrimaryCandidate: false,
 				title: "",
 			},
+			...(signal ? { signal } : {}),
 			run: () =>
 				page.evaluate(() => {
 					const bodyText = (document.body?.innerText ?? "").replace(/\s+/g, " ").trim();
@@ -788,7 +918,7 @@ export class DynamicRenderer {
 			);
 		}
 
-		await Bun.sleep(additionalWaitTime);
+		await sleep(additionalWaitTime, undefined, signal ? { signal } : undefined);
 	}
 
 	private async setCookiesForPage(page: Page, url: string, session: Session): Promise<void> {
@@ -805,7 +935,7 @@ export class DynamicRenderer {
 			}));
 
 			const siteCookies = Object.entries(SITE_COOKIES).find(([pattern]) =>
-				url.includes(pattern),
+				matchesOwnedSitePattern(url, pattern),
 			)?.[1];
 
 			let configuredCookies: BrowserCookie[] = [];

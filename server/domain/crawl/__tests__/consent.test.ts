@@ -13,6 +13,18 @@ describe("consent heuristics contract", () => {
 		expect(isConsentActionText("Zustimmen und fortfahren")).toBe(true);
 	});
 
+	test("never treats negative actions containing affirmative words as consent", () => {
+		for (const label of [
+			"Do not accept",
+			"Don't agree",
+			"Reject and continue",
+			"Nicht akzeptieren",
+			"Nur notwendige Cookies akzeptieren",
+		]) {
+			expect(isConsentActionText(label)).toBe(false);
+		}
+	});
+
 	test("requires strict consent bypass for youtube domains only", () => {
 		expect(requiresStrictConsentBypass("https://www.youtube.com/watch?v=fidFUKnRGNQ&t=1139s")).toBe(
 			true,

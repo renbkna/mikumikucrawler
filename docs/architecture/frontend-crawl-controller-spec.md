@@ -33,33 +33,44 @@ The reducer state must contain:
 
 - `target`
 - `crawlOptions`
+- `activeCrawlOptions`
 - `activeCrawlId`
 - `connectionState`
 - `runPhase`
 - `stats`
 - `queueStats`
 - `crawledPages`
+- `progress`
 - `logs`
-- `interruptedSessions`
+- `hasShownStaticFallbackHint`
+- `searchQuery`
+- `resumableSessions`
 - `lastSequenceByCrawlId`
 - `lastCommand`
+
+`resumableSessions` contains both paused and interrupted crawls. Its reducer
+actions use the `resumableSessions*` and `resumableSession*` names. The previous
+collection name has no compatibility alias.
 
 ## Command Contract
 
 Commands:
 
-- `start`
-- `stop`
-- `resume`
-- `export`
-- `refreshInterruptedSessions`
-- `deleteInterruptedSession`
+- `startCrawl`
+- `pauseCrawl`
+- `forceStopCrawl`
+- `resumeCrawl`
+- `exportCrawl`
+- `refreshResumableSessions`
+- `deleteResumableSession`
 
 Rules:
 
-- Every command resolves to a typed success/error result.
+- API requests return typed `ApiResult<T>` values to the controller.
 - The controller must not infer success from lack of thrown errors.
 - Failed commands must update `lastCommand` with explicit failure state.
+- `startCrawl` and `resumeCrawl` return a boolean for UI flow; other public
+  controller commands may settle without returning the internal API result.
 - Terminal command results must be representable without parsing human text.
 
 ## Event Contract
@@ -92,8 +103,17 @@ Rules:
 
 - `idle` -> `starting` after accepted create/resume command
 - `starting` -> `running` on `crawl.started`
-- `running` -> `completed | failed | stopped` on terminal event
-- `running` -> `stopping` after accepted stop command
+- `starting | running` -> `pausing` when the controller starts a pause request
+- `pausing` -> `paused` on `crawl.paused`
+- `starting | running | pausing` -> `stopping` when the controller starts a
+  force-stop request
+- an applicable active phase -> `completed | failed | stopped` on a terminal event
+
+### Settled guarantees
+
+When `crawl.paused`, `crawl.completed`, `crawl.failed`, or `crawl.stopped` is
+applied, the matching SSE subscription is closed. `paused` is resumable and is
+not a terminal phase.
 
 ### Terminal guarantees
 

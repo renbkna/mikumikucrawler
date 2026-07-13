@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { exportPages } from "../CrawlExportService.js";
+import { createCrawlExportResponse } from "../CrawlExportService.js";
 
 const pages = [
 	{
@@ -15,51 +15,78 @@ const pages = [
 ];
 
 describe("crawl export service contract", () => {
-	test("JSON export preserves pretty stored page rows", () => {
-		const result = exportPages("crawl:unsafe/id", pages, "json");
+	test("JSON export preserves stored page rows", async () => {
+		const result = createCrawlExportResponse("crawl:unsafe/id", pages, "json");
 
-		expect(result.body).toBe(JSON.stringify(pages, null, 2));
-		expect(result.contentType).toBe("application/json; charset=utf-8");
-		expect(result.contentDisposition).toBe('attachment; filename="crawl_unsafe_id.json"');
+		expect(await result.json()).toEqual(pages);
+		expect(result.headers.get("content-type")).toBe("application/json; charset=utf-8");
+		expect(result.headers.get("content-disposition")).toBe(
+			'attachment; filename="crawl_unsafe_id.json"',
+		);
+		expect(result.headers.get("cache-control")).toBe("no-transform");
 	});
 
-	test("CSV export preserves header order and row mapping", () => {
-		const result = exportPages("crawl-1", pages, "csv");
+	test("CSV export preserves header order and row mapping", async () => {
+		const result = createCrawlExportResponse("crawl-1", pages, "csv");
+		const body = await result.text();
 
-		expect(result.body.split("\n")[0]).toBe(
+		expect(body.split("\n")[0]).toBe(
 			'"id","url","title","description","contentType","domain","crawledAt"',
 		);
-		expect(result.body.split("\n")[1]).toContain('"7"');
-		expect(result.body.split("\n")[1]).toContain('"https://example.com/a?x=1,2"');
-		expect(result.body.split("\n")[1]).toContain('"text/html"');
-		expect(result.contentType).toBe("text/csv; charset=utf-8");
+		expect(body.split("\n")[1]).toContain('"7"');
+		expect(body.split("\n")[1]).toContain('"https://example.com/a?x=1,2"');
+		expect(body.split("\n")[1]).toContain('"text/html"');
+		expect(result.headers.get("content-type")).toBe("text/csv; charset=utf-8");
 	});
 
-	test("CSV escapes quotes and commas", () => {
-		const result = exportPages("crawl-1", pages, "csv");
+	test("CSV escapes quotes and commas", async () => {
+		const result = createCrawlExportResponse("crawl-1", pages, "csv");
+		const body = await result.text();
 
-		expect(result.body).toContain('"A ""quoted"" title"');
-		expect(result.body).toContain('"https://example.com/a?x=1,2"');
+		expect(body).toContain('"A ""quoted"" title"');
+		expect(body).toContain('"https://example.com/a?x=1,2"');
 	});
 
-	test("CSV prefixes dangerous cells", () => {
+	test("CSV prefixes dangerous cells", async () => {
 		const dangerousRows = ["=x", "+x", "-x", "@x", "|x", "\tx"].map((value, index) => ({
 			...pages[0],
 			id: index + 1,
 			description: value,
 		}));
 
-		const result = exportPages("crawl-1", dangerousRows, "csv");
+		const result = createCrawlExportResponse("crawl-1", dangerousRows, "csv");
+		const body = await result.text();
 
 		for (const value of ["'=x", "'+x", "'-x", "'@x", "'|x", "'\tx"]) {
-			expect(result.body).toContain(`"${value}"`);
+			expect(body).toContain(`"${value}"`);
 		}
 	});
 
 	test("filename sanitization replaces unsafe characters", () => {
-		const result = exportPages("crawl:/unsafe id", [], "csv");
+		const result = createCrawlExportResponse("crawl:/unsafe id", [], "csv");
 
-		expect(result.filename).toBe("crawl__unsafe_id.csv");
-		expect(result.contentDisposition).toBe('attachment; filename="crawl__unsafe_id.csv"');
+		expect(result.headers.get("content-disposition")).toBe(
+			'attachment; filename="crawl__unsafe_id.csv"',
+		);
+	});
+
+	test("pulls export rows only as the response stream requests them", async () => {
+		let yielded = 0;
+		function* rows() {
+			for (const page of pages) {
+				yielded += 1;
+				yield page;
+			}
+		}
+
+		const response = createCrawlExportResponse("crawl-stream", rows(), "json");
+		expect(yielded).toBe(0);
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("Expected streaming response body");
+		await reader.read();
+		expect(yielded).toBe(0);
+		await reader.read();
+		expect(yielded).toBe(1);
+		await reader.cancel();
 	});
 });

@@ -26,6 +26,7 @@ export interface CrawlRuntimeDependencies {
 	eventStream: EventStream;
 	resolver: Resolver;
 	httpClient: HttpClient;
+	allowLocalhostSeed?: boolean;
 	initialSequence?: number;
 	initialCounters?: CrawlCounters;
 	initialStartedAtMs?: number;
@@ -86,6 +87,7 @@ export class CrawlRuntime {
 			deps.httpClient,
 			this.dynamicRenderer,
 			deps.logger,
+			deps.allowLocalhostSeed ? deps.options.target : undefined,
 		);
 		this.robotsService = new RobotsService(deps.httpClient, deps.logger);
 		const toPersistedQueueItem = (item: QueueItem): QueueItem & { availableAt: number } => ({
@@ -225,16 +227,13 @@ export class CrawlRuntime {
 		if (this.deps.resume) {
 			const terminalUrls = this.deps.repos.crawlItems.listTerminalUrls(this.deps.crawlId);
 			this.state.restoreTerminals(terminalUrls);
-			const pending = this.deps.repos.crawlQueue.listPending(this.deps.crawlId);
-			this.queue.restore(pending);
-			return;
 		}
 
-		this.queue.enqueue({
-			url: this.deps.options.target,
-			depth: 0,
-			retries: 0,
-		});
+		const pending = this.deps.repos.crawlQueue.listPending(this.deps.crawlId);
+		if (pending.length === 0 && !this.deps.resume) {
+			throw new Error("New crawl is missing its durably committed initial queue item");
+		}
+		this.queue.restore(pending);
 	}
 
 	start(): Promise<void> {
@@ -291,7 +290,6 @@ export class CrawlRuntime {
 		for (const controller of this.activeControllers.values()) {
 			controller.abort(new Error(reason));
 		}
-		this.persistInterrupted(reason);
 		await this.dynamicRenderer.close();
 	}
 
@@ -302,7 +300,7 @@ export class CrawlRuntime {
 
 		this.deps.repos.crawlRuns.markInterrupted(
 			this.deps.crawlId,
-			this.state.counters,
+			this.lastDurableCounters,
 			reason,
 			this.getCurrentSequence(),
 		);
@@ -342,14 +340,21 @@ export class CrawlRuntime {
 		item: QueueItem,
 		externalSignal?: AbortSignal,
 	): Promise<PageProcessResult> {
+		let processPromise: Promise<PageProcessResult> | undefined;
 		try {
 			return await runWithTimeout({
 				timeoutMs: CRAWL_QUEUE_CONSTANTS.ITEM_PROCESSING_TIMEOUT_MS,
 				operationName: `Processing ${item.url}`,
 				...(externalSignal ? { signal: externalSignal } : {}),
-				run: (signal) => this.pipeline.process(item, signal),
+				run: (signal) => {
+					processPromise = this.pipeline.process(item, signal);
+					return processPromise;
+				},
 			});
 		} catch (error) {
+			if (processPromise !== undefined) {
+				await Promise.allSettled([processPromise]);
+			}
 			if (externalSignal?.aborted) {
 				return { aborted: true };
 			}
@@ -357,12 +362,11 @@ export class CrawlRuntime {
 			this.deps.logger.error(
 				`[Runtime] Failed to process ${item.url}: ${error instanceof Error ? error.message : String(error)}`,
 			);
-			const domainBudgetCharged = this.state.recordTerminal(item.url, "failure");
-			if (domainBudgetCharged) {
-				this.state.recordDomainPage(item.domain);
-			}
 			this.publish("crawl.log", { message: `[Crawler] Failure: ${item.url}` });
-			return { terminalOutcome: "failure", domainBudgetCharged };
+			return {
+				terminalOutcome: "failure",
+				terminalEffects: { chargeDomainBudget: true },
+			};
 		}
 	}
 
@@ -386,18 +390,49 @@ export class CrawlRuntime {
 			return;
 		}
 
+		const terminalEffects = processResult.terminalEffects;
+		const willRecordTerminal =
+			processResult.terminalOutcome !== undefined && !this.state.hasVisited(item.url);
+		const domainBudgetCharged = willRecordTerminal && terminalEffects?.chargeDomainBudget === true;
+		const nextCounters =
+			processResult.terminalOutcome !== undefined
+				? this.state.previewTerminalCounters(item.url, processResult.terminalOutcome, {
+						...(terminalEffects?.dataKb !== undefined ? { dataKb: terminalEffects.dataKb } : {}),
+						...(terminalEffects?.mediaFiles !== undefined
+							? { mediaFiles: terminalEffects.mediaFiles }
+							: {}),
+						...(terminalEffects?.discoveredLinks !== undefined
+							? { discoveredLinks: terminalEffects.discoveredLinks }
+							: {}),
+					})
+				: this.state.snapshotCounters();
 		const pendingPageEvent = processResult.page ? 1 : 0;
 		const itemCommit = this.deps.repos.crawlItems.commitCompletedItem({
 			crawlId: this.deps.crawlId,
 			url: item.url,
-			...(processResult.terminalOutcome !== undefined
+			...(willRecordTerminal && processResult.terminalOutcome !== undefined
 				? { outcome: processResult.terminalOutcome }
 				: {}),
-			domainBudgetCharged: processResult.domainBudgetCharged ?? false,
+			domainBudgetCharged,
 			...(processResult.page?.saveInput ? { page: processResult.page.saveInput } : {}),
-			counters: this.state.snapshotCounters(),
+			counters: nextCounters,
 			eventSequence: this.getCurrentSequence() + pendingPageEvent,
 		});
+
+		if (processResult.terminalOutcome !== undefined && willRecordTerminal) {
+			this.state.recordTerminal(item.url, processResult.terminalOutcome, {
+				...(terminalEffects?.dataKb !== undefined ? { dataKb: terminalEffects.dataKb } : {}),
+				...(terminalEffects?.mediaFiles !== undefined
+					? { mediaFiles: terminalEffects.mediaFiles }
+					: {}),
+				...(terminalEffects?.discoveredLinks !== undefined
+					? { discoveredLinks: terminalEffects.discoveredLinks }
+					: {}),
+			});
+			if (domainBudgetCharged) {
+				this.state.recordDomainPage(item.domain);
+			}
+		}
 
 		if (processResult.page) {
 			this.publish("crawl.page", {
@@ -412,7 +447,11 @@ export class CrawlRuntime {
 	private async initializeRuntime(): Promise<void> {
 		this.persistProgress("starting");
 		await this.awaitStartupStep(
-			this.deps.resolver.assertPublicHostname(new URL(this.deps.options.target).hostname),
+			this.deps.resolver
+				.resolveHost(new URL(this.deps.options.target).hostname, {
+					allowLocalhost: this.deps.allowLocalhostSeed ?? false,
+				})
+				.then(() => undefined),
 		);
 		this.throwIfForceStopped();
 		const initResult = await this.awaitStartupStep(
@@ -595,6 +634,8 @@ export class CrawlRuntime {
 				this.markInactive();
 				return;
 			}
+			this.queue.clearPending();
+			this.queue.clearPersisted();
 			const message = error instanceof Error ? error.message : String(error);
 			this.deps.repos.crawlRuns.markFailed(
 				this.deps.crawlId,
@@ -608,6 +649,7 @@ export class CrawlRuntime {
 				counters: this.lastDurableCounters,
 			});
 		} finally {
+			this.markInactive();
 			this.deps.onSettled();
 		}
 	}

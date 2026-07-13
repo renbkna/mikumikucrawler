@@ -1,8 +1,9 @@
 import { config } from "../../config/env.js";
 import type { Logger } from "../../config/logging.js";
-import { MEMORY_CONSTANTS, REQUEST_CONSTANTS } from "../../constants.js";
+import { DOMAIN_DELAY_CONSTANTS, MEMORY_CONSTANTS, REQUEST_CONSTANTS } from "../../constants.js";
 import type { HttpClient } from "../../plugins/security.js";
 import { LRUCacheWithTTL } from "../../utils/lruCache.js";
+import { disposeResponseBody, readLimitedResponseBody } from "../../utils/responseBody.js";
 import { NativeRobotsParser, type RobotsResult } from "../../utils/robotsParser.js";
 import { shouldTreatRobotsResponseAsNoRules } from "./httpStatusPolicy.js";
 import { type CrawlUrlIdentity, getCrawlUrlIdentity } from "./UrlPolicy.js";
@@ -58,19 +59,30 @@ export class RobotsService {
 				headers: { "User-Agent": config.userAgent },
 				signal: fetchSignal,
 			});
-
 			if (response.ok) {
-				const text = await response.text();
+				const body = await readLimitedResponseBody(
+					response,
+					REQUEST_CONSTANTS.MAX_ROBOTS_RESPONSE_BYTES,
+				);
+				if (body.type === "tooLarge") {
+					return {
+						type: "unavailable",
+						reason: `robots.txt exceeds ${REQUEST_CONSTANTS.MAX_ROBOTS_RESPONSE_BYTES} bytes`,
+					};
+				}
+				const text = new TextDecoder().decode(body.bytes);
 				const rules = new NativeRobotsParser(text);
 				this.cache.set(originKey, rules);
 				return { type: "rules", rules };
 			}
 
 			if (shouldTreatRobotsResponseAsNoRules(response.status)) {
+				await disposeResponseBody(response);
 				this.cache.set(originKey, null);
 				return { type: "no-rules" };
 			}
 
+			await disposeResponseBody(response);
 			return {
 				type: "unavailable",
 				reason: `robots.txt returned HTTP ${response.status}`,
@@ -109,12 +121,29 @@ export class RobotsService {
 
 		const rules = rulesResult.type === "rules" ? rulesResult.rules : null;
 		const crawlDelaySeconds = rules?.getCrawlDelay(config.userAgent);
+		const crawlDelayMs = toBoundedRobotsDelayMs(crawlDelaySeconds);
+		if (crawlDelayMs === null) {
+			return {
+				type: "unavailable",
+				delayKey: identity.originKey,
+				reason: `robots.txt crawl-delay exceeds ${DOMAIN_DELAY_CONSTANTS.MAX_MS}ms`,
+			};
+		}
 		const allowed = rules ? rules.isAllowed(identity.robotsMatchUrl, config.userAgent) : true;
 
 		return {
 			type: allowed ? "allowed" : "disallowed",
 			delayKey: identity.originKey,
-			...(crawlDelaySeconds === undefined ? {} : { crawlDelayMs: crawlDelaySeconds * 1000 }),
+			...(crawlDelayMs === undefined ? {} : { crawlDelayMs }),
 		};
 	}
+}
+
+function toBoundedRobotsDelayMs(seconds: number | undefined): number | undefined | null {
+	if (seconds === undefined) return undefined;
+	const delayMs = seconds * 1000;
+	if (!Number.isFinite(delayMs) || delayMs > DOMAIN_DELAY_CONSTANTS.MAX_MS) {
+		return null;
+	}
+	return delayMs;
 }
