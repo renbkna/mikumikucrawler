@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { buildCrawlEventsPath, buildCrawlExportPath } from "../../../shared/contracts/index.js";
 import { downloadCrawlExport, getBackendUrl, resolveBackendUrl } from "../client";
-import { subscribeToCrawlEvents } from "../crawls";
+import { createCrawl, subscribeToCrawlEvents } from "../crawls";
 
 const originalFetch = globalThis.fetch;
 const originalEventSource = globalThis.EventSource;
@@ -69,5 +69,66 @@ describe("API client backend URL resolution", () => {
 		subscription.close();
 
 		expect(constructedUrls).toEqual([`${getBackendUrl()}${buildCrawlEventsPath("crawl-2")}`]);
+	});
+
+	test("preserves API timestamp strings when Eden parses crawl responses", async () => {
+		const createdAt = "2026-07-13T10:15:24.000Z";
+		globalThis.fetch = mock(async () =>
+			Response.json({
+				id: "crawl-date-contract",
+				target: "https://example.com/",
+				status: "starting",
+				options: {
+					target: "https://example.com/",
+					crawlMethod: "full",
+					crawlDepth: 2,
+					crawlDelay: 1000,
+					maxPages: 50,
+					maxPagesPerDomain: 0,
+					maxConcurrentRequests: 5,
+					retryLimit: 3,
+					dynamic: true,
+					respectRobots: false,
+					contentOnly: false,
+					saveMedia: false,
+				},
+				counters: {
+					pagesScanned: 0,
+					successCount: 0,
+					failureCount: 0,
+					skippedCount: 0,
+					linksFound: 0,
+					mediaFiles: 0,
+					totalDataKb: 0,
+				},
+				createdAt,
+				startedAt: createdAt,
+				updatedAt: createdAt,
+				completedAt: null,
+				stopReason: null,
+				resumable: false,
+			}),
+		) as unknown as typeof fetch;
+
+		const result = await createCrawl({
+			target: "https://example.com/",
+			crawlMethod: "full",
+			crawlDepth: 2,
+			crawlDelay: 1000,
+			maxPages: 50,
+			maxPagesPerDomain: 0,
+			maxConcurrentRequests: 5,
+			retryLimit: 3,
+			dynamic: true,
+			respectRobots: false,
+			contentOnly: false,
+			saveMedia: false,
+		});
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.data.createdAt).toBe(createdAt);
+			expect(result.data.createdAt).not.toBeInstanceOf(Date);
+		}
 	});
 });
