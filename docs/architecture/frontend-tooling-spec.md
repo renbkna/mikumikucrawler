@@ -21,9 +21,8 @@ The goal is not:
 
 The repository uses:
 
-- `Biome` for formatting
-- `Oxlint` for linting
-- `tsc` for typechecking
+- `Biome` for formatting and linting
+- `tsgo` for typechecking
 - `Lefthook` for local git hook orchestration
 
 ## Responsibilities
@@ -33,26 +32,13 @@ The repository uses:
 Biome owns:
 
 - formatting
-- import organization assist in editors
-
-Biome does not own:
-
-- CI lint enforcement
-- hook-time semantic lint gating
-
-### Oxlint
-
-Oxlint owns:
-
 - repository lint checks
-- React/promise/import linting
-- selected type-aware correctness checks
-
-Oxlint rules must prefer bug-shaped findings over stylistic noise.
+- import organization assist in editors
 
 ### TypeScript
 
-`tsc` remains the type system authority.
+`tsgo` runs the repository's TypeScript project references and remains the type
+system authority.
 
 Linting does not replace compiler validation.
 
@@ -60,30 +46,30 @@ Linting does not replace compiler validation.
 
 ### pre-commit
 
-- format staged frontend/backend source files with Biome
-- lint staged source files with Oxlint
+- format staged TypeScript, JavaScript, JSON, and CSS files with Biome
+- lint staged TypeScript and JavaScript files with Biome
+- restage files changed by formatting
 
 ### pre-push
 
-- run formatting check
-- run Oxlint
-- run type-aware Oxlint
-- run both TypeScript programs
+- run `bun run check`
+- typecheck the TypeScript project references with `tsgo`
+- check repository formatting and lint rules with `biome ci`
 - run tests
 - run production build
 
 ## Rule Selection
 
-The active Oxlint configuration should:
+The active Biome configuration should:
 
-- disable outdated React 17 JSX-scope rules
-- ignore generated/build output and test directories
-- deny warnings in CI and hooks
-- enable type-aware rules only when they provide actionable signal
+- keep formatting and lint policy in one configuration
+- ignore generated/build output
+- fail the full repository gate on formatting or lint violations
+- prefer bug-shaped findings over stylistic noise
 
 ## Forbidden States
 
-- Biome and Oxlint both acting as the primary CI linter
+- more than one primary repository lint authority
 - pre-commit mutating files without restaging them
-- pre-push passing while `tsc` fails
-- type-aware linting enabled only on paper and never run
+- pre-push passing while `tsgo` fails
+- documentation claiming a quality phase that `bun run check` does not execute

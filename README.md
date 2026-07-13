@@ -96,7 +96,7 @@ Every crawled page goes through a full analysis pipeline:
 
 ## 🚀 Quick Start
 
-> **Requires [Bun](https://bun.sh)** — the fast JavaScript runtime.
+> **Requires [Bun 1.3.14](https://bun.sh)** — the repository's declared runtime.
 
 ```bash
 git clone https://github.com/renbkna/mikumikucrawler
@@ -319,6 +319,9 @@ docker build -t mikumikucrawler .
 docker run -p 3000:3000 mikumikucrawler
 ```
 
+The image pins Bun 1.3.14 and installs the Chromium build matched to the locked
+Playwright dependency.
+
 </details>
 
 ```env
@@ -336,7 +339,7 @@ DB_PATH=/app/data/crawler.db
 bun run check
 ```
 
-Format → Lint → Type-aware lint → Typecheck → Tests → Build
+Typecheck (`tsgo`) → Format check and lint (`biome ci`) → Tests → Build
 
 ---
 

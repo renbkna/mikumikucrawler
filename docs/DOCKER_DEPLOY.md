@@ -99,12 +99,12 @@ The Docker container is configured to work with these environment variables:
 
 ## What the Docker Setup Does
 
-1. **Base Image**: Uses the official Bun image with Chrome dependencies
-2. **System Dependencies**: Installs all required libraries for Playwright/Chromium
-3. **Browser Installation**: Playwright provides the browser automation runtime used by the crawler
-4. **Dependencies**: Installs packages via Bun
+1. **Base Image**: Pins the official Bun image to the repository's declared Bun 1.3.14 runtime
+2. **Dependencies**: Installs the dependency versions recorded in `bun.lock`
+3. **Browser Installation**: The locked Playwright CLI installs its matching Chromium build and operating-system dependencies into `/ms-playwright`
+4. **Browser Verification**: The image build launches and closes Chromium, failing if the dynamic-crawling runtime is unavailable
 5. **Build**: Runs `bun run build` to build frontend assets
-6. **Configuration**: Sets up proper environment for Playwright
+6. **Configuration**: Sets `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright` for both image build and application runtime
 7. **Health Check**: Includes a health check endpoint at `/health`
 8. **Optimization**: Uses Docker layer caching for faster builds
 
@@ -112,9 +112,9 @@ The Docker container is configured to work with these environment variables:
 
 ### If Playwright fails to find browsers
 
-1. Check the deployment logs on Render
-2. Playwright will log if browser binaries are missing
-3. Ensure the container built successfully
+1. Check whether the image's Playwright installation or browser-launch layer failed
+2. Confirm `PLAYWRIGHT_BROWSERS_PATH` remains `/ms-playwright` at runtime
+3. Check the deployment logs for later browser-session failures
 
 ### If the build fails
 
@@ -140,7 +140,7 @@ The Docker container is configured to work with these environment variables:
 
 ## Performance Notes
 
-- First deployment may take 5-10 minutes (installing Chrome, building)
+- First deployment may take 5-10 minutes (installing Chromium and building)
 - Subsequent deployments will be faster due to Docker layer caching
 - Browser binaries are large but necessary for Playwright
 - Container includes health checks for Render's monitoring
