@@ -19,10 +19,10 @@
 	"scripts": {
 		"prepare": "bun scripts/install-git-hooks.ts",
 		"hooks:install": "lefthook install --force",
-		"dev": "concurrently --kill-others-on-fail --kill-signal SIGTERM -n \"Client,Server\" \"bun run dev:client\" \"bun run dev:server\"",
+		"dev": "bun scripts/dev.ts",
 		"dev:server": "bun --watch server/server.ts",
-		"dev:client": "vite",
-		"build": "vite build",
+		"dev:client": "bun --bun vite",
+		"build": "bun --bun vite build",
 		"check": "bun run typecheck && bun run lint && bun test && bun run build",
 		"typecheck": "tsgo -b --pretty false --checkers 4 --builders 2",
 		"typecheck:single": "tsgo -b --pretty false --singleThreaded",
@@ -31,7 +31,7 @@
 		"lint": "biome ci .",
 		"fix": "biome check --write .",
 		"fix:unsafe": "biome check --write --unsafe .",
-		"preview": "vite preview",
+		"preview": "bun --bun vite preview",
 		"start": "bun server/server.ts",
 		"test": "bun test",
 		"clean": "rm -rf dist coverage node_modules/.tmp"
