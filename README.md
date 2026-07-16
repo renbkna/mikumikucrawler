@@ -116,6 +116,8 @@ On Linux systems missing browser libraries, run `bunx playwright install --with-
 | ⚙️ | Backend | <http://localhost:3000> |
 | 📋 | OpenAPI | <http://localhost:3000/openapi> |
 
+If the backend port is occupied, `bun run dev` selects a free port and configures the frontend to use it.
+
 <details>
 <summary>🔧 <b>Environment Variables</b></summary>
 
