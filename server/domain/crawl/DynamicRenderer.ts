@@ -11,6 +11,7 @@ import {
 } from "playwright";
 import type { CrawlOptions } from "../../../shared/contracts/index.js";
 import { normalizeRobotsMatchHttpUrl } from "../../../shared/url.js";
+import { resolveChromiumExecutable } from "../../config/browser.js";
 import { config } from "../../config/env.js";
 import type { Logger } from "../../config/logging.js";
 import {
@@ -365,10 +366,30 @@ export class DynamicRenderer {
 		signal?.addEventListener("abort", closeOnAbort, { once: true });
 		try {
 			this.logger.info("Launching Playwright (Chromium)...");
+			const browserExecutable = resolveChromiumExecutable(
+				config.browser.executablePath,
+				chromium.executablePath(),
+			);
+			if (browserExecutable.source === "invalid-configured") {
+				throw new Error(
+					`Configured Chromium executable does not exist: ${browserExecutable.executablePath}`,
+				);
+			}
+			if (browserExecutable.source === "missing") {
+				throw new Error(
+					"No Chromium executable found. Run `bunx playwright install chromium` or set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH.",
+				);
+			}
+			if (browserExecutable.source === "system") {
+				this.logger.info(`Using system Chromium executable: ${browserExecutable.executablePath}`);
+			}
 			await this.createSessionPool(signal);
 			throwIfAborted(signal);
 
-			const executablePath = config.browser.executablePath;
+			const executablePath =
+				browserExecutable.source === "configured" || browserExecutable.source === "system"
+					? browserExecutable.executablePath
+					: undefined;
 
 			this.browserPool = new BrowserPool({
 				browserPlugins: [
