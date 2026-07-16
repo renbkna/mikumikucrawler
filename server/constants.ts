@@ -142,6 +142,7 @@ export const SITE_SELECTORS: Record<string, string> = {
 export const SITE_COOKIES: Record<string, Array<{ name: string; value: string }>> = {
 	"youtube.com": [
 		{ name: "CONSENT", value: "YES+" },
+		{ name: "SOCS", value: "CAI" },
 		{ name: "PREF", value: "tz=UTC" },
 	],
 	"reddit.com": [{ name: "over18", value: "1" }],
