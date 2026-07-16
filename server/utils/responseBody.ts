@@ -2,6 +2,10 @@ export type LimitedResponseBody =
 	| { type: "body"; bytes: Uint8Array; contentLength: number }
 	| { type: "tooLarge" };
 
+interface ResponseBodyBudget {
+	tryConsume(bytes: number): boolean;
+}
+
 export async function disposeResponseBody(response: Response): Promise<void> {
 	await response.body?.cancel().catch(() => undefined);
 }
@@ -24,6 +28,7 @@ function concatChunks(chunks: Uint8Array[], totalLength: number): Uint8Array {
 export async function readLimitedResponseBody(
 	response: Response,
 	maxBytes: number,
+	budget?: ResponseBodyBudget,
 ): Promise<LimitedResponseBody> {
 	const declaredLength = parseContentLength(response.headers.get("content-length"));
 	if (declaredLength !== null && declaredLength > maxBytes) {
@@ -45,7 +50,7 @@ export async function readLimitedResponseBody(
 			if (!value) continue;
 
 			totalLength += value.byteLength;
-			if (totalLength > maxBytes) {
+			if (totalLength > maxBytes || (budget && !budget.tryConsume(value.byteLength))) {
 				await reader.cancel().catch(() => undefined);
 				return { type: "tooLarge" };
 			}

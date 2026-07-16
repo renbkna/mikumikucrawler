@@ -62,6 +62,10 @@ export const PDF_CONSTANTS = {
 } as const;
 
 export const DYNAMIC_RENDERER_CONSTANTS = {
+	NETWORK_BUDGET: {
+		MAX_REQUESTS_PER_PAGE: 100,
+		MAX_RESPONSE_BYTES_PER_PAGE: 20 * 1024 * 1024,
+	},
 	COMPLEX_JS_SITES: [
 		"youtube.com",
 		"google.com",
@@ -104,9 +108,9 @@ export const DYNAMIC_RENDERER_CONSTANTS = {
 		STANDARD_NAVIGATION: 30000,
 		SELECTOR_WAIT: 15000,
 		ADDITIONAL_WAIT: 2000,
-		/** Time to wait for navigation after consent bypass click */
-		CONSENT_NAVIGATION: 10000,
-		/** Time to wait for consent modal detection/interaction */
+		/** Time to wait for a clicked consent wall to disappear */
+		CONSENT_CLEAR: 10000,
+		/** Time to wait for a detected consent wall to become actionable */
 		CONSENT_EVAL: 5000,
 	},
 } as const;

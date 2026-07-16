@@ -170,6 +170,14 @@ export class PagePipeline {
 			return result;
 		}
 
+		if (fetchResult.type === "unsupported") {
+			const result = this.recordFetchedTerminal("skip");
+			this.eventSink.log(
+				`[Crawler] Unsupported content type ${fetchResult.contentType || "(missing)"}: ${item.url}`,
+			);
+			return result;
+		}
+
 		// Queue/page identity remains the requested item URL. The validated effective URL
 		// is the document base and is retained in processed-content metadata.
 		const processedContent = await processContent(

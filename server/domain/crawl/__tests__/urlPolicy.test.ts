@@ -10,7 +10,7 @@ import { filterDiscoveredLinks, getCrawlUrlIdentity } from "../UrlPolicy.js";
  *
  * Filtering rules:
  *   1. Rejects non-http URLs
- *   2. Rejects resource extensions (.css, .js, .json, .xml, .txt, .md, .csv, .svg, .ico, .git, .gitignore)
+ *   2. Rejects non-document resource and binary-download extensions
  *   3. Rejects external links unless crawlMethod is "full"
  *   4. Sets isInternal based on domain match when not already set
  *   5. Coerces nofollow to boolean
@@ -91,7 +91,20 @@ describe("filterDiscoveredLinks", () => {
 	});
 
 	test("rejects resource extensions", () => {
-		const extensions = [".css", ".js", ".json", ".xml", ".txt", ".md", ".csv", ".svg", ".ico"];
+		const extensions = [
+			".css",
+			".js",
+			".xml",
+			".txt",
+			".md",
+			".csv",
+			".svg",
+			".ico",
+			".msi",
+			".dmg",
+			".exe",
+			".zip",
+		];
 		const links = extensions.map((ext) => ({
 			url: `https://example.com/file${ext}`,
 			domain: "example.com",
@@ -105,6 +118,24 @@ describe("filterDiscoveredLinks", () => {
 
 		expect(result).toHaveLength(1);
 		expect(result[0].url).toBe("https://example.com/page");
+	});
+
+	test("rejects binary downloads while retaining supported JSON and PDF documents", () => {
+		const result = filterDiscoveredLinks(
+			[
+				{ url: "https://example.com/releases/app.MSI?download=1" },
+				{ url: "https://example.com/releases/app.dmg?source=latest" },
+				{ url: "https://example.com/releases/data.JSON?download=1" },
+				{ url: "https://example.com/releases/manual.pdf?download=1" },
+			],
+			makeOptions(),
+			"example.com",
+		);
+
+		expect(result.map((link) => link.url)).toEqual([
+			"https://example.com/releases/data.JSON?download=1",
+			"https://example.com/releases/manual.pdf?download=1",
+		]);
 	});
 
 	test("blocks external links when crawlMethod is 'links'", () => {
