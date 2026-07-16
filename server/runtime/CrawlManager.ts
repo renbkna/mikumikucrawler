@@ -54,11 +54,9 @@ export class CrawlManagerClosingError extends Error {
 export class CrawlManager {
 	private closing = false;
 
-	constructor(private readonly deps: CreateCrawlManagerOptions) {
-		this.recoverOrphanedActiveCrawls();
-	}
+	constructor(private readonly deps: CreateCrawlManagerOptions) {}
 
-	private recoverOrphanedActiveCrawls(): void {
+	recoverOrphanedActiveCrawls(): void {
 		for (const crawl of this.deps.repos.crawlRuns.listActive()) {
 			if (this.deps.registry.get(crawl.id)) {
 				continue;
