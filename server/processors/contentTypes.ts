@@ -15,3 +15,11 @@ export function isJsonContentType(contentType: string): boolean {
 export function isPdfContentType(contentType: string): boolean {
 	return mediaTypeFromContentType(contentType) === "application/pdf";
 }
+
+export function isSupportedDocumentContentType(contentType: string): boolean {
+	return (
+		isHtmlLikeContentType(contentType) ||
+		isJsonContentType(contentType) ||
+		isPdfContentType(contentType)
+	);
+}

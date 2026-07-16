@@ -3,7 +3,8 @@ import { isPrivateOrReservedIpAddressLiteral } from "../../../shared/ipPolicy.js
 import type { ExtractedLink } from "../../../shared/types.js";
 import { normalizeCanonicalHttpUrl, normalizeRobotsMatchHttpUrl } from "../../../shared/url.js";
 
-const SKIPPED_EXTENSIONS = /\.(css|js|json|xml|txt|md|csv|svg|ico|git|gitignore)$/i;
+const SKIPPED_EXTENSIONS =
+	/\.(7z|apk|appimage|bz2|csv|css|deb|dmg|exe|git|gitignore|gz|ico|iso|js|md|msi|msix|pkg|rar|rpm|svg|tar|tgz|txt|xml|xz|zip|zst)$/i;
 
 export interface CrawlUrlIdentity {
 	canonicalUrl: string;

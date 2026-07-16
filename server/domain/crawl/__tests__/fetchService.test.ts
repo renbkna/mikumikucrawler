@@ -276,6 +276,93 @@ describe("fetch service contract", () => {
 		expect(httpFetch).toHaveBeenCalled();
 	});
 
+	test("uses static bytes for supported non-HTML representations", async () => {
+		const httpFetch = mock(
+			async () =>
+				new Response('{"source":"raw-json"}', {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				}),
+		);
+		const service = new FetchService(
+			{ getHeaders: () => null } as never,
+			{ fetch: httpFetch },
+			{
+				isEnabled: () => true,
+				render: async () => ({ type: "staticFallback", reason: "non-html" }),
+			} as never,
+			createLogger(),
+		);
+
+		const result = await service.fetch("crawl-1", {
+			url: "https://example.com/data",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(result).toMatchObject({
+			type: "success",
+			content: '{"source":"raw-json"}',
+			contentType: "application/json",
+			isDynamic: false,
+		});
+	});
+
+	test("does not replay dynamic document transport failures through static fetch", async () => {
+		const httpFetch = mock(async () => new Response("must not run"));
+		const service = new FetchService(
+			{ getHeaders: () => null } as never,
+			{ fetch: httpFetch },
+			{
+				isEnabled: () => true,
+				render: async () => ({ type: "transportFailure", message: "connection reset" }),
+			} as never,
+			createLogger(),
+		);
+
+		await expect(
+			service.fetch("crawl-1", {
+				url: "https://example.com/failure",
+				domain: "example.com",
+				depth: 0,
+				retries: 0,
+			}),
+		).resolves.toEqual({
+			type: "transientFailure",
+			statusCode: 0,
+			retryAfterMs: 1000,
+		});
+		expect(httpFetch).not.toHaveBeenCalled();
+	});
+
+	test("does not retry oversized dynamic documents through static fetch", async () => {
+		const httpFetch = mock(async () => new Response("must not run"));
+		const service = new FetchService(
+			{ getHeaders: () => null } as never,
+			{ fetch: httpFetch },
+			{
+				isEnabled: () => true,
+				render: async () => ({ type: "tooLarge" }),
+			} as never,
+			createLogger(),
+		);
+
+		await expect(
+			service.fetch("crawl-1", {
+				url: "https://example.com/huge",
+				domain: "example.com",
+				depth: 0,
+				retries: 0,
+			}),
+		).resolves.toEqual({
+			type: "blocked",
+			statusCode: 413,
+			reason: "Response too large for https://example.com/huge",
+		});
+		expect(httpFetch).not.toHaveBeenCalled();
+	});
+
 	test("maps static 401 responses to blocked instead of thrown failures", async () => {
 		const service = new FetchService(
 			{
@@ -446,6 +533,69 @@ describe("fetch service contract", () => {
 		expect(Buffer.isBuffer(result.content)).toBe(true);
 		expect(result.content).toEqual(Buffer.from(pdfBytes));
 		expect(result.contentLength).toBe(pdfBytes.byteLength);
+	});
+
+	test("rejects unsupported static response types before buffering", async () => {
+		let bodyRead = false;
+		const response = new Response("installer bytes", {
+			status: 200,
+			headers: { "content-type": "application/x-msdownload" },
+		});
+		response.arrayBuffer = async () => {
+			bodyRead = true;
+			return new ArrayBuffer(0);
+		};
+		const service = new FetchService(
+			{ getHeaders: () => null } as never,
+			{ fetch: async () => response },
+			{ isEnabled: () => false, render: async () => null } as never,
+			createLogger(),
+		);
+
+		const result = await service.fetch("crawl-1", {
+			url: "https://example.com/download",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(result).toEqual({
+			type: "unsupported",
+			statusCode: 200,
+			contentType: "application/x-msdownload",
+		});
+		expect(bodyRead).toBe(false);
+	});
+
+	test("rejects unsupported dynamic response types", async () => {
+		const httpFetch = mock(async () => new Response("should not be called"));
+		const service = new FetchService(
+			{ getHeaders: () => null } as never,
+			{ fetch: httpFetch },
+			{
+				isEnabled: () => true,
+				render: async () => ({
+					type: "unsupported",
+					statusCode: 200,
+					contentType: "application/octet-stream",
+				}),
+			} as never,
+			createLogger(),
+		);
+
+		const result = await service.fetch("crawl-1", {
+			url: "https://example.com/download",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(result).toEqual({
+			type: "unsupported",
+			statusCode: 200,
+			contentType: "application/octet-stream",
+		});
+		expect(httpFetch).not.toHaveBeenCalled();
 	});
 
 	test("rejects declared oversized static responses before buffering", async () => {

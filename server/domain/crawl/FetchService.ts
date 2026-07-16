@@ -6,7 +6,7 @@ import {
 	TIMEOUT_CONSTANTS,
 } from "../../constants.js";
 import type { HttpClient } from "../../plugins/security.js";
-import { isPdfContentType } from "../../processors/contentTypes.js";
+import { isPdfContentType, isSupportedDocumentContentType } from "../../processors/contentTypes.js";
 import type { PageRepo } from "../../storage/repos/pageRepo.js";
 import { disposeResponseBody, readLimitedResponseBody } from "../../utils/responseBody.js";
 import type { QueueItem } from "./CrawlQueue.js";
@@ -52,6 +52,11 @@ export type FetchResult =
 	| {
 			type: "permanentFailure";
 			statusCode: number;
+	  }
+	| {
+			type: "unsupported";
+			statusCode: number;
+			contentType: string;
 	  }
 	| {
 			type: "blocked";
@@ -149,7 +154,7 @@ export class FetchService {
 	) {}
 
 	async fetch(crawlId: string, item: QueueItem, signal?: AbortSignal): Promise<FetchResult> {
-		let dynamicResult: Awaited<ReturnType<DynamicRenderer["render"]>> = null;
+		let dynamicResult: Awaited<ReturnType<DynamicRenderer["render"]>> | undefined;
 		if (this.dynamicRenderer.isEnabled()) {
 			try {
 				dynamicResult = await this.dynamicRenderer.render(item, signal);
@@ -179,48 +184,83 @@ export class FetchService {
 					reason: dynamicResult.message,
 				};
 			}
-
-			const renderedPage = dynamicResult.result;
-			const classifiedDynamicStatus = classifyFetchStatus(renderedPage.statusCode, {
-				retryAfterMs: parseRetryAfter(renderedPage.retryAfter ?? null),
-				blockedStatuses: [],
-				blockedReason: `Access blocked for ${item.url}`,
-			});
-			if (classifiedDynamicStatus) {
-				return classifiedDynamicStatus;
+			if (dynamicResult.type === "transportFailure") {
+				this.logger.warn(
+					`[Fetch] Dynamic document transport failed for ${item.url}: ${dynamicResult.message}`,
+				);
+				return {
+					type: "transientFailure",
+					statusCode: 0,
+					retryAfterMs: RETRY_CONSTANTS.BASE_DELAY,
+				};
 			}
-
-			if (isAccessBlockedStatus(renderedPage.statusCode)) {
+			if (dynamicResult.type === "tooLarge") {
 				return {
 					type: "blocked",
-					statusCode: renderedPage.statusCode,
-					reason: `Access blocked for ${item.url}`,
+					statusCode: 413,
+					reason: `Response too large for ${item.url}`,
 				};
 			}
-
-			if (renderedPage.statusCode >= 400) {
+			if (dynamicResult.type === "unsupported") {
 				return {
-					type: "permanentFailure",
-					statusCode: renderedPage.statusCode,
+					type: "unsupported",
+					statusCode: dynamicResult.statusCode,
+					contentType: dynamicResult.contentType,
 				};
 			}
+			if (dynamicResult.type === "staticFallback") {
+				dynamicResult = undefined;
+			} else {
+				const renderedPage = dynamicResult.result;
+				const classifiedDynamicStatus = classifyFetchStatus(renderedPage.statusCode, {
+					retryAfterMs: parseRetryAfter(renderedPage.retryAfter ?? null),
+					blockedStatuses: [],
+					blockedReason: `Access blocked for ${item.url}`,
+				});
+				if (classifiedDynamicStatus) {
+					return classifiedDynamicStatus;
+				}
 
-			const contentLength = Buffer.byteLength(renderedPage.content, "utf8");
+				if (isAccessBlockedStatus(renderedPage.statusCode)) {
+					return {
+						type: "blocked",
+						statusCode: renderedPage.statusCode,
+						reason: `Access blocked for ${item.url}`,
+					};
+				}
 
-			return {
-				type: "success",
-				content: renderedPage.content,
-				effectiveUrl: renderedPage.effectiveUrl,
-				statusCode: renderedPage.statusCode,
-				contentType: renderedPage.contentType,
-				contentLength,
-				title: renderedPage.title,
-				description: renderedPage.description,
-				lastModified: renderedPage.lastModified ?? null,
-				etag: renderedPage.etag ?? null,
-				xRobotsTag: renderedPage.xRobotsTag ?? null,
-				isDynamic: true,
-			};
+				if (renderedPage.statusCode >= 400) {
+					return {
+						type: "permanentFailure",
+						statusCode: renderedPage.statusCode,
+					};
+				}
+
+				if (!isSupportedDocumentContentType(renderedPage.contentType)) {
+					return {
+						type: "unsupported",
+						statusCode: renderedPage.statusCode,
+						contentType: renderedPage.contentType,
+					};
+				}
+
+				const contentLength = Buffer.byteLength(renderedPage.content, "utf8");
+
+				return {
+					type: "success",
+					content: renderedPage.content,
+					effectiveUrl: renderedPage.effectiveUrl,
+					statusCode: renderedPage.statusCode,
+					contentType: renderedPage.contentType,
+					contentLength,
+					title: renderedPage.title,
+					description: renderedPage.description,
+					lastModified: renderedPage.lastModified ?? null,
+					etag: renderedPage.etag ?? null,
+					xRobotsTag: renderedPage.xRobotsTag ?? null,
+					isDynamic: true,
+				};
+			}
 		}
 
 		// Consent-sensitive domains should not silently degrade to static junk when
@@ -325,6 +365,14 @@ export class FetchService {
 		}
 
 		const contentType = response.headers.get("content-type") ?? "";
+		if (!isSupportedDocumentContentType(contentType)) {
+			await disposeResponseBody(response);
+			return {
+				type: "unsupported",
+				statusCode: response.status,
+				contentType,
+			};
+		}
 		const readContent = await readResponseContent(response, contentType);
 		if (readContent.type === "tooLarge") {
 			return {

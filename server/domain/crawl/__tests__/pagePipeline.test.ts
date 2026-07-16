@@ -17,6 +17,56 @@ function createLogger(): Logger {
 }
 
 describe("page pipeline contract", () => {
+	test("records unsupported response types as skipped pages", async () => {
+		const eventSink = {
+			log: mock(() => undefined),
+			page: mock(() => undefined),
+		};
+		const recordTerminal = mock(() => true);
+		const pipeline = new PagePipeline(
+			"crawl-1",
+			{
+				crawlDepth: 1,
+				retryLimit: 0,
+				respectRobots: false,
+				saveMedia: false,
+				crawlMethod: "links",
+				contentOnly: false,
+			} as never,
+			{
+				canScheduleMore: () => true,
+				hasVisited: () => false,
+				isDomainBudgetExceeded: () => false,
+				recordTerminal,
+			} as never,
+			{} as never,
+			{} as never,
+			{
+				fetch: async () => ({
+					type: "unsupported",
+					statusCode: 200,
+					contentType: "application/x-apple-diskimage",
+				}),
+			} as never,
+			{} as never,
+			eventSink,
+			createLogger(),
+		);
+
+		const result = await pipeline.process({
+			url: "https://example.com/download",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(result).toMatchObject({ terminalOutcome: "skip" });
+		expect(eventSink.log).toHaveBeenCalledWith(
+			"[Crawler] Unsupported content type application/x-apple-diskimage: https://example.com/download",
+		);
+		expect(eventSink.page).not.toHaveBeenCalled();
+	});
+
 	test("surfaces blocked fetch reasons to the event sink", async () => {
 		const eventSink = {
 			log: mock(() => undefined),
