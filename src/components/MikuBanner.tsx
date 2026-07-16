@@ -7,70 +7,58 @@ interface MikuBannerProps {
 export const MikuBanner = ({ active }: MikuBannerProps) => {
 	return (
 		<div
-			className={`relative w-full h-64 md:h-80 rounded-3xl overflow-hidden mb-6 transition-all duration-500 border-2 ${
+			className={`relative w-full h-56 md:h-72 rounded-[18px] overflow-hidden mb-3 transition-all duration-500 border ${
 				active
-					? "shadow-[0_0_40px_rgba(57,197,187,0.4)] scale-[1.01] border-miku-teal/50"
-					: "shadow-lg border-miku-pink/20"
+					? "shadow-[0_10px_36px_rgba(105,201,229,0.16)] scale-[1.01] border-miku-teal/60"
+					: "shadow-[0_8px_28px_rgba(105,117,170,0.06)] border-miku-accent/20"
 			}`}
 		>
-			<div className="absolute inset-0 bg-gradient-to-br from-miku-teal/5 via-white/50 to-miku-pink/5" />
+			<div className="absolute inset-0 bg-white" />
 
 			<img
 				src="/miku1.gif"
 				alt="Miku Beam"
 				className={`w-full h-full object-cover transition-all duration-500 ${
-					active ? "opacity-100 scale-105" : "opacity-70 grayscale-[20%]"
+					active ? "opacity-100 scale-[1.02]" : "opacity-90"
 				}`}
 			/>
 
 			{active && (
 				<div className="absolute inset-0 pointer-events-none">
 					<SparkleIcon
-						className="absolute top-4 left-[10%] text-white/80 sparkle drop-shadow-lg"
-						size={20}
-					/>
-					<NoteIcon
-						className="absolute top-8 right-[15%] text-white/80 sparkle drop-shadow-lg"
+						className="absolute top-4 right-[8%] text-white/70 sparkle drop-shadow-sm"
 						size={16}
-						style={{ animationDelay: "0.3s" }}
 					/>
+					<NoteIcon className="hidden" size={16} style={{ animationDelay: "0.3s" }} />
 					<HeartIcon
-						className="absolute bottom-16 left-[20%] text-white/80 sparkle drop-shadow-lg"
+						className="absolute bottom-5 left-1/2 text-miku-pink/75 drop-shadow-sm"
 						size={14}
 						style={{ animationDelay: "0.7s" }}
 					/>
-					<SparkleIcon
-						className="absolute top-1/3 right-[10%] text-white/80 sparkle drop-shadow-lg"
-						size={18}
-						style={{ animationDelay: "1s" }}
-					/>
+					<SparkleIcon className="hidden" size={18} style={{ animationDelay: "1s" }} />
 				</div>
 			)}
 
 			{active && (
 				<>
-					<div className="absolute inset-0 bg-gradient-to-t from-miku-teal/20 via-transparent to-miku-pink/10 animate-pulse mix-blend-overlay" />
+					<div className="absolute inset-0 bg-gradient-to-t from-miku-accent/10 via-transparent to-white/5 animate-pulse mix-blend-screen" />
 
 					<div className="absolute bottom-0 left-0 right-0">
-						<div className="bg-gradient-to-t from-black/60 via-black/30 to-transparent pt-12 pb-4 px-4">
+						<div className="bg-gradient-to-t from-[#6d61d8]/45 via-[#6d61d8]/10 to-transparent pt-10 pb-3 px-4">
 							<div className="flex items-center justify-center gap-3">
 								<div className="flex items-center">
-									<span className="text-3xl md:text-4xl font-black text-white drop-shadow-[0_2px_10px_rgba(57,197,187,0.8)] tracking-tight">
+									<span className="text-2xl md:text-3xl font-bold text-white drop-shadow-sm tracking-[0.08em]">
 										MIKU
 									</span>
 									<HeartIcon
-										className="text-miku-pink mx-2 drop-shadow-lg animate-heart-beat"
-										size={28}
+										className="text-miku-pink mx-2 drop-shadow-sm animate-heart-beat"
+										size={18}
 									/>
-									<span className="text-3xl md:text-4xl font-black text-white drop-shadow-[0_2px_10px_rgba(255,183,197,0.8)] tracking-tight">
+									<span className="text-2xl md:text-3xl font-bold text-white drop-shadow-sm tracking-[0.08em]">
 										MIKU
 									</span>
-									<HeartIcon
-										className="text-miku-teal mx-2 drop-shadow-lg animate-heart-beat"
-										size={28}
-										style={{ animationDelay: "0.3s" }}
-									/>
-									<span className="text-3xl md:text-4xl font-black text-white drop-shadow-[0_2px_10px_rgba(224,80,157,0.8)] tracking-tight">
+									<HeartIcon className="hidden" size={18} style={{ animationDelay: "0.3s" }} />
+									<span className="text-2xl md:text-3xl font-bold text-white drop-shadow-sm tracking-[0.08em]">
 										BEAM!
 									</span>
 								</div>

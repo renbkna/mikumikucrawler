@@ -28,9 +28,7 @@ const LogItem = memo(function LogItem({ log, stableIndex, onCopy }: LogItemProps
 	}, [log.raw, onCopy]);
 
 	return (
-		<div
-			className={`group relative py-3 px-4 border-b border-miku-pink/5 hover:bg-gradient-to-r ${config.bgColor} hover:border-transparent transition-all duration-300 animate-in slide-in-from-left-2 fade-in duration-500`}
-		>
+		<div className="group relative py-3 px-3 border-b border-miku-border/60 hover:bg-white/55 transition-colors duration-200 animate-in slide-in-from-left-2 fade-in duration-500">
 			<div className="flex items-start gap-3">
 				{/* Index number */}
 				<span className="text-miku-teal/30 font-mono text-xs mt-1 select-none font-bold min-w-[1.5rem]">
@@ -156,20 +154,20 @@ export const LogsSection = memo(function LogsSection({
 	return (
 		<div className="h-full flex flex-col relative">
 			{/* Decorative line */}
-			<div className="absolute left-4 top-0 bottom-0 w-px bg-gradient-to-b from-miku-teal/20 via-miku-pink/20 to-transparent z-0" />
+			<div className="hidden" />
 
-			<div className="flex-1 rounded-[20px] relative z-10 flex flex-col h-full overflow-hidden bg-white/5 backdrop-blur-sm border border-miku-teal/10">
+			<div className="flex-1 relative z-10 flex flex-col h-full overflow-hidden">
 				{/* Header */}
-				<div className="flex items-center justify-between p-4 border-b border-miku-teal/10 shrink-0 bg-gradient-to-r from-miku-teal/5 to-transparent">
-					<div className="flex items-center gap-3">
-						<div className="p-2 rounded-xl bg-gradient-to-br from-miku-teal/20 to-miku-teal/10 text-miku-teal border border-miku-teal/20">
+				<div className="flex items-center justify-end pb-3 border-b border-miku-teal/10 shrink-0">
+					<div className="hidden">
+						<div>
 							<Terminal className="w-4 h-4" />
 						</div>
 						<div className="flex flex-col">
 							<span className="text-sm font-bold text-miku-text flex items-center gap-2">
 								System Logs
 								<span className="cute-badge flex items-center gap-1 text-[10px]">
-									<NoteIcon className="text-miku-teal" size={10} />
+									<NoteIcon className="hidden" size={10} />
 									{logs.length} total
 								</span>
 							</span>
@@ -179,7 +177,7 @@ export const LogsSection = memo(function LogsSection({
 
 					<div className="flex items-center gap-2">
 						{/* Level filter */}
-						<div className="flex items-center gap-1 bg-miku-text/5 rounded-lg p-1 border border-miku-text/10">
+						<div className="flex items-center gap-1 bg-white/55 rounded-lg p-1 border border-miku-border">
 							<Filter className="w-3 h-3 text-miku-text/40 ml-1" />
 							{levelOptions.map((option) => (
 								<button
@@ -212,7 +210,7 @@ export const LogsSection = memo(function LogsSection({
 
 				{/* Copied notification */}
 				{copiedIndex !== null && (
-					<div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 bg-miku-teal text-white px-3 py-1.5 rounded-full text-xs font-medium shadow-lg animate-in fade-in slide-in-from-top-2">
+					<div className="absolute top-12 left-1/2 -translate-x-1/2 z-50 bg-miku-teal text-white px-3 py-1.5 rounded-lg text-xs font-medium shadow-sm animate-in fade-in slide-in-from-top-2">
 						Copied to clipboard!
 					</div>
 				)}
@@ -257,7 +255,7 @@ export const LogsSection = memo(function LogsSection({
 						</div>
 					) : (
 						<div className="h-full flex flex-col items-center justify-center text-miku-text/40">
-							<NoteIcon className="text-miku-teal/30 mb-4 animate-bounce-slow" size={48} />
+							<NoteIcon className="text-miku-teal/35 mb-3" size={34} />
 							<p className="font-medium">Waiting for Miku to start writing...</p>
 							<p className="text-xs mt-1 opacity-60">Logs will appear here when crawling begins</p>
 						</div>

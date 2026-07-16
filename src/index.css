@@ -5,35 +5,40 @@ html {
 }
 
 :root {
-	--miku-teal: #2a918a;
-	--miku-teal-soft: #7dd8d2;
-	--miku-teal-pale: #c5f0ed;
-	--miku-teal-dark: #1d6661;
+	--miku-teal: #69c9e5;
+	--miku-teal-soft: #acd5f5;
+	--miku-teal-pale: #edf8fd;
+	--miku-teal-dark: #4b9fc7;
 
-	--miku-pink: #d65d7a;
-	--miku-pink-soft: #ffd4de;
-	--miku-pink-pale: #fff0f3;
-	--miku-pink-dark: #b03c58;
+	--miku-pink: #e98ab7;
+	--miku-pink-soft: #f3c8dc;
+	--miku-pink-pale: #fff5fa;
+	--miku-pink-dark: #bd6e9a;
 
-	--miku-accent: #e0509d;
+	--miku-accent: #776ddf;
+	--miku-lavender: #a2a4eb;
+	--miku-border: #e1e5f5;
+	--miku-border-strong: #cfd6ef;
 
-	--kawaii-bg: linear-gradient(135deg, #fff5f7 0%, #f0fffe 50%, #fff5f7 100%);
-	--kawaii-card: rgba(255, 255, 255, 0.9);
+	--kawaii-bg: #f6f8fd;
+	--kawaii-card: rgba(255, 255, 255, 0.82);
 
-	--miku-text: #4a5568;
-	--miku-text-soft: #718096;
-	--miku-text-light: #a0aec0;
+	--miku-text: #71779f;
+	--miku-text-soft: #9298b8;
+	--miku-text-light: #b5bad2;
 
-	--shadow-cute: 0 4px 20px rgba(57, 197, 187, 0.15), 0 2px 8px rgba(255, 183, 197, 0.1);
-	--shadow-hover: 0 8px 30px rgba(57, 197, 187, 0.2), 0 4px 12px rgba(255, 183, 197, 0.15);
+	--shadow-cute: 0 8px 28px rgba(105, 117, 170, 0.055);
+	--shadow-hover: 0 10px 32px rgba(105, 117, 170, 0.075);
 
-	--font-sans: "Varela Round", "M PLUS Rounded 1c", system-ui, sans-serif;
+	--font-sans: "M PLUS Rounded 1c", "Varela Round", system-ui, sans-serif;
 }
 
 @theme {
 	--color-miku-teal: var(--miku-teal);
 	--color-miku-pink: var(--miku-pink);
 	--color-miku-accent: var(--miku-accent);
+	--color-miku-lavender: var(--miku-lavender);
+	--color-miku-border: var(--miku-border);
 	--color-miku-text: var(--miku-text);
 	--color-miku-primary: var(--miku-teal);
 	--color-miku-secondary: var(--miku-pink);
@@ -123,6 +128,7 @@ html {
 
 body {
 	background: var(--kawaii-bg);
+	background-image: radial-gradient(circle at 50% -15%, rgba(172, 213, 245, 0.2), transparent 42%);
 	color: var(--miku-text);
 	font-family: var(--font-sans);
 	min-height: 100vh;
@@ -134,73 +140,60 @@ button {
 	cursor: pointer;
 }
 
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+	outline: 2px solid rgba(105, 201, 229, 0.45);
+	outline-offset: 2px;
+}
+
+dialog input:not([type="checkbox"]):not([type="range"]),
+dialog select {
+	border-width: 1px;
+	border-color: var(--miku-border-strong);
+	box-shadow: none;
+}
+
 body::before,
 body::after {
-	content: "";
-	position: fixed;
-	border-radius: 50%;
-	pointer-events: none;
-	z-index: 0;
-}
-
-body::before {
-	width: 300px;
-	height: 300px;
-	background: radial-gradient(circle, var(--miku-teal-pale) 0%, transparent 70%);
-	top: -100px;
-	right: -100px;
-	animation: float 8s ease-in-out infinite;
-}
-
-body::after {
-	width: 250px;
-	height: 250px;
-	background: radial-gradient(circle, var(--miku-pink-pale) 0%, transparent 70%);
-	bottom: -50px;
-	left: -50px;
-	animation: float 10s ease-in-out infinite reverse;
+	content: none;
 }
 
 .glass-panel {
 	background: var(--kawaii-card);
-	backdrop-filter: blur(10px);
-	border: 2px solid rgba(255, 255, 255, 0.8);
-	border-radius: 24px;
+	border: 1px solid var(--miku-border);
+	border-radius: 18px;
 	box-shadow: var(--shadow-cute);
-	transition: all 0.3s ease;
+	transition:
+		border-color 0.2s ease,
+		box-shadow 0.2s ease;
 	position: relative;
 	overflow: hidden;
 }
 
 .glass-panel:hover {
 	box-shadow: var(--shadow-hover);
-	transform: translateY(-2px);
+	border-color: var(--miku-border-strong);
 }
 
 .cute-card {
-	background: white;
-	border-radius: 20px;
-	border: 2px solid var(--miku-pink-pale);
-	box-shadow: var(--shadow-cute);
-	transition: all 0.3s ease;
+	background: rgba(255, 255, 255, 0.74);
+	border-radius: 14px;
+	border: 1px solid var(--miku-border);
+	box-shadow: none;
+	transition:
+		border-color 0.2s ease,
+		background-color 0.2s ease;
 	position: relative;
 }
 
 .cute-card::before {
-	content: "";
-	position: absolute;
-	top: 0;
-	left: 0;
-	right: 0;
-	height: 4px;
-	background: linear-gradient(90deg, var(--miku-teal), var(--miku-pink), var(--miku-teal));
-	border-radius: 20px 20px 0 0;
+	content: none;
 }
 
 .cute-card:hover {
-	transform: translateY(-4px);
-	box-shadow: var(--shadow-hover);
-	border-color: var(--miku-pink-soft);
+	background: rgba(255, 255, 255, 0.9);
+	border-color: var(--miku-border-strong);
 }
 
 .sparkle {
@@ -215,29 +208,25 @@ body::after {
 }
 
 .gradient-text {
-	background: linear-gradient(135deg, var(--miku-teal), var(--miku-pink));
-	-webkit-background-clip: text;
-	-webkit-text-fill-color: transparent;
-	background-clip: text;
+	color: var(--miku-accent);
 }
 
 .cute-badge {
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
-	padding: 6px 14px;
-	border-radius: 50px;
+	padding: 5px 10px;
+	border-radius: 9px;
 	font-size: 12px;
-	font-weight: bold;
-	background: white;
-	border: 2px solid var(--miku-pink-pale);
+	font-weight: 600;
+	background: rgba(255, 255, 255, 0.5);
+	border: 1px solid var(--miku-border);
 	color: var(--miku-text);
-	transition: all 0.2s ease;
+	transition: border-color 0.2s ease;
 }
 
 .cute-badge:hover {
-	transform: scale(1.05);
-	border-color: var(--miku-teal);
+	border-color: var(--miku-border-strong);
 }
 
 ::-webkit-scrollbar {
@@ -245,23 +234,93 @@ body::after {
 }
 
 ::-webkit-scrollbar-track {
-	background: var(--miku-pink-pale);
+	background: #f0f2fa;
 	border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb {
-	background: linear-gradient(180deg, var(--miku-teal-soft), var(--miku-pink));
+	background: var(--miku-teal-soft);
 	border-radius: 10px;
-	border: 2px solid var(--miku-pink-pale);
+	border: 2px solid #f0f2fa;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-	background: linear-gradient(180deg, var(--miku-teal), var(--miku-accent));
+	background: var(--miku-teal);
 }
 
 .energy-bar {
-	background: linear-gradient(90deg, var(--miku-teal), var(--miku-pink), var(--miku-teal));
+	background: linear-gradient(90deg, var(--miku-teal), var(--miku-lavender), var(--miku-teal));
 	background-size: 200% 100%;
 	animation: gradient-shift 2s ease infinite;
 	border-radius: 50px;
+}
+
+.app-atmosphere {
+	display: none;
+}
+
+.brand-shell {
+	background: transparent;
+	border: 0;
+	box-shadow: none;
+	border-radius: 0;
+	overflow: visible;
+}
+
+.brand-shell:hover {
+	border-color: transparent;
+	box-shadow: none;
+}
+
+.control-stage,
+.metric-group {
+	background: transparent;
+	border: 0;
+	box-shadow: none;
+	overflow: visible;
+}
+
+.control-stage:hover,
+.metric-group:hover {
+	border-color: transparent;
+	box-shadow: none;
+}
+
+.metric-card::after {
+	content: "";
+	position: absolute;
+	left: 1.25rem;
+	right: 1.25rem;
+	bottom: 1.1rem;
+	height: 2px;
+	border-radius: 999px;
+	background: var(--metric-color, var(--miku-teal));
+	opacity: 0.82;
+}
+
+.metric-pages {
+	--metric-color: var(--miku-teal);
+}
+
+.metric-links {
+	--metric-color: var(--miku-pink);
+}
+
+.metric-data {
+	--metric-color: var(--miku-lavender);
+}
+
+.soft-range {
+	accent-color: var(--miku-teal);
+}
+
+.crawl-readouts .cute-badge {
+	background: transparent;
+	border: 0;
+	border-radius: 0;
+	padding: 0.25rem 1rem;
+}
+
+.crawl-readouts .cute-badge + .cute-badge {
+	border-left: 1px solid var(--miku-border);
 }

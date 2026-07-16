@@ -69,11 +69,11 @@ export const CrawlerForm = memo(function CrawlerForm({
 	const connectionStyles = (() => {
 		switch (connectionState) {
 			case "connected":
-				return "bg-emerald-50 text-emerald-700 border-emerald-200 font-medium";
+				return "bg-miku-teal/8 text-miku-teal-dark border-miku-teal/35 font-medium";
 			case "connecting":
-				return "bg-amber-50 text-amber-700 border-amber-200 animate-pulse font-medium";
+				return "bg-miku-accent/5 text-miku-accent border-miku-accent/20 animate-pulse font-medium";
 			default:
-				return "bg-rose-50 text-rose-700 border-rose-200 font-medium";
+				return "bg-miku-pink/8 text-miku-pink-dark border-miku-pink/30 font-medium";
 		}
 	})();
 
@@ -82,32 +82,32 @@ export const CrawlerForm = memo(function CrawlerForm({
 		if (isAttacking) {
 			return (
 				<>
-					PAUSE <HeartIcon className="text-white/80" size={12} />
+					PAUSE <HeartIcon className="hidden" size={12} />
 				</>
 			);
 		}
 		return (
 			<>
-				MIKU BEAM! <SparkleIcon className="text-white/80" size={12} />
+				MIKU BEAM! <SparkleIcon className="hidden" size={12} />
 			</>
 		);
 	})();
 
 	return (
-		<div className="relative mb-8 space-y-6">
-			<div className="glass-panel rounded-[28px] p-8 relative overflow-hidden group">
-				<div className="absolute -right-10 -top-10 w-32 h-32 bg-miku-teal/10 rounded-full blur-2xl group-hover:bg-miku-teal/20 transition-colors duration-500" />
-				<div className="absolute -left-10 -bottom-10 w-32 h-32 bg-miku-pink/10 rounded-full blur-2xl group-hover:bg-miku-pink/20 transition-colors duration-500" />
+		<div className="relative mb-0 space-y-0">
+			<div className="glass-panel rounded-t-[18px] rounded-b-none p-5 relative overflow-hidden group">
+				<div className="hidden" />
+				<div className="hidden" />
 
-				<div className="relative z-10 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-6 items-end">
-					<div className="space-y-3">
+				<div className="relative z-10 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-4 items-end">
+					<div className="space-y-2">
 						<label
 							htmlFor="target-url"
-							className="text-sm font-bold text-miku-text/70 ml-4 flex items-center gap-2"
+							className="text-xs font-bold uppercase tracking-[0.08em] text-miku-accent/65 ml-1 flex items-center gap-2"
 						>
-							<NoteIcon className="text-miku-pink" size={12} />
+							<NoteIcon className="hidden" size={12} />
 							TARGET URL
-							<NoteIcon className="text-miku-teal" size={12} />
+							<NoteIcon className="hidden" size={12} />
 						</label>
 						<div className="relative">
 							<input
@@ -117,10 +117,10 @@ export const CrawlerForm = memo(function CrawlerForm({
 								onChange={handleTargetChange}
 								onKeyDown={handleKeyDown}
 								placeholder="https://example.com"
-								className={`w-full px-6 py-4 rounded-2xl bg-white border-2 focus:ring-4 transition-all duration-300 outline-none text-gray-700 placeholder:text-gray-400 font-bold text-lg shadow-sm ${
+								className={`w-full px-5 py-3.5 rounded-xl bg-white/75 border focus:ring-3 transition-all duration-300 outline-none text-miku-text placeholder:text-miku-text/35 font-medium text-base shadow-none ${
 									validationError
-										? "border-rose-300 focus:border-rose-500 focus:ring-rose-500/10"
-										: "border-miku-pink/20 focus:border-miku-teal focus:ring-miku-teal/10"
+										? "border-rose-300 focus:border-rose-400 focus:ring-rose-300/10"
+										: "border-miku-accent/20 focus:border-miku-teal focus:ring-miku-teal/10"
 								}`}
 								disabled={isAttacking}
 							/>
@@ -135,7 +135,7 @@ export const CrawlerForm = memo(function CrawlerForm({
 
 					<div className="flex gap-3 items-center">
 						<output
-							className={`p-3 rounded-2xl transition-all duration-300 border-2 flex items-center justify-center ${connectionStyles}`}
+							className={`p-3.5 rounded-xl transition-all duration-300 border flex items-center justify-center ${connectionStyles}`}
 							title={`Status: ${connectionState}`}
 							aria-live="polite"
 						>
@@ -150,16 +150,13 @@ export const CrawlerForm = memo(function CrawlerForm({
 								type="button"
 								onClick={() => startAttack(true)}
 								disabled={!canStart || !!validationError || !hasRunnableTarget}
-								className="relative p-4 rounded-2xl bg-gradient-to-br from-amber-400 via-yellow-500 to-orange-500 text-white hover:scale-110 transition-all duration-300 shadow-lg shadow-amber-300/40 flex items-center justify-center group/zap disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 overflow-hidden disabled:grayscale"
+								className="relative p-3.5 rounded-xl bg-white/75 text-miku-pink hover:bg-miku-pink/8 border border-miku-accent/20 hover:border-miku-pink/40 transition-all duration-300 flex items-center justify-center group/zap disabled:opacity-50 disabled:cursor-not-allowed overflow-hidden"
 								title="Lightning Strike! (Skip Animation)"
 								aria-label="Lightning Strike Attack (Skip Animation)"
 							>
-								<SparkleIcon
-									className="absolute -top-1 -right-1 text-white/80 group-hover/zap:animate-ping"
-									size={10}
-								/>
-								<NoteIcon className="absolute -bottom-1 -left-1 text-white/60" size={10} />
-								<Zap className="w-5 h-5 group-hover/zap:fill-white group-hover/zap:animate-bounce transition-all" />
+								<SparkleIcon className="hidden" size={10} />
+								<NoteIcon className="hidden" size={10} />
+								<Zap className="w-5 h-5" />
 							</button>
 						)}
 
@@ -169,36 +166,28 @@ export const CrawlerForm = memo(function CrawlerForm({
 							disabled={
 								isAttacking ? !canPause : !canStart || !!validationError || !hasRunnableTarget
 							}
-							className={`relative px-7 py-4 rounded-2xl font-black text-white shadow-xl transition-all duration-300 hover:scale-105 active:scale-95 flex items-center gap-3 text-base disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 overflow-hidden disabled:grayscale ${
+							className={`relative px-7 py-3.5 rounded-xl font-bold text-white transition-all duration-300 active:scale-[0.98] flex items-center gap-3 text-base disabled:opacity-50 disabled:cursor-not-allowed overflow-hidden ${
 								isAttacking
-									? "bg-gradient-to-r from-rose-500 via-pink-600 to-rose-500 shadow-miku-pink/40"
-									: "bg-gradient-to-r from-teal-600 via-teal-500 to-emerald-600 shadow-miku-teal/40"
+									? "bg-miku-pink hover:bg-miku-pink-dark"
+									: "bg-miku-teal hover:bg-miku-teal-dark shadow-[0_8px_20px_rgba(105,201,229,0.18)]"
 							}`}
 							aria-label={isAttacking ? "Pause Crawl" : "Start Miku Beam Crawl"}
 						>
-							<NoteIcon className="absolute top-1 left-3 text-white/40 animate-float" size={10} />
-							<SparkleIcon
-								className="absolute bottom-1 right-3 text-white/40 animate-float"
-								size={10}
-								style={{ animationDelay: "0.5s" }}
-							/>
+							<NoteIcon className="hidden" size={10} />
+							<SparkleIcon className="hidden" size={10} style={{ animationDelay: "0.5s" }} />
 
-							{isAttacking ? (
-								<Pause className="w-5 h-5" />
-							) : (
-								<Wand2 className="w-5 h-5 animate-bounce" />
-							)}
+							{isAttacking ? <Pause className="w-5 h-5" /> : <Wand2 className="w-5 h-5" />}
 
 							<span className="relative flex items-center gap-1">{buttonLabel}</span>
 
-							<span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700" />
+							<span className="hidden" />
 						</button>
 
 						{canForceStop && (
 							<button
 								type="button"
 								onClick={forceStopAttack}
-								className="relative px-4 py-4 rounded-2xl font-black text-white shadow-xl transition-all duration-300 hover:scale-105 active:scale-95 flex items-center gap-2 text-sm bg-gradient-to-r from-red-600 to-rose-700 shadow-rose-500/30"
+								className="relative px-4 py-3.5 rounded-xl font-bold text-white transition-all duration-300 active:scale-[0.98] flex items-center gap-2 text-sm bg-rose-500 hover:bg-rose-600"
 								aria-label="Force Stop Crawl"
 								title="Force stop and clear pending queue"
 							>
@@ -210,7 +199,7 @@ export const CrawlerForm = memo(function CrawlerForm({
 						<button
 							type="button"
 							onClick={() => setOpenedConfig(true)}
-							className="p-4 rounded-2xl bg-white text-miku-text/50 hover:text-miku-teal border-2 border-miku-pink/20 hover:border-miku-teal/30 transition-all duration-300 shadow-sm hover:shadow-md hover:rotate-90"
+							className="p-3.5 rounded-xl bg-white/75 text-miku-accent/60 hover:text-miku-accent border border-miku-accent/20 hover:border-miku-accent/35 transition-all duration-300"
 							title="Settings"
 							aria-label="Open Configuration"
 						>
@@ -220,19 +209,21 @@ export const CrawlerForm = memo(function CrawlerForm({
 				</div>
 			</div>
 
-			<div className="flex flex-wrap gap-4 justify-center">
+			<div className="crawl-readouts flex flex-wrap gap-1 justify-center px-4 py-3 rounded-b-[18px] border border-t-0 border-miku-border bg-white/55">
 				<div className="cute-badge">
-					<Globe className="w-4 h-4 text-miku-teal" />
+					<Globe className="hidden" />
 					Depth: <span className="text-teal-700 font-bold">{crawlOptions.crawlDepth}</span>
 				</div>
 				<div className="cute-badge">
-					<FileText className="w-4 h-4 text-miku-pink" />
+					<FileText className="hidden" />
 					Pages: <span className="text-pink-700 font-bold">{crawlOptions.maxPages}</span>
 				</div>
 				<div className="cute-badge">
-					<Zap className="w-4 h-4 text-amber-400" />
+					<Zap className="hidden" />
 					Method:{" "}
-					<span className="text-amber-700 font-bold capitalize">{crawlOptions.crawlMethod}</span>
+					<span className="text-miku-teal-dark font-bold capitalize">
+						{crawlOptions.crawlMethod}
+					</span>
 				</div>
 				<div className={`cute-badge ${crawlOptions.dynamic ? "" : "opacity-50"}`}>
 					<Sparkles

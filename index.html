@@ -63,9 +63,10 @@
     <!-- Inline Critical CSS -->
     <style>
       :root {
-        --miku-teal: #39c5bb;
-        --miku-pink: #ffb7c5;
-        --miku-bg: #e0f2f1;
+        --miku-teal: #69c9e5;
+        --miku-pink: #e98ab7;
+        --miku-lavender: #a2a4eb;
+        --miku-bg: #f6f8fd;
       }
       body {
         margin: 0;
@@ -90,9 +91,7 @@
         align-items: center;
         justify-content: center;
         z-index: 9999;
-        background-image: radial-gradient(var(--miku-teal) 1px, transparent 1px), radial-gradient(var(--miku-pink) 1px, transparent 1px);
-        background-size: 40px 40px;
-        background-position: 0 0, 20px 20px;
+        background-image: radial-gradient(circle at 50% 35%, rgba(172, 213, 245, 0.3), transparent 35%);
       }
 
       .miku-loader {
@@ -118,21 +117,21 @@
         content: '';
         position: absolute;
         inset: 0;
-        border: 4px solid #39c5bb;
-        border-top-color: #ffb7c5;
+        border: 2px solid rgba(105, 201, 229, 0.35);
+        border-top-color: var(--miku-pink);
         border-radius: 50%;
         animation: spin 1.5s infinite linear;
       }
 
-      h1 {
-        color: #39c5bb;
+      .loading-screen h1 {
+        color: var(--miku-lavender);
         font-size: 24px;
         margin-bottom: 8px;
-        text-shadow: 2px 2px 0px #fff;
+        text-shadow: none;
       }
 
-      p {
-        color: #ffb7c5;
+      .loading-screen p {
+        color: var(--miku-pink);
         font-weight: bold;
         font-size: 14px;
         letter-spacing: 1px;

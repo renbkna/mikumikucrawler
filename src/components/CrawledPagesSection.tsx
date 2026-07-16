@@ -162,25 +162,22 @@ const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledP
 				onClick={() => setIsExpanded(!isExpanded)}
 				aria-expanded={isExpanded}
 			>
-				<div className="flex-1 min-w-0 pr-4">
-					<h4 className="font-bold text-miku-text truncate group-hover:text-miku-pink transition-colors text-lg">
-						{page.title || page.url}
-					</h4>
-					<a
-						href={page.url}
-						target="_blank"
-						rel="noopener noreferrer"
-						className="text-xs text-miku-text/50 hover:text-miku-teal flex items-center gap-1 mt-1 truncate font-medium"
-						onClick={(e) => e.stopPropagation()}
-					>
-						{page.url}
-						<ExternalLink className="w-3 h-3" />
-					</a>
-				</div>
+				<h4 className="flex-1 min-w-0 pr-4 font-bold text-miku-text truncate group-hover:text-miku-pink transition-colors text-lg">
+					{page.title || page.url}
+				</h4>
 				<span className="p-2 rounded-full bg-miku-pink/10 text-miku-pink/50 group-hover:text-miku-pink transition-colors">
 					{isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
 				</span>
 			</button>
+			<a
+				href={page.url}
+				target="_blank"
+				rel="noopener noreferrer"
+				className="text-xs text-miku-text/50 hover:text-miku-teal flex items-center gap-1 mt-1 truncate font-medium"
+			>
+				{page.url}
+				<ExternalLink className="w-3 h-3" />
+			</a>
 
 			{hasProcessedData && hasSummaryMetrics && !isExpanded && (
 				<div className="flex flex-wrap gap-2 mt-4">
@@ -347,9 +344,9 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 		if (!hasSearchQuery && crawledPages.length === 0) {
 			return (
 				<div className="h-full flex flex-col items-center justify-center text-miku-text/40">
-					<NoteIcon className="text-miku-teal/30 mb-4 animate-float" size={48} />
-					<p className="font-bold text-lg">No pages crawled yet...</p>
-					<p className="text-sm mt-1 font-medium flex items-center gap-1">
+					<NoteIcon className="text-miku-pink/45 mb-3" size={34} />
+					<p className="font-semibold text-base">No pages crawled yet...</p>
+					<p className="text-xs mt-1 font-medium flex items-center gap-1">
 						Start the Miku Beam to begin! <HeartIcon className="text-miku-pink" size={12} />
 					</p>
 				</div>
@@ -397,25 +394,25 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 	]);
 
 	return (
-		<div className="space-y-4 h-full flex flex-col">
-			<p className="text-xs font-medium text-miku-text/40 shrink-0">
-				Search uses the durable full-text index for the active crawl.
-			</p>
-			<div className="bg-white rounded-2xl p-2 flex items-center gap-3 border-2 border-miku-pink/20 shrink-0">
-				<div className="p-2 rounded-xl bg-miku-pink/10 text-miku-pink">
-					<Filter className="w-5 h-5" />
+		<div className="space-y-3 h-full flex flex-col">
+			<p className="hidden">Search uses the durable full-text index for the active crawl.</p>
+			<div className="bg-white/60 rounded-xl p-1.5 flex items-center gap-2 border border-miku-accent/15 shrink-0">
+				<div className="p-1.5 text-miku-accent/50">
+					<Filter className="w-4 h-4" />
 				</div>
 				<input
 					type="text"
 					value={localQuery}
 					onChange={handleSearchChange}
 					placeholder="Search stored page content..."
-					className="flex-1 bg-transparent border-none outline-none text-miku-text placeholder-miku-text/30 font-bold"
+					className="flex-1 bg-transparent border-none outline-none text-miku-text placeholder-miku-text/30 font-medium"
 				/>
 				{localQuery && (
 					<button
 						type="button"
 						onClick={handleClearSearch}
+						aria-label="Clear page search"
+						title="Clear search"
 						className="p-2 rounded-full hover:bg-rose-50 text-miku-text/30 hover:text-rose-400 transition-colors"
 					>
 						<X className="w-4 h-4" />

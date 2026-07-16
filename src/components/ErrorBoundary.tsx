@@ -50,14 +50,14 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 							<button
 								type="button"
 								onClick={this.handleRetry}
-								className="px-6 py-3 rounded-2xl bg-gradient-to-r from-miku-teal to-teal-400 text-white font-bold shadow-lg hover:scale-105 transition-transform"
+								className="px-6 py-3 rounded-xl bg-miku-teal hover:bg-miku-teal-dark text-white font-bold transition-colors"
 							>
 								Try Again
 							</button>
 							<button
 								type="button"
 								onClick={() => globalThis.location.reload()}
-								className="px-6 py-3 rounded-2xl bg-white border-2 border-miku-pink text-miku-pink font-bold hover:bg-miku-pink hover:text-white transition-colors"
+								className="px-6 py-3 rounded-xl bg-white border border-miku-pink/40 text-miku-pink-dark font-bold hover:bg-miku-pink/5 transition-colors"
 							>
 								Reload Page
 							</button>
