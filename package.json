@@ -19,7 +19,7 @@
 	"scripts": {
 		"prepare": "bun scripts/install-git-hooks.ts",
 		"hooks:install": "lefthook install --force",
-		"dev": "concurrently --ks SIGKILL -n \"Client,Server\" \"bun run dev:client\" \"bun run dev:server\"",
+		"dev": "concurrently --kill-others-on-fail --kill-signal SIGTERM -n \"Client,Server\" \"bun run dev:client\" \"bun run dev:server\"",
 		"dev:server": "bun --watch server/server.ts",
 		"dev:client": "vite",
 		"build": "vite build",

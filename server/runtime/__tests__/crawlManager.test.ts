@@ -949,7 +949,7 @@ describe("crawl manager contract", () => {
 		expect(storage.repos.crawlRuns.getById(created.id)?.status).toBe("running");
 	});
 
-	test("startup recovers registry-less active crawls as interrupted", () => {
+	test("listener ownership gates recovery of registry-less active crawls", () => {
 		const storage = createInMemoryStorage();
 		const eventStream = new EventStream();
 		const registry = new Map<string, CrawlRuntime>();
@@ -991,6 +991,12 @@ describe("crawl manager contract", () => {
 					}),
 			},
 		});
+
+		for (const activeId of activeIds) {
+			expect(storage.repos.crawlRuns.getById(activeId)?.status).not.toBe("interrupted");
+		}
+
+		manager.recoverOrphanedActiveCrawls();
 
 		for (const activeId of activeIds) {
 			const recovered = storage.repos.crawlRuns.getById(activeId);
