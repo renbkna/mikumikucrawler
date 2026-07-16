@@ -12,6 +12,7 @@ import { healthApi } from "./api/health.js";
 import { pagesApi } from "./api/pages.js";
 import { searchApi } from "./api/search.js";
 import { sseApi } from "./api/sse.js";
+import { isCorsOriginAllowed } from "./config/cors.js";
 import { config } from "./config/env.js";
 import type { AppLogger } from "./config/logging.js";
 import type { ApiErrorSchema } from "./contracts/errors.js";
@@ -87,13 +88,7 @@ export function createApp(deps: AppDependencies) {
 		.decorate("runtimeRegistry", deps.runtimeRegistry)
 		.use(
 			cors({
-				origin: (request) => {
-					const origin = request.headers.get("origin");
-					if (config.isDevelopment && origin === "http://localhost:5173") {
-						return true;
-					}
-					return origin === config.frontendUrl;
-				},
+				origin: (request) => isCorsOriginAllowed(request.headers.get("origin"), config),
 				credentials: true,
 			}),
 		)

@@ -102,8 +102,13 @@ Every crawled page goes through a full analysis pipeline:
 git clone https://github.com/renbkna/mikumikucrawler
 cd mikumikucrawler
 bun install
+bunx playwright install chromium
 bun run dev
 ```
+
+Playwright's managed Chromium is preferred. If it is not installed, local development can
+use `chromium`, `chromium-browser`, `google-chrome`, or `google-chrome-stable` from `PATH`.
+On Linux systems missing browser libraries, run `bunx playwright install --with-deps chromium`.
 
 | | Service | URL |
 |---|---------|-----|
