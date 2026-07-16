@@ -149,9 +149,9 @@ function App() {
 			/>
 
 			<div
-				className={`relative w-full h-full pt-4 px-4 pb-16 transition-all duration-1000 ${isUIHidden ? "opacity-0 scale-95 blur-xl pointer-events-none" : "opacity-100 scale-100 blur-0"} ${isModalOpen ? "overflow-hidden" : "overflow-y-auto"}`}
+				className={`relative w-full h-full px-4 pb-12 transition-all duration-1000 ${isUIHidden ? "opacity-0 scale-95 blur-xl pointer-events-none" : "opacity-100 scale-100 blur-0"} ${isModalOpen ? "overflow-hidden" : "overflow-y-auto"}`}
 			>
-				<div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
+				<div className="app-atmosphere fixed inset-0 pointer-events-none overflow-hidden z-0">
 					<div className="absolute top-10 left-10 w-32 h-32 bg-miku-teal/10 rounded-full blur-3xl animate-float" />
 					<div
 						className="absolute bottom-20 right-20 w-40 h-40 bg-miku-pink/10 rounded-full blur-3xl animate-float"
@@ -165,27 +165,26 @@ function App() {
 					))}
 				</div>
 
-				<main className="relative z-10 max-w-7xl mx-auto space-y-8">
-					<header className="flex items-center justify-center py-6">
-						<div className="glass-panel px-6 py-4 inline-flex items-center gap-3">
-							<div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-miku-teal to-miku-pink flex items-center justify-center shadow-md">
+				<main className="relative z-10 max-w-7xl mx-auto space-y-3">
+					<header className="flex items-center justify-center py-4">
+						<div className="brand-shell glass-panel px-4 py-2 inline-flex items-center gap-3">
+							<div className="hidden">
 								<Music className="w-5 h-5 text-white" />
 							</div>
 
 							<div>
-								<h1 className="text-2xl font-black tracking-tight flex items-center gap-0.5">
-									<span className="text-miku-teal-dark">Miku</span>
-									<HeartIcon className="text-miku-pink mx-0.5" size={16} />
-									<span className="text-miku-pink-dark">Miku</span>
-									<HeartIcon className="text-miku-accent mx-0.5" size={16} />
-									<span className="text-miku-accent">Crawler</span>
+								<h1 className="text-lg font-bold uppercase tracking-[0.12em] flex items-center gap-2 text-miku-accent">
+									<SparkleIcon className="text-miku-accent/40" size={15} />
+									<span>Miku</span>
+									<HeartIcon className="hidden" size={16} />
+									<span>Miku</span>
+									<HeartIcon className="hidden" size={16} />
+									<span>Crawler</span>
 								</h1>
-								<p className="text-xs text-miku-text/50 font-medium text-center">
-									web crawling, but cuter
-								</p>
+								<p className="hidden">web crawling, but cuter</p>
 							</div>
 
-							<div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-miku-pink to-miku-accent flex items-center justify-center shadow-md">
+							<div className="hidden">
 								<Heart className="w-5 h-5 text-white animate-heart-beat" fill="white" />
 							</div>
 						</div>
@@ -193,7 +192,7 @@ function App() {
 
 					<section
 						aria-label="Crawler Control"
-						className="glass-panel p-8 relative overflow-hidden group hover:shadow-xl transition-all duration-500"
+						className="control-stage glass-panel relative group transition-all duration-500"
 					>
 						<MikuBanner active={theatreStatus === "beam" || isAttacking} />
 
@@ -216,7 +215,7 @@ function App() {
 					</section>
 
 					{resumableSessions.length > 0 && !isAttacking && (
-						<div className="flex items-center justify-between px-5 py-3 rounded-2xl border-2 border-amber-200 bg-amber-50 text-amber-800 shadow-sm">
+						<div className="flex items-center justify-between px-5 py-3 rounded-xl border border-miku-border bg-white/70 text-miku-text shadow-sm">
 							<div className="flex items-center gap-2 text-sm font-bold">
 								<History className="w-4 h-4 shrink-0" />
 								{resumableSessions.length} resumable crawl
@@ -225,18 +224,18 @@ function App() {
 							<button
 								type="button"
 								onClick={() => setOpenResumePanel(true)}
-								className="px-4 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition-colors shadow-sm"
+								className="px-4 py-1.5 rounded-lg bg-miku-teal hover:bg-miku-teal-dark text-white text-xs font-bold transition-colors"
 							>
 								View &amp; Resume
 							</button>
 						</div>
 					)}
 
-					<section aria-label="Statistics" className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-						<div className="lg:col-span-2 glass-panel p-6">
+					<section aria-label="Statistics" className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+						<div className="metric-group lg:col-span-2 glass-panel">
 							<StatsGrid stats={stats} queueStats={queueStats} isAttacking={isAttacking} />
 						</div>
-						<div className="glass-panel p-6 flex flex-col justify-center">
+						<div className="glass-panel p-5 flex flex-col justify-center">
 							<ProgressBar progress={progress} />
 						</div>
 					</section>
@@ -250,36 +249,36 @@ function App() {
 
 					{showDetails && <StatsVisualizer stats={stats} />}
 
-					<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+					<div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
 						<section
 							aria-labelledby="logs-heading"
-							className="glass-panel p-6 h-[600px] flex flex-col"
+							className="glass-panel p-5 h-[440px] flex flex-col"
 						>
-							<div className="flex items-center justify-between mb-4 border-b-2 border-miku-teal/10 pb-3">
+							<div className="flex items-center justify-between mb-3 border-b border-miku-teal/15 pb-3">
 								<h2
 									id="logs-heading"
-									className="text-lg font-bold text-miku-teal-dark flex items-center gap-2"
+									className="text-base font-bold uppercase tracking-wide text-miku-teal-dark flex items-center gap-2"
 								>
 									<span className="w-2 h-2 rounded-full bg-miku-teal animate-pulse" />
-									System Logs <NoteIcon className="text-miku-teal" size={14} />
+									System Logs <NoteIcon className="hidden" size={14} />
 								</h2>
 							</div>
 							<LogsSection logs={logs} clearLogs={clearLogs} />
 						</section>
 						<section
 							aria-labelledby="data-heading"
-							className="glass-panel p-6 h-[600px] flex flex-col"
+							className="glass-panel p-5 h-[440px] flex flex-col"
 						>
-							<div className="flex items-center justify-between mb-4 border-b-2 border-miku-pink/10 pb-3">
+							<div className="flex items-center justify-between mb-3 border-b border-miku-pink/15 pb-3">
 								<h2
 									id="data-heading"
-									className="text-lg font-bold text-miku-pink-dark flex items-center gap-2"
+									className="text-base font-bold uppercase tracking-wide text-miku-pink-dark flex items-center gap-2"
 								>
 									<span className="w-2 h-2 rounded-full bg-miku-pink animate-pulse" />
-									Captured Data <HeartIcon className="text-miku-pink" size={14} />
+									Captured Data <HeartIcon className="hidden" size={14} />
 								</h2>
 								<span className="cute-badge flex items-center gap-1">
-									<SparkleIcon className="text-miku-teal" size={12} />
+									<SparkleIcon className="hidden" size={12} />
 									{crawledPages.length} items
 								</span>
 							</div>
@@ -298,23 +297,19 @@ function App() {
 					</div>
 				</main>
 
-				<footer className="mt-12 pb-8 text-center">
-					<div className="inline-block glass-panel px-8 py-4 rounded-full">
+				<footer className="mt-4 pb-6 text-center">
+					<div className="inline-block glass-panel px-6 py-3 rounded-full">
 						<div className="flex items-center gap-4">
-							<HeartIcon className="text-miku-pink animate-heart-beat" size={14} />
-							<span className="text-sm text-miku-text font-bold">
+							<HeartIcon className="hidden" size={14} />
+							<span className="hidden">
 								Miku Miku Crawler <span className="text-miku-teal-dark">v3.0.0</span>
 							</span>
-							<HeartIcon
-								className="text-miku-teal animate-heart-beat"
-								size={14}
-								style={{ animationDelay: "0.5s" }}
-							/>
+							<HeartIcon className="hidden" size={14} style={{ animationDelay: "0.5s" }} />
 
-							<div className="w-px h-4 bg-miku-pink/30 mx-2" />
+							<div className="hidden" />
 
 							<div className="flex items-center gap-2">
-								<NoteIcon className="text-miku-teal" size={12} />
+								<NoteIcon className="text-miku-accent/50" size={13} />
 								<span className="text-xs text-miku-teal-dark font-bold">VOL</span>
 								<input
 									type="range"
@@ -324,9 +319,9 @@ function App() {
 									onChange={(e) => setAudioVol(Number.parseInt(e.target.value, 10))}
 									aria-label="Volume control"
 									title={`Volume: ${audioVol}%`}
-									className="w-24 h-2 bg-miku-pink/20 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-gradient-to-r [&::-webkit-slider-thumb]:from-miku-teal [&::-webkit-slider-thumb]:to-miku-pink [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-md"
+									className="soft-range w-48 h-1.5 bg-miku-teal/20 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-miku-teal [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-sm"
 								/>
-								<span className="text-xs text-miku-pink-dark font-bold w-8">{audioVol}%</span>
+								<span className="text-xs text-miku-accent font-bold w-8">{audioVol}%</span>
 							</div>
 						</div>
 					</div>
@@ -337,8 +332,8 @@ function App() {
 				isOpen={openedConfig}
 				onClose={() => setOpenedConfig(false)}
 				options={crawlOptions}
-				onOptionsChange={setCrawlOptions}
-				onSave={() => {
+				onSave={(options) => {
+					setCrawlOptions(options);
 					addToast("success", "Configuration saved! ✨");
 				}}
 			/>

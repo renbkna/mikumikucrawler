@@ -15,57 +15,57 @@ export const StatsGrid = memo(function StatsGrid({
 	isAttacking,
 }: StatsGridProps) {
 	return (
-		<div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-			<div className="cute-card p-6 relative overflow-hidden group">
-				<div className="absolute -right-6 -top-6 w-24 h-24 bg-miku-teal/10 rounded-full group-hover:scale-150 transition-transform duration-500" />
+		<div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+			<div className="metric-card metric-pages cute-card p-5 pb-8 relative overflow-hidden group">
+				<div className="hidden" />
 
 				<div className="relative z-10">
-					<div className="flex items-center gap-3 mb-4">
-						<div className="p-3 rounded-2xl bg-gradient-to-br from-miku-teal/20 to-miku-teal/10 text-miku-teal">
-							<Bug className="w-6 h-6" />
+					<div className="flex items-center gap-2 mb-3">
+						<div className="text-miku-teal">
+							<Bug className="w-5 h-5" />
 						</div>
-						<h3 className="font-bold text-miku-text/60 text-sm uppercase tracking-wider flex items-center gap-1">
-							Pages <NoteIcon className="text-miku-teal" size={12} />
+						<h3 className="font-bold text-miku-teal-dark text-sm uppercase tracking-wider flex items-center gap-1">
+							Pages <NoteIcon className="hidden" size={12} />
 						</h3>
 					</div>
 
-					<div className="text-5xl font-black text-miku-text mb-3 tracking-tight">
+					<div className="text-4xl font-semibold text-miku-accent/80 mb-3 tracking-tight">
 						{(stats.pagesScanned || 0).toLocaleString()}
 					</div>
 
 					{queueStats && isAttacking && (
-						<div className="flex items-center gap-2 text-xs font-bold text-miku-teal bg-miku-teal/10 rounded-full px-3 py-1.5 w-fit border border-miku-teal/20">
+						<div className="flex items-center gap-2 text-xs font-semibold text-miku-teal-dark px-1 py-1 w-fit">
 							<Activity className="w-3 h-3 animate-pulse" />
 							<span>{(queueStats.pagesPerSecond || 0).toFixed(1)} / sec</span>
-							<SparkleIcon className="text-miku-teal" size={10} />
+							<SparkleIcon className="hidden" size={10} />
 						</div>
 					)}
 				</div>
 			</div>
 
-			<div className="cute-card p-6 relative overflow-hidden group">
-				<div className="absolute -right-6 -top-6 w-24 h-24 bg-miku-pink/10 rounded-full group-hover:scale-150 transition-transform duration-500" />
+			<div className="metric-card metric-links cute-card p-5 pb-8 relative overflow-hidden group">
+				<div className="hidden" />
 
 				<div className="relative z-10">
-					<div className="flex items-center gap-3 mb-4">
-						<div className="p-3 rounded-2xl bg-gradient-to-br from-miku-pink/20 to-miku-pink/10 text-miku-pink">
-							<Link2 className="w-6 h-6" />
+					<div className="flex items-center gap-2 mb-3">
+						<div className="text-miku-pink">
+							<Link2 className="w-5 h-5" />
 						</div>
-						<h3 className="font-bold text-miku-text/60 text-sm uppercase tracking-wider flex items-center gap-1">
-							Links <HeartIcon className="text-miku-pink" size={12} />
+						<h3 className="font-bold text-miku-pink-dark text-sm uppercase tracking-wider flex items-center gap-1">
+							Links <HeartIcon className="hidden" size={12} />
 						</h3>
 					</div>
 
-					<div className="text-5xl font-black text-miku-text mb-3 tracking-tight">
+					<div className="text-4xl font-semibold text-miku-accent/80 mb-3 tracking-tight">
 						{(stats.linksFound || 0).toLocaleString()}
 					</div>
 
 					<div className="flex gap-2">
-						<div className="flex items-center gap-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 border border-emerald-100 px-2.5 py-1 rounded-full">
+						<div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-500 px-1 py-1">
 							<CheckCircle className="w-3 h-3" />
 							{stats.successCount}
 						</div>
-						<div className="flex items-center gap-1.5 text-xs font-bold text-rose-500 bg-rose-50 border border-rose-100 px-2.5 py-1 rounded-full">
+						<div className="flex items-center gap-1.5 text-xs font-semibold text-rose-400 px-1 py-1">
 							<XCircle className="w-3 h-3" />
 							{stats.failureCount}
 						</div>
@@ -73,25 +73,25 @@ export const StatsGrid = memo(function StatsGrid({
 				</div>
 			</div>
 
-			<div className="cute-card p-6 relative overflow-hidden group">
-				<div className="absolute -right-6 -top-6 w-24 h-24 bg-purple-100 rounded-full group-hover:scale-150 transition-transform duration-500" />
+			<div className="metric-card metric-data cute-card p-5 pb-8 relative overflow-hidden group">
+				<div className="hidden" />
 
 				<div className="relative z-10">
-					<div className="flex items-center gap-3 mb-4">
-						<div className="p-3 rounded-2xl bg-gradient-to-br from-purple-100 to-purple-50 text-purple-500">
-							<Database className="w-6 h-6" />
+					<div className="flex items-center gap-2 mb-3">
+						<div className="text-miku-teal">
+							<Database className="w-5 h-5" />
 						</div>
-						<h3 className="font-bold text-miku-text/60 text-sm uppercase tracking-wider flex items-center gap-1">
-							Data <SparkleIcon className="text-purple-500" size={12} />
+						<h3 className="font-bold text-miku-teal-dark text-sm uppercase tracking-wider flex items-center gap-1">
+							Data <SparkleIcon className="hidden" size={12} />
 						</h3>
 					</div>
 
-					<div className="text-5xl font-black text-miku-text mb-3 tracking-tight">
+					<div className="text-4xl font-semibold text-miku-accent/80 mb-3 tracking-tight">
 						{(stats.totalData || 0).toLocaleString()}{" "}
-						<span className="text-xl text-miku-text/40 font-bold">KB</span>
+						<span className="text-lg text-miku-text/50 font-medium">KB</span>
 					</div>
 
-					<div className="text-xs font-bold text-purple-500 bg-purple-50 border border-purple-100 rounded-full px-3 py-1.5 w-fit">
+					<div className="text-xs font-semibold text-miku-accent/70 px-1 py-1 w-fit">
 						{stats.mediaFiles} media files
 					</div>
 				</div>

@@ -4,10 +4,10 @@ import { TOAST_DEFAULTS } from "../constants";
 import type { Toast } from "../types";
 
 const TOAST_STYLES = {
-	success: "bg-emerald-50 border-2 border-emerald-200 text-emerald-700",
-	error: "bg-rose-50 border-2 border-rose-200 text-rose-700",
-	warning: "bg-amber-50 border-2 border-amber-200 text-amber-700",
-	info: "bg-miku-teal/10 border-2 border-miku-teal/30 text-miku-teal",
+	success: "bg-emerald-50/95 border border-emerald-200 text-emerald-700",
+	error: "bg-rose-50/95 border border-rose-200 text-rose-700",
+	warning: "bg-amber-50/95 border border-amber-200 text-amber-700",
+	info: "bg-white/95 border border-miku-teal/30 text-miku-teal-dark",
 } as const;
 
 const BUTTON_STYLES = {
@@ -71,7 +71,7 @@ export const ToastNotification = memo(function ToastNotification({
 		<div
 			className={`${
 				TOAST_STYLES[toast.type]
-			} px-4 py-3 rounded-2xl shadow-lg backdrop-blur-sm flex items-center justify-between max-w-xs sm:max-w-md transition-all duration-300 transform ${
+			} px-4 py-3 rounded-xl shadow-[0_10px_30px_rgba(105,117,170,0.1)] flex items-center justify-between max-w-xs sm:max-w-md transition-all duration-300 transform ${
 				isLeaving ? "translate-x-full opacity-0 scale-95" : "translate-x-0 opacity-100 scale-100"
 			} animate-in slide-in-from-right-full`}
 		>

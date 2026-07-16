@@ -1,4 +1,5 @@
 import { Coffee, Database, TriangleAlert } from "lucide-react";
+import { useState } from "react";
 import {
 	type CrawlOptions,
 	crawlMethodSupportsSavedMedia,
@@ -12,9 +13,10 @@ interface ConfigurationViewProps {
 	isOpen: boolean;
 	onClose: () => void;
 	options: CrawlOptions;
-	onOptionsChange: (options: CrawlOptions) => void;
-	onSave: () => void;
+	onSave: (options: CrawlOptions) => void;
 }
+
+type ConfigurationDialogProps = Omit<ConfigurationViewProps, "isOpen">;
 
 export function parseCrawlIntegerOption(
 	key: keyof typeof CRAWL_OPTION_BOUNDS,
@@ -30,21 +32,29 @@ export function ConfigurationView({
 	isOpen,
 	onClose,
 	options,
-	onOptionsChange,
 	onSave,
 }: Readonly<ConfigurationViewProps>) {
-	const { dialogRef } = useDialogModal({ isOpen });
-
 	if (!isOpen) return null;
+
+	return <ConfigurationDialog onClose={onClose} options={options} onSave={onSave} />;
+}
+
+function ConfigurationDialog({
+	onClose,
+	options: committedOptions,
+	onSave,
+}: Readonly<ConfigurationDialogProps>) {
+	const { dialogRef } = useDialogModal({ isOpen: true });
+	const [draftOptions, setDraftOptions] = useState(() => normalizeCrawlOptions(committedOptions));
 
 	const crawlMethodDesc = {
 		links: "Follows internal HTML links and skips media metadata in saved results",
 		media: "Follows internal HTML links and keeps extracted image, video, and audio metadata",
 		full: "Follows internal and external HTML links and keeps extracted media metadata",
-	}[options.crawlMethod];
-	const mediaRetentionDisabled = !crawlMethodSupportsSavedMedia(options.crawlMethod);
+	}[draftOptions.crawlMethod];
+	const mediaRetentionDisabled = !crawlMethodSupportsSavedMedia(draftOptions.crawlMethod);
 	const updateOptions = (patch: Partial<CrawlOptions>) => {
-		onOptionsChange(normalizeCrawlOptions({ ...options, ...patch }));
+		setDraftOptions((current) => normalizeCrawlOptions({ ...current, ...patch }));
 	};
 
 	return (
@@ -61,15 +71,15 @@ export function ConfigurationView({
 				aria-label="Close dialog"
 				tabIndex={-1}
 			/>
-			<div className="relative w-full max-w-xl p-6 bg-white rounded-3xl shadow-xl border-2 border-miku-pink/20 max-h-[90vh] overflow-y-auto animate-pop focus:outline-none">
+			<div className="relative w-full max-w-xl p-6 bg-[#fbfcff] rounded-[18px] shadow-[0_16px_50px_rgba(105,117,170,0.14)] border border-miku-border max-h-[90vh] overflow-y-auto animate-pop focus:outline-none">
 				<div className="flex items-center justify-between mb-6">
 					<h2
 						id="config-dialog-title"
-						className="text-2xl font-black gradient-text tracking-tight flex items-center gap-2"
+						className="text-xl font-bold gradient-text tracking-tight flex items-center gap-2"
 					>
 						<NoteIcon className="text-miku-teal" size={20} />
 						Advanced Configuration
-						<NoteIcon className="text-miku-pink" size={20} />
+						<NoteIcon className="hidden" size={20} />
 					</h2>
 					<button
 						type="button"
@@ -83,11 +93,11 @@ export function ConfigurationView({
 
 				<div className="space-y-6">
 					{/* ── Performance Settings ─────────────────────────────── */}
-					<div className="p-5 border-2 border-miku-teal/10 rounded-2xl bg-miku-teal/5">
+					<div className="p-5 border border-miku-border rounded-xl bg-white/65">
 						<h3 className="flex items-center mb-4 text-lg font-bold text-miku-teal">
 							<Coffee className="w-5 h-5 mr-2" />
 							Performance Settings
-							<SparkleIcon className="text-miku-teal ml-2" size={14} />
+							<SparkleIcon className="hidden" size={14} />
 						</h3>
 
 						<div className="space-y-4">
@@ -101,7 +111,7 @@ export function ConfigurationView({
 								</label>
 								<select
 									id="config-crawl-method"
-									value={options.crawlMethod}
+									value={draftOptions.crawlMethod}
 									onChange={(e) => {
 										const nextMethod = e.target.value;
 										if (!isCrawlMethod(nextMethod)) {
@@ -132,7 +142,7 @@ export function ConfigurationView({
 								<input
 									id="config-crawl-depth"
 									type="number"
-									value={options.crawlDepth}
+									value={draftOptions.crawlDepth}
 									onChange={(e) => {
 										const value = parseCrawlIntegerOption("crawlDepth", e.target.value);
 										updateOptions({ crawlDepth: value });
@@ -146,7 +156,7 @@ export function ConfigurationView({
 									How many link-hops deep to crawl from the start URL
 									{` (${CRAWL_OPTION_BOUNDS.crawlDepth.min}-${CRAWL_OPTION_BOUNDS.crawlDepth.max})`}
 								</p>
-								{options.crawlDepth >= CRAWL_OPTION_BOUNDS.crawlDepth.max && (
+								{draftOptions.crawlDepth >= CRAWL_OPTION_BOUNDS.crawlDepth.max && (
 									<p className="mt-1.5 flex items-center gap-1.5 text-xs font-bold text-amber-600">
 										<TriangleAlert className="w-3.5 h-3.5 shrink-0" />
 										Deep crawls may take a while ✨
@@ -166,7 +176,7 @@ export function ConfigurationView({
 									<input
 										id="config-max-pages"
 										type="number"
-										value={options.maxPages}
+										value={draftOptions.maxPages}
 										onChange={(e) => {
 											const value = parseCrawlIntegerOption("maxPages", e.target.value);
 											updateOptions({ maxPages: value });
@@ -191,7 +201,7 @@ export function ConfigurationView({
 									<input
 										id="config-max-pages-domain"
 										type="number"
-										value={options.maxPagesPerDomain}
+										value={draftOptions.maxPagesPerDomain}
 										onChange={(e) => {
 											const value = parseCrawlIntegerOption("maxPagesPerDomain", e.target.value);
 											updateOptions({ maxPagesPerDomain: value });
@@ -215,15 +225,15 @@ export function ConfigurationView({
 								>
 									Crawl Delay
 									<span className="ml-2 text-miku-teal font-black">
-										{options.crawlDelay >= 1000
-											? `${options.crawlDelay / 1000}s`
-											: `${options.crawlDelay}ms`}
+										{draftOptions.crawlDelay >= 1000
+											? `${draftOptions.crawlDelay / 1000}s`
+											: `${draftOptions.crawlDelay}ms`}
 									</span>
 								</label>
 								<input
 									id="config-crawl-delay"
 									type="range"
-									value={options.crawlDelay}
+									value={draftOptions.crawlDelay}
 									min={CRAWL_OPTION_BOUNDS.crawlDelay.min}
 									max={CRAWL_OPTION_BOUNDS.crawlDelay.max}
 									step={CRAWL_OPTION_BOUNDS.crawlDelay.step}
@@ -232,7 +242,7 @@ export function ConfigurationView({
 											crawlDelay: parseCrawlIntegerOption("crawlDelay", e.target.value),
 										})
 									}
-									className="w-full h-2 bg-miku-pink/20 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-gradient-to-r [&::-webkit-slider-thumb]:from-miku-teal [&::-webkit-slider-thumb]:to-teal-400 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-md"
+									className="soft-range w-full h-2 bg-miku-teal/15 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-miku-teal [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-sm"
 								/>
 								<div className="flex justify-between mt-1 text-xs text-miku-text/40 font-medium">
 									<span>{CRAWL_OPTION_BOUNDS.crawlDelay.min}ms (fast)</span>
@@ -255,7 +265,7 @@ export function ConfigurationView({
 									<input
 										id="config-max-concurrent"
 										type="number"
-										value={options.maxConcurrentRequests}
+										value={draftOptions.maxConcurrentRequests}
 										onChange={(e) => {
 											const value = parseCrawlIntegerOption(
 												"maxConcurrentRequests",
@@ -283,7 +293,7 @@ export function ConfigurationView({
 									<input
 										id="config-retry-limit"
 										type="number"
-										value={options.retryLimit}
+										value={draftOptions.retryLimit}
 										onChange={(e) => {
 											const value = parseCrawlIntegerOption("retryLimit", e.target.value);
 											updateOptions({ retryLimit: value });
@@ -302,11 +312,11 @@ export function ConfigurationView({
 					</div>
 
 					{/* ── Content & Behavior ────────────────────────────────── */}
-					<div className="p-5 border-2 border-miku-pink/10 rounded-2xl bg-miku-pink/5">
+					<div className="p-5 border border-miku-border rounded-xl bg-white/65">
 						<h3 className="flex items-center mb-4 text-lg font-bold text-miku-pink">
 							<Database className="w-5 h-5 mr-2" />
 							Content & Behavior
-							<HeartIcon className="text-miku-pink ml-2" size={14} />
+							<HeartIcon className="hidden" size={14} />
 						</h3>
 
 						<div className="grid grid-cols-1 gap-4">
@@ -315,19 +325,19 @@ export function ConfigurationView({
 									id: "dynamic",
 									label: "Use Dynamic Content (JS Rendering)",
 									desc: "(Slower but handles SPAs better)",
-									checked: options.dynamic,
+									checked: draftOptions.dynamic,
 								},
 								{
 									id: "respectRobots",
 									label: "Respect robots.txt",
 									desc: "(Be a polite crawler)",
-									checked: options.respectRobots,
+									checked: draftOptions.respectRobots,
 								},
 								{
 									id: "contentOnly",
 									label: "Metadata Only",
 									desc: "(Don't store full page content)",
-									checked: options.contentOnly,
+									checked: draftOptions.contentOnly,
 								},
 								{
 									id: "saveMedia",
@@ -335,7 +345,7 @@ export function ConfigurationView({
 									desc: mediaRetentionDisabled
 										? "(Requires Media or Full crawl method)"
 										: "(Store extracted image/video/audio metadata in results)",
-									checked: options.saveMedia,
+									checked: draftOptions.saveMedia,
 									disabled: mediaRetentionDisabled,
 								},
 							].map((item) => (
@@ -375,10 +385,10 @@ export function ConfigurationView({
 						<button
 							type="button"
 							onClick={() => {
-								onSave();
+								onSave(draftOptions);
 								onClose();
 							}}
-							className="px-6 py-2.5 text-white font-bold bg-gradient-to-r from-miku-teal to-teal-400 rounded-xl shadow-lg shadow-miku-teal/30 hover:shadow-miku-teal/50 hover:scale-105 transition-all flex items-center gap-2"
+							className="px-6 py-2.5 text-white font-bold bg-miku-teal hover:bg-miku-teal-dark rounded-xl shadow-sm transition-colors flex items-center gap-2"
 						>
 							Save Configuration
 							<SparkleIcon className="text-white/80" size={14} />

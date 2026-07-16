@@ -101,16 +101,16 @@ export function ResumeSessionsPanel({
 				aria-label="Close dialog"
 				tabIndex={-1}
 			/>
-			<div className="relative w-full max-w-xl p-6 bg-white rounded-3xl shadow-xl border-2 border-miku-teal/20 max-h-[90vh] overflow-y-auto animate-pop focus:outline-none">
+			<div className="relative w-full max-w-xl p-6 bg-[#fbfcff] rounded-[18px] shadow-[0_16px_50px_rgba(105,117,170,0.14)] border border-miku-border max-h-[90vh] overflow-y-auto animate-pop focus:outline-none">
 				{/* ── Header ─────────────────────────────────────────────────────── */}
 				<div className="flex items-center justify-between mb-6">
 					<h2
 						id="resume-dialog-title"
-						className="text-2xl font-black gradient-text tracking-tight flex items-center gap-2"
+						className="text-xl font-bold gradient-text tracking-tight flex items-center gap-2"
 					>
 						<History className="text-miku-teal w-5 h-5" />
 						Resume Crawl
-						<SparkleIcon className="text-miku-pink" size={20} />
+						<SparkleIcon className="hidden" size={20} />
 					</h2>
 
 					<div className="flex items-center gap-2">
@@ -148,7 +148,7 @@ export function ResumeSessionsPanel({
 					{isLoading && sessions.length === 0 && (
 						<div className="space-y-2">
 							{[1, 2].map((n) => (
-								<div key={n} className="h-20 rounded-2xl bg-miku-teal/5 animate-pulse" />
+								<div key={n} className="h-20 rounded-xl bg-miku-teal/5 animate-pulse" />
 							))}
 						</div>
 					)}
@@ -168,7 +168,7 @@ export function ResumeSessionsPanel({
 					{sessions.map((session) => (
 						<div
 							key={session.id}
-							className="p-4 rounded-2xl border-2 border-miku-teal/10 bg-miku-teal/5 hover:border-miku-teal/20 transition-all duration-200"
+							className="p-4 rounded-xl border border-miku-border bg-white/65 hover:border-miku-teal/25 transition-colors duration-200"
 						>
 							<div className="flex items-start justify-between gap-3">
 								{/* Session info */}
@@ -207,7 +207,7 @@ export function ResumeSessionsPanel({
 											void handleResume(session);
 										}}
 										disabled={isActionPending}
-										className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-miku-teal to-teal-400 text-white text-xs font-bold shadow-md shadow-miku-teal/20 hover:shadow-miku-teal/40 hover:scale-105 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100"
+										className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-miku-teal hover:bg-miku-teal-dark text-white text-xs font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
 										aria-label={`Resume session for ${session.target}`}
 									>
 										<RotateCcw className="w-3.5 h-3.5" />
