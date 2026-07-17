@@ -133,7 +133,12 @@ VITE_BACKEND_URL=http://localhost:3000
 DB_PATH=./data/crawler.db
 LOG_LEVEL=info
 USER_AGENT=MikuCrawler/3.0.0
+ROBOTS_PRODUCT_TOKEN=MikuCrawler
 RENDER=false
+# On Render this also trusts the platform's client-IP forwarding for rate limits.
+# Browser rendering is skipped when process RSS exceeds this many MB.
+# Defaults to 350 on Render and 600 elsewhere.
+MEMORY_THRESHOLD_MB=600
 ```
 
 </details>
@@ -236,7 +241,7 @@ restart or cleanup, recover from the persisted crawl summary and stored pages.
 | 🦊 | Elysia + OpenAPI |
 | 🎭 | Playwright |
 | 📝 | Pino |
-| 📊 | OpenTelemetry |
+| ⏱️ | Development Server Timing |
 | 🔒 | IP validation + rate limiting |
 
 </td>
@@ -315,6 +320,10 @@ graph TD
 ```bash
 bun run build && bun start
 ```
+
+Render's public load balancer owns Brotli/gzip response compression. Any direct
+self-host—including `bun start` and the container below—emits uncompressed
+responses unless a compression-capable reverse proxy is placed in front.
 
 <details>
 <summary>🐳 <b>Docker</b></summary>

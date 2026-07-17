@@ -1,11 +1,11 @@
 import type {
 	ContentAnalysis,
 	ExtractedData,
-	ExtractedLink,
 	MediaInfo,
 	PageMetadata,
 	ProcessingError,
-} from "../shared/types.js";
+} from "../shared/contracts/pageData.js";
+import type { ExtractedLink } from "../shared/types.js";
 
 /**
  * Server-side superset of processed data.
@@ -15,8 +15,6 @@ export interface ProcessedContent {
 	url?: string;
 	contentType?: string;
 	extractedData: ExtractedData;
-	// Server allows looser metadata typing (Record<string, string>) than frontend,
-	// but we can make it compatible or just use the Shared definition + index signature
 	metadata: PageMetadata;
 	analysis: ContentAnalysis;
 	media: MediaInfo[];

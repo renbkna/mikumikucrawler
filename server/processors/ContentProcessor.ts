@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { CheerioAPI } from "cheerio";
 import * as cheerio from "cheerio";
-import type { ContentAnalysis, ExtractedData } from "../../shared/types.js";
+import type { ContentAnalysis, ExtractedData } from "../../shared/contracts/pageData.js";
 import type { Logger } from "../config/logging.js";
 import { TIMEOUT_CONSTANTS } from "../constants.js";
 import type { ProcessedContent } from "../types.js";

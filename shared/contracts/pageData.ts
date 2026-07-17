@@ -1,87 +1,28 @@
+import type {
+	ContentAnalysisSchema,
+	CrawlPagePayloadSchema,
+	CrawlPageSummarySchema,
+	CrawlPagesResponseSchema,
+	ExtractedDataSchema,
+	MediaInfoSchema,
+	PageMetadataSchema,
+	ProcessedPageDataSchema,
+	ProcessingErrorSchema,
+	QualityAnalysisSchema,
+	QueueStatsSchema,
+} from "./schemas.js";
+
 export const MediaTypeValues = ["image", "video", "audio"] as const;
 export const CRAWL_PAGE_SNAPSHOT_LIMIT = 200;
 
-export interface MediaInfo {
-	type: (typeof MediaTypeValues)[number];
-	url: string;
-	alt?: string;
-	title?: string;
-	width?: string;
-	height?: string;
-	poster?: string;
-}
-
-export interface ProcessingError {
-	type: string;
-	message: string;
-	timestamp?: string;
-}
-
-export interface QualityAnalysis {
-	score: number;
-	factors: Record<string, number | boolean>;
-	issues: string[];
-}
-
-export interface ContentAnalysis {
-	wordCount?: number;
-	readingTime?: number;
-	language?: string;
-	keywords?: Array<{ word: string; count: number }>;
-	sentiment?: string;
-	readabilityScore?: number;
-	quality?: QualityAnalysis;
-}
-
-export interface ExtractedData {
-	mainContent?: string;
-	jsonLd?: Record<string, unknown>[];
-	microdata?: Record<string, unknown>;
-	openGraph?: Record<string, string>;
-	twitterCards?: Record<string, string>;
-	schema?: Record<string, unknown>;
-}
-
-export type PageMetadata = Record<string, string>;
-
-export interface ProcessedPageData {
-	extractedData: ExtractedData;
-	metadata: PageMetadata;
-	analysis: ContentAnalysis;
-	media: MediaInfo[];
-	errors?: ProcessingError[];
-	qualityScore: number;
-	language: string;
-}
-
-export interface QueueStats {
-	activeRequests: number;
-	queueLength: number;
-	elapsedTime: number;
-	pagesPerSecond: number;
-}
-
-export interface CrawledPage {
-	id: number | null;
-	url: string;
-	content?: string;
-	title?: string;
-	description?: string;
-	contentType?: string;
-	domain?: string;
-	processedData?: ProcessedPageData;
-}
-
-export interface CrawlPageSummary {
-	id: number;
-	url: string;
-	title?: string;
-	description?: string;
-	contentType?: string;
-	domain: string;
-}
-
-export interface CrawlPagesResponse {
-	pages: CrawlPageSummary[];
-	count: number;
-}
+export type MediaInfo = typeof MediaInfoSchema.static;
+export type ProcessingError = typeof ProcessingErrorSchema.static;
+export type QualityAnalysis = typeof QualityAnalysisSchema.static;
+export type ContentAnalysis = typeof ContentAnalysisSchema.static;
+export type ExtractedData = typeof ExtractedDataSchema.static;
+export type PageMetadata = typeof PageMetadataSchema.static;
+export type ProcessedPageData = typeof ProcessedPageDataSchema.static;
+export type QueueStats = typeof QueueStatsSchema.static;
+export type CrawledPage = typeof CrawlPagePayloadSchema.static;
+export type CrawlPageSummary = typeof CrawlPageSummarySchema.static;
+export type CrawlPagesResponse = typeof CrawlPagesResponseSchema.static;

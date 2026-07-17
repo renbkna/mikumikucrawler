@@ -1,6 +1,6 @@
 import type { CrawlCounters, CrawlOptions } from "../../../shared/contracts/index.js";
 import { isCrawlCounters } from "../../../shared/contracts/index.js";
-import type { QueueStats } from "../../../shared/types.js";
+import type { QueueStats } from "../../../shared/contracts/pageData.js";
 import { DOMAIN_DELAY_CONSTANTS } from "../../constants.js";
 import { shouldAdaptDomainDelay } from "./httpStatusPolicy.js";
 

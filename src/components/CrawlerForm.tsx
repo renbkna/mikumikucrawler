@@ -14,7 +14,7 @@ import {
 import { type ChangeEvent, memo, useCallback, useMemo } from "react";
 import type { CrawlOptions } from "../../shared/contracts/index.js";
 import { validatePublicHttpUrl } from "../../shared/url";
-import type { ConnectionState } from "../hooks";
+import type { ConnectionState } from "../hooks/crawlControllerState";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 
 interface CrawlerFormProps {

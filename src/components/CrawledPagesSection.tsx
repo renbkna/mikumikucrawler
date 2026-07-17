@@ -1,7 +1,7 @@
 import { AlertCircle, ChevronDown, ChevronUp, Code, ExternalLink, Filter, X } from "lucide-react";
 import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso } from "react-virtuoso";
-import type { CrawledPage } from "../../shared/types.js";
+import type { CrawledPage } from "../../shared/contracts/pageData.js";
 import { createPageContentRequestSignal, getPageContent } from "../api/pages";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 

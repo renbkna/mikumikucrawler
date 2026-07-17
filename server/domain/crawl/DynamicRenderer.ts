@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Session } from "crawlee";
-import { BrowserPool, PlaywrightPlugin, SessionPool } from "crawlee";
+import { BrowserPool, PlaywrightPlugin } from "@crawlee/browser-pool";
+import { type Session, SessionPool } from "@crawlee/core";
 import {
 	type BrowserContext,
 	type BrowserContextOptions,
@@ -504,10 +504,8 @@ export class DynamicRenderer {
 		}
 
 		const memoryStatus = logMemoryStatus(this.logger);
-		const constrainedEnvironment =
-			memoryStatus.isLowMemory || (config.isRender && memoryStatus.heapUsed > 50);
 
-		if (constrainedEnvironment) {
+		if (memoryStatus.isLowMemory) {
 			this.disableDynamic("Skipping Playwright due to constrained memory");
 			return {
 				dynamicEnabled: false,

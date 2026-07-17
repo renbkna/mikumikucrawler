@@ -26,10 +26,10 @@ import { ApiErrorSchema } from "../contracts/errors.js";
 import { OkResponseSchema } from "../contracts/http.js";
 import { createCrawlExportResponse } from "../domain/export/CrawlExportService.js";
 import { CrawlManagerClosingError } from "../runtime/CrawlManager.js";
-import { routeServices } from "./context.js";
+import type { RouteServicesPlugin } from "./context.js";
 
-export function crawlsApi() {
-	const crawlByIdRoutes = new Elysia().guard(
+export function crawlsApi(services: RouteServicesPlugin) {
+	const crawlByIdRoutes = new Elysia().use(services).guard(
 		{
 			params: CrawlIdParamsSchema,
 		},
@@ -37,18 +37,13 @@ export function crawlsApi() {
 			app
 				.post(
 					CRAWL_ROUTE_SEGMENTS.stop,
-					async (context) => {
-						const { body, crawlManager, params, set } = routeServices<{
-							body: typeof StopCrawlBodySchema.static;
-						}>(context);
+					async ({ body, crawlManager, params, status }) => {
 						const result = await crawlManager.stop(params.id, body?.mode);
 						if (result.type === "not-found") {
-							set.status = 404;
-							return { error: "Crawl not found" };
+							return status(404, { error: "Crawl not found" });
 						}
 						if (result.type === "not-active") {
-							set.status = 409;
-							return { error: "Only active crawls can be stopped" };
+							return status(409, { error: "Only active crawls can be stopped" });
 						}
 						return result.crawl;
 					},
@@ -68,24 +63,20 @@ export function crawlsApi() {
 				)
 				.post(
 					CRAWL_ROUTE_SEGMENTS.resume,
-					(context) => {
-						const { crawlManager, params, repos, set } = routeServices(context);
+					({ crawlManager, params, repos, status }) => {
 						const result = crawlManager.resume(params.id);
 						if (result.type === "not-found") {
-							set.status = 404;
-							return { error: "Crawl not found" };
+							return status(404, { error: "Crawl not found" });
 						}
 
 						if (result.type === "not-resumable") {
-							set.status = 409;
-							return {
+							return status(409, {
 								error: "Only paused or interrupted crawls can be resumed",
-							};
+							});
 						}
 
 						if (result.type === "already-running") {
-							set.status = 409;
-							return { error: "Crawl is already running" };
+							return status(409, { error: "Crawl is already running" });
 						}
 
 						const pageSnapshot = repos.pages.listSnapshot(params.id);
@@ -110,11 +101,9 @@ export function crawlsApi() {
 				)
 				.get(
 					CRAWL_ROUTE_SEGMENTS.pages,
-					(context) => {
-						const { crawlManager, params, repos, set } = routeServices(context);
+					({ crawlManager, params, repos, status }) => {
 						if (!crawlManager.get(params.id)) {
-							set.status = 404;
-							return { error: "Crawl not found" };
+							return status(404, { error: "Crawl not found" });
 						}
 						return repos.pages.listSnapshot(params.id);
 					},
@@ -132,12 +121,10 @@ export function crawlsApi() {
 				)
 				.get(
 					CRAWL_ROUTE_SEGMENTS.byId,
-					(context) => {
-						const { crawlManager, params, set } = routeServices(context);
+					({ crawlManager, params, status }) => {
 						const crawl = crawlManager.get(params.id);
 						if (!crawl) {
-							set.status = 404;
-							return { error: "Crawl not found" };
+							return status(404, { error: "Crawl not found" });
 						}
 						return crawl;
 					},
@@ -155,14 +142,10 @@ export function crawlsApi() {
 				)
 				.get(
 					CRAWL_ROUTE_SEGMENTS.export,
-					(context) => {
-						const { crawlManager, params, query, repos, set } = routeServices<{
-							query: typeof ExportQuerySchema.static;
-						}>(context);
+					({ crawlManager, params, query, repos, status }) => {
 						const crawl = crawlManager.get(params.id);
 						if (!crawl) {
-							set.status = 404;
-							return { error: "Crawl not found" };
+							return status(404, { error: "Crawl not found" });
 						}
 
 						const format = query.format ?? "json";
@@ -186,16 +169,13 @@ export function crawlsApi() {
 				)
 				.delete(
 					CRAWL_ROUTE_SEGMENTS.byId,
-					(context) => {
-						const { crawlManager, params, set } = routeServices(context);
+					({ crawlManager, params, status }) => {
 						const result = crawlManager.delete(params.id);
 						if (result.type === "not-found") {
-							set.status = 404;
-							return { error: "Crawl not found" };
+							return status(404, { error: "Crawl not found" });
 						}
 						if (result.type === "active") {
-							set.status = 409;
-							return { error: "Active crawls cannot be deleted" };
+							return status(409, { error: "Active crawls cannot be deleted" });
 						}
 						return { status: "ok" };
 					},
@@ -215,37 +195,32 @@ export function crawlsApi() {
 	);
 
 	return new Elysia({ name: "crawls-api", prefix: API_PATHS.crawls })
+		.use(services)
 		.post(
 			CRAWL_ROUTE_SEGMENTS.collection,
-			(context) => {
-				const { body, crawlManager, set } = routeServices<{
-					body: typeof CreateCrawlBodySchema.static;
-				}>(context);
+			({ body, crawlManager, status }) => {
 				const normalizedTarget = validatePublicHttpUrl(body.target, {
 					allowLocalhost: config.allowLocalhostTargets,
 				});
 				if ("error" in normalizedTarget) {
-					set.status = 422;
-					return { error: normalizedTarget.error, code: "INVALID_TARGET" };
+					return status(422, { error: normalizedTarget.error, code: "INVALID_TARGET" });
 				}
 				const normalizedOptions = {
 					...body,
 					target: normalizedTarget.url,
 				};
 				if (!isCrawlOptions(normalizedOptions)) {
-					set.status = 422;
-					return {
+					return status(422, {
 						error: "Crawl options contain an unsupported combination",
 						code: "INVALID_CRAWL_OPTIONS",
-					};
+					});
 				}
 
 				try {
 					return crawlManager.create(normalizedOptions);
 				} catch (error) {
 					if (error instanceof CrawlManagerClosingError) {
-						set.status = 503;
-						return { error: error.message, code: "SERVICE_CLOSING" };
+						return status(503, { error: error.message, code: "SERVICE_CLOSING" });
 					}
 					throw error;
 				}
@@ -265,10 +240,7 @@ export function crawlsApi() {
 		)
 		.get(
 			CRAWL_ROUTE_SEGMENTS.resumable,
-			(context) => {
-				const { crawlManager, query } = routeServices<{
-					query: typeof ResumableCrawlListQuerySchema.static;
-				}>(context);
+			({ crawlManager, query }) => {
 				return {
 					crawls: crawlManager.listResumable(query.limit ?? DEFAULT_CRAWL_LIST_LIMIT),
 				};
@@ -287,16 +259,7 @@ export function crawlsApi() {
 		)
 		.get(
 			CRAWL_ROUTE_SEGMENTS.collection,
-			(context) => {
-				const { crawlManager, query } = routeServices<{
-					query: {
-						status?: CrawlStatus;
-						from?: string;
-						to?: string;
-						limit?: number;
-					};
-				}>(context);
-
+			({ crawlManager, query }) => {
 				const listFilter: {
 					status?: CrawlStatus;
 					from?: string;

@@ -1,5 +1,5 @@
 import { Download } from "lucide-react";
-import { useDialogModal } from "../hooks";
+import { useDialogModal } from "../hooks/useDialogModal";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 
 interface ExportDialogProps {

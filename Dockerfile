@@ -3,8 +3,9 @@ FROM oven/bun:1.3.14
 WORKDIR /app
 
 # Copy dependency files
-COPY package.json bun.lock ./
+COPY package.json bun.lock bunfig.toml ./
 COPY scripts ./scripts
+COPY patches ./patches
 
 # Install the locked application dependencies.
 RUN bun install --frozen-lockfile

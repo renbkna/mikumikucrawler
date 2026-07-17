@@ -1,9 +1,9 @@
 import { lookup } from "node:dns/promises";
 import net from "node:net";
 import { Elysia } from "elysia";
+import { LRUCache } from "lru-cache";
 import { normalizeRobotsMatchHttpUrl } from "../../shared/url.js";
 import { isInvalidIpAddress } from "../utils/ipValidation.js";
-import { LRUCacheWithTTL } from "../utils/lruCache.js";
 import { disposeResponseBody } from "../utils/responseBody.js";
 
 const RESOLUTION_TTL_MS = 5 * 60 * 1000;
@@ -34,10 +34,10 @@ export interface HttpClient {
 }
 
 export class DefaultResolver implements Resolver {
-	private readonly cache = new LRUCacheWithTTL<string, string[]>(
-		RESOLUTION_CACHE_MAX_ENTRIES,
-		RESOLUTION_TTL_MS,
-	);
+	private readonly cache = new LRUCache<string, string[]>({
+		max: RESOLUTION_CACHE_MAX_ENTRIES,
+		ttl: RESOLUTION_TTL_MS,
+	});
 
 	constructor(
 		private readonly lookupFn: typeof lookup = lookup,

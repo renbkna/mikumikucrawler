@@ -1,7 +1,8 @@
 import { URL } from "node:url";
 import type { CheerioAPI } from "cheerio";
 import type { Element } from "domhandler";
-import type { ExtractedLink, MediaInfo, PageMetadata } from "../../shared/types.js";
+import type { MediaInfo, PageMetadata } from "../../shared/contracts/pageData.js";
+import type { ExtractedLink } from "../../shared/types.js";
 import { normalizeCanonicalHttpUrl } from "../../shared/url.js";
 import type { LoggerLike } from "../types.js";
 import { getErrorMessage } from "../utils/helpers.js";

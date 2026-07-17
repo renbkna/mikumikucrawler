@@ -14,8 +14,8 @@ import {
 	isResumeCrawlResponse,
 	toResumableSessionSummary,
 } from "../../shared/contracts/index.js";
+import { parseCrawlEventEnvelope } from "../../shared/contracts/validation.js";
 import { api, createCrawlEventSource, downloadCrawlExport } from "./client";
-import { parseCrawlEventEnvelope } from "./crawlEvents";
 import { getApiErrorMessage } from "./errors";
 import type { ApiResult } from "./result";
 

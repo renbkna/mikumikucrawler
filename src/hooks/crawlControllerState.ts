@@ -5,7 +5,8 @@ import type {
 	ResumableSessionSummary,
 } from "../../shared/contracts/index.js";
 import { normalizeCrawlOptions } from "../../shared/contracts/index.js";
-import type { CrawledPage, QueueStats, Stats } from "../../shared/types.js";
+import type { CrawledPage, QueueStats } from "../../shared/contracts/pageData.js";
+import type { Stats } from "../../shared/types.js";
 import { CRAWLER_DEFAULTS, TOAST_DEFAULTS, UI_LIMITS } from "../constants";
 
 export type ConnectionState = "connecting" | "connected" | "disconnected";

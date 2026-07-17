@@ -1,0 +1,17 @@
+diff --git a/dist/index.js b/dist/index.js
+index 3a3c57e4fe9564eff058999009662a069c7af763..6fa0d8a8eaf53717a4044622232ce53197933b16 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -216,11 +216,8 @@ const plugin = function rateLimitPlugin(userOptions) {
+ 		});
+ 		plugin$1.onError({ as: options.scoping }, async function onErrorRateLimitHandler({ request, cookie, set }) {
+ 			const context = arguments[0];
+-			const error = context.error;
+ 			const code = context.code;
+-			const errorStatus = typeof error === "object" && error !== null ? error.status ?? error.statusCode : void 0;
+-			const currentStatus = typeof set?.status === "number" ? set.status : void 0;
+-			const isNotFound = code === "NOT_FOUND" || currentStatus === 404 || errorStatus === 404;
++			const isNotFound = code === "NOT_FOUND";
+ 			if (isNotFound) {
+ 				const enhancedRequest = attachCookieToRequest(request, cookie);
+ 				const clientKey = await options.generator(enhancedRequest, options.injectServer?.() ?? app.server, getGeneratorDerived(context));

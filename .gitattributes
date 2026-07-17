@@ -1,0 +1,2 @@
+# Unified patch context prefixes indentation with one literal space by design.
+*.patch -whitespace

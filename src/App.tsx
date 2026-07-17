@@ -1,26 +1,23 @@
 import { Heart, History, Music } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { shouldResetTheatreStatus, type TheatreStatus } from "../shared/theatreStatus.js";
-import {
-	ActionButtons,
-	ConfigurationView,
-	CrawledPagesSection,
-	CrawlerForm,
-	ExportDialog,
-	HeartIcon,
-	LogsSection,
-	NoteIcon,
-	ProgressBar,
-	ResumeSessionsPanel,
-	SparkleIcon,
-	StatsGrid,
-	StatsVisualizer,
-	ToastNotification,
-} from "./components";
+import { ActionButtons } from "./components/ActionButtons";
+import { ConfigurationView } from "./components/ConfigurationView";
+import { CrawledPagesSection } from "./components/CrawledPagesSection";
+import { CrawlerForm } from "./components/CrawlerForm";
+import { ExportDialog } from "./components/ExportDialog";
+import { HeartIcon, NoteIcon, SparkleIcon } from "./components/KawaiiIcons";
+import { LogsSection } from "./components/LogsSection";
 import { MikuBanner } from "./components/MikuBanner";
+import { ProgressBar } from "./components/ProgressBar";
+import { ResumeSessionsPanel } from "./components/ResumeSessionsPanel";
+import { StatsGrid } from "./components/StatsGrid";
+import { StatsVisualizer } from "./components/StatsVisualizer";
 import { TheatreOverlay } from "./components/TheatreOverlay";
+import { ToastNotification } from "./components/ToastNotification";
 import { UI_LIMITS } from "./constants";
-import { useCrawlController, useToast } from "./hooks";
+import { useCrawlController } from "./hooks/useCrawlController";
+import { useToast } from "./hooks/useToast";
 
 function App() {
 	const [theatreStatus, setTheatreStatus] = useState<TheatreStatus>("idle");

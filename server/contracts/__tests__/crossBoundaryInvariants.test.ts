@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, expectTypeOf, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -40,7 +40,11 @@ import {
 	TERMINAL_CRAWL_STATUS_VALUES,
 	toResumableSessionSummary,
 } from "../../../shared/contracts/index.js";
-import { CrawlEventEnvelopeSchema } from "../../../shared/contracts/schemas.js";
+import {
+	type CrawlCountersSchema,
+	CrawlEventEnvelopeSchema,
+	type CrawlOptionsSchema,
+} from "../../../shared/contracts/schemas.js";
 import { shouldResetTheatreStatus, THEATRE_STATUS_VALUES } from "../../../shared/theatreStatus.js";
 import { createApp } from "../../app.js";
 import type { AppLogger } from "../../config/logging.js";
@@ -92,7 +96,6 @@ function createLogger(): AppLogger {
 		trace: noop,
 		silent: noop,
 		child: () => createLogger(),
-		close: noop,
 	} as unknown as AppLogger;
 }
 
@@ -130,6 +133,7 @@ function buildBoundaryApp() {
 			eventStream,
 			runtimeRegistry,
 			crawlManager,
+			rateLimitGenerator: () => "cross-boundary-contract-client",
 		}),
 		eventStream,
 		storage,
@@ -216,6 +220,12 @@ describe("cross-boundary invariants", () => {
 		expect(CrawlListQuerySchema).toBeDefined();
 		expect(ResumableCrawlListQuerySchema).toBeDefined();
 		expect(CrawlEventEnvelopeSchema).toBeDefined();
+	});
+
+	test("wire types are projections of their runtime schemas", () => {
+		expectTypeOf<CrawlOptions>().toEqualTypeOf<typeof CrawlOptionsSchema.static>();
+		expectTypeOf<CrawlCounters>().toEqualTypeOf<typeof CrawlCountersSchema.static>();
+		expectTypeOf<CrawlEventEnvelope>().toEqualTypeOf<typeof CrawlEventEnvelopeSchema.static>();
 	});
 
 	test("browser-facing validation depends only on eval-free wire schemas", async () => {
