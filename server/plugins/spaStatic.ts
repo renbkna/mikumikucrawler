@@ -19,10 +19,9 @@ const ROOT_STATIC_IGNORES = [
 	/(?:^|[\\/])\.env(?:\.[^\\/]+)?$/,
 ];
 
-function isAssetRequest(requestPath: string): boolean {
-	return /\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|json|webmanifest|mp3|wav|ogg|map|txt|xml)$/i.test(
-		requestPath,
-	);
+function isSpaDocumentRequest(request: Request, requestPath: string): boolean {
+	if (requestPath === "/" || requestPath === "/index.html") return true;
+	return request.headers.get("accept")?.toLowerCase().includes("text/html") === true;
 }
 
 export async function spaStaticPlugin({ distPath }: SpaStaticPluginOptions) {
@@ -49,11 +48,11 @@ export async function spaStaticPlugin({ distPath }: SpaStaticPluginOptions) {
 	return new Elysia({ name: "spa-static-plugin" })
 		.use(versionedAssets)
 		.use(publicFiles)
-		.get("*", ({ path: requestPath }) => {
+		.get("*", ({ path: requestPath, request }) => {
 			if (
 				isApiPath(requestPath) ||
 				requestPath === API_PATHS.health ||
-				isAssetRequest(requestPath)
+				!isSpaDocumentRequest(request, requestPath)
 			) {
 				return status(404, { error: "Not Found" });
 			}

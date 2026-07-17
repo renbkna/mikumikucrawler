@@ -589,6 +589,20 @@ describe("api contract", () => {
 		expect(eventContent).toHaveProperty("text/event-stream");
 		expect(eventContent).not.toHaveProperty("text/plain");
 
+		const referencedSchemas = new Set<string>();
+		const collectSchemaReferences = (value: unknown): void => {
+			if (!value || typeof value !== "object") return;
+			if ("$ref" in value && typeof value.$ref === "string") {
+				referencedSchemas.add(value.$ref);
+			}
+			for (const nested of Object.values(value)) collectSchemaReferences(nested);
+		};
+		collectSchemaReferences(spec);
+		for (const reference of referencedSchemas) {
+			const componentName = reference.match(/^#\/components\/schemas\/(.+)$/)?.[1];
+			if (componentName) expect(spec.components?.schemas).toHaveProperty(componentName);
+		}
+
 		const uiResponse = await app.handle(new Request("http://localhost/openapi"));
 		expect(uiResponse.status).toBe(200);
 		const ui = await uiResponse.text();
