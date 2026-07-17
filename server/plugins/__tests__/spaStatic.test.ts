@@ -17,15 +17,27 @@ describe("spa static plugin", () => {
 		try {
 			const app = await spaStaticPlugin({ distPath });
 
-			const navigation = await app.handle(new Request("http://localhost/missing-route"));
+			const navigation = await app.handle(
+				new Request("http://localhost/missing-route", {
+					headers: { Accept: "text/html" },
+				}),
+			);
 			expect(navigation.status).toBe(200);
 			expect(await navigation.text()).toContain("Miku app");
 
-			const dottedNavigation = await app.handle(new Request("http://localhost/reports.v2"));
+			const dottedNavigation = await app.handle(
+				new Request("http://localhost/reports.v2", {
+					headers: { Accept: "text/html,application/xhtml+xml" },
+				}),
+			);
 			expect(dottedNavigation.status).toBe(200);
 			expect(await dottedNavigation.text()).toContain("Miku app");
 
-			const apiPrefixNavigation = await app.handle(new Request("http://localhost/apiary"));
+			const apiPrefixNavigation = await app.handle(
+				new Request("http://localhost/apiary", {
+					headers: { Accept: "text/html" },
+				}),
+			);
 			expect(apiPrefixNavigation.status).toBe(200);
 			expect(await apiPrefixNavigation.text()).toContain("Miku app");
 
@@ -48,6 +60,22 @@ describe("spa static plugin", () => {
 			const missingSitemap = await app.handle(new Request("http://localhost/sitemap.xml"));
 			expect(missingSitemap.status).toBe(404);
 			expect(await missingSitemap.json()).toEqual({ error: "Not Found" });
+
+			for (const requestPath of [
+				"/missing.webp",
+				"/missing.pdf",
+				"/missing.wasm",
+				"/missing.mp4",
+				"/missing.zip",
+			]) {
+				const response = await app.handle(
+					new Request(`http://localhost${requestPath}`, {
+						headers: { Accept: "*/*" },
+					}),
+				);
+				expect(response.status).toBe(404);
+				expect(await response.json()).toEqual({ error: "Not Found" });
+			}
 		} finally {
 			rmSync(distPath, { recursive: true, force: true });
 		}
@@ -132,7 +160,11 @@ describe("spa static plugin", () => {
 			const app = await spaStaticPlugin({ distPath });
 
 			for (const requestPath of ["/", "/index.html", "/dashboard"]) {
-				const response = await app.handle(new Request(`http://localhost${requestPath}`));
+				const response = await app.handle(
+					new Request(`http://localhost${requestPath}`, {
+						headers: { Accept: "text/html" },
+					}),
+				);
 				expect(response.status).toBe(200);
 				expect(response.headers.get("cache-control")).toBe("no-store");
 				expect(response.headers.get("content-type")).toContain("text/html");

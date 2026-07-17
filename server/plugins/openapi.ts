@@ -6,7 +6,14 @@ import {
 	OPENAPI_CRAWL_EVENTS_PATH,
 	OPENAPI_CRAWL_EXPORT_PATH,
 } from "../../shared/contracts/index.js";
+import { ApiErrorSchema } from "../contracts/errors.js";
 import { SSE_LAST_EVENT_ID_MAX } from "../contracts/http.js";
+
+const apiErrorContent = {
+	"application/json": {
+		schema: ApiErrorSchema,
+	},
+} as const;
 
 export function openapiPlugin() {
 	return new Elysia({ name: "openapi-plugin" }).use(
@@ -61,27 +68,15 @@ export function openapiPlugin() {
 								},
 								"404": {
 									description: "Crawl not found",
-									content: {
-										"application/json": {
-											schema: { $ref: "#/components/schemas/ApiError" },
-										},
-									},
+									content: apiErrorContent,
 								},
 								"422": {
 									description: "Validation error",
-									content: {
-										"application/json": {
-											schema: { $ref: "#/components/schemas/ApiError" },
-										},
-									},
+									content: apiErrorContent,
 								},
 								"429": {
 									description: "SSE subscriber capacity reached",
-									content: {
-										"application/json": {
-											schema: { $ref: "#/components/schemas/ApiError" },
-										},
-									},
+									content: apiErrorContent,
 								},
 							},
 						},
@@ -128,19 +123,11 @@ export function openapiPlugin() {
 								},
 								"404": {
 									description: "Crawl not found",
-									content: {
-										"application/json": {
-											schema: { $ref: "#/components/schemas/ApiError" },
-										},
-									},
+									content: apiErrorContent,
 								},
 								"422": {
 									description: "Validation error",
-									content: {
-										"application/json": {
-											schema: { $ref: "#/components/schemas/ApiError" },
-										},
-									},
+									content: apiErrorContent,
 								},
 							},
 						},
