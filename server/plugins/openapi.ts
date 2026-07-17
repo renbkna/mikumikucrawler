@@ -6,7 +6,7 @@ import {
 	OPENAPI_CRAWL_EVENTS_PATH,
 	OPENAPI_CRAWL_EXPORT_PATH,
 } from "../../shared/contracts/index.js";
-import { SSE_LAST_EVENT_ID_MAX_LENGTH, SSE_LAST_EVENT_ID_PATTERN } from "../contracts/http.js";
+import { SSE_LAST_EVENT_ID_MAX } from "../contracts/http.js";
 
 export function openapiPlugin() {
 	return new Elysia({ name: "openapi-plugin" }).use(
@@ -44,9 +44,9 @@ export function openapiPlugin() {
 									description:
 										"Bounded live replay cursor. Older events may be unavailable after process restart or stream cleanup; recover durable state from crawl and page endpoints.",
 									schema: {
-										type: "string",
-										pattern: SSE_LAST_EVENT_ID_PATTERN,
-										maxLength: SSE_LAST_EVENT_ID_MAX_LENGTH,
+										type: "integer",
+										minimum: 0,
+										maximum: SSE_LAST_EVENT_ID_MAX,
 									},
 								},
 							],

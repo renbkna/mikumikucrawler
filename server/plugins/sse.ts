@@ -1,23 +1,18 @@
+import { type SSEPayload, sse } from "elysia";
 import type { CrawlEventEnvelope } from "../../shared/contracts/index.js";
 import type { EventStream } from "../runtime/EventStream.js";
 
-const encoder = new TextEncoder();
 const KEEPALIVE_INTERVAL_MS = 15_000;
 
-function serializeEvent(event: CrawlEventEnvelope): Uint8Array {
-	return encoder.encode(
-		`id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
-	);
-}
+type CrawlSsePayload = SSEPayload<CrawlEventEnvelope, CrawlEventEnvelope["type"]>;
 
-export function createEventStreamResponse(options: {
+export function createCrawlEventStream(options: {
 	crawlId: string;
 	eventStream: EventStream;
 	afterSequence: number;
-	requestSignal: AbortSignal;
-}): Response {
+}) {
 	let close = () => {};
-	const stream = new ReadableStream<Uint8Array>({
+	const stream = new ReadableStream<CrawlSsePayload>({
 		start(controller) {
 			let closed = false;
 			let unsubscribe = () => {};
@@ -26,7 +21,6 @@ export function createEventStreamResponse(options: {
 			close = () => {
 				if (closed) return;
 				closed = true;
-				options.requestSignal.removeEventListener("abort", close);
 				if (keepAlive) {
 					clearInterval(keepAlive);
 				}
@@ -39,7 +33,13 @@ export function createEventStreamResponse(options: {
 			const write = (event: CrawlEventEnvelope) => {
 				if (closed) return;
 				try {
-					controller.enqueue(serializeEvent(event));
+					controller.enqueue(
+						sse({
+							id: event.sequence,
+							event: event.type,
+							data: event,
+						}),
+					);
 				} catch {
 					close();
 				}
@@ -51,33 +51,22 @@ export function createEventStreamResponse(options: {
 				options.afterSequence,
 				close,
 			);
+			controller.enqueue(sse({ retry: KEEPALIVE_INTERVAL_MS }));
 			keepAlive = setInterval(() => {
 				if (closed) return;
 				try {
-					controller.enqueue(encoder.encode(": keepalive\n\n"));
+					controller.enqueue(sse({ retry: KEEPALIVE_INTERVAL_MS }));
 				} catch {
 					close();
 				}
 			}, KEEPALIVE_INTERVAL_MS);
-
-			if (options.requestSignal.aborted) {
-				close();
-			} else {
-				options.requestSignal.addEventListener("abort", close, { once: true });
-			}
 		},
 		cancel() {
-			// `request.signal` is not guaranteed to fire when the reader cancels.
 			close();
 		},
 	});
 
-	return new Response(stream, {
-		headers: {
-			"Content-Type": "text/event-stream",
-			"Cache-Control": "no-cache, no-transform",
-			Connection: "keep-alive",
-			"X-Accel-Buffering": "no",
-		},
-	});
+	// Elysia owns stream detection and wire framing. Individual payloads carry
+	// their event metadata; wrapping the stream marks the response as SSE.
+	return sse(stream);
 }

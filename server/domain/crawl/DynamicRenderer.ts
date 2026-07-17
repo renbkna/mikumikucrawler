@@ -446,9 +446,6 @@ export async function configurePinnedBrowserContext(
 }
 
 export class DynamicRenderer {
-	private static readonly instances = new Set<DynamicRenderer>();
-	private static handlersRegistered = false;
-
 	private readonly options: CrawlOptions;
 	private readonly logger: Logger;
 	private readonly httpClient: HttpClient;
@@ -456,22 +453,6 @@ export class DynamicRenderer {
 	private sessionPool: SessionPool | null;
 	private enabled: boolean;
 	private closePromise: Promise<void> | null;
-
-	private static registerGlobalHandlers(): void {
-		if (DynamicRenderer.handlersRegistered) return;
-
-		const closeOpenBrowsers = (): void => {
-			for (const instance of DynamicRenderer.instances) {
-				if (instance.browserPool) {
-					instance.browserPool.closeAllBrowsers().catch(() => {});
-				}
-			}
-		};
-
-		process.on("beforeExit", closeOpenBrowsers);
-		process.on("exit", closeOpenBrowsers);
-		DynamicRenderer.handlersRegistered = true;
-	}
 
 	constructor(options: CrawlOptions, logger: Logger, httpClient: HttpClient) {
 		this.options = options;
@@ -481,9 +462,6 @@ export class DynamicRenderer {
 		this.sessionPool = null;
 		this.enabled = options.dynamic;
 		this.closePromise = null;
-
-		DynamicRenderer.instances.add(this);
-		DynamicRenderer.registerGlobalHandlers();
 	}
 
 	isEnabled(): boolean {
@@ -1224,8 +1202,6 @@ export class DynamicRenderer {
 	}
 
 	private async closeResources(): Promise<void> {
-		DynamicRenderer.instances.delete(this);
-
 		try {
 			if (this.browserPool) {
 				await this.browserPool.closeAllBrowsers();

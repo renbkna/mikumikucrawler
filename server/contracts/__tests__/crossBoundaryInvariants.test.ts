@@ -72,6 +72,12 @@ const VALID_OPTIONS: CrawlOptions = {
 	saveMedia: true,
 };
 
+function decodeSseChunk(value: unknown): string {
+	if (typeof value === "string") return value;
+	if (value instanceof Uint8Array) return new TextDecoder().decode(value);
+	throw new Error("Expected an SSE string or byte chunk");
+}
+
 const COUNTERS: CrawlCounters = {
 	pagesScanned: 1,
 	successCount: 1,
@@ -401,7 +407,7 @@ describe("cross-boundary invariants", () => {
 		const reader = eventsResponse.body.getReader();
 		const { value, done } = await reader.read();
 		expect(done).toBe(false);
-		expect(new TextDecoder().decode(value)).toContain("data: ");
+		expect(decodeSseChunk(value)).toContain("data: ");
 		await reader.cancel();
 		abortController.abort();
 	});
