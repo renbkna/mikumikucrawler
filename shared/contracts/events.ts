@@ -1,5 +1,14 @@
-import type { CrawlCounters } from "./crawl.js";
-import type { CrawledPage, QueueStats } from "./pageData.js";
+import type {
+	CrawlCompletedPayloadSchema,
+	CrawlEventEnvelopeSchema,
+	CrawlFailedPayloadSchema,
+	CrawlLogPayloadSchema,
+	CrawlPagePayloadSchema,
+	CrawlPausedPayloadSchema,
+	CrawlProgressPayloadSchema,
+	CrawlStartedPayloadSchema,
+	CrawlStoppedPayloadSchema,
+} from "./schemas.js";
 
 export const CrawlEventTypeValues = [
 	"crawl.started",
@@ -36,66 +45,28 @@ export type LiveCrawlEventType = (typeof LIVE_CRAWL_EVENT_TYPE_VALUES)[number];
 export type TerminalCrawlEventType = (typeof TERMINAL_CRAWL_EVENT_TYPE_VALUES)[number];
 export type SettledCrawlEventType = (typeof SETTLED_CRAWL_EVENT_TYPE_VALUES)[number];
 
-export interface CrawlStartedPayload {
-	target: string;
-	resume: boolean;
-}
+export type CrawlStartedPayload = typeof CrawlStartedPayloadSchema.static;
+export type CrawlProgressPayload = typeof CrawlProgressPayloadSchema.static;
+export type CrawlPagePayload = typeof CrawlPagePayloadSchema.static;
+export type CrawlLogPayload = typeof CrawlLogPayloadSchema.static;
+export type CrawlCompletedPayload = typeof CrawlCompletedPayloadSchema.static;
+export type CrawlFailedPayload = typeof CrawlFailedPayloadSchema.static;
+export type CrawlStoppedPayload = typeof CrawlStoppedPayloadSchema.static;
+export type CrawlPausedPayload = typeof CrawlPausedPayloadSchema.static;
 
-export interface CrawlProgressPayload {
-	counters: CrawlCounters;
-	queue: QueueStats;
-	elapsedSeconds: number;
-	pagesPerSecond: number;
-	stopReason: string | null;
-}
+export type CrawlEventEnvelope = typeof CrawlEventEnvelopeSchema.static;
 
-export type CrawlPagePayload = CrawledPage;
+export type CrawlEventMap = {
+	[TType in CrawlEventType]: Extract<CrawlEventEnvelope, { type: TType }>["payload"];
+};
 
-export interface CrawlLogPayload {
-	message: string;
-}
-
-export interface CrawlCompletedPayload {
-	counters: CrawlCounters;
-}
-
-export interface CrawlFailedPayload {
-	error: string;
-	counters: CrawlCounters;
-}
-
-export interface CrawlStoppedPayload {
-	stopReason: string;
-	counters: CrawlCounters;
-}
-
-export interface CrawlPausedPayload {
-	stopReason: string | null;
-	counters: CrawlCounters;
-}
-
-export interface CrawlEventMap {
-	"crawl.started": CrawlStartedPayload;
-	"crawl.progress": CrawlProgressPayload;
-	"crawl.page": CrawlPagePayload;
-	"crawl.log": CrawlLogPayload;
-	"crawl.completed": CrawlCompletedPayload;
-	"crawl.failed": CrawlFailedPayload;
-	"crawl.stopped": CrawlStoppedPayload;
-	"crawl.paused": CrawlPausedPayload;
-}
-
-export interface CrawlEventEnvelopeBase<TType extends CrawlEventType> {
+export type CrawlEventEnvelopeBase<TType extends CrawlEventType> = Omit<
+	CrawlEventEnvelope,
+	"type" | "payload"
+> & {
 	type: TType;
-	crawlId: string;
-	sequence: number;
-	timestamp: string;
 	payload: CrawlEventMap[TType];
-}
-
-export type CrawlEventEnvelope = {
-	[TType in CrawlEventType]: CrawlEventEnvelopeBase<TType>;
-}[CrawlEventType];
+};
 
 export function isCrawlEventType(value: unknown): value is CrawlEventType {
 	return typeof value === "string" && CrawlEventTypeValues.includes(value as CrawlEventType);

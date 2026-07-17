@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseCrawlEventEnvelope } from "../crawlEvents";
+import { parseCrawlEventEnvelope } from "../../../shared/contracts/validation.js";
 
 describe("crawl event parser", () => {
 	test("parses valid progress envelopes against the shared contract", () => {

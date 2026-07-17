@@ -14,7 +14,6 @@ import { MediaTypeValues } from "./pageData.js";
 export const CrawlStatusSchema = t.UnionEnum([...CrawlStatusValues]);
 
 export const CrawlMethodValues = CRAWL_METHODS;
-export type CrawlMethod = (typeof CrawlMethodValues)[number];
 export const CrawlMethodSchema = t.UnionEnum([...CrawlMethodValues]);
 
 export const StopCrawlModeSchema = t.UnionEnum([...StopCrawlModeValues]);
@@ -57,8 +56,6 @@ export const CrawlOptionsSchema = t.Object({
 	contentOnly: t.Boolean(),
 	saveMedia: t.Boolean(),
 });
-
-export type CrawlOptions = typeof CrawlOptionsSchema.static;
 
 export const CrawlCountersSchema = t.Object({
 	pagesScanned: t.Number({ minimum: 0, multipleOf: 1 }),

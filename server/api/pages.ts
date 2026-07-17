@@ -3,23 +3,19 @@ import { API_PATHS, PAGE_ROUTE_SEGMENTS } from "../../shared/contracts/index.js"
 import { PageContentResponseSchema } from "../../shared/contracts/schemas.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
 import { PositiveIntegerIdSchema } from "../contracts/http.js";
-import { routeServices } from "./context.js";
+import type { RouteServicesPlugin } from "./context.js";
 
 const PageContentParamsSchema = t.Object({
 	id: PositiveIntegerIdSchema,
 });
 
-export function pagesApi() {
-	return new Elysia({ name: "pages-api", prefix: API_PATHS.pages }).get(
+export function pagesApi(services: RouteServicesPlugin) {
+	return new Elysia({ name: "pages-api", prefix: API_PATHS.pages }).use(services).get(
 		PAGE_ROUTE_SEGMENTS.content,
-		(context) => {
-			const { params, repos, set } = routeServices<{
-				params: { id: number };
-			}>(context);
+		({ params, repos, status }) => {
 			const content = repos.pages.getContentById(params.id);
 			if (content === undefined) {
-				set.status = 404;
-				return { error: "Page not found" };
+				return status(404, { error: "Page not found" });
 			}
 
 			return {

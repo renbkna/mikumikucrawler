@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createEventStreamResponse } from "../../server/plugins/sse.js";
 import { EventStream } from "../../server/runtime/EventStream.js";
-import { parseCrawlEventEnvelope } from "../../src/api/crawlEvents.js";
 import type { CrawlEventEnvelope } from "../contracts/index.js";
+import { parseCrawlEventEnvelope } from "../contracts/validation.js";
 
 /**
  * Round-trip contract test: verifies that events published by EventStream pass

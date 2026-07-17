@@ -101,6 +101,24 @@ describe("RobotsService", () => {
 		).resolves.toBe("disallowed");
 	});
 
+	test("uses the most specific matching user-agent group", async () => {
+		const fetch = mock(
+			async () =>
+				new Response(`
+User-agent: Miku
+Allow: /same
+
+User-agent: MikuCrawler
+Disallow: /same
+`),
+		);
+		const service = new RobotsService({ fetch }, createLogger());
+
+		await expect(
+			service.evaluate("https://example.com/same").then((policy) => policy.type),
+		).resolves.toBe("disallowed");
+	});
+
 	test("returns an origin-scoped crawl-delay key", async () => {
 		const fetch = mock(
 			async () =>
@@ -151,8 +169,8 @@ describe("RobotsService", () => {
 		expect(streamedCanceled).toBe(true);
 	});
 
-	test("does not emit non-finite or above-ceiling robots delays", async () => {
-		for (const value of ["1e306", String(DOMAIN_DELAY_CONSTANTS.MAX_MS / 1000 + 1)]) {
+	test("does not emit negative, non-finite, or above-ceiling robots delays", async () => {
+		for (const value of ["-1", "1e306", String(DOMAIN_DELAY_CONSTANTS.MAX_MS / 1000 + 1)]) {
 			const service = new RobotsService(
 				{
 					fetch: mock(async () => new Response(`User-agent: *\nCrawl-delay: ${value}`)),
@@ -162,7 +180,7 @@ describe("RobotsService", () => {
 
 			await expect(service.evaluate("https://example.com/page")).resolves.toMatchObject({
 				type: "unavailable",
-				reason: `robots.txt crawl-delay exceeds ${DOMAIN_DELAY_CONSTANTS.MAX_MS}ms`,
+				reason: `robots.txt crawl-delay must be between 0 and ${DOMAIN_DELAY_CONSTANTS.MAX_MS}ms`,
 			});
 		}
 	});

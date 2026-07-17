@@ -1,4 +1,5 @@
 [install]
-saveTextLockfile = true
-linkWorkspacePackages = true
-hoist = true
+# Every non-optional peer required by a direct dependency is declared in
+# package.json. Do not materialize optional peer ecosystems such as Puppeteer
+# when Crawlee uses Playwright only.
+peer = false

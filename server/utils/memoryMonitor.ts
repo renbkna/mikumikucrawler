@@ -1,44 +1,27 @@
 import { config } from "../config/env.js";
 import type { Logger } from "../config/logging.js";
 
-interface MemoryUsage {
+export interface MemoryUsageMb {
 	rss: number;
 	heapUsed: number;
-	heapTotal: number;
-	external: number;
-	arrayBuffers: number;
 }
 
-interface MemoryStatus extends MemoryUsage {
+export interface MemoryStatus extends MemoryUsageMb {
 	isLowMemory: boolean;
-	recommendation: string;
-	totalEstimated: string;
-	percentUsed: number;
 }
 
-function getMemoryUsage(): MemoryUsage {
+function getMemoryUsage(): MemoryUsageMb {
 	const usage = process.memoryUsage();
 	return {
 		rss: Math.round(usage.rss / 1024 / 1024),
 		heapUsed: Math.round(usage.heapUsed / 1024 / 1024),
-		heapTotal: Math.round(usage.heapTotal / 1024 / 1024),
-		external: Math.round(usage.external / 1024 / 1024),
-		arrayBuffers: Math.round((usage.arrayBuffers || 0) / 1024 / 1024),
 	};
 }
 
-function getMemoryStatus(): MemoryStatus {
-	const usage = getMemoryUsage();
-	const lowMem = usage.rss > config.memoryThreshold;
-
+export function assessMemoryStatus(usage: MemoryUsageMb, memoryThresholdMb: number): MemoryStatus {
 	return {
 		...usage,
-		isLowMemory: lowMem,
-		recommendation: lowMem
-			? "Consider upgrading to at least 1GB RAM for Playwright support"
-			: "Memory levels OK for dynamic crawling",
-		totalEstimated: `${usage.rss}MB total | Heap: ${usage.heapUsed}MB`,
-		percentUsed: Math.round((usage.rss / 512) * 100),
+		isLowMemory: usage.rss > memoryThresholdMb,
 	};
 }
 
@@ -46,8 +29,13 @@ function getMemoryStatus(): MemoryStatus {
  * Logs the current memory status to the provided logger.
  */
 export function logMemoryStatus(logger: Logger): MemoryStatus {
-	const status = getMemoryStatus();
+	const status = assessMemoryStatus(getMemoryUsage(), config.memoryThreshold);
 	const icon = status.isLowMemory ? "⚠️" : "✅";
-	logger.info(`${icon} Memory: ${status.totalEstimated} | ${status.recommendation}`);
+	const recommendation = status.isLowMemory
+		? `RSS exceeds the configured ${config.memoryThreshold}MB browser threshold`
+		: "Memory levels OK for dynamic crawling";
+	logger.info(
+		`${icon} Memory: ${status.rss}MB RSS | Heap: ${status.heapUsed}MB | ${recommendation}`,
+	);
 	return status;
 }

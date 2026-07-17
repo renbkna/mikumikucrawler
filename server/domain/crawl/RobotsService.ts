@@ -1,12 +1,14 @@
+import { LRUCache } from "lru-cache";
+import robotsParserModule from "robots-parser";
 import { config } from "../../config/env.js";
 import type { Logger } from "../../config/logging.js";
 import { DOMAIN_DELAY_CONSTANTS, MEMORY_CONSTANTS, REQUEST_CONSTANTS } from "../../constants.js";
 import type { HttpClient } from "../../plugins/security.js";
-import { LRUCacheWithTTL } from "../../utils/lruCache.js";
 import { disposeResponseBody, readLimitedResponseBody } from "../../utils/responseBody.js";
-import { NativeRobotsParser, type RobotsResult } from "../../utils/robotsParser.js";
 import { shouldTreatRobotsResponseAsNoRules } from "./httpStatusPolicy.js";
 import { type CrawlUrlIdentity, getCrawlUrlIdentity } from "./UrlPolicy.js";
+
+type RobotsResult = ReturnType<typeof robotsParserModule>;
 
 export type RobotsPolicy =
 	| {
@@ -31,10 +33,10 @@ type RobotsRulesResult =
 	| { type: "unavailable"; reason: string };
 
 export class RobotsService {
-	private readonly cache = new LRUCacheWithTTL<string, RobotsResult | null>(
-		MEMORY_CONSTANTS.ROBOTS_CACHE_MAX_SIZE,
-		MEMORY_CONSTANTS.ROBOTS_CACHE_TTL_MS,
-	);
+	private readonly cache = new LRUCache<string, RobotsResult | false>({
+		max: MEMORY_CONSTANTS.ROBOTS_CACHE_MAX_SIZE,
+		ttl: MEMORY_CONSTANTS.ROBOTS_CACHE_TTL_MS,
+	});
 
 	constructor(
 		private readonly httpClient: HttpClient,
@@ -47,7 +49,7 @@ export class RobotsService {
 	): Promise<RobotsRulesResult> {
 		const cached = this.cache.get(originKey);
 		if (cached !== undefined) {
-			return cached === null ? { type: "no-rules" } : { type: "rules", rules: cached };
+			return cached === false ? { type: "no-rules" } : { type: "rules", rules: cached };
 		}
 
 		const timeoutSignal = AbortSignal.timeout(REQUEST_CONSTANTS.ROBOTS_FETCH_TIMEOUT_MS);
@@ -71,14 +73,14 @@ export class RobotsService {
 					};
 				}
 				const text = new TextDecoder().decode(body.bytes);
-				const rules = new NativeRobotsParser(text);
+				const rules = robotsParserModule(`${originKey}/robots.txt`, text);
 				this.cache.set(originKey, rules);
 				return { type: "rules", rules };
 			}
 
 			if (shouldTreatRobotsResponseAsNoRules(response.status)) {
 				await disposeResponseBody(response);
-				this.cache.set(originKey, null);
+				this.cache.set(originKey, false);
 				return { type: "no-rules" };
 			}
 
@@ -120,16 +122,18 @@ export class RobotsService {
 		}
 
 		const rules = rulesResult.type === "rules" ? rulesResult.rules : null;
-		const crawlDelaySeconds = rules?.getCrawlDelay(config.userAgent);
+		const crawlDelaySeconds = rules?.getCrawlDelay(config.robotsProductToken);
 		const crawlDelayMs = toBoundedRobotsDelayMs(crawlDelaySeconds);
 		if (crawlDelayMs === null) {
 			return {
 				type: "unavailable",
 				delayKey: identity.originKey,
-				reason: `robots.txt crawl-delay exceeds ${DOMAIN_DELAY_CONSTANTS.MAX_MS}ms`,
+				reason: `robots.txt crawl-delay must be between 0 and ${DOMAIN_DELAY_CONSTANTS.MAX_MS}ms`,
 			};
 		}
-		const allowed = rules ? rules.isAllowed(identity.robotsMatchUrl, config.userAgent) : true;
+		const allowed = rules
+			? (rules.isAllowed(identity.robotsMatchUrl, config.robotsProductToken) ?? true)
+			: true;
 
 		return {
 			type: allowed ? "allowed" : "disallowed",
@@ -142,7 +146,7 @@ export class RobotsService {
 function toBoundedRobotsDelayMs(seconds: number | undefined): number | undefined | null {
 	if (seconds === undefined) return undefined;
 	const delayMs = seconds * 1000;
-	if (!Number.isFinite(delayMs) || delayMs > DOMAIN_DELAY_CONSTANTS.MAX_MS) {
+	if (!Number.isFinite(delayMs) || delayMs < 0 || delayMs > DOMAIN_DELAY_CONSTANTS.MAX_MS) {
 		return null;
 	}
 	return delayMs;

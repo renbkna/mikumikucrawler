@@ -6,7 +6,7 @@ import {
 	SearchQuerySchema,
 	SearchResponseSchema,
 } from "../contracts/search.js";
-import { routeServices } from "./context.js";
+import type { RouteServicesPlugin } from "./context.js";
 
 function buildFtsQuery(query: string): string | null {
 	const terms = query
@@ -22,13 +22,10 @@ function buildFtsQuery(query: string): string | null {
 	return terms.map((term) => `"${term}"*`).join(" ");
 }
 
-export function searchApi() {
-	return new Elysia({ name: "search-api", prefix: API_PATHS.root }).get(
+export function searchApi(services: RouteServicesPlugin) {
+	return new Elysia({ name: "search-api", prefix: API_PATHS.root }).use(services).get(
 		API_PATHS.search.slice(API_PATHS.root.length),
-		(context) => {
-			const { query, repos } = routeServices<{
-				query: typeof SearchQuerySchema.static;
-			}>(context);
+		({ query, repos }) => {
 			const ftsQuery = buildFtsQuery(query.q);
 			if (!ftsQuery) {
 				return {

@@ -6,7 +6,7 @@ import {
 	normalizeCrawlOptions,
 } from "../../shared/contracts/index.js";
 import { CRAWL_OPTION_BOUNDS, isCrawlMethod } from "../../shared/crawl.js";
-import { useDialogModal } from "../hooks";
+import { useDialogModal } from "../hooks/useDialogModal";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 
 interface ConfigurationViewProps {

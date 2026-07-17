@@ -19,7 +19,6 @@ function createLogger(): AppLogger {
 		trace: mock(() => undefined),
 		silent: mock(() => undefined),
 		child: mock(() => createLogger()),
-		close: mock(() => undefined),
 	} as unknown as AppLogger;
 }
 
@@ -62,6 +61,7 @@ function buildApp(httpClient: HttpClient) {
 		eventStream,
 		runtimeRegistry: registry,
 		crawlManager,
+		rateLimitGenerator: () => "api-contract-client",
 	});
 
 	return { app, crawlManager, registry, storage };
@@ -588,6 +588,12 @@ describe("api contract", () => {
 		expect(findParameter("/api/search", "limit")?.schema.default).toBe(20);
 		expect(eventContent).toHaveProperty("text/event-stream");
 		expect(eventContent).not.toHaveProperty("text/plain");
+
+		const uiResponse = await app.handle(new Request("http://localhost/openapi"));
+		expect(uiResponse.status).toBe(200);
+		const ui = await uiResponse.text();
+		expect(ui).toContain("@scalar/api-reference@1.62.9/");
+		expect(ui).not.toContain("@scalar/api-reference@latest/");
 		expect(exportContent["application/json"].schema.type).toBe("array");
 		expect(exportContent).toHaveProperty("application/json");
 		expect(exportContent).toHaveProperty("text/csv");

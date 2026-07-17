@@ -1,23 +1,14 @@
-import type { CrawlMethod } from "../crawl.js";
-import type { CrawlPageSummary } from "./pageData.js";
+import type {
+	CrawlCountersSchema,
+	CrawlListResponseSchema,
+	CrawlOptionsSchema,
+	CrawlSummarySchema,
+	ResumeCrawlResponseSchema,
+} from "./schemas.js";
 
 export const DEFAULT_CRAWL_LIST_LIMIT = 25;
 
-export interface CrawlOptions {
-	target: string;
-	crawlMethod: CrawlMethod;
-	crawlDepth: number;
-	crawlDelay: number;
-	maxPages: number;
-	/** Maximum pages to crawl per domain. 0 means unlimited. */
-	maxPagesPerDomain: number;
-	maxConcurrentRequests: number;
-	retryLimit: number;
-	dynamic: boolean;
-	respectRobots: boolean;
-	contentOnly: boolean;
-	saveMedia: boolean;
-}
+export type CrawlOptions = typeof CrawlOptionsSchema.static;
 
 export const CrawlStatusValues = [
 	"pending",
@@ -78,39 +69,10 @@ export const StopCrawlModeValues = ["pause", "force"] as const;
 
 export type StopCrawlMode = (typeof StopCrawlModeValues)[number];
 
-export interface CrawlCounters {
-	pagesScanned: number;
-	successCount: number;
-	failureCount: number;
-	skippedCount: number;
-	linksFound: number;
-	mediaFiles: number;
-	totalDataKb: number;
-}
-
-export interface CrawlSummary {
-	id: string;
-	target: string;
-	status: CrawlStatus;
-	options: CrawlOptions;
-	counters: CrawlCounters;
-	createdAt: string;
-	startedAt: string | null;
-	updatedAt: string;
-	completedAt: string | null;
-	stopReason: string | null;
-	resumable: boolean;
-}
-
-export interface CrawlListResponse {
-	crawls: CrawlSummary[];
-}
-
-export interface ResumeCrawlResponse {
-	crawl: CrawlSummary;
-	pages: CrawlPageSummary[];
-	pageCount: number;
-}
+export type CrawlCounters = typeof CrawlCountersSchema.static;
+export type CrawlSummary = typeof CrawlSummarySchema.static;
+export type CrawlListResponse = typeof CrawlListResponseSchema.static;
+export type ResumeCrawlResponse = typeof ResumeCrawlResponseSchema.static;
 
 export interface ResumableSessionSummary {
 	id: string;

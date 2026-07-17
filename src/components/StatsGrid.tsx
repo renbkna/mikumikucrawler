@@ -1,6 +1,7 @@
 import { Activity, Bug, CheckCircle, Database, Link2, XCircle } from "lucide-react";
 import { memo } from "react";
-import type { QueueStats, Stats } from "../../shared/types.js";
+import type { QueueStats } from "../../shared/contracts/pageData.js";
+import type { Stats } from "../../shared/types.js";
 import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 
 interface StatsGridProps {

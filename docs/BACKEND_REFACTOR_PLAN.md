@@ -96,7 +96,7 @@ Reasons:
 - `bun:sqlite`
 - Eden Treaty
 - Elysia OpenAPI plugin
-- Elysia OpenTelemetry and Server Timing integration
+- Elysia Server Timing integration for development diagnostics
 - native `EventSource` for realtime telemetry
 
 ### Runtime model
@@ -133,17 +133,18 @@ Reasons:
 ```text
 server/
   app.ts
+  config/
+    env.ts
+    logging.ts
   plugins/
-    db.ts
-    logger.ts
     openapi.ts
-    telemetry.ts
     security.ts
+    spaStatic.ts
+    sse.ts
   contracts/
-    crawl.ts
-    page.ts
+    crawls.ts
     search.ts
-    events.ts
+    http.ts
     errors.ts
   api/
     crawls.ts
@@ -525,8 +526,10 @@ Use Elysia for app-boundary observability.
 Add:
 
 - OpenAPI plugin
-- OpenTelemetry integration
-- Server Timing for request diagnostics
+- Server Timing for development request diagnostics
+
+Do not start an exporter from the application without an explicit deployment,
+configuration, and shutdown contract.
 
 Do not:
 
@@ -579,7 +582,7 @@ Goal:
 Steps:
 
 1. Add `server/app.ts` as the new composition root.
-2. Add Elysia plugins for db, logger, OpenAPI, telemetry, and security.
+2. Compose storage, Pino logging, OpenAPI, development Server Timing, and security at the app boundary.
 3. Add `server/contracts/*` schemas and DTO types.
 4. Replace deprecated Swagger usage with Elysia OpenAPI.
 5. Add route groups for `crawls`, `pages`, `search`, `health`.

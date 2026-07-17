@@ -27,7 +27,6 @@ const instance = await (async () => {
 			await app.stop(true);
 		}
 		dependencies.storage.db.close();
-		logger.close();
 		process.exit(1);
 	}
 })();
@@ -40,8 +39,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
 	await crawlManager.shutdownAll();
 	await instance.stop();
 	dependencies.storage.db.close();
-	logger.close();
-	process.exit(0);
+	process.exitCode = 0;
 }
 
 process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));

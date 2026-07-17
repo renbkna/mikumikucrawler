@@ -95,12 +95,14 @@ Without this, your SQLite database (`crawler.db`) inside the container will be w
 The Docker container is configured to work with these environment variables:
 
 - `PORT` - Set automatically by Render
-- `NODE_ENV=production` - Set automatically
+- `RENDER=true` - Set automatically by Render and used to trust Render's
+  client-IP forwarding for rate limits
+- `NODE_ENV=production` - Set by the image
 
 ## What the Docker Setup Does
 
 1. **Base Image**: Pins the official Bun image to the repository's declared Bun 1.3.14 runtime
-2. **Dependencies**: Installs the dependency versions recorded in `bun.lock`
+2. **Dependencies**: Installs the dependency versions and patches recorded in `bun.lock` under the repository's explicit peer-install policy
 3. **Browser Installation**: The locked Playwright CLI installs its matching Chromium build and operating-system dependencies into `/ms-playwright`
 4. **Browser Verification**: The image build launches and closes Chromium, failing if the dynamic-crawling runtime is unavailable
 5. **Build**: Runs `bun run build` to build frontend assets
@@ -143,6 +145,7 @@ The Docker container is configured to work with these environment variables:
 - First deployment may take 5-10 minutes (installing Chromium and building)
 - Subsequent deployments will be faster due to Docker layer caching
 - Browser binaries are large but necessary for Playwright
-- Container includes health checks for Render's monitoring
+- The application exposes `/health` for Render's monitoring
+- Render's public load balancer owns Brotli/gzip response compression. The application does not duplicate that policy. When running the container directly outside Render, put a compression-capable reverse proxy in front of it if compressed HTTP responses are required.
 
 Your application should now be successfully running on Render with full Playwright support!

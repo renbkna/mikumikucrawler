@@ -2,11 +2,11 @@ import { lookup } from "node:dns/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cors } from "@elysiajs/cors";
-import { opentelemetry } from "@elysiajs/opentelemetry";
 import { serverTiming } from "@elysiajs/server-timing";
 import { Elysia } from "elysia";
-import { rateLimit } from "elysia-rate-limit";
+import { type Generator, rateLimit } from "elysia-rate-limit";
 import { API_PATHS, isCrawlEventsPath } from "../shared/contracts/index.js";
+import { routeServicesPlugin } from "./api/context.js";
 import { crawlsApi } from "./api/crawls.js";
 import { healthApi } from "./api/health.js";
 import { pagesApi } from "./api/pages.js";
@@ -15,9 +15,9 @@ import { sseApi } from "./api/sse.js";
 import { isCorsOriginAllowed } from "./config/cors.js";
 import { config } from "./config/env.js";
 import type { AppLogger } from "./config/logging.js";
+import { createRateLimitKeyGenerator } from "./config/rateLimit.js";
 import type { ApiErrorSchema } from "./contracts/errors.js";
 import { handleAppError } from "./errorHandling.js";
-import { compression } from "./middleware/compression.js";
 import { openapiPlugin } from "./plugins/openapi.js";
 import {
 	DefaultResolver,
@@ -49,6 +49,7 @@ export interface AppDependencies {
 	eventStream: EventStream;
 	runtimeRegistry: Map<string, CrawlRuntime>;
 	crawlManager: CrawlManager;
+	rateLimitGenerator: Generator;
 }
 
 export function createDefaultAppDependencies(logger: AppLogger): AppDependencies {
@@ -75,17 +76,21 @@ export function createDefaultAppDependencies(logger: AppLogger): AppDependencies
 		eventStream,
 		runtimeRegistry,
 		crawlManager,
+		rateLimitGenerator: createRateLimitKeyGenerator(config.isRender),
 	};
 }
 
 export function createApp(deps: AppDependencies) {
-	return new Elysia()
+	const routeServices = routeServicesPlugin({
+		crawlManager: deps.crawlManager,
+		eventStream: deps.eventStream,
+		repos: deps.storage.repos,
+		runtimeRegistry: deps.runtimeRegistry,
+	});
+
+	const app = new Elysia()
 		.use(securityPlugin(deps.resolver, deps.httpClient))
 		.decorate("logger", deps.logger)
-		.decorate("repos", deps.storage.repos)
-		.decorate("crawlManager", deps.crawlManager)
-		.decorate("eventStream", deps.eventStream)
-		.decorate("runtimeRegistry", deps.runtimeRegistry)
 		.use(
 			cors({
 				origin: (request) => isCorsOriginAllowed(request.headers.get("origin"), config),
@@ -96,28 +101,30 @@ export function createApp(deps: AppDependencies) {
 			rateLimit({
 				max: 100,
 				duration: 60_000,
+				generator: deps.rateLimitGenerator,
 				skip: isRateLimitExempt,
 			}),
 		)
-		.use(compression())
-		.use(openapiPlugin())
-		.use(serverTiming())
-		.use(opentelemetry())
-		.use(crawlsApi())
-		.use(sseApi())
-		.use(pagesApi())
-		.use(searchApi())
-		.use(healthApi())
+		.use(openapiPlugin());
+
+	if (config.isDevelopment) app.use(serverTiming());
+
+	return app
+		.use(crawlsApi(routeServices))
+		.use(sseApi(routeServices))
+		.use(pagesApi(routeServices))
+		.use(searchApi(routeServices))
+		.use(healthApi(routeServices))
 		.use(spaStaticPlugin({ distPath }))
-		.onError(
-			({ code, error, logger: requestLogger, set }) =>
-				handleAppError({
-					code,
-					error,
-					set,
-					logger: requestLogger,
-				}) satisfies typeof ApiErrorSchema.static,
-		);
+		.onError(({ code, error, logger: requestLogger, status }) => {
+			const response = handleAppError({
+				code,
+				error,
+				logger: requestLogger,
+			});
+
+			return status(response.status, response.body satisfies typeof ApiErrorSchema.static);
+		});
 }
 
 export type App = ReturnType<typeof createApp>;

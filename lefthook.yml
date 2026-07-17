@@ -1,12 +1,9 @@
 pre-commit:
   commands:
-    format:
-      glob: "*.{ts,tsx,js,jsx,json,css}"
-      run: ./node_modules/.bin/biome format --write --files-ignore-unknown=true --no-errors-on-unmatched {staged_files}
+    check:
+      glob: "*.{ts,tsx,js,jsx,json,jsonc,css}"
+      run: ./node_modules/.bin/biome check --write --files-ignore-unknown=true --no-errors-on-unmatched {staged_files}
       stage_fixed: true
-    lint:
-      glob: "*.{ts,tsx,js,jsx}"
-      run: ./node_modules/.bin/biome ci {staged_files}
 
 pre-push:
   commands:

@@ -1,4 +1,4 @@
-import type { TSchema } from "@sinclair/typebox";
+import type { Static, TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import type { CrawlMethod } from "../crawl.js";
 import type {
@@ -32,8 +32,8 @@ import {
 	ResumeCrawlResponseSchema,
 } from "./schemas.js";
 
-function check(schema: unknown, value: unknown): boolean {
-	return Value.Check(schema as TSchema, value);
+function check<T extends TSchema>(schema: T, value: unknown): value is Static<T> {
+	return Value.Check(schema, value);
 }
 
 export function crawlMethodSupportsSavedMedia(crawlMethod: CrawlMethod): boolean {
@@ -53,7 +53,7 @@ export function normalizeCrawlOptions(options: CrawlOptions): CrawlOptions {
 }
 
 export function isCrawlOptions(value: unknown): value is CrawlOptions {
-	return check(CrawlOptionsSchema, value) && hasValidCrawlOptionSemantics(value as CrawlOptions);
+	return check(CrawlOptionsSchema, value) && hasValidCrawlOptionSemantics(value);
 }
 
 export function hasValidCrawlCounterIdentity(counters: CrawlCounters): boolean {
@@ -63,7 +63,7 @@ export function hasValidCrawlCounterIdentity(counters: CrawlCounters): boolean {
 }
 
 export function isCrawlCounters(value: unknown): value is CrawlCounters {
-	return check(CrawlCountersSchema, value) && hasValidCrawlCounterIdentity(value as CrawlCounters);
+	return check(CrawlCountersSchema, value) && hasValidCrawlCounterIdentity(value);
 }
 
 export function isCrawlSummary(value: unknown): value is CrawlSummary {
@@ -71,15 +71,11 @@ export function isCrawlSummary(value: unknown): value is CrawlSummary {
 		return false;
 	}
 
-	const summary = value as CrawlSummary;
-	return isCrawlOptions(summary.options) && isCrawlCounters(summary.counters);
+	return isCrawlOptions(value.options) && isCrawlCounters(value.counters);
 }
 
 export function isCrawlListResponse(value: unknown): value is CrawlListResponse {
-	return (
-		check(CrawlListResponseSchema, value) &&
-		(value as CrawlListResponse).crawls.every(isCrawlSummary)
-	);
+	return check(CrawlListResponseSchema, value) && value.crawls.every(isCrawlSummary);
 }
 
 export function isPageContentResponse(value: unknown): value is PageContentResponse {
@@ -99,17 +95,14 @@ export function isCrawlPageSummary(value: unknown): value is CrawlPageSummary {
 }
 
 export function isCrawlPagesResponse(value: unknown): value is CrawlPagesResponse {
-	return (
-		check(CrawlPagesResponseSchema, value) &&
-		(value as CrawlPagesResponse).pages.every(isCrawlPageSummary)
-	);
+	return check(CrawlPagesResponseSchema, value) && value.pages.every(isCrawlPageSummary);
 }
 
 export function isResumeCrawlResponse(value: unknown): value is ResumeCrawlResponse {
 	return (
 		check(ResumeCrawlResponseSchema, value) &&
-		isCrawlSummary((value as ResumeCrawlResponse).crawl) &&
-		(value as ResumeCrawlResponse).pages.every(isCrawlPageSummary)
+		isCrawlSummary(value.crawl) &&
+		value.pages.every(isCrawlPageSummary)
 	);
 }
 
@@ -122,8 +115,7 @@ export function isCrawlEventEnvelope(value: unknown): value is CrawlEventEnvelop
 		return false;
 	}
 
-	const envelope = value as CrawlEventEnvelope;
-	return !("counters" in envelope.payload) || isCrawlCounters(envelope.payload.counters);
+	return !("counters" in value.payload) || isCrawlCounters(value.payload.counters);
 }
 
 export function parseCrawlEventEnvelope(raw: string): CrawlEventEnvelope | null {

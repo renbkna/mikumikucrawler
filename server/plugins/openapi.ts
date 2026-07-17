@@ -12,6 +12,7 @@ export function openapiPlugin() {
 	return new Elysia({ name: "openapi-plugin" }).use(
 		openapi({
 			path: API_PATHS.openapi,
+			scalar: { version: "1.62.9" },
 			documentation: {
 				info: {
 					title: "MikuMikuCrawler API",

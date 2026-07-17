@@ -46,9 +46,11 @@ Linting does not replace compiler validation.
 
 ### pre-commit
 
-- format staged TypeScript, JavaScript, JSON, and CSS files with Biome
-- lint staged TypeScript and JavaScript files with Biome
-- restage files changed by formatting
+- run one Biome `check --write` pass over staged TypeScript, JavaScript, JSON,
+  JSONC, and CSS files
+- apply formatting, import organization, and safe lint fixes under the shared
+  Biome configuration
+- restage files changed by the check
 
 ### pre-push
 
