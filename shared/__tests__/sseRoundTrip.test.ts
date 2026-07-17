@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { createEventStreamResponse } from "../../server/plugins/sse.js";
+import { Elysia } from "elysia";
+import { createCrawlEventStream } from "../../server/plugins/sse.js";
 import { EventStream } from "../../server/runtime/EventStream.js";
 import type { CrawlEventEnvelope } from "../contracts/index.js";
 import { parseCrawlEventEnvelope } from "../contracts/validation.js";
@@ -11,6 +12,11 @@ import { parseCrawlEventEnvelope } from "../contracts/validation.js";
  */
 describe("SSE round-trip: EventStream → SSE response → parseCrawlEventEnvelope", () => {
 	const decoder = new TextDecoder();
+	const decodeSseChunk = (value: unknown): string => {
+		if (typeof value === "string") return value;
+		if (value instanceof Uint8Array) return decoder.decode(value);
+		throw new Error("Expected an SSE string or byte chunk");
+	};
 
 	async function readFirstSsePayload(response: Response): Promise<string> {
 		expect(response.headers.get("content-type")).toContain("text/event-stream");
@@ -24,7 +30,7 @@ describe("SSE round-trip: EventStream → SSE response → parseCrawlEventEnvelo
 			expect(done).toBe(false);
 			expect(value).toBeDefined();
 
-			const wire = decoder.decode(value);
+			const wire = decodeSseChunk(value);
 			expect(wire).toContain("\n\n");
 			expect(wire).toContain("id: ");
 			expect(wire).toContain("event: ");
@@ -46,12 +52,14 @@ describe("SSE round-trip: EventStream → SSE response → parseCrawlEventEnvelo
 			payload: Parameters<EventStream["publish"]>[2],
 		) => {
 			const published = stream.publish(crawlId, type, payload as never);
-			const response = createEventStreamResponse({
-				crawlId,
-				eventStream: stream,
-				afterSequence: published.sequence - 1,
-				requestSignal: new AbortController().signal,
-			});
+			const app = new Elysia().get("/events", () =>
+				createCrawlEventStream({
+					crawlId,
+					eventStream: stream,
+					afterSequence: published.sequence - 1,
+				}),
+			);
+			const response = await app.handle(new Request("http://localhost/events"));
 			return parseCrawlEventEnvelope(await readFirstSsePayload(response));
 		};
 	}
@@ -280,5 +288,35 @@ describe("SSE round-trip: EventStream → SSE response → parseCrawlEventEnvelo
 		expect(e1.sequence).toBe(1);
 		expect(e2.sequence).toBe(2);
 		expect(e3.sequence).toBe(3);
+	});
+
+	test("Elysia stream cancellation releases EventStream subscriber ownership", async () => {
+		const stream = new EventStream();
+		stream.initialize("rt-cancel");
+		stream.publish("rt-cancel", "crawl.started", {
+			target: "https://example.com",
+			resume: false,
+		});
+		const app = new Elysia().get("/events", () =>
+			createCrawlEventStream({
+				crawlId: "rt-cancel",
+				eventStream: stream,
+				afterSequence: 0,
+			}),
+		);
+		const response = await app.handle(new Request("http://localhost/events"));
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("Expected SSE response body");
+		await reader.read();
+		await reader.cancel();
+
+		const unsubscribers: Array<() => void> = [];
+		try {
+			for (let index = 0; index < 10; index += 1) {
+				unsubscribers.push(stream.subscribe("rt-cancel", () => {}));
+			}
+		} finally {
+			for (const unsubscribe of unsubscribers) unsubscribe();
+		}
 	});
 });

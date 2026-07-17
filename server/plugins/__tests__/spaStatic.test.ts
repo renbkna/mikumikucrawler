@@ -60,10 +60,18 @@ describe("spa static plugin", () => {
 			const app = await spaStaticPlugin({ distPath });
 			const first = await app.handle(new Request("http://localhost/app.js"));
 			const cacheControl = first.headers.get("cache-control");
+			const etag = first.headers.get("etag");
 
 			expect(cacheControl).toBe("no-cache");
 			expect(cacheControl).not.toContain("immutable");
-			expect(first.headers.get("etag")).toBeNull();
+			expect(etag).not.toBeNull();
+
+			const revalidated = await app.handle(
+				new Request("http://localhost/app.js", {
+					headers: { "If-None-Match": etag ?? "" },
+				}),
+			);
+			expect(revalidated.status).toBe(304);
 		} finally {
 			rmSync(distPath, { recursive: true, force: true });
 		}

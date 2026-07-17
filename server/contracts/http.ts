@@ -1,21 +1,6 @@
 import { t } from "elysia";
 
-export const SSE_LAST_EVENT_ID_PATTERN = "^(0|[1-9]\\d*)$";
 export const SSE_LAST_EVENT_ID_MAX = Number.MAX_SAFE_INTEGER;
-export const SSE_LAST_EVENT_ID_MAX_LENGTH = String(SSE_LAST_EVENT_ID_MAX).length;
-
-export function parseSseLastEventId(value: string | undefined): number | null {
-	if (value === undefined) {
-		return 0;
-	}
-
-	if (!new RegExp(SSE_LAST_EVENT_ID_PATTERN).test(value)) {
-		return null;
-	}
-
-	const parsed = Number(value);
-	return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
-}
 
 /**
  * Shared HTTP boundary contract:
@@ -35,9 +20,10 @@ export const OkResponseSchema = t.Object({
 export const SseHeadersSchema = t.Object(
 	{
 		"last-event-id": t.Optional(
-			t.String({
-				pattern: SSE_LAST_EVENT_ID_PATTERN,
-				maxLength: SSE_LAST_EVENT_ID_MAX_LENGTH,
+			t.Numeric({
+				minimum: 0,
+				maximum: SSE_LAST_EVENT_ID_MAX,
+				multipleOf: 1,
 			}),
 		),
 	},

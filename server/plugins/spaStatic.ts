@@ -40,7 +40,6 @@ export async function spaStaticPlugin({ distPath }: SpaStaticPluginOptions) {
 		prefix: "",
 		alwaysStatic: true,
 		ignorePatterns: ROOT_STATIC_IGNORES,
-		etag: false,
 		headers: {
 			"Cache-Control": "no-cache",
 		},

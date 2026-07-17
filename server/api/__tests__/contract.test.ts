@@ -35,6 +35,12 @@ async function waitFor<T>(read: () => T, predicate: (value: T) => boolean) {
 	throw new Error("Timed out waiting for condition");
 }
 
+function decodeSseChunk(value: unknown): string {
+	if (typeof value === "string") return value;
+	if (value instanceof Uint8Array) return new TextDecoder().decode(value);
+	throw new Error("Expected an SSE string or byte chunk");
+}
+
 function buildApp(httpClient: HttpClient) {
 	const storage = createInMemoryStorage();
 	const eventStream = new EventStream();
@@ -184,7 +190,7 @@ describe("api contract", () => {
 		expect(pageContentResponse.status).toBe(422);
 	});
 
-	test("rejects malformed SSE replay headers at the API boundary", async () => {
+	test("Elysia owns bounded numeric SSE replay cursor validation", async () => {
 		const { app } = buildApp({
 			fetch: async () =>
 				new Response("<html><body><main>unused</main></body></html>", {
@@ -193,29 +199,23 @@ describe("api contract", () => {
 				}),
 		});
 
-		const response = await app.handle(
-			new Request("http://localhost/api/crawls/example/events", {
-				headers: {
-					"last-event-id": "not-a-sequence",
-				},
-			}),
-		);
+		for (const value of ["not-a-sequence", "-1", "1.5", String(Number.MAX_SAFE_INTEGER + 1)]) {
+			const response = await app.handle(
+				new Request("http://localhost/api/crawls/example/events", {
+					headers: { "last-event-id": value },
+				}),
+			);
+			expect(response.status).toBe(422);
+		}
 
-		expect(response.status).toBe(422);
-
-		const unsafeResponse = await app.handle(
-			new Request("http://localhost/api/crawls/example/events", {
-				headers: {
-					"last-event-id": String(Number.MAX_SAFE_INTEGER + 1),
-				},
-			}),
-		);
-
-		expect(unsafeResponse.status).toBe(422);
-		expect(await unsafeResponse.json()).toEqual({
-			error: "Last-Event-ID must be a safe non-negative integer",
-			code: "INVALID_LAST_EVENT_ID",
-		});
+		for (const value of ["01", String(Number.MAX_SAFE_INTEGER)]) {
+			const response = await app.handle(
+				new Request("http://localhost/api/crawls/example/events", {
+					headers: { "last-event-id": value },
+				}),
+			);
+			expect(response.status).toBe(404);
+		}
 	});
 
 	test("rate-limit exemptions are exact route paths, not query-string substrings", async () => {
@@ -578,9 +578,9 @@ describe("api contract", () => {
 			);
 
 		expect(lastEventIdParameter?.schema).toEqual({
-			type: "string",
-			pattern: "^(0|[1-9]\\d*)$",
-			maxLength: 16,
+			type: "integer",
+			minimum: 0,
+			maximum: Number.MAX_SAFE_INTEGER,
 		});
 		expect(lastEventIdParameter?.description).toContain("Bounded live replay cursor");
 		expect(findParameter("/api/crawls/", "limit")?.schema.default).toBe(25);
@@ -954,13 +954,16 @@ describe("api contract", () => {
 		);
 		const reader = sseResponse.body?.getReader();
 		expect(reader).toBeTruthy();
+		expect(sseResponse.headers.get("cache-control")).toBe("no-cache, no-transform");
+		expect(sseResponse.headers.get("x-accel-buffering")).toBe("no");
 		if (!reader) {
 			throw new Error("Expected SSE reader to be available");
 		}
 
 		releaseFetch();
 		const firstChunk = await reader.read();
-		expect(new TextDecoder().decode(firstChunk.value)).toContain("event: crawl.started");
+		const firstWireChunk = decodeSseChunk(firstChunk.value);
+		expect(firstWireChunk).toContain("event: crawl.started");
 		await reader.cancel();
 
 		const completed = await waitFor(

@@ -63,6 +63,26 @@ function createRoute(input: {
 }
 
 describe("dynamic renderer network contract", () => {
+	test("leaves process lifecycle ownership with the server runtime", async () => {
+		const listenerCounts = {
+			beforeExit: process.listenerCount("beforeExit"),
+			exit: process.listenerCount("exit"),
+		};
+		const logger = {
+			debug: mock(() => undefined),
+			info: mock(() => undefined),
+			warn: mock(() => undefined),
+		} as unknown as Logger;
+		const httpClient: HttpClient = {
+			fetch: mock(async () => new Response("unused")),
+		};
+		const renderer = new DynamicRenderer({ ...dynamicOptions, dynamic: false }, logger, httpClient);
+
+		expect(process.listenerCount("beforeExit")).toBe(listenerCounts.beforeExit);
+		expect(process.listenerCount("exit")).toBe(listenerCounts.exit);
+		await renderer.close();
+	});
+
 	test("measures rendered HTML limits in UTF-8 bytes, not JS characters", () => {
 		const content = "a\u0100\u0100";
 
