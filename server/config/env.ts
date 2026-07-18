@@ -5,6 +5,8 @@
  * provides a single source of truth for the backend.
  */
 
+import { resolveBackendPort } from "../../shared/deploymentDefaults.js";
+
 const getEnv = (key: string, defaultValue: string): string => {
 	return process.env[key] || defaultValue;
 };
@@ -48,10 +50,7 @@ function requireInt(key: string, defaultValue: number): number {
 	return Number.parseInt(normalized, 10);
 }
 
-const port = requireInt("PORT", 3000);
-if (port < 1 || port > 65535) {
-	throw new Error(`Invalid PORT=${port} — must be between 1 and 65535.`);
-}
+const port = resolveBackendPort(process.env.PORT);
 
 const isRender = getEnv("RENDER", "false") === "true";
 const memoryThreshold = requireInt("MEMORY_THRESHOLD_MB", isRender ? 350 : 600);

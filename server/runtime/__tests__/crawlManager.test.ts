@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { CrawlCounters } from "../../../shared/contracts/index.js";
 import type { Logger } from "../../config/logging.js";
+import { RobotsService } from "../../domain/crawl/RobotsService.js";
 import type { HttpClient, Resolver } from "../../plugins/security.js";
 import { createInMemoryStorage } from "../../storage/db.js";
 import { CrawlManager, type ResumeCrawlResult } from "../CrawlManager.js";
@@ -19,6 +20,10 @@ function createLogger(): Logger {
 		silent: mock(() => undefined),
 		child: mock(() => createLogger()),
 	} as unknown as Logger;
+}
+
+function createRobotsService(httpClient: HttpClient): RobotsService {
+	return new RobotsService(httpClient, createLogger());
 }
 
 function createOptions(target = "https://example.com"): {
@@ -64,8 +69,11 @@ async function waitFor<T>(read: () => T, predicate: (value: T) => boolean) {
 	throw new Error("Timed out waiting for condition");
 }
 
-function createManager(httpClient: HttpClient, resolverOverride?: Resolver) {
-	const storage = createInMemoryStorage();
+function createManager(
+	httpClient: HttpClient,
+	resolverOverride?: Resolver,
+	storage = createInMemoryStorage(),
+) {
 	const eventStream = new EventStream();
 	const registry = new Map<string, CrawlRuntime>();
 	const resolver: Resolver = resolverOverride ?? {
@@ -111,10 +119,61 @@ describe("crawl manager contract", () => {
 				(completed?.counters.failureCount ?? 0) +
 				(completed?.counters.skippedCount ?? 0),
 		);
-		expect(storage.repos.pages.getVisitedUrls(created.id)).toEqual(["https://example.com/"]);
+		expect(storage.repos.pages.listSnapshot(created.id).pages.map((page) => page.url)).toEqual([
+			"https://example.com/",
+		]);
 		expect(storage.repos.crawlRuns.getById(created.id)?.eventSequence).toBe(
 			eventStream.getCurrentSequence(created.id),
 		);
+	});
+
+	test("shares one robots policy load across concurrent crawls", async () => {
+		let robotsFetches = 0;
+		let releaseRobots!: () => void;
+		const robotsGate = new Promise<void>((resolve) => {
+			releaseRobots = resolve;
+		});
+		const httpClient: HttpClient = {
+			fetch: async ({ url }) => {
+				if (url.endsWith("/robots.txt")) {
+					robotsFetches += 1;
+					await robotsGate;
+					return new Response("User-agent: *\nAllow: /");
+				}
+
+				return new Response("<html><body><main>shared robots policy</main></body></html>", {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				});
+			},
+		};
+		const { manager, storage } = createManager(httpClient);
+		const first = manager.create({
+			...createOptions("https://shared-policy.example/one"),
+			respectRobots: true,
+		});
+		const second = manager.create({
+			...createOptions("https://shared-policy.example/two"),
+			respectRobots: true,
+		});
+
+		await waitFor(
+			() => robotsFetches,
+			(count) => count > 0,
+		);
+		releaseRobots();
+		await Promise.all([
+			waitFor(
+				() => storage.repos.crawlRuns.getById(first.id),
+				(crawl) => crawl?.status === "completed",
+			),
+			waitFor(
+				() => storage.repos.crawlRuns.getById(second.id),
+				(crawl) => crawl?.status === "completed",
+			),
+		]);
+
+		expect(robotsFetches).toBe(1);
 	});
 
 	test("create returns the current persisted startup snapshot", async () => {
@@ -192,6 +251,7 @@ describe("crawl manager contract", () => {
 			eventStream,
 			resolver,
 			httpClient,
+			robotsService: createRobotsService(httpClient),
 			resume: false,
 			onSettled: () => {},
 		});
@@ -244,6 +304,51 @@ describe("crawl manager contract", () => {
 		).toBe(true);
 	});
 
+	test("page events expose the identity and exact count from the committed page transaction", async () => {
+		const httpClient: HttpClient = {
+			fetch: async () =>
+				new Response("<html><body><main>Hello world</main></body></html>", {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				}),
+		};
+		const { manager, storage, eventStream } = createManager(httpClient);
+		const created = manager.create(createOptions("https://page-count.example"));
+		const observedPages: Array<{
+			eventId: number;
+			durableId: number;
+			eventCount: number;
+			durableCount: number;
+		}> = [];
+		const unsubscribe = eventStream.subscribe(created.id, (event) => {
+			if (event.type !== "crawl.page") return;
+			const durableSnapshot = storage.repos.pages.listSnapshot(created.id);
+			const durablePage = durableSnapshot.pages[0];
+			if (!durablePage)
+				throw new Error("Persisted page event was published before its durable row");
+			observedPages.push({
+				eventId: event.payload.id,
+				durableId: durablePage.id,
+				eventCount: event.payload.pageCount,
+				durableCount: durableSnapshot.count,
+			});
+		});
+
+		await waitFor(
+			() => storage.repos.crawlRuns.getById(created.id),
+			(run) => run?.status === "completed",
+		);
+		unsubscribe();
+
+		expect(observedPages).toHaveLength(1);
+		const observedPage = observedPages[0];
+		if (!observedPage) throw new Error("Expected one persisted page event");
+		expect(observedPage.eventId).toBeGreaterThan(0);
+		expect(observedPage.eventId).toBe(observedPage.durableId);
+		expect(observedPage.eventCount).toBe(observedPage.durableCount);
+		expect(observedPage.eventCount).toBe(1);
+	});
+
 	test("completed event subscribers observe the terminal persisted status", async () => {
 		const httpClient: HttpClient = {
 			fetch: async () =>
@@ -284,6 +389,7 @@ describe("crawl manager contract", () => {
 			eventStream,
 			resolver,
 			httpClient,
+			robotsService: createRobotsService(httpClient),
 			resume: false,
 			onSettled: () => {},
 		});
@@ -332,6 +438,7 @@ describe("crawl manager contract", () => {
 			eventStream,
 			resolver,
 			httpClient,
+			robotsService: createRobotsService(httpClient),
 			resume: false,
 			onSettled: () => {},
 		});
@@ -383,6 +490,7 @@ describe("crawl manager contract", () => {
 			eventStream,
 			resolver,
 			httpClient,
+			robotsService: createRobotsService(httpClient),
 			resume: false,
 			onSettled: () => {},
 		});
@@ -421,6 +529,9 @@ describe("crawl manager contract", () => {
 			httpClient: {
 				fetch: async () => new Response("unused"),
 			},
+			robotsService: createRobotsService({
+				fetch: async () => new Response("unused"),
+			}),
 			resume: false,
 			onInactive: () => registry.delete(crawlId),
 			onSettled: () => {
@@ -725,7 +836,8 @@ describe("crawl manager contract", () => {
 			(run) => run?.status === "interrupted",
 		);
 
-		const resumed = manager.resume(created.id);
+		const restartedManager = createManager(httpClient, undefined, storage).manager;
+		const resumed = restartedManager.resume(created.id);
 		expect(resumed.type).toBe("resumed");
 		expect(["interrupted", "starting", "running"]).toContain(
 			resumed.type === "resumed" ? resumed.crawl.status : "interrupted",
@@ -770,6 +882,49 @@ describe("crawl manager contract", () => {
 		]);
 
 		expect(shutdown).toBe("settled");
+		expect(storage.repos.crawlRuns.getById(created.id)?.status).toBe("interrupted");
+		expect(registry.size).toBe(0);
+	});
+
+	test("shutdown aborts the manager-owned robots policy load", async () => {
+		let robotsEntered = false;
+		let robotsAbortObserved = false;
+		const httpClient: HttpClient = {
+			fetch: ({ url, signal }) => {
+				if (!url.endsWith("/robots.txt")) {
+					return Promise.resolve(new Response("unused"));
+				}
+
+				robotsEntered = true;
+				return new Promise<Response>((_resolve, reject) => {
+					signal?.addEventListener(
+						"abort",
+						() => {
+							robotsAbortObserved = true;
+							reject(signal.reason);
+						},
+						{ once: true },
+					);
+				});
+			},
+		};
+		const { manager, storage, registry } = createManager(httpClient);
+		const created = manager.create({
+			...createOptions("https://shutdown-robots.example"),
+			respectRobots: true,
+		});
+
+		await waitFor(
+			() => robotsEntered,
+			(entered) => entered,
+		);
+		const shutdown = await Promise.race([
+			manager.shutdownAll().then(() => "settled" as const),
+			new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 100)),
+		]);
+
+		expect(shutdown).toBe("settled");
+		expect(robotsAbortObserved).toBe(true);
 		expect(storage.repos.crawlRuns.getById(created.id)?.status).toBe("interrupted");
 		expect(registry.size).toBe(0);
 	});
@@ -821,7 +976,8 @@ describe("crawl manager contract", () => {
 			expect.objectContaining({ url: "https://example.com/hold" }),
 		]);
 
-		expect(manager.resume(created.id).type).toBe("resumed");
+		const restartedManager = createManager(httpClient, undefined, storage).manager;
+		expect(restartedManager.resume(created.id).type).toBe("resumed");
 		const completed = await waitFor(
 			() => storage.repos.crawlRuns.getById(created.id),
 			(run) => run?.status === "completed",
@@ -1054,19 +1210,27 @@ describe("crawl manager contract", () => {
 				}),
 		};
 		const { manager, storage, registry } = createManager(httpClient);
+		const paused = storage.repos.crawlRuns.createRun(
+			"late-resume",
+			createOptions("https://late-resume.example"),
+		);
+		storage.repos.crawlRuns.markPaused(paused.id, paused.counters, "Paused", 0);
 
 		const shutdown = manager.shutdownAll();
 		expect(() => manager.create(createOptions("https://late.example"))).toThrow(
 			"Crawl service is shutting down",
 		);
+		expect(() => manager.resume(paused.id)).toThrow("Crawl service is shutting down");
 		await shutdown;
 
-		expect(manager.list({})).toEqual([]);
+		expect(manager.list({})).toEqual([
+			expect.objectContaining({ id: paused.id, status: "paused" }),
+		]);
 		expect(registry.size).toBe(0);
 		expect(
 			(storage.db.query("SELECT COUNT(*) AS count FROM crawl_runs").get() as { count: number })
 				.count,
-		).toBe(0);
+		).toBe(1);
 	});
 
 	test("resume starts a fresh SSE replay window after the persisted event sequence", async () => {
@@ -1224,7 +1388,8 @@ describe("crawl manager contract", () => {
 			(run) => run?.status === "interrupted",
 		);
 
-		expect(manager.resume(created.id).type).toBe("resumed");
+		const restartedManager = createManager(httpClient, undefined, storage).manager;
+		expect(restartedManager.resume(created.id).type).toBe("resumed");
 		const completed = await waitFor(
 			() => storage.repos.crawlRuns.getById(created.id),
 			(run) => run?.status === "completed" && holdResolved,
@@ -1282,7 +1447,8 @@ describe("crawl manager contract", () => {
 		);
 
 		await Bun.sleep(1_050);
-		expect(manager.resume(created.id).type).toBe("resumed");
+		const restartedManager = createManager(httpClient, undefined, storage).manager;
+		expect(restartedManager.resume(created.id).type).toBe("resumed");
 
 		const completed = await waitFor(
 			() => storage.repos.crawlRuns.getById(created.id),

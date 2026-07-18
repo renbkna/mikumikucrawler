@@ -4,8 +4,6 @@ import { shouldResetTheatreStatus } from "../../shared/theatreStatus";
 describe("theatre status contract", () => {
 	test("any non-idle overlay state clears when crawl activity ends", () => {
 		expect(shouldResetTheatreStatus("blackout", false)).toBe(true);
-		expect(shouldResetTheatreStatus("counting", false)).toBe(true);
-		expect(shouldResetTheatreStatus("beam", false)).toBe(true);
 		expect(shouldResetTheatreStatus("live", false)).toBe(true);
 	});
 

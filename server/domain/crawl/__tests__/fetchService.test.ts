@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { config } from "../../../config/env.js";
 import type { Logger } from "../../../config/logging.js";
-import { REQUEST_CONSTANTS } from "../../../constants.js";
+import { PDF_CONSTANTS, REQUEST_CONSTANTS } from "../../../constants.js";
 import { FetchService } from "../FetchService.js";
 
 function createLogger(): Logger {
@@ -22,9 +22,6 @@ describe("fetch service contract", () => {
 	test("does not fall back to static crawl when a strict consent wall blocks dynamic rendering", async () => {
 		const httpFetch = mock(async () => new Response("should not be called"));
 		const service = new FetchService(
-			{
-				getHeaders: () => null,
-			} as never,
 			{ fetch: httpFetch },
 			{
 				isEnabled: () => true,
@@ -37,7 +34,7 @@ describe("fetch service contract", () => {
 			createLogger(),
 		);
 
-		const result = await service.fetch("crawl-1", {
+		const result = await service.fetch({
 			url: "https://www.youtube.com/watch?v=test",
 			domain: "www.youtube.com",
 			depth: 0,
@@ -54,9 +51,6 @@ describe("fetch service contract", () => {
 
 	test("maps browser-rendered 403 responses to blocked instead of success", async () => {
 		const service = new FetchService(
-			{
-				getHeaders: () => null,
-			} as never,
 			{
 				fetch: mock(async () => new Response("should not be called")),
 			},
@@ -81,7 +75,7 @@ describe("fetch service contract", () => {
 			createLogger(),
 		);
 
-		const result = await service.fetch("crawl-1", {
+		const result = await service.fetch({
 			url: "https://example.com/blocked",
 			domain: "example.com",
 			depth: 0,
@@ -97,9 +91,6 @@ describe("fetch service contract", () => {
 
 	test("maps transient browser-rendered HTTP errors to retryable failures", async () => {
 		const service = new FetchService(
-			{
-				getHeaders: () => null,
-			} as never,
 			{
 				fetch: mock(async () => new Response("should not be called")),
 			},
@@ -124,7 +115,7 @@ describe("fetch service contract", () => {
 			createLogger(),
 		);
 
-		const result = await service.fetch("crawl-1", {
+		const result = await service.fetch({
 			url: "https://example.com/error",
 			domain: "example.com",
 			depth: 0,
@@ -140,9 +131,6 @@ describe("fetch service contract", () => {
 	test("maps transient static HTTP errors to retryable failures", async () => {
 		const service = new FetchService(
 			{
-				getHeaders: () => null,
-			} as never,
-			{
 				fetch: async () => new Response("server error", { status: 500 }),
 			},
 			{
@@ -152,7 +140,7 @@ describe("fetch service contract", () => {
 			createLogger(),
 		);
 
-		const result = await service.fetch("crawl-1", {
+		const result = await service.fetch({
 			url: "https://example.com/static-error",
 			domain: "example.com",
 			depth: 0,
@@ -167,9 +155,6 @@ describe("fetch service contract", () => {
 
 	test("honors browser-rendered retry-after values", async () => {
 		const service = new FetchService(
-			{
-				getHeaders: () => null,
-			} as never,
 			{
 				fetch: mock(async () => new Response("should not be called")),
 			},
@@ -195,7 +180,7 @@ describe("fetch service contract", () => {
 			createLogger(),
 		);
 
-		const result = await service.fetch("crawl-1", {
+		const result = await service.fetch({
 			url: "https://example.com/rate-limited-dynamic",
 			domain: "example.com",
 			depth: 0,
@@ -212,9 +197,6 @@ describe("fetch service contract", () => {
 	test("leaves missing rate-limit retry fallback to the pipeline", async () => {
 		const service = new FetchService(
 			{
-				getHeaders: () => null,
-			} as never,
-			{
 				fetch: async () => new Response("", { status: 429 }),
 			},
 			{
@@ -225,7 +207,7 @@ describe("fetch service contract", () => {
 		);
 
 		await expect(
-			service.fetch("crawl-1", {
+			service.fetch({
 				url: "https://example.com/rate-limited",
 				domain: "example.com",
 				depth: 0,
@@ -247,9 +229,6 @@ describe("fetch service contract", () => {
 				}),
 		);
 		const service = new FetchService(
-			{
-				getHeaders: () => null,
-			} as never,
 			{ fetch: httpFetch },
 			{
 				isEnabled: () => true,
@@ -260,7 +239,7 @@ describe("fetch service contract", () => {
 			createLogger(),
 		);
 
-		const result = await service.fetch("crawl-1", {
+		const result = await service.fetch({
 			url: "https://example.com/fallback",
 			domain: "example.com",
 			depth: 0,
@@ -285,7 +264,6 @@ describe("fetch service contract", () => {
 				}),
 		);
 		const service = new FetchService(
-			{ getHeaders: () => null } as never,
 			{ fetch: httpFetch },
 			{
 				isEnabled: () => true,
@@ -294,7 +272,7 @@ describe("fetch service contract", () => {
 			createLogger(),
 		);
 
-		const result = await service.fetch("crawl-1", {
+		const result = await service.fetch({
 			url: "https://example.com/data",
 			domain: "example.com",
 			depth: 0,
@@ -312,7 +290,6 @@ describe("fetch service contract", () => {
 	test("does not replay dynamic document transport failures through static fetch", async () => {
 		const httpFetch = mock(async () => new Response("must not run"));
 		const service = new FetchService(
-			{ getHeaders: () => null } as never,
 			{ fetch: httpFetch },
 			{
 				isEnabled: () => true,
@@ -322,7 +299,7 @@ describe("fetch service contract", () => {
 		);
 
 		await expect(
-			service.fetch("crawl-1", {
+			service.fetch({
 				url: "https://example.com/failure",
 				domain: "example.com",
 				depth: 0,
@@ -339,7 +316,6 @@ describe("fetch service contract", () => {
 	test("does not retry oversized dynamic documents through static fetch", async () => {
 		const httpFetch = mock(async () => new Response("must not run"));
 		const service = new FetchService(
-			{ getHeaders: () => null } as never,
 			{ fetch: httpFetch },
 			{
 				isEnabled: () => true,
@@ -349,7 +325,7 @@ describe("fetch service contract", () => {
 		);
 
 		await expect(
-			service.fetch("crawl-1", {
+			service.fetch({
 				url: "https://example.com/huge",
 				domain: "example.com",
 				depth: 0,
@@ -366,9 +342,6 @@ describe("fetch service contract", () => {
 	test("maps static 401 responses to blocked instead of thrown failures", async () => {
 		const service = new FetchService(
 			{
-				getHeaders: () => null,
-			} as never,
-			{
 				fetch: async () => new Response("auth required", { status: 401 }),
 			},
 			{
@@ -378,7 +351,7 @@ describe("fetch service contract", () => {
 			createLogger(),
 		);
 
-		const result = await service.fetch("crawl-1", {
+		const result = await service.fetch({
 			url: "https://example.com/private",
 			domain: "example.com",
 			depth: 0,
@@ -402,9 +375,6 @@ describe("fetch service contract", () => {
 			});
 		});
 		const service = new FetchService(
-			{
-				getHeaders: () => null,
-			} as never,
 			{ fetch: httpFetch },
 			{
 				isEnabled: () => false,
@@ -413,7 +383,7 @@ describe("fetch service contract", () => {
 			createLogger(),
 		);
 
-		await service.fetch("crawl-1", {
+		await service.fetch({
 			url: "https://example.com/ua",
 			domain: "example.com",
 			depth: 0,
@@ -426,9 +396,6 @@ describe("fetch service contract", () => {
 	test("honors short HTTP-date retry-after values instead of forcing the max delay", async () => {
 		const retryAfterAt = new Date(Date.now() + 5_000).toUTCString();
 		const service = new FetchService(
-			{
-				getHeaders: () => null,
-			} as never,
 			{
 				fetch: async () =>
 					new Response("", {
@@ -443,7 +410,7 @@ describe("fetch service contract", () => {
 			createLogger(),
 		);
 
-		const result = await service.fetch("crawl-1", {
+		const result = await service.fetch({
 			url: "https://example.com/rate-limited",
 			domain: "example.com",
 			depth: 0,
@@ -463,9 +430,6 @@ describe("fetch service contract", () => {
 			"<html><body><main>This body is longer than the compressed header would imply.</main></body></html>";
 		const service = new FetchService(
 			{
-				getHeaders: () => null,
-			} as never,
-			{
 				fetch: async () =>
 					new Response(content, {
 						status: 200,
@@ -483,7 +447,7 @@ describe("fetch service contract", () => {
 			createLogger(),
 		);
 
-		const result = await service.fetch("crawl-1", {
+		const result = await service.fetch({
 			url: "https://example.com/decoded",
 			domain: "example.com",
 			depth: 0,
@@ -503,9 +467,6 @@ describe("fetch service contract", () => {
 		]);
 		const service = new FetchService(
 			{
-				getHeaders: () => null,
-			} as never,
-			{
 				fetch: async () =>
 					new Response(pdfBytes, {
 						status: 200,
@@ -519,7 +480,7 @@ describe("fetch service contract", () => {
 			createLogger(),
 		);
 
-		const result = await service.fetch("crawl-1", {
+		const result = await service.fetch({
 			url: "https://example.com/file.pdf",
 			domain: "example.com",
 			depth: 0,
@@ -546,13 +507,12 @@ describe("fetch service contract", () => {
 			return new ArrayBuffer(0);
 		};
 		const service = new FetchService(
-			{ getHeaders: () => null } as never,
 			{ fetch: async () => response },
 			{ isEnabled: () => false, render: async () => null } as never,
 			createLogger(),
 		);
 
-		const result = await service.fetch("crawl-1", {
+		const result = await service.fetch({
 			url: "https://example.com/download",
 			domain: "example.com",
 			depth: 0,
@@ -570,7 +530,6 @@ describe("fetch service contract", () => {
 	test("rejects unsupported dynamic response types", async () => {
 		const httpFetch = mock(async () => new Response("should not be called"));
 		const service = new FetchService(
-			{ getHeaders: () => null } as never,
 			{ fetch: httpFetch },
 			{
 				isEnabled: () => true,
@@ -583,7 +542,7 @@ describe("fetch service contract", () => {
 			createLogger(),
 		);
 
-		const result = await service.fetch("crawl-1", {
+		const result = await service.fetch({
 			url: "https://example.com/download",
 			domain: "example.com",
 			depth: 0,
@@ -604,7 +563,7 @@ describe("fetch service contract", () => {
 			status: 200,
 			headers: {
 				"content-type": "text/html",
-				"content-length": String(REQUEST_CONSTANTS.MAX_RESPONSE_BYTES + 1),
+				"content-length": String(REQUEST_CONSTANTS.MAX_TEXT_DOCUMENT_BYTES + 1),
 			},
 		});
 		response.text = async () => {
@@ -612,9 +571,6 @@ describe("fetch service contract", () => {
 			return "unused";
 		};
 		const service = new FetchService(
-			{
-				getHeaders: () => null,
-			} as never,
 			{
 				fetch: async () => response,
 			},
@@ -625,7 +581,7 @@ describe("fetch service contract", () => {
 			createLogger(),
 		);
 
-		const result = await service.fetch("crawl-1", {
+		const result = await service.fetch({
 			url: "https://example.com/too-large",
 			domain: "example.com",
 			depth: 0,
@@ -639,11 +595,65 @@ describe("fetch service contract", () => {
 		expect(textRead).toBe(false);
 	});
 
-	test("classifies thrown static fetches as retryable transient failures", async () => {
+	test("retains the larger PDF acquisition budget", async () => {
+		const pdf = Buffer.from("%PDF-small-body");
 		const service = new FetchService(
 			{
-				getHeaders: () => null,
-			} as never,
+				fetch: async () =>
+					new Response(pdf, {
+						headers: {
+							"content-type": "application/pdf",
+							"content-length": String(REQUEST_CONSTANTS.MAX_TEXT_DOCUMENT_BYTES + 1),
+						},
+					}),
+			},
+			{ isEnabled: () => false, render: async () => null } as never,
+			createLogger(),
+		);
+
+		const result = await service.fetch({
+			url: "https://example.com/document.pdf",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(result).toMatchObject({
+			type: "success",
+			contentType: "application/pdf",
+		});
+	});
+
+	test("rejects PDFs beyond their dedicated acquisition budget", async () => {
+		const service = new FetchService(
+			{
+				fetch: async () =>
+					new Response("unused", {
+						headers: {
+							"content-type": "application/pdf",
+							"content-length": String(PDF_CONSTANTS.MAX_FILE_SIZE_MB * 1024 * 1024 + 1),
+						},
+					}),
+			},
+			{ isEnabled: () => false, render: async () => null } as never,
+			createLogger(),
+		);
+
+		const result = await service.fetch({
+			url: "https://example.com/oversized.pdf",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(result).toMatchObject({
+			type: "blocked",
+			statusCode: 413,
+		});
+	});
+
+	test("classifies thrown static fetches as retryable transient failures", async () => {
+		const service = new FetchService(
 			{
 				fetch: async () => {
 					throw new Error("socket reset");
@@ -656,7 +666,7 @@ describe("fetch service contract", () => {
 			createLogger(),
 		);
 
-		const result = await service.fetch("crawl-1", {
+		const result = await service.fetch({
 			url: "https://example.com/socket-reset",
 			domain: "example.com",
 			depth: 0,
@@ -673,9 +683,6 @@ describe("fetch service contract", () => {
 		const content =
 			"<html><body><main>This dynamic DOM is larger than the stale content-length metadata.</main></body></html>";
 		const service = new FetchService(
-			{
-				getHeaders: () => null,
-			} as never,
 			{
 				fetch: mock(async () => new Response("should not be called")),
 			},
@@ -700,7 +707,7 @@ describe("fetch service contract", () => {
 			createLogger(),
 		);
 
-		const result = await service.fetch("crawl-1", {
+		const result = await service.fetch({
 			url: "https://example.com/dynamic",
 			domain: "example.com",
 			depth: 0,
@@ -722,13 +729,11 @@ describe("fetch service contract", () => {
 		});
 		Object.defineProperty(staticResponse, "url", { value: "https://final.example/docs/" });
 		const staticService = new FetchService(
-			{ getHeaders: () => null } as never,
 			{ fetch: async () => staticResponse },
 			{ isEnabled: () => false, render: async () => null } as never,
 			createLogger(),
 		);
 		const dynamicService = new FetchService(
-			{ getHeaders: () => null } as never,
 			{ fetch: mock(async () => new Response("unused")) },
 			{
 				isEnabled: () => true,
@@ -756,57 +761,26 @@ describe("fetch service contract", () => {
 			retries: 0,
 		};
 
-		await expect(staticService.fetch("crawl-1", item)).resolves.toMatchObject({
+		await expect(staticService.fetch(item)).resolves.toMatchObject({
 			type: "success",
 			effectiveUrl: "https://final.example/docs/",
 		});
-		await expect(dynamicService.fetch("crawl-1", item)).resolves.toMatchObject({
+		await expect(dynamicService.fetch(item)).resolves.toMatchObject({
 			type: "success",
 			effectiveUrl: "https://dynamic.example/final/",
 		});
 	});
 
-	test("refetches one unconditional time when 304 has no cached page", async () => {
-		const requests: Array<{ headers?: Record<string, string> }> = [];
-		const fetch = mock(async (request: { headers?: Record<string, string> }) => {
-			requests.push(request);
-			return fetch.mock.calls.length === 1
-				? new Response(null, { status: 304 })
-				: new Response("<html><main>fresh</main></html>", {
-						headers: { "content-type": "text/html" },
-					});
-		});
-		const service = new FetchService(
-			{ getHeaders: () => null } as never,
-			{ fetch },
-			{ isEnabled: () => false, render: async () => null } as never,
-			createLogger(),
-		);
-
-		await expect(
-			service.fetch("crawl-1", {
-				url: "https://example.com/first",
-				domain: "example.com",
-				depth: 0,
-				retries: 0,
-			}),
-		).resolves.toMatchObject({ type: "success" });
-		expect(fetch).toHaveBeenCalledTimes(2);
-		expect(requests[1]?.headers).not.toHaveProperty("If-None-Match");
-		expect(requests[1]?.headers).not.toHaveProperty("If-Modified-Since");
-	});
-
-	test("classifies repeated cacheless 304 as failure instead of page success", async () => {
+	test("rejects an unexpected unconditional 304 without retrying", async () => {
 		const fetch = mock(async () => new Response(null, { status: 304 }));
 		const service = new FetchService(
-			{ getHeaders: () => null } as never,
 			{ fetch },
 			{ isEnabled: () => false, render: async () => null } as never,
 			createLogger(),
 		);
 
 		await expect(
-			service.fetch("crawl-1", {
+			service.fetch({
 				url: "https://example.com/first",
 				domain: "example.com",
 				depth: 0,
@@ -815,14 +789,14 @@ describe("fetch service contract", () => {
 		).resolves.toMatchObject({
 			type: "blocked",
 			statusCode: 304,
+			reason: "Received unexpected 304 for unconditional request to https://example.com/first",
 		});
-		expect(fetch).toHaveBeenCalledTimes(2);
+		expect(fetch).toHaveBeenCalledTimes(1);
 	});
 
 	test("cancels classified error response bodies", async () => {
 		let canceled = false;
 		const service = new FetchService(
-			{ getHeaders: () => null } as never,
 			{
 				fetch: async () =>
 					new Response(
@@ -838,7 +812,7 @@ describe("fetch service contract", () => {
 			createLogger(),
 		);
 
-		await service.fetch("crawl-1", {
+		await service.fetch({
 			url: "https://example.com/error",
 			domain: "example.com",
 			depth: 0,
@@ -851,7 +825,6 @@ describe("fetch service contract", () => {
 	test("grants local networking only to the configured seed identity", async () => {
 		const requests: Array<{ allowLocalhostOnInitialRequest?: boolean }> = [];
 		const service = new FetchService(
-			{ getHeaders: () => null } as never,
 			{
 				fetch: async (request) => {
 					requests.push(request);
@@ -865,13 +838,13 @@ describe("fetch service contract", () => {
 			"http://localhost:3000/",
 		);
 
-		await service.fetch("crawl-1", {
+		await service.fetch({
 			url: "http://localhost:3000/",
 			domain: "localhost",
 			depth: 0,
 			retries: 0,
 		});
-		await service.fetch("crawl-1", {
+		await service.fetch({
 			url: "http://localhost:3000/child",
 			domain: "localhost",
 			depth: 0,

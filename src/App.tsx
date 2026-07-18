@@ -37,6 +37,7 @@ function App() {
 		stats,
 		queueStats,
 		crawledPages,
+		storedPageCount,
 		progress,
 		logs,
 		clearLogs,
@@ -122,22 +123,17 @@ function App() {
 		void refreshResumableSessions();
 	}, [refreshResumableSessions]);
 
-	const handleBeamStart = useCallback(() => {
-		setTheatreStatus("beam");
-	}, []);
-
 	const handleTheatreComplete = useCallback(() => {
 		setTheatreStatus("live");
 	}, []);
 
-	const isUIHidden = theatreStatus === "blackout" || theatreStatus === "counting";
+	const isUIHidden = theatreStatus === "blackout";
 	const isModalOpen = openedConfig || openExportDialog || openResumePanel;
 
 	return (
 		<div className="relative w-screen h-screen overflow-hidden text-miku-text font-sans">
 			<TheatreOverlay
 				status={theatreStatus}
-				onBeamStart={handleBeamStart}
 				onComplete={handleTheatreComplete}
 				isCrawlActive={canPause || canForceStop}
 				onStop={canPause ? pauseAttack : forceStopAttack}
@@ -191,7 +187,7 @@ function App() {
 						aria-label="Crawler Control"
 						className="control-stage glass-panel relative group transition-all duration-500"
 					>
-						<MikuBanner active={theatreStatus === "beam" || isAttacking} />
+						<MikuBanner active={isAttacking} />
 
 						<CrawlerForm
 							target={target}
@@ -238,7 +234,7 @@ function App() {
 					</section>
 
 					<ActionButtons
-						crawledPages={crawledPages}
+						storedPageCount={storedPageCount}
 						setOpenExportDialog={setOpenExportDialog}
 						showDetails={showDetails}
 						setShowDetails={setShowDetails}
@@ -276,7 +272,7 @@ function App() {
 								</h2>
 								<span className="cute-badge flex items-center gap-1">
 									<SparkleIcon className="hidden" size={12} />
-									{crawledPages.length} items
+									{storedPageCount} stored
 								</span>
 							</div>
 							<CrawledPagesSection

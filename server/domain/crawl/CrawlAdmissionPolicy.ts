@@ -3,14 +3,9 @@ import type { ExtractedLink } from "../../../shared/types.js";
 import type { CrawlQueue, QueueItem } from "./CrawlQueue.js";
 import type { CrawlState } from "./CrawlState.js";
 import type { RobotsService } from "./RobotsService.js";
-import {
-	type NormalizedDiscoveredLink,
-	normalizeDiscoveredLink,
-	type UrlRejectionReason,
-} from "./UrlPolicy.js";
+import { type NormalizedDiscoveredLink, normalizeDiscoveredLink } from "./UrlPolicy.js";
 
 export type AdmissionRejectionReason =
-	| UrlRejectionReason
 	| "depth-limit"
 	| "nofollow"
 	| "robots-disallowed"
@@ -42,35 +37,14 @@ export class CrawlAdmissionPolicy {
 		private readonly robotsService: RobotsService,
 	) {}
 
-	normalizeDiscoveredLinks(parent: QueueItem, links: ExtractedLink[]): NormalizedDiscoveredLink[] {
+	normalizeDiscoveredLinks(
+		documentUrl: string,
+		links: ExtractedLink[],
+	): NormalizedDiscoveredLink[] {
 		return links.flatMap((link) => {
-			const normalized = normalizeDiscoveredLink(link, this.options, parent.url);
+			const normalized = normalizeDiscoveredLink(link, this.options, documentUrl);
 			return "error" in normalized ? [] : [normalized];
 		});
-	}
-
-	async admitDiscoveredLinks(
-		parent: QueueItem,
-		links: ExtractedLink[],
-		signal?: AbortSignal,
-	): Promise<LinkAdmissionResult[]> {
-		const results: LinkAdmissionResult[] = [];
-		for (const link of links) {
-			throwIfAborted(signal);
-			const normalized = normalizeDiscoveredLink(link, this.options, parent.url);
-			if ("error" in normalized) {
-				results.push({
-					type: "rejected",
-					reason: normalized.reason,
-					url: link.url,
-				});
-				continue;
-			}
-
-			const [result] = await this.admitNormalizedDiscoveredLinks(parent, [normalized], signal);
-			if (result) results.push(result);
-		}
-		return results;
 	}
 
 	async admitNormalizedDiscoveredLinks(

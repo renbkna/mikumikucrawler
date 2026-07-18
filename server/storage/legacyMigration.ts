@@ -472,7 +472,7 @@ function importLegacySessions(db: Database): void {
 	}
 
 	const insertQueue = db.prepare(`
-		INSERT OR IGNORE INTO crawl_queue_items
+		INSERT INTO crawl_queue_items
 			(crawl_id, url, depth, retries, parent_url, domain, available_at)
 		VALUES (?, ?, ?, ?, ?, ?, 0)
 	`);
@@ -499,9 +499,19 @@ function importLegacySessions(db: Database): void {
 				},
 			];
 		});
+		const migratedQueueUrls = new Set<string>();
+		const migratedQueue = validQueue.filter((item) => {
+			if (migratedQueueUrls.has(item.url)) return false;
+			migratedQueueUrls.add(item.url);
+			return true;
+		});
 		const legacyStatus = typeof row.status === "string" ? row.status : "interrupted";
 		const status =
-			legacyStatus === "completed" ? "completed" : validQueue.length > 0 ? "interrupted" : "failed";
+			legacyStatus === "completed"
+				? "completed"
+				: migratedQueue.length > 0
+					? "interrupted"
+					: "failed";
 		const counters =
 			status === "completed"
 				? completedLegacyCounters(row.stats)
@@ -549,7 +559,7 @@ function importLegacySessions(db: Database): void {
 		);
 
 		if (status === "interrupted") {
-			for (const item of validQueue) {
+			for (const item of migratedQueue) {
 				insertQueue.run(id, item.url, item.depth, item.retries, item.parentUrl, item.domain);
 			}
 		}

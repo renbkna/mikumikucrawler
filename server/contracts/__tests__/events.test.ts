@@ -118,23 +118,48 @@ describe("crawl event schema", () => {
 		expect(response.status).toBe(422);
 	});
 
-	test("rejects fractional page payload ids", async () => {
-		const response = await app.handle(
-			new Request("http://localhost/event", {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({
-					...baseEvent,
-					type: "crawl.page",
-					payload: {
-						id: 1.5,
-						url: "https://example.com/page",
-					},
+	test("requires a positive integer persisted page id", async () => {
+		for (const id of [null, 0, 1.5]) {
+			const response = await app.handle(
+				new Request("http://localhost/event", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({
+						...baseEvent,
+						type: "crawl.page",
+						payload: {
+							id,
+							pageCount: 1,
+							url: "https://example.com/page",
+						},
+					}),
 				}),
-			}),
-		);
+			);
 
-		expect(response.status).toBe(422);
+			expect(response.status).toBe(422);
+		}
+	});
+
+	test("requires a positive integer post-commit page count", async () => {
+		for (const pageCount of [undefined, -1, 0, 1.5]) {
+			const response = await app.handle(
+				new Request("http://localhost/event", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({
+						...baseEvent,
+						type: "crawl.page",
+						payload: {
+							id: 1,
+							pageCount,
+							url: "https://example.com/page",
+						},
+					}),
+				}),
+			);
+
+			expect(response.status).toBe(422);
+		}
 	});
 
 	test("rejects malformed nested processed page data", async () => {
@@ -147,6 +172,7 @@ describe("crawl event schema", () => {
 					type: "crawl.page",
 					payload: {
 						id: 1,
+						pageCount: 1,
 						url: "https://example.com/page",
 						processedData: {
 							extractedData: {},

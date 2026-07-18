@@ -5,8 +5,8 @@ import type {
 	CrawlCounters,
 	CrawlListResponse,
 	CrawlOptions,
+	CrawlRecoverySnapshot,
 	CrawlSummary,
-	ResumeCrawlResponse,
 } from "./crawl.js";
 import type { CrawlEventEnvelope } from "./events.js";
 import type { PageContentResponse } from "./page.js";
@@ -25,11 +25,11 @@ import {
 	CrawlPagePayloadSchema,
 	CrawlPageSummarySchema,
 	CrawlPagesResponseSchema,
+	CrawlRecoverySnapshotSchema,
 	CrawlSummarySchema,
 	PageContentResponseSchema,
 	ProcessedPageDataSchema,
 	QueueStatsSchema,
-	ResumeCrawlResponseSchema,
 } from "./schemas.js";
 
 function check<T extends TSchema>(schema: T, value: unknown): value is Static<T> {
@@ -95,14 +95,19 @@ export function isCrawlPageSummary(value: unknown): value is CrawlPageSummary {
 }
 
 export function isCrawlPagesResponse(value: unknown): value is CrawlPagesResponse {
-	return check(CrawlPagesResponseSchema, value) && value.pages.every(isCrawlPageSummary);
+	return (
+		check(CrawlPagesResponseSchema, value) &&
+		value.pages.every(isCrawlPageSummary) &&
+		value.count >= value.pages.length
+	);
 }
 
-export function isResumeCrawlResponse(value: unknown): value is ResumeCrawlResponse {
+export function isCrawlRecoverySnapshot(value: unknown): value is CrawlRecoverySnapshot {
 	return (
-		check(ResumeCrawlResponseSchema, value) &&
+		check(CrawlRecoverySnapshotSchema, value) &&
 		isCrawlSummary(value.crawl) &&
-		value.pages.every(isCrawlPageSummary)
+		value.pages.every(isCrawlPageSummary) &&
+		value.pageCount >= value.pages.length
 	);
 }
 

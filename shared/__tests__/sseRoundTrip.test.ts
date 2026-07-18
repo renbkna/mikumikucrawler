@@ -144,6 +144,7 @@ describe("SSE round-trip: EventStream → SSE response → parseCrawlEventEnvelo
 		const parsed = expectEnvelope(
 			await publish("crawl.page", {
 				id: 42,
+				pageCount: 1,
 				url: "https://example.com/page",
 				title: "Test Page",
 				description: "A test page",
@@ -153,6 +154,7 @@ describe("SSE round-trip: EventStream → SSE response → parseCrawlEventEnvelo
 		);
 
 		expect(parsed.payload.id).toBe(42);
+		expect(parsed.payload.pageCount).toBe(1);
 		expect(parsed.payload.url).toBe("https://example.com/page");
 	});
 
@@ -278,6 +280,7 @@ describe("SSE round-trip: EventStream → SSE response → parseCrawlEventEnvelo
 		const e2 = await publish("crawl.log", { message: "fetching..." });
 		const e3 = await publish("crawl.page", {
 			id: 1,
+			pageCount: 1,
 			url: "https://example.com",
 		});
 

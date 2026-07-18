@@ -126,6 +126,8 @@ Rules:
 - only `paused` and `interrupted` crawls are resumable
 - resume restores only data scoped to the same `crawlId`
 - resume never depends on a browser connection identifier
+- create and resume admission close before process shutdown snapshots active runtimes;
+  requests arriving after that point return `503 SERVICE_CLOSING`
 
 ### `GET /api/crawls/:id`
 
@@ -159,6 +161,8 @@ Rules:
 - subscriber disconnect does not stop the crawl
 - events are ordered per crawl
 - terminal lifecycle emits exactly one terminal event
+- process startup acquires the exclusive listener, then synchronously marks
+  orphaned active crawls interrupted before yielding to request admission
 
 ### Existing product endpoints kept
 
@@ -269,7 +273,9 @@ Every event includes:
 
 - `sequence` starts at `1` for each crawl.
 - `sequence` strictly increases by `1`.
-- `crawl.page` is emitted only after page persistence succeeds.
+- `crawl.page` is emitted only after page persistence succeeds and carries the
+  positive persisted page `id` and positive exact post-commit `pageCount` from
+  that same transaction.
 - `crawl.completed`, `crawl.failed`, and `crawl.stopped` are terminal and mutually exclusive.
 - `crawl.paused` is resumable and non-terminal.
 - `crawl.progress` may repeat snapshots, but sequence ordering must still hold.
@@ -279,6 +285,13 @@ Every event includes:
 - After process restart, stream cleanup, or history eviction, clients must
   recover from persisted crawl summary and page state, then continue from new
   live events.
+
+## Document Processing Limits
+
+- Decoded HTML and JSON documents are capped at 1 MiB before synchronous parsing.
+- PDF documents retain a separate 50 MiB limit plus page-count and processing-time limits.
+- Static acquisition, browser document routing, and rendered DOM snapshots enforce
+  the same text-document ceiling before content enters the processor.
 
 ## Resume Contract
 
@@ -402,8 +415,41 @@ Required columns:
 Rules:
 
 - page history is run-scoped
-- `pages` stores crawl results and HTTP validators; it is not the source of truth for resume dedupe
+- the crawl-item completion transaction is the only application page-write path;
+  it owns the page row, terminal outcome, queue removal, counters, and event sequence
+- item completion requires and consumes exactly one pending queue row; it cannot
+  manufacture terminal or page state for work that was never queued
+- queue admission persists the pending row before exposing in-memory queue or
+  budget state; a failed enqueue consumes no crawl or domain admission
+- retries update an existing pending row and fail if it is missing; only the
+  completion transaction removes one pending item, so rescheduling cannot recreate work
+- item completion is single-assignment per crawl URL; duplicate completion fails
+  transactionally instead of rewriting a page or advancing projections
+- terminal URLs and pending queue items are mutually exclusive; migration `0007`
+  removes historical overlaps and database triggers reject their recreation
+- the runtime rejects any terminal URL that nevertheless reaches page processing;
+  it does not silently treat duplicate work as a no-op
+- the page repository exposes read projections only
+- the consumed queue row owns stored page URL/domain identity and parent/depth lineage;
+  completion page data cannot restate its domain
+- the validated effective document URL owns document-base resolution and
+  internal-versus-external classification for discovered links after redirects
+- `pages` stores crawl results and reported HTTP metadata; it is not cache authority
+  or the source of truth for resume dedupe
+- fetch acquisition never reads prior pages or sends same-run conditional requests;
+  an unsolicited `304` is rejected instead of creating a second success path
+- pre-`0005` pages have no recoverable exact discovered total; their zero placeholder
+  is an inert migration projection contained by terminal status and the
+  terminal/queue exclusion
 - resume restores terminal URL outcomes from `crawl_terminal_urls WHERE crawl_id = ?`
+- terminal restoration validates the complete batch for unique canonical URL
+  identity before mutating counters, admission, or domain-budget state
+- pending rows reserve domain capacity; fetched terminal outcomes retain that
+  reservation, while pre-fetch terminal skips release it and persist as uncharged
+- historical pending rows that already exceed the restored global or domain
+  budget are bounded migration containment: the pipeline logs and terminally
+  skips them without fetching or charging domain capacity; current admission
+  cannot create new excess rows
 
 ### `page_links`
 
@@ -461,7 +507,7 @@ Rules:
 
 - queueing
 - fetch/render
-- robots checks
+- robots checks through one manager-owned process service, with origin-keyed cache and in-flight loads
 - content processing
 - link extraction
 - storage of successful pages
@@ -471,6 +517,7 @@ Rules:
 - domain code depending on Elysia request context
 - domain code writing directly to SSE subscribers
 - runtime ownership keyed by browser socket identifier
+- shared robots requests surviving manager shutdown
 
 ## Verification Requirements
 

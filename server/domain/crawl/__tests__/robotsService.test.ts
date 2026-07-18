@@ -56,6 +56,51 @@ describe("RobotsService", () => {
 		expect(fetch).toHaveBeenCalledTimes(1);
 	});
 
+	test("coalesces concurrent rules loads for one origin", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const fetch = mock(async () => {
+			await gate;
+			return new Response("User-agent: *\nAllow: /");
+		});
+		const service = new RobotsService({ fetch }, createLogger());
+
+		const first = service.evaluate("https://example.com/one");
+		const second = service.evaluate("https://example.com/two");
+		await Bun.sleep(0);
+
+		expect(fetch).toHaveBeenCalledTimes(1);
+		release();
+		await expect(Promise.all([first, second])).resolves.toEqual([
+			expect.objectContaining({ type: "allowed" }),
+			expect.objectContaining({ type: "allowed" }),
+		]);
+	});
+
+	test("caller cancellation does not poison a shared rules load", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const fetch = mock(async () => {
+			await gate;
+			return new Response("User-agent: *\nAllow: /");
+		});
+		const service = new RobotsService({ fetch }, createLogger());
+		const controller = new AbortController();
+
+		const canceled = service.evaluate("https://example.com/canceled", controller.signal);
+		const survivor = service.evaluate("https://example.com/survivor");
+		controller.abort(new Error("page canceled"));
+
+		await expect(canceled).rejects.toThrow("page canceled");
+		expect(fetch).toHaveBeenCalledTimes(1);
+		release();
+		await expect(survivor).resolves.toMatchObject({ type: "allowed" });
+	});
+
 	test("treats denied robots fetches as unavailable policy", async () => {
 		const fetch = mock(async () => new Response("forbidden", { status: 403 }));
 		const service = new RobotsService({ fetch }, createLogger());

@@ -15,7 +15,6 @@ export interface QueueItem {
 interface QueuePersistence {
 	enqueueMany(items: QueueItem[]): void;
 	reschedule(item: QueueItem): void;
-	remove(url: string): void;
 	clear(): void;
 }
 
@@ -23,7 +22,6 @@ export class CrawlQueue {
 	private readonly pending: QueueItem[] = [];
 	private readonly queuedUrls = new Set<string>();
 	private readonly activeUrls = new Set<string>();
-	private readonly rescheduledUrls = new Set<string>();
 
 	constructor(
 		private readonly options: CrawlOptions,
@@ -42,9 +40,11 @@ export class CrawlQueue {
 
 	restore(items: QueueItem[]): void {
 		for (const item of items) {
-			if (this.queuedUrls.has(item.url)) continue;
+			if (this.queuedUrls.has(item.url)) {
+				throw new Error(`Cannot restore duplicate queued URL: ${item.url}`);
+			}
 			this.state.restoreAdmission(item.url);
-			this.state.restoreDomainAdmission?.(item.domain);
+			this.state.restoreDomainAdmission(item.domain);
 			this.pending.push(item);
 			this.queuedUrls.add(item.url);
 		}
@@ -82,11 +82,7 @@ export class CrawlQueue {
 			return false;
 		}
 
-		if (
-			!(this.state.canAdmitUrl?.(item.url) ?? true) ||
-			!(this.state.tryAdmitDomain?.(item.domain) ?? true) ||
-			!this.state.tryAdmit(item.url)
-		) {
+		if (!this.state.canAdmit(item.url, item.domain)) {
 			return false;
 		}
 
@@ -95,9 +91,10 @@ export class CrawlQueue {
 			availableAt: item.availableAt ?? Date.now(),
 		};
 
+		this.persistence.enqueueMany([queueItem]);
+		this.state.recordAdmission(queueItem.url, queueItem.domain);
 		this.pending.push(queueItem);
 		this.queuedUrls.add(queueItem.url);
-		this.persistence.enqueueMany([queueItem]);
 		return true;
 	}
 
@@ -108,10 +105,9 @@ export class CrawlQueue {
 			availableAt: Date.now() + delayMs,
 		};
 
+		this.persistence.reschedule(retryItem);
 		this.pending.push(retryItem);
 		this.queuedUrls.add(retryItem.url);
-		this.rescheduledUrls.add(retryItem.url);
-		this.persistence.reschedule(retryItem);
 	}
 
 	clearRetryTimers(): void {
@@ -156,8 +152,8 @@ export class CrawlQueue {
 			this.state.reserveDomain(delayKey, now);
 			const nextAllowedAt = this.state.nextAllowedAtForDomain(delayKey);
 			if (nextAllowedAt > (candidate.availableAt ?? 0)) {
+				this.persistence.reschedule({ ...candidate, availableAt: nextAllowedAt });
 				candidate.availableAt = nextAllowedAt;
-				this.persistence.reschedule(candidate);
 			}
 			this.deferPendingByDelayKey((pendingDelayKey) =>
 				this.state.nextAllowedAtForDomain(pendingDelayKey),
@@ -171,17 +167,8 @@ export class CrawlQueue {
 		};
 	}
 
-	markDone(item: QueueItem, options: { persist?: boolean } = {}): void {
+	markDone(item: QueueItem): void {
 		this.activeUrls.delete(item.url);
-		if (options.persist === false) {
-			this.rescheduledUrls.delete(item.url);
-			return;
-		}
-		const wasRescheduled = this.rescheduledUrls.delete(item.url);
-		if (wasRescheduled) {
-			return;
-		}
-		this.persistence.remove(item.url);
 	}
 
 	markInterrupted(item: QueueItem): void {
@@ -201,8 +188,8 @@ export class CrawlQueue {
 				continue;
 			}
 
+			this.persistence.reschedule({ ...item, availableAt: nextAllowedAt });
 			item.availableAt = nextAllowedAt;
-			this.persistence.reschedule(item);
 		}
 	}
 

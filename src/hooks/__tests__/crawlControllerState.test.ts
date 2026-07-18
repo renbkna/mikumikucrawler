@@ -31,6 +31,38 @@ function applyEvent(state: CrawlControllerState, envelope: CrawlEventEnvelope) {
 	});
 }
 
+function createSummary(
+	overrides: Partial<CrawlSummary> & Pick<CrawlSummary, "id" | "status">,
+): CrawlSummary {
+	const { id, status, ...remainingOverrides } = overrides;
+	const options = {
+		...createInitialCrawlControllerState().crawlOptions,
+		target: "https://example.com/",
+	};
+	return {
+		id,
+		target: options.target,
+		status,
+		options,
+		counters: {
+			pagesScanned: 0,
+			successCount: 0,
+			failureCount: 0,
+			skippedCount: 0,
+			linksFound: 0,
+			mediaFiles: 0,
+			totalDataKb: 0,
+		},
+		createdAt: "2026-03-21T12:00:00.000Z",
+		startedAt: "2026-03-21T12:00:01.000Z",
+		updatedAt: "2026-03-21T12:00:02.000Z",
+		completedAt: null,
+		stopReason: null,
+		resumable: status === "paused" || status === "interrupted",
+		...remainingOverrides,
+	};
+}
+
 describe("crawlControllerReducer", () => {
 	test("terminal subscription teardown only settles the active crawl subscription", () => {
 		const oldTerminal: CrawlEventEnvelope = {
@@ -160,6 +192,312 @@ describe("crawlControllerReducer", () => {
 		}).state;
 
 		expect(afterOldEvent).toEqual(nextCrawl);
+	});
+
+	test("durable active snapshots repair missing pages without regressing newer live state", () => {
+		const progressed = applyEvent(
+			reduce(createInitialCrawlControllerState(), {
+				type: "crawlAccepted",
+				crawlId: "crawl-gap",
+				kind: "start",
+			}),
+			{
+				type: "crawl.progress",
+				crawlId: "crawl-gap",
+				sequence: 10,
+				timestamp: "2026-03-21T12:00:10.000Z",
+				payload: {
+					counters: {
+						pagesScanned: 10,
+						successCount: 10,
+						failureCount: 0,
+						skippedCount: 0,
+						linksFound: 20,
+						mediaFiles: 0,
+						totalDataKb: 50,
+					},
+					queue: { activeRequests: 1, queueLength: 1, elapsedTime: 10, pagesPerSecond: 1 },
+					elapsedSeconds: 10,
+					pagesPerSecond: 1,
+					stopReason: null,
+				},
+			},
+		).state;
+		const live = applyEvent(progressed, {
+			type: "crawl.page",
+			crawlId: "crawl-gap",
+			sequence: 11,
+			timestamp: "2026-03-21T12:00:11.000Z",
+			payload: {
+				id: 7,
+				pageCount: 10,
+				url: "https://example.com/live",
+				title: "Rich live title",
+				content: "<main>rich live content</main>",
+				domain: "example.com",
+			},
+		}).state;
+
+		const synchronized = reduce(live, {
+			type: "crawlRecoverySnapshotSynchronized",
+			snapshot: {
+				crawl: createSummary({
+					id: "crawl-gap",
+					status: "running",
+					counters: {
+						pagesScanned: 5,
+						successCount: 5,
+						failureCount: 0,
+						skippedCount: 0,
+						linksFound: 8,
+						mediaFiles: 0,
+						totalDataKb: 20,
+					},
+				}),
+				pages: [
+					{ id: 8, url: "https://example.com/missed-newer", domain: "example.com" },
+					{
+						id: 7,
+						url: "https://example.com/live",
+						title: "Lower-fidelity durable summary",
+						domain: "example.com",
+					},
+					{ id: 1, url: "https://example.com/missed", domain: "example.com" },
+				],
+				pageCount: 5,
+			},
+		});
+
+		expect(synchronized.stats.pagesScanned).toBe(10);
+		expect(synchronized.storedPageCount).toBe(10);
+		expect(synchronized.runPhase).toBe("running");
+		expect(synchronized.crawledPages.map((page) => page.id)).toEqual([8, 7, 1]);
+		expect(synchronized.crawledPages[1]).toMatchObject({
+			title: "Rich live title",
+			content: "<main>rich live content</main>",
+		});
+	});
+
+	test("durable active snapshots repair a missed counter tuple atomically", () => {
+		const active = reduce(createInitialCrawlControllerState(), {
+			type: "crawlAccepted",
+			crawlId: "crawl-counter-gap",
+			kind: "start",
+		});
+
+		const synchronized = reduce(active, {
+			type: "crawlRecoverySnapshotSynchronized",
+			snapshot: {
+				crawl: createSummary({
+					id: "crawl-counter-gap",
+					status: "running",
+					counters: {
+						pagesScanned: 3,
+						successCount: 2,
+						failureCount: 1,
+						skippedCount: 0,
+						linksFound: 7,
+						mediaFiles: 1,
+						totalDataKb: 12,
+					},
+				}),
+				pages: [],
+				pageCount: 0,
+			},
+		});
+
+		expect(synchronized.stats).toMatchObject({
+			pagesScanned: 3,
+			successCount: 2,
+			failureCount: 1,
+			skippedCount: 0,
+			linksFound: 7,
+			mediaFiles: 1,
+			totalData: 12,
+		});
+
+		const replayedProgress = applyEvent(synchronized, {
+			type: "crawl.progress",
+			crawlId: "crawl-counter-gap",
+			sequence: 1,
+			timestamp: "2026-03-21T12:00:03.000Z",
+			payload: {
+				counters: {
+					pagesScanned: 1,
+					successCount: 1,
+					failureCount: 0,
+					skippedCount: 0,
+					linksFound: 2,
+					mediaFiles: 0,
+					totalDataKb: 4,
+				},
+				queue: { activeRequests: 1, queueLength: 2, elapsedTime: 3, pagesPerSecond: 2 },
+				elapsedSeconds: 3,
+				pagesPerSecond: 2,
+				stopReason: null,
+			},
+		}).state;
+
+		expect(replayedProgress.stats.pagesScanned).toBe(3);
+		expect(replayedProgress.stats.linksFound).toBe(7);
+		expect(replayedProgress.stats.pagesPerSecond).toBe("2.00");
+		expect(replayedProgress.queueStats?.queueLength).toBe(2);
+	});
+
+	test("durable settled snapshots recover terminal state when SSE history is unavailable", () => {
+		const active = reduce(createInitialCrawlControllerState(), {
+			type: "crawlAccepted",
+			crawlId: "crawl-cleaned-stream",
+			kind: "start",
+		});
+		const synchronized = reduce(active, {
+			type: "crawlRecoverySnapshotSynchronized",
+			snapshot: {
+				crawl: createSummary({
+					id: "crawl-cleaned-stream",
+					status: "completed",
+					completedAt: "2026-03-21T12:01:00.000Z",
+					counters: {
+						pagesScanned: 2,
+						successCount: 2,
+						failureCount: 0,
+						skippedCount: 0,
+						linksFound: 3,
+						mediaFiles: 0,
+						totalDataKb: 4,
+					},
+				}),
+				pages: [
+					{ id: 2, url: "https://example.com/two", domain: "example.com" },
+					{ id: 1, url: "https://example.com/one", domain: "example.com" },
+				],
+				pageCount: 2,
+			},
+		});
+
+		expect(synchronized.runPhase).toBe("completed");
+		expect(synchronized.connectionState).toBe("disconnected");
+		expect(synchronized.progress).toBe(100);
+		expect(synchronized.stats.pagesScanned).toBe(2);
+		expect(synchronized.crawledPages).toHaveLength(2);
+		expect(synchronized.storedPageCount).toBe(2);
+	});
+
+	test("durable page count remains authoritative beyond the bounded display buffer", () => {
+		const active = reduce(createInitialCrawlControllerState(), {
+			type: "crawlAccepted",
+			crawlId: "crawl-large",
+			kind: "start",
+		});
+		const snapshotPages = Array.from({ length: UI_LIMITS.MAX_PAGE_BUFFER }, (_, index) => ({
+			id: index + 1,
+			url: `https://example.com/${index + 1}`,
+			domain: "example.com",
+		}));
+		let state = reduce(active, {
+			type: "crawlRecoverySnapshotSynchronized",
+			snapshot: {
+				crawl: createSummary({ id: "crawl-large", status: "running" }),
+				pages: snapshotPages,
+				pageCount: 350,
+			},
+		});
+
+		expect(state.crawledPages).toHaveLength(UI_LIMITS.MAX_PAGE_BUFFER);
+		expect(state.storedPageCount).toBe(350);
+
+		state = applyEvent(state, {
+			type: "crawl.page",
+			crawlId: "crawl-large",
+			sequence: 1,
+			timestamp: "2026-03-21T12:01:01.000Z",
+			payload: {
+				id: 351,
+				pageCount: 351,
+				url: "https://example.com/351",
+				domain: "example.com",
+			},
+		}).state;
+
+		expect(state.crawledPages).toHaveLength(UI_LIMITS.MAX_PAGE_BUFFER);
+		expect(state.storedPageCount).toBe(351);
+
+		state = applyEvent(state, {
+			type: "crawl.progress",
+			crawlId: "crawl-large",
+			sequence: 2,
+			timestamp: "2026-03-21T12:01:02.000Z",
+			payload: {
+				counters: {
+					pagesScanned: 400,
+					successCount: 400,
+					failureCount: 0,
+					skippedCount: 0,
+					linksFound: 700,
+					mediaFiles: 0,
+					totalDataKb: 1_024,
+				},
+				queue: { activeRequests: 1, queueLength: 1, elapsedTime: 20, pagesPerSecond: 5 },
+				elapsedSeconds: 20,
+				pagesPerSecond: 5,
+				stopReason: null,
+			},
+		}).state;
+
+		expect(state.storedPageCount).toBe(351);
+	});
+
+	test("late active snapshots cannot regress terminal reducer state", () => {
+		const completed = applyEvent(
+			reduce(createInitialCrawlControllerState(), {
+				type: "crawlAccepted",
+				crawlId: "crawl-terminal-race",
+				kind: "start",
+			}),
+			{
+				type: "crawl.completed",
+				crawlId: "crawl-terminal-race",
+				sequence: 4,
+				timestamp: "2026-03-21T12:01:00.000Z",
+				payload: {
+					counters: {
+						pagesScanned: 1,
+						successCount: 1,
+						failureCount: 0,
+						skippedCount: 0,
+						linksFound: 2,
+						mediaFiles: 0,
+						totalDataKb: 3,
+					},
+				},
+			},
+		).state;
+
+		const synchronized = reduce(completed, {
+			type: "crawlRecoverySnapshotSynchronized",
+			snapshot: {
+				crawl: createSummary({
+					id: "crawl-terminal-race",
+					status: "running",
+					counters: {
+						pagesScanned: 2,
+						successCount: 2,
+						failureCount: 0,
+						skippedCount: 0,
+						linksFound: 4,
+						mediaFiles: 0,
+						totalDataKb: 6,
+					},
+				}),
+				pages: [{ id: 1, url: "https://example.com/one", domain: "example.com" }],
+				pageCount: 1,
+			},
+		});
+
+		expect(synchronized.runPhase).toBe("completed");
+		expect(synchronized.progress).toBe(100);
+		expect(synchronized.stats.pagesScanned).toBe(1);
+		expect(synchronized.crawledPages).toHaveLength(1);
 	});
 
 	test("marks terminal events as complete and clears pending command state", () => {
@@ -667,14 +1005,14 @@ describe("crawlControllerReducer", () => {
 			crawlId: "crawl-1",
 			sequence: 1,
 			timestamp: "2026-03-21T12:00:00.000Z",
-			payload: { id: 1, url: "https://example.com/a" },
+			payload: { id: 1, pageCount: 1, url: "https://example.com/a" },
 		});
 		const t2 = applyEvent(t1.state, {
 			type: "crawl.page",
 			crawlId: "crawl-1",
 			sequence: 2,
 			timestamp: "2026-03-21T12:00:01.000Z",
-			payload: { id: 2, url: "https://example.com/b", title: "Page B" },
+			payload: { id: 2, pageCount: 2, url: "https://example.com/b", title: "Page B" },
 		});
 
 		expect(t2.state.crawledPages).toHaveLength(2);
@@ -682,6 +1020,8 @@ describe("crawlControllerReducer", () => {
 		const [firstPage, secondPage] = t2.state.crawledPages;
 		expect(firstPage?.url).toBe("https://example.com/b");
 		expect(secondPage?.url).toBe("https://example.com/a");
+		expect(firstPage).not.toHaveProperty("pageCount");
+		expect(t2.state.storedPageCount).toBe(2);
 	});
 
 	test("crawl.progress updates stats, queue, and progress", () => {
@@ -998,6 +1338,7 @@ describe("crawlControllerReducer", () => {
 			timestamp: "2026-03-21T12:00:01.000Z",
 			payload: {
 				id: 1,
+				pageCount: 1,
 				url: "https://active.example/page",
 				title: "active",
 			},
@@ -1241,7 +1582,7 @@ describe("crawlControllerReducer", () => {
 			crawlId: "crawl-1",
 			sequence: 1,
 			timestamp: "2026-03-21T12:00:00.000Z",
-			payload: { id: 1, url: "https://example.com" },
+			payload: { id: 1, pageCount: 1, url: "https://example.com" },
 		}).state;
 
 		state = crawlControllerReducer(state, { type: "liveStateReset" }).state;
@@ -1305,7 +1646,7 @@ describe("crawlControllerReducer", () => {
 			crawlId: "lifecycle-1",
 			sequence: 3,
 			timestamp: "2026-03-21T12:00:02.000Z",
-			payload: { id: 1, url: "https://example.com" },
+			payload: { id: 1, pageCount: 1, url: "https://example.com" },
 		}).state;
 		expect(state.crawledPages).toHaveLength(1);
 
@@ -1406,24 +1747,33 @@ describe("crawlControllerReducer", () => {
 		let state = reduce(
 			initial,
 			{
-				type: "crawlSnapshotHydrated",
-				crawl: {
-					counters: {
-						pagesScanned: 2,
-						successCount: 2,
-						failureCount: 0,
-						skippedCount: 0,
-						linksFound: 4,
-						mediaFiles: 0,
-						totalDataKb: 8,
-					},
-				},
-				pages: [
-					{ id: 2, url: "https://resume.example/two", domain: "resume.example" },
-					{ id: 1, url: "https://resume.example/one", domain: "resume.example" },
-				],
+				type: "crawlAccepted",
+				crawlId: "crawl-resume",
+				kind: "resume",
 			},
-			{ type: "crawlAccepted", crawlId: "crawl-resume", kind: "resume" },
+			{
+				type: "crawlRecoverySnapshotSynchronized",
+				snapshot: {
+					crawl: createSummary({
+						id: "crawl-resume",
+						status: "starting",
+						counters: {
+							pagesScanned: 2,
+							successCount: 2,
+							failureCount: 0,
+							skippedCount: 0,
+							linksFound: 4,
+							mediaFiles: 0,
+							totalDataKb: 8,
+						},
+					}),
+					pages: [
+						{ id: 2, url: "https://resume.example/two", domain: "resume.example" },
+						{ id: 1, url: "https://resume.example/one", domain: "resume.example" },
+					],
+					pageCount: 2,
+				},
+			},
 		);
 
 		expect(state.stats.pagesScanned).toBe(2);
@@ -1435,7 +1785,12 @@ describe("crawlControllerReducer", () => {
 			crawlId: "crawl-resume",
 			sequence: 100,
 			timestamp: "2026-03-21T12:02:00.000Z",
-			payload: { id: 2, url: "https://resume.example/two", title: "Replayed" },
+			payload: {
+				id: 2,
+				pageCount: 2,
+				url: "https://resume.example/two",
+				title: "Replayed",
+			},
 		}).state;
 
 		expect(state.crawledPages).toHaveLength(2);

@@ -47,7 +47,9 @@ export const REQUEST_CONSTANTS = {
 	MAX_ROBOTS_RESPONSE_BYTES: 512 * 1024,
 	/** Maximum URL length for validation (2000 characters) */
 	MAX_URL_LENGTH,
-	/** Maximum response body size to buffer per crawled page (50 MB) */
+	/** Maximum decoded HTML/JSON document size admitted to synchronous processing (1 MiB). */
+	MAX_TEXT_DOCUMENT_BYTES: 1 * 1024 * 1024,
+	/** Maximum response body size buffered for binary documents and browser subresources (50 MiB). */
 	MAX_RESPONSE_BYTES: 50 * 1024 * 1024,
 } as const;
 

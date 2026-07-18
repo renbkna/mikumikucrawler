@@ -39,7 +39,7 @@ describe("CrawlAdmissionPolicy", () => {
 			} as never,
 		);
 
-		const normalized = policy.normalizeDiscoveredLinks(parent, [
+		const normalized = policy.normalizeDiscoveredLinks(parent.url, [
 			{ url: "HTTPS://Example.com:443/page?b=2&a=1#section" },
 			{ url: "https://example.com/app.css" },
 		]);
@@ -47,7 +47,7 @@ describe("CrawlAdmissionPolicy", () => {
 		expect(normalized.map((link) => link.link.url)).toEqual(["https://example.com/page?a=1&b=2"]);
 	});
 
-	test("applies URL filtering, nofollow, robots, delay, and queue admission in one boundary", async () => {
+	test("admits the canonical crawl-visible links through one policy boundary", async () => {
 		const setDomainDelay = mock(() => undefined);
 		const enqueueNormalized = mock(() => true);
 		const evaluateIdentity = mock(async (identity: { canonicalUrl: string }) => ({
@@ -62,13 +62,19 @@ describe("CrawlAdmissionPolicy", () => {
 			{ evaluateIdentity } as never,
 		);
 
-		const results = await policy.admitDiscoveredLinks(parent, [
+		const normalized = policy.normalizeDiscoveredLinks(parent.url, [
 			{ url: "https://example.com/allowed" },
 			{ url: "https://other.example/external" },
 			{ url: "https://example.com/app.css" },
 			{ url: "https://example.com/nofollow", nofollow: true },
 			{ url: "https://example.com/blocked" },
 		]);
+		expect(normalized.map((link) => link.link.url)).toEqual([
+			"https://example.com/allowed",
+			"https://example.com/nofollow",
+			"https://example.com/blocked",
+		]);
+		const results = await policy.admitNormalizedDiscoveredLinks(parent, normalized);
 
 		expect(results).toEqual([
 			expect.objectContaining({
@@ -81,16 +87,6 @@ describe("CrawlAdmissionPolicy", () => {
 					parentUrl: "https://example.com/start",
 				}),
 			}),
-			{
-				type: "rejected",
-				reason: "external-link",
-				url: "https://other.example/external",
-			},
-			{
-				type: "rejected",
-				reason: "resource-extension",
-				url: "https://example.com/app.css",
-			},
 			{
 				type: "rejected",
 				reason: "nofollow",
@@ -123,7 +119,10 @@ describe("CrawlAdmissionPolicy", () => {
 			} as never,
 		);
 
-		await policy.admitDiscoveredLinks(parent, [{ url: "http://example.com:8080/slow" }]);
+		const normalized = policy.normalizeDiscoveredLinks(parent.url, [
+			{ url: "http://example.com:8080/slow" },
+		]);
+		await policy.admitNormalizedDiscoveredLinks(parent, normalized);
 
 		expect(setDomainDelay).toHaveBeenCalledWith("http://example.com:8080", 1200);
 		expect(enqueueNormalized).toHaveBeenCalledWith(

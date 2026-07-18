@@ -3,7 +3,7 @@ import type {
 	CrawlEventEnvelopeSchema,
 	CrawlFailedPayloadSchema,
 	CrawlLogPayloadSchema,
-	CrawlPagePayloadSchema,
+	CrawlPageEventPayloadSchema,
 	CrawlPausedPayloadSchema,
 	CrawlProgressPayloadSchema,
 	CrawlStartedPayloadSchema,
@@ -47,7 +47,7 @@ export type SettledCrawlEventType = (typeof SETTLED_CRAWL_EVENT_TYPE_VALUES)[num
 
 export type CrawlStartedPayload = typeof CrawlStartedPayloadSchema.static;
 export type CrawlProgressPayload = typeof CrawlProgressPayloadSchema.static;
-export type CrawlPagePayload = typeof CrawlPagePayloadSchema.static;
+export type CrawlPagePayload = typeof CrawlPageEventPayloadSchema.static;
 export type CrawlLogPayload = typeof CrawlLogPayloadSchema.static;
 export type CrawlCompletedPayload = typeof CrawlCompletedPayloadSchema.static;
 export type CrawlFailedPayload = typeof CrawlFailedPayloadSchema.static;

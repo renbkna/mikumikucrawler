@@ -20,11 +20,8 @@ describe("page pipeline contract", () => {
 	test("records unsupported response types as skipped pages", async () => {
 		const eventSink = {
 			log: mock(() => undefined),
-			page: mock(() => undefined),
 		};
-		const recordTerminal = mock(() => true);
 		const pipeline = new PagePipeline(
-			"crawl-1",
 			{
 				crawlDepth: 1,
 				retryLimit: 0,
@@ -37,9 +34,7 @@ describe("page pipeline contract", () => {
 				canScheduleMore: () => true,
 				hasVisited: () => false,
 				isDomainBudgetExceeded: () => false,
-				recordTerminal,
 			} as never,
-			{} as never,
 			{} as never,
 			{
 				fetch: async () => ({
@@ -64,24 +59,19 @@ describe("page pipeline contract", () => {
 		expect(eventSink.log).toHaveBeenCalledWith(
 			"[Crawler] Unsupported content type application/x-apple-diskimage: https://example.com/download",
 		);
-		expect(eventSink.page).not.toHaveBeenCalled();
 	});
 
 	test("surfaces blocked fetch reasons to the event sink", async () => {
 		const eventSink = {
 			log: mock(() => undefined),
-			page: mock(() => undefined),
 		};
 		const state = {
 			canScheduleMore: () => true,
 			hasVisited: () => false,
 			isDomainBudgetExceeded: () => false,
 			adaptDomainDelay: mock(() => undefined),
-			recordTerminal: mock(() => undefined),
-			recordDomainPage: mock(() => undefined),
 		};
 		const pipeline = new PagePipeline(
-			"crawl-1",
 			{
 				crawlDepth: 1,
 				retryLimit: 0,
@@ -95,10 +85,6 @@ describe("page pipeline contract", () => {
 				enqueue: mock(() => undefined),
 				enqueueNormalized: mock(() => true),
 				scheduleRetry: mock(() => undefined),
-			} as never,
-			{
-				getLinksByPageUrl: () => [],
-				getDiscoveredLinkCountByPageUrl: () => 3,
 			} as never,
 			{
 				fetch: async () => ({
@@ -130,17 +116,13 @@ describe("page pipeline contract", () => {
 		expect(eventSink.log).toHaveBeenCalledWith(
 			"[Crawler] Consent wall could not be bypassed for https://www.youtube.com/watch?v=test",
 		);
-		expect(eventSink.page).not.toHaveBeenCalled();
 	});
 
 	test("records a skipped terminal outcome when max pages has already been reached", async () => {
 		const eventSink = {
 			log: mock(() => undefined),
-			page: mock(() => undefined),
 		};
-		const recordTerminal = mock(() => true);
 		const pipeline = new PagePipeline(
-			"crawl-1",
 			{
 				crawlDepth: 1,
 				retryLimit: 0,
@@ -153,14 +135,12 @@ describe("page pipeline contract", () => {
 				canScheduleMore: () => false,
 				hasVisited: () => false,
 				isDomainBudgetExceeded: () => false,
-				recordTerminal,
 			} as never,
 			{
 				enqueue: mock(() => undefined),
 				enqueueNormalized: mock(() => true),
 				scheduleRetry: mock(() => undefined),
 			} as never,
-			{} as never,
 			{
 				fetch: mock(async () => {
 					throw new Error("fetch should not be called");
@@ -187,16 +167,12 @@ describe("page pipeline contract", () => {
 		);
 	});
 
-	test("unchanged cached pages count against the domain budget", async () => {
-		const eventSink = {
-			log: mock(() => undefined),
-			page: mock(() => undefined),
-		};
-		const recordTerminal = mock(() => true);
-		const recordDomainPage = mock(() => undefined);
-		const recordDiscoveredLinks = mock(() => undefined);
+	test("contains restored work beyond the domain budget as an observable uncharged skip", async () => {
+		const eventSink = { log: mock(() => undefined) };
+		const fetch = mock(async () => {
+			throw new Error("fetch should not be called");
+		});
 		const pipeline = new PagePipeline(
-			"crawl-1",
 			{
 				crawlDepth: 1,
 				retryLimit: 0,
@@ -208,60 +184,72 @@ describe("page pipeline contract", () => {
 			{
 				canScheduleMore: () => true,
 				hasVisited: () => false,
-				isDomainBudgetExceeded: () => false,
-				recordTerminal,
-				recordDomainPage,
-				recordDiscoveredLinks,
+				isDomainBudgetExceeded: () => true,
 			} as never,
-			{
-				enqueue: mock(() => undefined),
-				enqueueNormalized: mock(() => true),
-				scheduleRetry: mock(() => undefined),
-			} as never,
-			{
-				getLinksByPageUrl: () => [],
-				getDiscoveredLinkCountByPageUrl: () => 3,
-			} as never,
-			{
-				fetch: async () => ({
-					type: "unchanged",
-					statusCode: 304,
-					lastModified: "Wed, 21 Oct 2015 07:28:00 GMT",
-					etag: '"abc"',
-				}),
-			} as never,
+			{} as never,
+			{ fetch } as never,
 			{} as never,
 			eventSink,
 			createLogger(),
 		);
+		const item = {
+			url: "https://example.com/restored-excess",
+			domain: "example.com",
+			depth: 1,
+			retries: 0,
+		};
 
-		const result = await pipeline.process({
-			url: "https://example.com/cached",
+		await expect(pipeline.process(item)).resolves.toEqual({
+			terminalOutcome: "skip",
+			terminalEffects: { chargeDomainBudget: false },
+		});
+		expect(fetch).not.toHaveBeenCalled();
+		expect(eventSink.log).toHaveBeenCalledWith(
+			"[Budget] Domain budget exceeded: https://example.com/restored-excess",
+		);
+	});
+
+	test("rejects a terminal URL that re-enters the runtime queue", async () => {
+		const fetch = mock(async () => {
+			throw new Error("fetch should not be called");
+		});
+		const pipeline = new PagePipeline(
+			{
+				crawlDepth: 1,
+				retryLimit: 0,
+				respectRobots: false,
+				saveMedia: false,
+				crawlMethod: "links",
+				contentOnly: false,
+			} as never,
+			{
+				hasVisited: () => true,
+			} as never,
+			{} as never,
+			{ fetch } as never,
+			{} as never,
+			{ log: mock(() => undefined) },
+			createLogger(),
+		);
+		const item = {
+			url: "https://example.com/already-terminal",
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
-		});
+		};
 
-		expect(result).toEqual({
-			terminalOutcome: "success",
-			terminalEffects: { chargeDomainBudget: true, discoveredLinks: 3 },
-		});
-		expect(eventSink.log).toHaveBeenCalledWith(
-			"[Crawler] Unchanged: https://example.com/cached (304)",
+		await expect(pipeline.process(item)).rejects.toThrow(
+			"Queued URL is already terminal: https://example.com/already-terminal",
 		);
+		expect(fetch).not.toHaveBeenCalled();
 	});
 
 	test("XHTML responses admit discovered links through the HTML pipeline", async () => {
 		const eventSink = {
 			log: mock(() => undefined),
-			page: mock(() => undefined),
 		};
 		const enqueueNormalized = mock(() => true);
-		const recordTerminal = mock(() => true);
-		const recordDomainPage = mock(() => undefined);
-		const recordDiscoveredLinks = mock(() => undefined);
 		const pipeline = new PagePipeline(
-			"crawl-1",
 			{
 				crawlDepth: 1,
 				retryLimit: 0,
@@ -274,16 +262,12 @@ describe("page pipeline contract", () => {
 				canScheduleMore: () => true,
 				hasVisited: () => false,
 				isDomainBudgetExceeded: () => false,
-				recordTerminal,
-				recordDomainPage,
-				recordDiscoveredLinks,
 			} as never,
 			{
 				enqueue: mock(() => undefined),
 				enqueueNormalized,
 				scheduleRetry: mock(() => undefined),
 			} as never,
-			{} as never,
 			{
 				fetch: async () => ({
 					type: "success",
@@ -325,16 +309,12 @@ describe("page pipeline contract", () => {
 		});
 	});
 
-	test("aborted processing does not persist or emit a late success", async () => {
+	test("aborted processing rejects before returning a late success", async () => {
 		const eventSink = {
 			log: mock(() => undefined),
-			page: mock(() => undefined),
 		};
-		const save = mock(() => 1);
-		const recordTerminal = mock(() => true);
 		const controller = new AbortController();
 		const pipeline = new PagePipeline(
-			"crawl-1",
 			{
 				crawlDepth: 1,
 				retryLimit: 0,
@@ -347,23 +327,15 @@ describe("page pipeline contract", () => {
 				canScheduleMore: () => true,
 				hasVisited: () => false,
 				isDomainBudgetExceeded: () => false,
-				recordTerminal,
-				recordDiscoveredLinks: mock(() => undefined),
-				recordDomainPage: mock(() => undefined),
 			} as never,
 			{
 				enqueue: mock(() => undefined),
 				scheduleRetry: mock(() => undefined),
 			} as never,
 			{
-				save,
-			} as never,
-			{
-				fetch: async (signal?: AbortSignal) => {
+				fetch: async (_item: unknown, signal?: AbortSignal) => {
+					expect(signal).toBe(controller.signal);
 					controller.abort(new Error("timeout"));
-					if (!signal) {
-						throw new Error("Expected signal");
-					}
 					return {
 						type: "success",
 						content: "<html><body><main>late</main></body></html>",
@@ -396,22 +368,13 @@ describe("page pipeline contract", () => {
 				controller.signal,
 			),
 		).rejects.toThrow("timeout");
-
-		expect(save).not.toHaveBeenCalled();
-		expect(recordTerminal).not.toHaveBeenCalled();
-		expect(eventSink.page).not.toHaveBeenCalled();
 	});
 
 	test("small valid pages are not treated as soft 404s solely because they are short", async () => {
 		const eventSink = {
 			log: mock(() => undefined),
-			page: mock(() => undefined),
 		};
-		const save = mock(() => 11);
-		const recordTerminal = mock(() => true);
-		const recordDomainPage = mock(() => undefined);
 		const pipeline = new PagePipeline(
-			"crawl-1",
 			{
 				crawlDepth: 1,
 				retryLimit: 0,
@@ -424,16 +387,10 @@ describe("page pipeline contract", () => {
 				canScheduleMore: () => true,
 				hasVisited: () => false,
 				isDomainBudgetExceeded: () => false,
-				recordTerminal,
-				recordDiscoveredLinks: mock(() => undefined),
-				recordDomainPage,
 			} as never,
 			{
 				enqueue: mock(() => undefined),
 				scheduleRetry: mock(() => undefined),
-			} as never,
-			{
-				save,
 			} as never,
 			{
 				fetch: async () => ({
@@ -463,8 +420,7 @@ describe("page pipeline contract", () => {
 			retries: 0,
 		});
 
-		expect(save).not.toHaveBeenCalled();
-		expect(result.page?.saveInput.url).toBe("https://example.com/");
+		expect(result.page?.eventPayload.url).toBe("https://example.com/");
 		expect(result.page?.eventPayload).not.toHaveProperty("id");
 		expect(result).toMatchObject({
 			terminalOutcome: "success",
@@ -477,15 +433,11 @@ describe("page pipeline contract", () => {
 		expect(eventSink.log).toHaveBeenCalledWith("[Crawler] Crawled https://example.com/");
 	});
 
-	test("rendered client error shells are terminal failures and are not persisted", async () => {
+	test("rendered client error shells return terminal failure without page data", async () => {
 		const eventSink = {
 			log: mock(() => undefined),
-			page: mock(() => undefined),
 		};
-		const recordTerminal = mock(() => true);
-		const recordDomainPage = mock(() => undefined);
 		const pipeline = new PagePipeline(
-			"crawl-1",
 			{
 				crawlDepth: 1,
 				retryLimit: 0,
@@ -499,14 +451,11 @@ describe("page pipeline contract", () => {
 				hasVisited: () => false,
 				isDomainBudgetExceeded: () => false,
 				adaptDomainDelay: mock(() => undefined),
-				recordTerminal,
-				recordDomainPage,
 			} as never,
 			{
 				enqueue: mock(() => undefined),
 				scheduleRetry: mock(() => undefined),
 			} as never,
-			{} as never,
 			{
 				fetch: async () => ({
 					type: "success",
@@ -549,13 +498,8 @@ describe("page pipeline contract", () => {
 	test("noindex terminal pages count against the domain budget", async () => {
 		const eventSink = {
 			log: mock(() => undefined),
-			page: mock(() => undefined),
 		};
-		const recordTerminal = mock(() => true);
-		const recordDomainPage = mock(() => undefined);
-		const recordDiscoveredLinks = mock(() => undefined);
 		const pipeline = new PagePipeline(
-			"crawl-1",
 			{
 				crawlDepth: 1,
 				retryLimit: 0,
@@ -568,16 +512,12 @@ describe("page pipeline contract", () => {
 				canScheduleMore: () => true,
 				hasVisited: () => false,
 				isDomainBudgetExceeded: () => false,
-				recordTerminal,
-				recordDomainPage,
-				recordDiscoveredLinks,
 			} as never,
 			{
 				enqueue: mock(() => undefined),
 				enqueueNormalized: mock(() => true),
 				scheduleRetry: mock(() => undefined),
 			} as never,
-			{} as never,
 			{
 				fetch: async () => ({
 					type: "success",
@@ -611,18 +551,14 @@ describe("page pipeline contract", () => {
 			terminalOutcome: "skip",
 			terminalEffects: { chargeDomainBudget: true },
 		});
-		expect(recordDiscoveredLinks).not.toHaveBeenCalled();
 	});
 
-	test("abort during noindex link admission does not record a terminal skip", async () => {
+	test("abort during noindex link admission rejects before terminal classification", async () => {
 		const eventSink = {
 			log: mock(() => undefined),
-			page: mock(() => undefined),
 		};
-		const recordTerminal = mock(() => true);
 		const controller = new AbortController();
 		const pipeline = new PagePipeline(
-			"crawl-1",
 			{
 				target: "https://example.com",
 				crawlDepth: 1,
@@ -636,8 +572,6 @@ describe("page pipeline contract", () => {
 				canScheduleMore: () => true,
 				hasVisited: () => false,
 				isDomainBudgetExceeded: () => false,
-				recordTerminal,
-				recordDomainPage: mock(() => undefined),
 				setDomainDelay: mock(() => undefined),
 			} as never,
 			{
@@ -645,7 +579,6 @@ describe("page pipeline contract", () => {
 				enqueueNormalized: mock(() => true),
 				scheduleRetry: mock(() => undefined),
 			} as never,
-			{} as never,
 			{
 				fetch: async () => ({
 					type: "success",
@@ -684,19 +617,13 @@ describe("page pipeline contract", () => {
 				controller.signal,
 			),
 		).rejects.toThrow("force stop");
-
-		expect(recordTerminal).not.toHaveBeenCalled();
 	});
 
-	test("saveMedia=false strips extracted media from persisted and emitted page data", async () => {
+	test("saveMedia=false strips extracted media from returned page data", async () => {
 		const eventSink = {
 			log: mock(() => undefined),
-			page: mock(() => undefined),
 		};
-		const recordTerminal = mock(() => true);
-		const save = mock(() => 7);
 		const pipeline = new PagePipeline(
-			"crawl-1",
 			{
 				crawlDepth: 1,
 				retryLimit: 0,
@@ -709,22 +636,16 @@ describe("page pipeline contract", () => {
 				canScheduleMore: () => true,
 				hasVisited: () => false,
 				isDomainBudgetExceeded: () => false,
-				recordTerminal,
-				recordDiscoveredLinks: mock(() => undefined),
-				recordDomainPage: mock(() => undefined),
 			} as never,
 			{
 				enqueue: mock(() => undefined),
 				scheduleRetry: mock(() => undefined),
 			} as never,
 			{
-				save,
-			} as never,
-			{
 				fetch: async () => ({
 					type: "success",
 					content:
-						'<html><body><main>This is a long enough article body to exercise the successful persistence path during the contract test execution path.</main><img src="/image.png" alt="cover" /></body></html>',
+						'<html><body><main>This is a long enough article body to exercise page-result construction during the contract test execution path.</main><img src="/image.png" alt="cover" /></body></html>',
 					effectiveUrl: "https://example.com/post",
 					statusCode: 200,
 					contentType: "text/html",
@@ -749,25 +670,19 @@ describe("page pipeline contract", () => {
 			retries: 0,
 		});
 
-		expect(save).not.toHaveBeenCalled();
-		expect(result.page?.saveInput.processedContent.media).toEqual([]);
+		expect(result.page?.pageData.processedContent.media).toEqual([]);
 		expect(result).toMatchObject({
 			terminalOutcome: "success",
 			terminalEffects: { chargeDomainBudget: true, mediaFiles: 0 },
 		});
 		expect(result.page?.eventPayload.processedData?.media).toEqual([]);
-		expect(eventSink.page).not.toHaveBeenCalled();
 	});
 
 	test("media mode with saveMedia=true keeps extracted media metadata", async () => {
 		const eventSink = {
 			log: mock(() => undefined),
-			page: mock(() => undefined),
 		};
-		const recordTerminal = mock(() => true);
-		const save = mock(() => 8);
 		const pipeline = new PagePipeline(
-			"crawl-1",
 			{
 				crawlDepth: 1,
 				retryLimit: 0,
@@ -780,22 +695,16 @@ describe("page pipeline contract", () => {
 				canScheduleMore: () => true,
 				hasVisited: () => false,
 				isDomainBudgetExceeded: () => false,
-				recordTerminal,
-				recordDiscoveredLinks: mock(() => undefined),
-				recordDomainPage: mock(() => undefined),
 			} as never,
 			{
 				enqueue: mock(() => undefined),
 				scheduleRetry: mock(() => undefined),
 			} as never,
 			{
-				save,
-			} as never,
-			{
 				fetch: async () => ({
 					type: "success",
 					content:
-						'<html><body><main>This is a long enough article body to exercise the successful persistence path during the contract test execution path.</main><img src="/image.png" alt="cover" /></body></html>',
+						'<html><body><main>This is a long enough article body to exercise page-result construction during the contract test execution path.</main><img src="/image.png" alt="cover" /></body></html>',
 					effectiveUrl: "https://example.com/post",
 					statusCode: 200,
 					contentType: "text/html",
@@ -820,14 +729,12 @@ describe("page pipeline contract", () => {
 			retries: 0,
 		});
 
-		expect(save).not.toHaveBeenCalled();
-		expect(result.page?.saveInput.processedContent.media).toHaveLength(1);
+		expect(result.page?.pageData.processedContent.media).toHaveLength(1);
 		expect(result).toMatchObject({
 			terminalOutcome: "success",
 			terminalEffects: { chargeDomainBudget: true, mediaFiles: 1 },
 		});
 		expect(result.page?.eventPayload.processedData?.media).toHaveLength(1);
-		expect(eventSink.page).not.toHaveBeenCalled();
 	});
 
 	test("reschedules transient fetch failures through the queue retry path", async () => {
@@ -839,7 +746,6 @@ describe("page pipeline contract", () => {
 			retries: 0,
 		};
 		const pipeline = new PagePipeline(
-			"crawl-1",
 			{
 				crawlDepth: 1,
 				retryLimit: 1,
@@ -858,7 +764,6 @@ describe("page pipeline contract", () => {
 				enqueue: mock(() => undefined),
 				scheduleRetry,
 			} as never,
-			{} as never,
 			{
 				fetch: async () => ({
 					type: "transientFailure",
@@ -886,7 +791,6 @@ describe("page pipeline contract", () => {
 			retries: 1,
 		};
 		const pipeline = new PagePipeline(
-			"crawl-1",
 			{
 				crawlDepth: 1,
 				retryLimit: 2,
@@ -905,7 +809,6 @@ describe("page pipeline contract", () => {
 				enqueue: mock(() => undefined),
 				scheduleRetry,
 			} as never,
-			{} as never,
 			{
 				fetch: async () => ({
 					type: "rateLimited",
@@ -924,32 +827,26 @@ describe("page pipeline contract", () => {
 		expect(adaptDomainDelay).toHaveBeenCalledWith("https://example.com", 429, 2000);
 	});
 
-	test("resolves relative links from the effective document URL while preserving requested identity", async () => {
+	test("classifies redirected links against the effective document while preserving requested identity", async () => {
 		const enqueueNormalized = mock(() => true);
-		const recordTerminal = mock(() => true);
 		const pipeline = new PagePipeline(
-			"crawl-1",
 			{
 				crawlDepth: 1,
 				retryLimit: 0,
 				respectRobots: false,
 				saveMedia: false,
-				crawlMethod: "full",
+				crawlMethod: "links",
 				contentOnly: false,
 			} as never,
 			{
 				canScheduleMore: () => true,
 				hasVisited: () => false,
 				isDomainBudgetExceeded: () => false,
-				recordTerminal,
-				recordDomainPage: mock(() => undefined),
-				recordDiscoveredLinks: mock(() => undefined),
 			} as never,
 			{
 				enqueueNormalized,
 				scheduleRetry: mock(() => undefined),
 			} as never,
-			{} as never,
 			{
 				fetch: async () => ({
 					type: "success",
@@ -981,17 +878,15 @@ describe("page pipeline contract", () => {
 		expect(enqueueNormalized).toHaveBeenCalledWith(
 			expect.objectContaining({ url: "https://final.example/docs/child" }),
 		);
-		expect(result.page?.saveInput.url).toBe("https://example.com/start");
-		expect(result.page?.saveInput.processedContent.url).toBe(
+		expect(result.page?.eventPayload.url).toBe("https://example.com/start");
+		expect(result.page?.pageData.processedContent.url).toBe(
 			"https://final.example/docs/index.html",
 		);
 	});
 
 	test("rejects large HTML shells without readable content or link admission", async () => {
 		const enqueueNormalized = mock(() => true);
-		const recordTerminal = mock(() => true);
 		const pipeline = new PagePipeline(
-			"crawl-1",
 			{
 				crawlDepth: 1,
 				retryLimit: 0,
@@ -1004,12 +899,8 @@ describe("page pipeline contract", () => {
 				canScheduleMore: () => true,
 				hasVisited: () => false,
 				isDomainBudgetExceeded: () => false,
-				recordTerminal,
-				recordDomainPage: mock(() => undefined),
-				recordDiscoveredLinks: mock(() => undefined),
 			} as never,
 			{ enqueueNormalized, scheduleRetry: mock(() => undefined) } as never,
-			{} as never,
 			{
 				fetch: async () => ({
 					type: "success",
@@ -1044,9 +935,7 @@ describe("page pipeline contract", () => {
 	});
 
 	test("consumes structured processor errors as terminal failure", async () => {
-		const recordTerminal = mock(() => true);
 		const pipeline = new PagePipeline(
-			"crawl-1",
 			{
 				crawlDepth: 1,
 				retryLimit: 0,
@@ -1059,11 +948,8 @@ describe("page pipeline contract", () => {
 				canScheduleMore: () => true,
 				hasVisited: () => false,
 				isDomainBudgetExceeded: () => false,
-				recordTerminal,
-				recordDomainPage: mock(() => undefined),
 			} as never,
 			{ scheduleRetry: mock(() => undefined) } as never,
-			{} as never,
 			{
 				fetch: async () => ({
 					type: "success",

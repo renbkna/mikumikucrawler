@@ -8,7 +8,7 @@ import { CrawlState } from "../CrawlState.js";
  * Tracks crawl progress with these invariants:
  *   - counter identity: pagesScanned = successCount + failureCount + skippedCount
  *   - circuit breaker: auto-stop after 20 consecutive failures
- *   - terminal idempotency: recordTerminal returns false for duplicate URLs
+ *   - terminal identity: a URL can enter terminal state exactly once
  *   - domain rate adaptation: only responds to 429/503/403
  *   - domain budget: maxPagesPerDomain=0 means unlimited
  *   - canScheduleMore: false when stopped OR pagesScanned >= maxPages
@@ -55,18 +55,45 @@ describe("CrawlState", () => {
 			expect(c.totalDataKb).toBe(10);
 			expect(c.mediaFiles).toBe(2);
 			expect(c.linksFound).toBe(3);
+			expect(state.hasVisited("https://a.example/1")).toBe(true);
 		});
 	});
 
-	describe("invariant: terminal idempotency", () => {
-		test("recordTerminal returns false and does not double-count on duplicate URL", () => {
+	describe("invariant: terminal identity", () => {
+		test("recordTerminal rejects a duplicate URL without changing counters", () => {
 			const state = new CrawlState(makeOptions());
 
-			expect(state.recordTerminal("https://a.example/1", "success")).toBe(true);
-			expect(state.recordTerminal("https://a.example/1", "success")).toBe(false);
+			state.recordTerminal("https://a.example/1", "success");
+			expect(() => state.recordTerminal("https://a.example/1", "success")).toThrow(
+				"Cannot complete already-terminal URL: https://a.example/1",
+			);
 
 			expect(state.counters.pagesScanned).toBe(1);
 			expect(state.counters.successCount).toBe(1);
+		});
+
+		test("restoreTerminals rejects duplicate input before restoring any record", () => {
+			const state = new CrawlState(makeOptions());
+
+			expect(() =>
+				state.restoreTerminals([
+					{ url: "https://a.example/1", outcome: "success" },
+					{ url: "https://a.example/1", outcome: "failure" },
+				]),
+			).toThrow("Cannot restore duplicate terminal URL: https://a.example/1");
+			expect(state.hasVisited("https://a.example/1")).toBe(false);
+		});
+
+		test("restoreTerminals rejects invalid persisted identity before restoring any record", () => {
+			const state = new CrawlState(makeOptions());
+
+			expect(() =>
+				state.restoreTerminals([
+					{ url: "https://a.example/valid", outcome: "success" },
+					{ url: "not a URL", outcome: "failure", domainBudgetCharged: true },
+				]),
+			).toThrow("Cannot restore invalid terminal URL: not a URL");
+			expect(state.hasVisited("https://a.example/valid")).toBe(false);
 		});
 	});
 
@@ -232,6 +259,17 @@ describe("CrawlState", () => {
 	});
 
 	describe("domain budget", () => {
+		test("uncharged terminal work releases its reserved domain capacity", () => {
+			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 1 }));
+
+			expect(state.canAdmit("https://example.com/first", "example.com")).toBe(true);
+			state.recordAdmission("https://example.com/first", "example.com");
+			expect(state.canAdmit("https://example.com/second", "example.com")).toBe(false);
+
+			state.releaseDomainAdmission("example.com");
+			expect(state.canAdmit("https://example.com/second", "example.com")).toBe(true);
+		});
+
 		test("maxPagesPerDomain=0 means unlimited", () => {
 			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 0 }));
 			for (let i = 0; i < 100; i++) {

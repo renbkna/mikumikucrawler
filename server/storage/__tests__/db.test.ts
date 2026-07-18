@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { persistPageFixture } from "../../__tests__/pageFixture.js";
 import { applyMigrations, createInMemoryStorage } from "../db.js";
 
 describe("storage contract", () => {
@@ -19,12 +20,22 @@ describe("storage contract", () => {
 			"0004_runtime_persistence.sql",
 			"0005_domain_state_search_content.sql",
 			"0006_canonical_schema.sql",
+			"0007_terminal_queue_exclusion.sql",
 		]);
 		expect(rows.every((row) => typeof row.checksum === "string")).toBe(true);
 		expect(storage.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
 	});
 
-	test("0005 leaves legacy discovered link totals unknown instead of inferring from visible links", () => {
+	test("page observations expose neither an independent writer nor same-run cache authority", () => {
+		const storage = createInMemoryStorage();
+
+		expect(storage.repos.pages).not.toHaveProperty("save");
+		expect(storage.repos.pages).not.toHaveProperty("getHeaders");
+		expect(storage.repos.pages).not.toHaveProperty("getLinksByPageUrl");
+		expect(storage.repos.pages).not.toHaveProperty("getDiscoveredLinkCountByPageUrl");
+	});
+
+	test("legacy unknown link totals remain contained behind terminal queue exclusion", () => {
 		const migrationDir = mkdtempSync(path.join(tmpdir(), "miku-migrations-"));
 		const sourceDir = path.join(import.meta.dir, "../migrations");
 		for (const fileName of [
@@ -33,6 +44,8 @@ describe("storage contract", () => {
 			"0003_pages_fts.sql",
 			"0004_runtime_persistence.sql",
 			"0005_domain_state_search_content.sql",
+			"0006_canonical_schema.sql",
+			"0007_terminal_queue_exclusion.sql",
 		]) {
 			writeFileSync(
 				path.join(migrationDir, fileName),
@@ -66,6 +79,9 @@ describe("storage contract", () => {
 					'legacy body',
 					NULL
 				);
+
+				INSERT INTO crawl_queue_items (crawl_id, url, depth, retries, domain)
+				VALUES ('legacy-crawl', 'https://legacy.example/page', 0, 0, 'legacy.example');
 			`,
 		);
 
@@ -76,6 +92,41 @@ describe("storage contract", () => {
 			.query("SELECT discovered_links_count FROM pages WHERE crawl_id = 'legacy-crawl'")
 			.get() as { discovered_links_count: number };
 		expect(row.discovered_links_count).toBe(0);
+		expect(
+			(
+				db
+					.query("SELECT COUNT(*) AS count FROM crawl_queue_items WHERE crawl_id = 'legacy-crawl'")
+					.get() as { count: number }
+			).count,
+		).toBe(0);
+		expect(() =>
+			db
+				.query(
+					"INSERT INTO crawl_queue_items (crawl_id, url, depth, retries, domain) VALUES (?, ?, 0, 0, ?)",
+				)
+				.run("legacy-crawl", "https://legacy.example/page", "legacy.example"),
+		).toThrow("cannot queue a terminal crawl URL");
+
+		db.query(
+			"INSERT INTO crawl_queue_items (crawl_id, url, depth, retries, domain) VALUES (?, ?, 0, 0, ?)",
+		).run("legacy-crawl", "https://legacy.example/pending", "legacy.example");
+		db.query(
+			"INSERT INTO crawl_terminal_urls (crawl_id, url, outcome, domain_budget_charged) VALUES (?, ?, 'failure', 0)",
+		).run("legacy-crawl", "https://legacy.example/other-terminal");
+		expect(() =>
+			db
+				.query("UPDATE crawl_queue_items SET url = ? WHERE crawl_id = ? AND url = ?")
+				.run("https://legacy.example/page", "legacy-crawl", "https://legacy.example/pending"),
+		).toThrow("cannot update a queue item to a terminal crawl URL");
+		expect(() =>
+			db
+				.query("UPDATE crawl_terminal_urls SET url = ? WHERE crawl_id = ? AND url = ?")
+				.run(
+					"https://legacy.example/pending",
+					"legacy-crawl",
+					"https://legacy.example/other-terminal",
+				),
+		).toThrow("cannot update terminal state onto a pending crawl URL");
 	});
 
 	test("fails startup when an applied migration file changes", () => {
@@ -214,7 +265,7 @@ describe("storage contract", () => {
 		expect(
 			(db.query("SELECT COUNT(*) AS count FROM schema_migrations").get() as { count: number })
 				.count,
-		).toBe(6);
+		).toBe(7);
 		const migrated = db
 			.query("SELECT target, options_json FROM crawl_runs WHERE id = 'historical-run'")
 			.get() as { target: string; options_json: string };
@@ -312,7 +363,9 @@ describe("storage contract", () => {
 				'interrupted'
 			);
 			INSERT INTO queue_items (session_id, url, depth, retries, domain)
-			VALUES ('legacy-session', 'https://resume.example/pending', 1, 0, 'resume.example');
+			VALUES
+				('legacy-session', 'https://resume.example/pending', 1, 0, 'resume.example'),
+				('legacy-session', 'https://resume.example/pending?utm_source=legacy', 2, 0, 'resume.example');
 		`);
 
 		applyMigrations(db);
@@ -330,6 +383,13 @@ describe("storage contract", () => {
 					count: number;
 				}
 			).count,
+		).toBe(1);
+		expect(
+			(
+				db.query("SELECT depth FROM crawl_queue_items WHERE crawl_id = 'legacy-session'").get() as {
+					depth: number;
+				}
+			).depth,
 		).toBe(1);
 		expect(
 			(db.query("SELECT COUNT(*) AS count FROM page_links").get() as { count: number }).count,
@@ -548,6 +608,35 @@ describe("storage contract", () => {
 		]);
 	});
 
+	test("queue writes reject duplicate admission and cannot recreate missing pending work", () => {
+		const storage = createInMemoryStorage();
+		const crawl = storage.repos.crawlRuns.createRun("queue-single-assignment", {
+			target: "https://queue-single.example",
+			crawlMethod: "links",
+			crawlDepth: 1,
+			crawlDelay: 200,
+			maxPages: 5,
+			maxPagesPerDomain: 0,
+			maxConcurrentRequests: 1,
+			retryLimit: 0,
+			dynamic: false,
+			respectRobots: false,
+			contentOnly: false,
+			saveMedia: false,
+		});
+		const initial = storage.repos.crawlQueue.listPending(crawl.id)[0];
+		if (!initial) throw new Error("Expected the initial queue item");
+
+		expect(() => storage.repos.crawlQueue.enqueueMany(crawl.id, [initial])).toThrow();
+		storage.db
+			.query("DELETE FROM crawl_queue_items WHERE crawl_id = ? AND url = ?")
+			.run(crawl.id, initial.url);
+		expect(() => storage.repos.crawlQueue.reschedule(crawl.id, { ...initial, retries: 1 })).toThrow(
+			`Cannot reschedule non-pending crawl URL: ${initial.url}`,
+		);
+		expect(storage.repos.crawlQueue.listPending(crawl.id)).toEqual([]);
+	});
+
 	test("domain delay state restores only for the requested crawlId", () => {
 		const storage = createInMemoryStorage();
 		storage.repos.crawlRuns.createRun("crawl-domain-a", {
@@ -682,7 +771,7 @@ describe("storage contract", () => {
 			saveMedia: false,
 		});
 
-		storage.repos.pages.save({
+		persistPageFixture(storage, {
 			crawlId: created.id,
 			url: "https://export.example/page",
 			domain: "export.example",
@@ -756,16 +845,15 @@ describe("storage contract", () => {
 			links: [],
 		};
 
-		storage.repos.pages.save(pageInput);
+		persistPageFixture(storage, pageInput);
 		expect(storage.repos.search.count(created.id, '"old"*')).toBe(1);
 		expect(storage.repos.search.count(created.id, '"fresh"*')).toBe(0);
 
-		storage.repos.pages.save({
-			...pageInput,
-			title: "Fresh haystack",
-			description: "Fresh description",
-			content: "fresh haystack body",
-		});
+		storage.db
+			.query(
+				"UPDATE pages SET title = ?, description = ?, content = ? WHERE crawl_id = ? AND url = ?",
+			)
+			.run("Fresh haystack", "Fresh description", "fresh haystack body", created.id, pageInput.url);
 
 		expect(storage.repos.search.count(created.id, '"old"*')).toBe(0);
 		expect(storage.repos.search.count(created.id, '"fresh"*')).toBe(1);
@@ -774,7 +862,7 @@ describe("storage contract", () => {
 			...created.options,
 			target: "https://other.example",
 		});
-		storage.repos.pages.save({
+		persistPageFixture(storage, {
 			...pageInput,
 			crawlId: other.id,
 			url: "https://other.example/page",
@@ -801,7 +889,7 @@ describe("storage contract", () => {
 			saveMedia: false,
 		});
 
-		storage.repos.pages.save({
+		persistPageFixture(storage, {
 			crawlId: created.id,
 			url: "https://content-only.example/page",
 			domain: "content-only.example",
@@ -851,7 +939,7 @@ describe("storage contract", () => {
 			saveMedia: false,
 		});
 
-		storage.repos.pages.save({
+		persistPageFixture(storage, {
 			crawlId: created.id,
 			url: "https://empty-content.example/page",
 			domain: "empty-content.example",
@@ -895,7 +983,7 @@ describe("storage contract", () => {
 			saveMedia: false,
 		});
 
-		storage.repos.pages.save({
+		persistPageFixture(storage, {
 			crawlId: created.id,
 			url: "https://main-content.example/page",
 			domain: "main-content.example",
@@ -940,7 +1028,7 @@ describe("storage contract", () => {
 			saveMedia: false,
 		});
 
-		storage.repos.pages.save({
+		persistPageFixture(storage, {
 			crawlId: created.id,
 			url: "https://metadata.example/title",
 			domain: "metadata.example",
@@ -963,7 +1051,7 @@ describe("storage contract", () => {
 			},
 			links: [],
 		});
-		storage.repos.pages.save({
+		persistPageFixture(storage, {
 			crawlId: created.id,
 			url: "https://metadata.example/description",
 			domain: "metadata.example",
@@ -1018,7 +1106,7 @@ describe("storage contract", () => {
 			saveMedia: false,
 		});
 
-		storage.repos.pages.save({
+		persistPageFixture(storage, {
 			crawlId: created.id,
 			url: "https://metadata-snippet.example/title",
 			domain: "metadata-snippet.example",
@@ -1050,7 +1138,7 @@ describe("storage contract", () => {
 		expect(result?.snippet).not.toContain("unrelated body text");
 	});
 
-	test("page link replay preserves nofollow metadata", () => {
+	test("the stored page-link projection preserves nofollow metadata", () => {
 		const storage = createInMemoryStorage();
 		const created = storage.repos.crawlRuns.createRun("crawl-link-metadata", {
 			target: "https://links.example",
@@ -1067,7 +1155,7 @@ describe("storage contract", () => {
 			saveMedia: false,
 		});
 
-		storage.repos.pages.save({
+		persistPageFixture(storage, {
 			crawlId: created.id,
 			url: "https://links.example/page",
 			domain: "links.example",
@@ -1102,23 +1190,35 @@ describe("storage contract", () => {
 			],
 		});
 
-		expect(storage.repos.pages.getLinksByPageUrl(created.id, "https://links.example/page")).toEqual(
-			[
-				{
-					url: "https://links.example/follow",
-					text: "Follow",
-					nofollow: false,
-				},
-				{
-					url: "https://links.example/nofollow",
-					text: "No follow",
-					nofollow: true,
-				},
-			],
-		);
+		const links = storage.db
+			.query(
+				`SELECT pl.target_url AS targetUrl, pl.text, pl.nofollow
+				 FROM page_links pl
+				 INNER JOIN pages p ON p.id = pl.page_id
+				 WHERE p.crawl_id = ? AND p.url = ?
+				 ORDER BY pl.id`,
+			)
+			.all(created.id, "https://links.example/page") as Array<{
+			targetUrl: string;
+			text: string;
+			nofollow: number;
+		}>;
+
+		expect(links).toEqual([
+			{
+				targetUrl: "https://links.example/follow",
+				text: "Follow",
+				nofollow: 0,
+			},
+			{
+				targetUrl: "https://links.example/nofollow",
+				text: "No follow",
+				nofollow: 1,
+			},
+		]);
 	});
 
-	test("item completion commits page, terminal, queue removal, counters, and event sequence atomically", () => {
+	test("item completion commits once and rejects duplicate page rewrites transactionally", () => {
 		const storage = createInMemoryStorage();
 		storage.repos.crawlRuns.createRun("crawl-item", {
 			target: "https://item.example/page",
@@ -1134,32 +1234,35 @@ describe("storage contract", () => {
 			contentOnly: false,
 			saveMedia: false,
 		});
+		expect(storage.repos.crawlQueue.listPending("crawl-item")).toEqual([
+			expect.objectContaining({ url: "https://item.example/page" }),
+		]);
+		const page = {
+			contentType: "text/html",
+			statusCode: 200,
+			contentLength: 2048,
+			title: "Item page",
+			description: "Item description",
+			content: "<main>Item</main>",
+			isDynamic: false,
+			lastModified: null,
+			etag: null,
+			processedContent: {
+				extractedData: { mainContent: "Item" },
+				metadata: {},
+				analysis: {},
+				media: [],
+				links: [],
+				errors: [],
+			},
+			links: [],
+		};
 		const result = storage.repos.crawlItems.commitCompletedItem({
 			crawlId: "crawl-item",
 			url: "https://item.example/page",
 			outcome: "success",
 			domainBudgetCharged: true,
-			page: {
-				domain: "item.example",
-				contentType: "text/html",
-				statusCode: 200,
-				contentLength: 2048,
-				title: "Item page",
-				description: "Item description",
-				content: "<main>Item</main>",
-				isDynamic: false,
-				lastModified: null,
-				etag: null,
-				processedContent: {
-					extractedData: { mainContent: "Item" },
-					metadata: {},
-					analysis: {},
-					media: [],
-					links: [],
-					errors: [],
-				},
-				links: [],
-			},
+			page,
 			counters: {
 				pagesScanned: 1,
 				successCount: 1,
@@ -1172,7 +1275,12 @@ describe("storage contract", () => {
 			eventSequence: 7,
 		});
 
-		expect(typeof result.pageId).toBe("number");
+		expect(result.type).toBe("page-persisted");
+		if (result.type !== "page-persisted") {
+			throw new Error("Expected the page-persisted completion variant");
+		}
+		expect(result.pageId).toBeGreaterThan(0);
+		expect(result.pageCount).toBe(1);
 		expect(Array.from(storage.repos.pages.iterateForExport("crawl-item"))).toHaveLength(1);
 		expect(storage.repos.crawlItems.listTerminalUrls("crawl-item")).toEqual([
 			{
@@ -1184,22 +1292,59 @@ describe("storage contract", () => {
 		expect(storage.repos.crawlQueue.listPending("crawl-item")).toEqual([]);
 		expect(storage.repos.crawlRuns.getById("crawl-item")?.eventSequence).toBe(7);
 
-		storage.repos.crawlItems.commitCompletedItem({
-			crawlId: "crawl-item",
-			url: "https://item.example/page",
-			outcome: "failure",
-			domainBudgetCharged: false,
-			counters: {
-				pagesScanned: 1,
-				successCount: 1,
-				failureCount: 0,
-				skippedCount: 0,
-				linksFound: 0,
-				mediaFiles: 0,
-				totalDataKb: 2,
-			},
-			eventSequence: 8,
-		});
+		expect(() =>
+			storage.repos.crawlQueue.enqueueMany("crawl-item", [
+				{
+					url: "https://item.example/page",
+					depth: 0,
+					retries: 0,
+					domain: "item.example",
+				},
+			]),
+		).toThrow("cannot queue a terminal crawl URL");
+		expect(() =>
+			storage.repos.crawlItems.commitCompletedItem({
+				crawlId: "crawl-item",
+				url: "https://item.example/page",
+				outcome: "success",
+				domainBudgetCharged: true,
+				page: { ...page, title: "Duplicate item page" },
+				counters: {
+					pagesScanned: 2,
+					successCount: 2,
+					failureCount: 0,
+					skippedCount: 0,
+					linksFound: 0,
+					mediaFiles: 0,
+					totalDataKb: 4,
+				},
+				eventSequence: 8,
+			}),
+		).toThrow();
+		expect(() =>
+			storage.repos.crawlItems.commitCompletedItem({
+				crawlId: "crawl-item",
+				url: "https://item.example/never-queued",
+				outcome: "failure",
+				domainBudgetCharged: true,
+				counters: {
+					pagesScanned: 2,
+					successCount: 1,
+					failureCount: 1,
+					skippedCount: 0,
+					linksFound: 0,
+					mediaFiles: 0,
+					totalDataKb: 2,
+				},
+				eventSequence: 8,
+			}),
+		).toThrow("Cannot complete non-pending crawl URL: https://item.example/never-queued");
+
+		expect(storage.repos.crawlQueue.listPending("crawl-item")).toEqual([]);
+		expect(storage.repos.crawlRuns.getById("crawl-item")?.eventSequence).toBe(7);
+		expect(Array.from(storage.repos.pages.iterateForExport("crawl-item"))).toEqual([
+			expect.objectContaining({ id: result.pageId, title: "Item page" }),
+		]);
 		expect(storage.repos.crawlItems.listTerminalUrls("crawl-item")).toEqual([
 			{
 				url: "https://item.example/page",
@@ -1235,10 +1380,24 @@ describe("storage contract", () => {
 			mediaFiles: 0,
 			totalDataKb: 0,
 		};
+		storage.repos.crawlQueue.enqueueMany("crawl-terminal-order", [
+			{
+				url: "https://order.example/z-skip",
+				depth: 0,
+				retries: 0,
+				domain: "order.example",
+			},
+			{
+				url: "https://order.example/a-failure",
+				depth: 0,
+				retries: 0,
+				domain: "order.example",
+			},
+		]);
 		storage.repos.crawlItems.commitCompletedItem({
 			crawlId: "crawl-terminal-order",
-			url: "https://order.example/z-success",
-			outcome: "success",
+			url: "https://order.example/z-skip",
+			outcome: "skip",
 			domainBudgetCharged: true,
 			counters,
 			eventSequence: 1,
@@ -1254,8 +1413,8 @@ describe("storage contract", () => {
 
 		expect(storage.repos.crawlItems.listTerminalUrls("crawl-terminal-order")).toEqual([
 			{
-				url: "https://order.example/z-success",
-				outcome: "success",
+				url: "https://order.example/z-skip",
+				outcome: "skip",
 				domainBudgetCharged: true,
 			},
 			{
@@ -1266,7 +1425,7 @@ describe("storage contract", () => {
 		]);
 	});
 
-	test("item completion rolls back page save when terminal persistence fails", () => {
+	test("item completion rolls back terminal and page inserts when a later projection fails", () => {
 		const storage = createInMemoryStorage();
 		storage.repos.crawlRuns.createRun("crawl-item-rollback", {
 			target: "https://rollback.example",
@@ -1282,15 +1441,22 @@ describe("storage contract", () => {
 			contentOnly: false,
 			saveMedia: false,
 		});
+		storage.repos.crawlQueue.enqueueMany("crawl-item-rollback", [
+			{
+				url: "https://rollback.example/page",
+				depth: 0,
+				retries: 0,
+				domain: "rollback.example",
+			},
+		]);
 
 		expect(() =>
 			storage.repos.crawlItems.commitCompletedItem({
 				crawlId: "crawl-item-rollback",
 				url: "https://rollback.example/page",
-				outcome: "invalid" as never,
+				outcome: "success",
 				domainBudgetCharged: true,
 				page: {
-					domain: "rollback.example",
 					contentType: "text/html",
 					statusCode: 200,
 					contentLength: 100,
@@ -1312,7 +1478,7 @@ describe("storage contract", () => {
 				},
 				counters: {
 					pagesScanned: 1,
-					successCount: 1,
+					successCount: 0,
 					failureCount: 0,
 					skippedCount: 0,
 					linksFound: 0,
@@ -1325,6 +1491,9 @@ describe("storage contract", () => {
 
 		expect(Array.from(storage.repos.pages.iterateForExport("crawl-item-rollback"))).toEqual([]);
 		expect(storage.repos.crawlItems.listTerminalUrls("crawl-item-rollback")).toEqual([]);
+		expect(
+			storage.repos.crawlQueue.listPending("crawl-item-rollback").map((item) => item.url),
+		).toEqual(["https://rollback.example/", "https://rollback.example/page"]);
 		expect(storage.repos.crawlRuns.getById("crawl-item-rollback")?.eventSequence).toBe(0);
 	});
 });

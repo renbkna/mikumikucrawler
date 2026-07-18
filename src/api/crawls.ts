@@ -2,16 +2,16 @@ import type {
 	CrawlEventEnvelope,
 	CrawlExportFormat,
 	CrawlOptions,
+	CrawlRecoverySnapshot,
 	CrawlSummary,
 	ResumableSessionSummary,
-	ResumeCrawlResponse,
 	StopCrawlMode,
 } from "../../shared/contracts/index.js";
 import {
 	CrawlEventTypeValues,
 	isCrawlListResponse,
+	isCrawlRecoverySnapshot,
 	isCrawlSummary,
-	isResumeCrawlResponse,
 	toResumableSessionSummary,
 } from "../../shared/contracts/index.js";
 import { parseCrawlEventEnvelope } from "../../shared/contracts/validation.js";
@@ -30,6 +30,22 @@ export async function createCrawl(options: CrawlOptions): Promise<ApiResult<Craw
 	return { ok: true, data: response.data };
 }
 
+export async function getCrawlRecoverySnapshot(
+	crawlId: string,
+	signal?: AbortSignal,
+): Promise<ApiResult<CrawlRecoverySnapshot>> {
+	const response = await api.api
+		.crawls({ id: crawlId })
+		.snapshot.get(signal ? { fetch: { signal } } : undefined);
+	if (response.error || !response.data) {
+		return { ok: false, error: getApiErrorMessage(response.error?.value) };
+	}
+	if (!isCrawlRecoverySnapshot(response.data)) {
+		return { ok: false, error: "Unexpected crawl recovery response" };
+	}
+	return { ok: true, data: response.data };
+}
+
 export async function stopCrawl(
 	crawlId: string,
 	mode: StopCrawlMode = "pause",
@@ -44,12 +60,12 @@ export async function stopCrawl(
 	return { ok: true, data: response.data };
 }
 
-export async function resumeCrawl(crawlId: string): Promise<ApiResult<ResumeCrawlResponse>> {
+export async function resumeCrawl(crawlId: string): Promise<ApiResult<CrawlRecoverySnapshot>> {
 	const response = await api.api.crawls({ id: crawlId }).resume.post();
 	if (response.error || !response.data) {
 		return { ok: false, error: getApiErrorMessage(response.error?.value) };
 	}
-	if (!isResumeCrawlResponse(response.data)) {
+	if (!isCrawlRecoverySnapshot(response.data)) {
 		return { ok: false, error: "Unexpected crawl response" };
 	}
 	return { ok: true, data: response.data };

@@ -40,6 +40,7 @@ The reducer state must contain:
 - `stats`
 - `queueStats`
 - `crawledPages`
+- `storedPageCount`
 - `progress`
 - `logs`
 - `hasShownStaticFallbackHint`
@@ -126,10 +127,24 @@ When `crawl.completed`, `crawl.failed`, or `crawl.stopped` is applied:
 
 ## Derived UI Guarantees
 
-- `Captured Data` reflects only persisted `crawl.page` events.
+- `crawledPages` is a bounded latest-page presentation buffer; it is not a
+  durable total.
+- `storedPageCount` reflects the storage-owned page count returned by the
+  durable recovery snapshot and the positive count on each atomically persisted
+  `crawl.page` event.
+- Export availability and total-count UI use `storedPageCount`, never the
+  presentation buffer length.
 - Missing `crawl.page` events must not be misreported as frontend failure.
-- On reconnect or resume, persisted crawl summary/pages are the durable source
-  of truth; SSE events are telemetry for live updates.
+- On reconnect or resume, the backend-owned recovery snapshot is the durable
+  source of truth; SSE events are telemetry for live updates.
+- Every SSE open or reopen requests one recovery snapshot containing the matching
+  crawl summary, bounded latest-page window, and full stored-page count. The
+  controller applies that one response before deciding whether to settle the
+  stream; it never reconstructs lifecycle state from independently timed reads.
+  Active snapshots repair gaps within that presentation window and older
+  counter tuples without regressing newer live telemetry; settled snapshots
+  recover lifecycle state even when the in-memory event stream has already been
+  cleaned up. Search and export operate on the full durable store.
 - System logs must show backend-visible blocked reasons when provided.
 - Progress uses reducer state only, not ad hoc refs that can drift.
 
@@ -140,6 +155,7 @@ When `crawl.completed`, `crawl.failed`, or `crawl.stopped` is applied:
 - Terminal event applied while the controller still thinks the run is active.
 - Silent command failure that leaves the UI in a loading/active state.
 - Multiple sources of truth for crawl pages, stats, or log ordering.
+- Presentation-buffer length used as the stored-page total.
 
 ## Verification Requirements
 

@@ -29,6 +29,10 @@ docker build -t mikumikucrawler .
 # Run the container locally
 docker run -p 3000:3000 -e PORT=3000 mikumikucrawler
 
+# Port 3000 is a projection of DEFAULT_BACKEND_PORT in
+# shared/deploymentDefaults.ts.
+# Keep the mapped ports and PORT value synchronized with that source.
+
 # Test the health endpoint
 curl http://localhost:3000/health
 ```

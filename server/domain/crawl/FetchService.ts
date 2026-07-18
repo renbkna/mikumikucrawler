@@ -1,13 +1,11 @@
 import type { Logger } from "../../config/logging.js";
-import {
-	FETCH_HEADERS,
-	REQUEST_CONSTANTS,
-	RETRY_CONSTANTS,
-	TIMEOUT_CONSTANTS,
-} from "../../constants.js";
+import { FETCH_HEADERS, RETRY_CONSTANTS, TIMEOUT_CONSTANTS } from "../../constants.js";
 import type { HttpClient } from "../../plugins/security.js";
-import { isPdfContentType, isSupportedDocumentContentType } from "../../processors/contentTypes.js";
-import type { PageRepo } from "../../storage/repos/pageRepo.js";
+import {
+	isPdfContentType,
+	isSupportedDocumentContentType,
+	maxProcessableDocumentBytes,
+} from "../../processors/contentTypes.js";
 import { disposeResponseBody, readLimitedResponseBody } from "../../utils/responseBody.js";
 import type { QueueItem } from "./CrawlQueue.js";
 import type { DynamicRenderer } from "./DynamicRenderer.js";
@@ -32,12 +30,6 @@ export type FetchResult =
 			etag: string | null;
 			xRobotsTag: string | null;
 			isDynamic: boolean;
-	  }
-	| {
-			type: "unchanged";
-			statusCode: 304;
-			lastModified: string | null;
-			etag: string | null;
 	  }
 	| {
 			type: "rateLimited";
@@ -84,7 +76,7 @@ async function readResponseContent(
 ): Promise<
 	{ type: "content"; content: string | Buffer; contentLength: number } | { type: "tooLarge" }
 > {
-	const body = await readLimitedResponseBody(response, REQUEST_CONSTANTS.MAX_RESPONSE_BYTES);
+	const body = await readLimitedResponseBody(response, maxProcessableDocumentBytes(contentType));
 	if (body.type === "tooLarge") {
 		return { type: "tooLarge" };
 	}
@@ -109,7 +101,7 @@ function classifyFetchStatus(
 		blockedStatuses: readonly number[];
 		blockedReason?: string;
 	},
-): Exclude<FetchResult, { type: "success" | "unchanged" }> | null {
+): Exclude<FetchResult, { type: "success" }> | null {
 	if (isRateLimitedStatus(statusCode)) {
 		return {
 			type: "rateLimited",
@@ -146,14 +138,13 @@ function classifyFetchStatus(
 
 export class FetchService {
 	constructor(
-		private readonly pageRepo: PageRepo,
 		private readonly httpClient: HttpClient,
 		private readonly dynamicRenderer: DynamicRenderer,
 		private readonly logger: Logger,
 		private readonly localSeedUrl?: string,
 	) {}
 
-	async fetch(crawlId: string, item: QueueItem, signal?: AbortSignal): Promise<FetchResult> {
+	async fetch(item: QueueItem, signal?: AbortSignal): Promise<FetchResult> {
 		let dynamicResult: Awaited<ReturnType<DynamicRenderer["render"]>> | undefined;
 		if (this.dynamicRenderer.isEnabled()) {
 			try {
@@ -266,76 +257,45 @@ export class FetchService {
 		// Consent-sensitive domains should not silently degrade to static junk when
 		// the dynamic path already proved access is blocked by an interstitial wall.
 		this.logger.info(`[Fetch] Static crawl for ${item.url}`);
-		const cachedHeaders = this.pageRepo.getHeaders(crawlId, item.url);
-		const conditionalHeaders: Record<string, string> = {};
-
-		if (cachedHeaders?.lastModified) {
-			conditionalHeaders["If-Modified-Since"] = cachedHeaders.lastModified;
-		}
-
-		if (cachedHeaders?.etag) {
-			conditionalHeaders["If-None-Match"] = cachedHeaders.etag;
-		}
-
 		let response: Response;
-		let effectiveUrl = item.url;
-		let unconditionalRetry = false;
-		for (;;) {
-			try {
-				response = await this.httpClient.fetch({
-					url: item.url,
-					headers: {
-						...FETCH_HEADERS,
-						...(unconditionalRetry ? {} : conditionalHeaders),
-					},
-					signal:
-						signal && "any" in AbortSignal
-							? AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH)])
-							: AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH),
-					allowLocalhostOnInitialRequest:
-						this.localSeedUrl !== undefined && item.url === this.localSeedUrl,
-				});
-				effectiveUrl = response.url || item.url;
-			} catch (error) {
-				if (signal?.aborted) {
-					throw signal.reason instanceof Error ? signal.reason : new Error("Fetch aborted");
-				}
-				this.logger.warn(
-					`[Fetch] Transient fetch failure for ${item.url}: ${error instanceof Error ? error.message : String(error)}`,
-				);
-				return {
-					type: "transientFailure",
-					statusCode: 0,
-					retryAfterMs: RETRY_CONSTANTS.BASE_DELAY,
-				};
-			}
+		try {
+			response = await this.httpClient.fetch({
+				url: item.url,
+				headers: FETCH_HEADERS,
+				signal:
+					signal && "any" in AbortSignal
+						? AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH)])
+						: AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH),
+				allowLocalhostOnInitialRequest:
+					this.localSeedUrl !== undefined && item.url === this.localSeedUrl,
+			});
+		} catch (error) {
 			if (signal?.aborted) {
-				await disposeResponseBody(response);
 				throw signal.reason instanceof Error ? signal.reason : new Error("Fetch aborted");
 			}
-
-			if (response.status !== 304) {
-				break;
-			}
-
-			await disposeResponseBody(response);
-			if (cachedHeaders) {
-				return {
-					type: "unchanged",
-					statusCode: 304,
-					lastModified: cachedHeaders.lastModified ?? null,
-					etag: cachedHeaders.etag ?? null,
-				};
-			}
-			if (unconditionalRetry) {
-				return {
-					type: "blocked",
-					statusCode: 304,
-					reason: `Received 304 without a cached page for ${item.url}`,
-				};
-			}
-			unconditionalRetry = true;
+			this.logger.warn(
+				`[Fetch] Transient fetch failure for ${item.url}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			return {
+				type: "transientFailure",
+				statusCode: 0,
+				retryAfterMs: RETRY_CONSTANTS.BASE_DELAY,
+			};
 		}
+		if (signal?.aborted) {
+			await disposeResponseBody(response);
+			throw signal.reason instanceof Error ? signal.reason : new Error("Fetch aborted");
+		}
+
+		if (response.status === 304) {
+			await disposeResponseBody(response);
+			return {
+				type: "blocked",
+				statusCode: 304,
+				reason: `Received unexpected 304 for unconditional request to ${item.url}`,
+			};
+		}
+		const effectiveUrl = response.url || item.url;
 
 		const classifiedStaticStatus = classifyFetchStatus(response.status, {
 			retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),

@@ -5,29 +5,12 @@ import {
 	buildCrawlExportPath,
 	type CrawlExportFormat,
 } from "../../shared/contracts/index.js";
+import { buildBackendApiUrl, resolveBackendUrl } from "./backendUrl";
 import { getApiErrorMessage } from "./errors";
 
-interface BackendUrlEnv {
-	VITE_BACKEND_URL?: string;
-	DEV?: boolean;
-}
-
-export function resolveBackendUrl(
-	env: BackendUrlEnv,
-	origin = globalThis.window?.location.origin,
-): string {
-	if (env.VITE_BACKEND_URL) {
-		return env.VITE_BACKEND_URL;
-	}
-
-	if (env.DEV) {
-		return "http://localhost:3000";
-	}
-
-	return origin ?? "http://localhost";
-}
-
-const backendUrl = resolveBackendUrl(import.meta.env);
+const backendUrl = resolveBackendUrl({
+	VITE_BACKEND_URL: import.meta.env.VITE_BACKEND_URL,
+});
 
 /** Type-safe Eden Treaty client for the Miku Crawler API */
 export const api: Treaty.Create<App> = treaty<App>(backendUrl, {
@@ -39,11 +22,11 @@ export const api: Treaty.Create<App> = treaty<App>(backendUrl, {
 export type { CrawlExportFormat } from "../../shared/contracts/index.js";
 
 export function getBackendUrl(): string {
-	return backendUrl.replace(/\/$/, "");
+	return backendUrl;
 }
 
 export function getBackendApiUrl(path: string): string {
-	return `${getBackendUrl()}${path}`;
+	return buildBackendApiUrl(getBackendUrl(), path);
 }
 
 export function createCrawlEventSource(crawlId: string): EventSource {

@@ -45,7 +45,8 @@ Inputs:
 
 Outputs:
 
-- typed fetch result for the requested URL
+- typed fetch result that preserves both requested queue identity and the
+  validated effective document URL
 - classified failure reason when rendering or navigation is blocked
 
 ## Invariants
@@ -59,6 +60,8 @@ Outputs:
 - Session state is scoped to one crawl runtime and must not leak across runs.
 - Browser-routed HTTP(S) responses must obey the same response-size ceiling as
   static fetches before buffering.
+- Redirects do not transfer stored page identity, but the effective document
+  URL owns document-base resolution and discovered-link origin classification.
 
 ## Readiness Contract
 
@@ -85,6 +88,7 @@ policy remains the final authority.
 The runtime pipeline rules for rendered content are:
 
 - normalize URLs before enqueue
+- classify discovered links relative to the effective document origin
 - preserve `parentUrl`
 - preserve `depth + 1`
 - never enqueue already-visited or already-pending URLs
@@ -103,7 +107,6 @@ The runtime pipeline rules for rendered content are:
 The engine and fetch boundary together must distinguish at least:
 
 - `success`
-- `unchanged`
 - `rateLimited`
 - `blocked`
 - `permanentFailure`

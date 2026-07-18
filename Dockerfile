@@ -22,6 +22,8 @@ COPY . .
 # Build frontend
 RUN bun run build
 
+# Container projection of DEFAULT_BACKEND_PORT in shared/deploymentDefaults.ts.
+# Keep ENV and EXPOSE synchronized with that source.
 ENV PORT=3000
 ENV NODE_ENV=production
 

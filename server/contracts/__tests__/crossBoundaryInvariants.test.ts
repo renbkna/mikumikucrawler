@@ -9,6 +9,7 @@ import {
 	API_PATHS,
 	buildCrawlEventsPath,
 	buildCrawlExportPath,
+	buildCrawlSnapshotPath,
 	buildPageContentPath,
 	CRAWL_EXPORT_FORMAT_VALUES,
 	CRAWL_ROUTE_SEGMENTS,
@@ -32,6 +33,7 @@ import {
 	LIVE_CRAWL_EVENT_TYPE_VALUES,
 	OPENAPI_CRAWL_EVENTS_PATH,
 	OPENAPI_CRAWL_EXPORT_PATH,
+	OPENAPI_CRAWL_SNAPSHOT_PATH,
 	PAGE_ROUTE_SEGMENTS,
 	PENDING_CRAWL_STATUS_VALUES,
 	RESUMABLE_CRAWL_STATUS_VALUES,
@@ -45,7 +47,9 @@ import {
 	CrawlEventEnvelopeSchema,
 	type CrawlOptionsSchema,
 } from "../../../shared/contracts/schemas.js";
+import { DEFAULT_BACKEND_PORT } from "../../../shared/deploymentDefaults.js";
 import { shouldResetTheatreStatus, THEATRE_STATUS_VALUES } from "../../../shared/theatreStatus.js";
+import { persistPageFixture } from "../../__tests__/pageFixture.js";
 import { createApp } from "../../app.js";
 import type { AppLogger } from "../../config/logging.js";
 import { createDynamicBrowserContextOptions } from "../../domain/crawl/DynamicRenderer.js";
@@ -183,7 +187,8 @@ function buildEnvelope(type: (typeof CrawlEventTypeValues)[number]): CrawlEventE
 				...base,
 				type,
 				payload: {
-					id: null,
+					id: 1,
+					pageCount: 1,
 					url: VALID_OPTIONS.target,
 					title: "Boundary",
 					description: "Boundary page",
@@ -217,7 +222,49 @@ function buildEnvelope(type: (typeof CrawlEventTypeValues)[number]): CrawlEventE
 	}
 }
 
+function expectBackendPortProjections(source: string, patterns: RegExp[]): void {
+	const projectedPorts = patterns.flatMap((pattern) =>
+		[...source.matchAll(pattern)].flatMap((match) =>
+			match
+				.slice(1)
+				.filter((value): value is string => value !== undefined)
+				.map(Number),
+		),
+	);
+
+	expect(projectedPorts.length).toBeGreaterThan(0);
+	expect([...new Set(projectedPorts)]).toEqual([DEFAULT_BACKEND_PORT]);
+}
+
 describe("cross-boundary invariants", () => {
+	test("checked-in deployment projections match the authoritative backend default", async () => {
+		const [environmentExample, dockerfile, readme, dockerDeployment] = await Promise.all([
+			readFile(new URL("../../../.env.example", import.meta.url), "utf8"),
+			readFile(new URL("../../../Dockerfile", import.meta.url), "utf8"),
+			readFile(new URL("../../../README.md", import.meta.url), "utf8"),
+			readFile(new URL("../../../docs/DOCKER_DEPLOY.md", import.meta.url), "utf8"),
+		]);
+		const readmeBackendProjections = readme
+			.split("\n")
+			.filter((line) => !line.includes("Frontend") && !line.startsWith("FRONTEND_URL="))
+			.join("\n");
+
+		expectBackendPortProjections(environmentExample, [/^PORT=(\d+)$/gm]);
+		expectBackendPortProjections(dockerfile, [/^ENV PORT=(\d+)$|^EXPOSE (\d+)$/gm]);
+		expectBackendPortProjections(readmeBackendProjections, [
+			/localhost:(\d+)/g,
+			/^PORT=(\d+)$/gm,
+			/-p (\d+):(\d+)/g,
+			/backend owns port `(\d+)`/gi,
+		]);
+		expectBackendPortProjections(dockerDeployment, [
+			/localhost:(\d+)/g,
+			/\bPORT=(\d+)\b/g,
+			/-p (\d+):(\d+)/g,
+			/\bPort (\d+) is a projection/g,
+		]);
+	});
+
 	test("shared contracts own crawl and event validation schemas", () => {
 		expect(existsSync(join(SERVER_CONTRACTS_DIR, "crawl.ts"))).toBe(false);
 		expect(existsSync(join(SERVER_CONTRACTS_DIR, "events.ts"))).toBe(false);
@@ -336,16 +383,19 @@ describe("cross-boundary invariants", () => {
 	test("manual transports use the same route-builder contract as backend route templates", async () => {
 		const templateEventsPath = `${API_PATHS.crawls}${CRAWL_ROUTE_SEGMENTS.events.replace(":id", "{id}")}`;
 		const templateExportPath = `${API_PATHS.crawls}${CRAWL_ROUTE_SEGMENTS.export.replace(":id", "{id}")}`;
+		const templateSnapshotPath = `${API_PATHS.crawls}${CRAWL_ROUTE_SEGMENTS.snapshot.replace(":id", "{id}")}`;
 		const templatePageContentPath = `${API_PATHS.pages}${PAGE_ROUTE_SEGMENTS.content.replace(":id", "{id}")}`;
 
 		expect(templateEventsPath).toBe(OPENAPI_CRAWL_EVENTS_PATH);
 		expect(templateExportPath).toBe(OPENAPI_CRAWL_EXPORT_PATH);
+		expect(templateSnapshotPath).toBe(OPENAPI_CRAWL_SNAPSHOT_PATH);
 		expect(templatePageContentPath).toBe("/api/pages/{id}/content");
 
 		expect(buildCrawlEventsPath("crawl 1/2")).toBe("/api/crawls/crawl%201%2F2/events");
 		expect(buildCrawlExportPath("crawl 1/2", "csv")).toBe(
 			"/api/crawls/crawl%201%2F2/export?format=csv",
 		);
+		expect(buildCrawlSnapshotPath("crawl 1/2")).toBe("/api/crawls/crawl%201%2F2/snapshot");
 		expect(buildPageContentPath(42)).toBe("/api/pages/42/content");
 		expect(CRAWL_EXPORT_FORMAT_VALUES).toEqual(["json", "csv"]);
 		expect(isApiPath("/api")).toBe(true);
@@ -358,7 +408,7 @@ describe("cross-boundary invariants", () => {
 		const { app, eventStream, storage } = buildBoundaryApp();
 		const crawlId = "route-contract";
 		storage.repos.crawlRuns.createRun(crawlId, VALID_OPTIONS);
-		const pageId = storage.repos.pages.save({
+		const pageId = persistPageFixture(storage, {
 			crawlId,
 			url: `${VALID_OPTIONS.target}/page`,
 			domain: "example.com",
@@ -382,6 +432,12 @@ describe("cross-boundary invariants", () => {
 			links: [],
 		});
 		eventStream.publish(crawlId, "crawl.log", { message: "route contract" });
+
+		const snapshotResponse = await app.handle(
+			new Request(`http://localhost${buildCrawlSnapshotPath(crawlId)}`),
+		);
+		expect(snapshotResponse.status).toBe(200);
+		expect(await snapshotResponse.json()).toEqual(expect.objectContaining({ pageCount: 1 }));
 
 		const exportResponse = await app.handle(
 			new Request(`http://localhost${buildCrawlExportPath(crawlId, "json")}`),

@@ -1,5 +1,6 @@
 import { CircleStop } from "lucide-react";
 import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
+import type { TheatreStatus } from "../../shared/theatreStatus.js";
 import { SEQUENCE_TIMINGS } from "../constants";
 
 const RIPPLE_ANIMATION_DURATION_MS = 1500;
@@ -7,9 +8,8 @@ const LOOP_START = 15.86;
 const LOOP_END = 17.53;
 
 interface TheatreOverlayProps {
-	status: "idle" | "blackout" | "counting" | "beam" | "live";
+	status: TheatreStatus;
 	onComplete: () => void;
-	onBeamStart: () => void;
 	isCrawlActive?: boolean;
 	onStop?: () => void;
 	stopLabel?: string;
@@ -19,7 +19,6 @@ interface TheatreOverlayProps {
 export const TheatreOverlay = memo(function TheatreOverlay({
 	status,
 	onComplete,
-	onBeamStart,
 	isCrawlActive = false,
 	onStop,
 	stopLabel = "Pause",
@@ -28,70 +27,60 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 	const [count, setCount] = useState<string | null>(null);
 	const [ripples, setRipples] = useState<{ id: number; color: string }[]>([]);
 	const audioRef = useRef<HTMLAudioElement | null>(null);
-	const timeoutsRef = useRef<NodeJS.Timeout[]>([]);
+	const timeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 	const sequenceStartedRef = useRef(false);
 	const rippleCountRef = useRef(0);
 
 	// Stable refs for callbacks to avoid effect re-runs
-	const onBeamStartRef = useRef(onBeamStart);
 	const onCompleteRef = useRef(onComplete);
-	onBeamStartRef.current = onBeamStart;
 	onCompleteRef.current = onComplete;
 
 	// Audio should play when status is not "idle"
 	const shouldPlayAudio = status !== "idle";
 
-	/** Audio lifecycle - completely separate from countdown */
+	/** Release the lazily-created audio element on unmount. */
 	useEffect(() => {
-		// Create audio element once
-		if (!audioRef.current) {
-			// Cache-bust to avoid browser cache issues
-			const audio = new Audio(`/audio.mp3?v=${Date.now()}`);
-			audioRef.current = audio;
+		return () => {
+			for (const id of timeoutsRef.current) {
+				clearTimeout(id);
+			}
+			timeoutsRef.current = [];
+			const audio = audioRef.current;
+			if (!audio) return;
+			audio.ontimeupdate = null;
+			audio.pause();
+			audioRef.current = null;
+		};
+	}, []);
 
-			// Loop handler - stays attached for component lifetime
-			const handleTimeUpdate = () => {
-				if (audio.currentTime > LOOP_END) {
-					audio.currentTime = LOOP_START;
-				}
-			};
-			audio.addEventListener("timeupdate", handleTimeUpdate);
-
-			// Cleanup only on unmount
-			return () => {
-				audio.removeEventListener("timeupdate", handleTimeUpdate);
-				audio.pause();
-				audioRef.current = null;
-			};
-		}
-		return undefined;
-	}, []); // Empty deps - only runs once
-
-	/** Control audio play/pause based on status */
+	/** Create audio on first use, then control playback and volume from UI state. */
 	useEffect(() => {
-		const audio = audioRef.current;
-		if (!audio) return;
-
 		if (shouldPlayAudio) {
-			// Only reset and play when transitioning from idle
+			let audio = audioRef.current;
+			if (!audio) {
+				const createdAudio = new Audio("/audio.mp3");
+				createdAudio.ontimeupdate = () => {
+					if (createdAudio.currentTime > LOOP_END) {
+						createdAudio.currentTime = LOOP_START;
+					}
+				};
+				audioRef.current = createdAudio;
+				audio = createdAudio;
+			}
+
+			audio.volume = Math.max(0, Math.min(1, volume / 100));
 			if (audio.paused) {
 				audio.currentTime = 0;
 				audio.play().catch(() => {
 					// Audio play failures are non-critical, silently ignore
 				});
 			}
-		} else {
+		} else if (audioRef.current) {
+			const audio = audioRef.current;
 			audio.pause();
 			audio.currentTime = 0;
 		}
-	}, [shouldPlayAudio]);
-
-	/** Volume control - separate effect */
-	useEffect(() => {
-		if (audioRef.current) {
-			audioRef.current.volume = Math.max(0, Math.min(1, volume / 100));
-		}
-	}, [volume]);
+	}, [shouldPlayAudio, volume]);
 
 	/** Reset state when returning to idle */
 	useEffect(() => {
@@ -132,7 +121,7 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 		if (status !== "blackout" || sequenceStartedRef.current) return;
 
 		sequenceStartedRef.current = true;
-		const timeouts: NodeJS.Timeout[] = [];
+		const timeouts: Array<ReturnType<typeof setTimeout>> = [];
 
 		const sequence = [
 			{ fn: () => setCount("1"), delay: SEQUENCE_TIMINGS.COUNT_1 },
@@ -142,11 +131,10 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 			{
 				fn: () => {
 					setCount(null);
-					onBeamStartRef.current();
+					onCompleteRef.current();
 				},
-				delay: SEQUENCE_TIMINGS.BEAM_START,
+				delay: SEQUENCE_TIMINGS.COMPLETE,
 			},
-			{ fn: () => onCompleteRef.current(), delay: SEQUENCE_TIMINGS.COMPLETE },
 		];
 
 		for (const item of sequence) {

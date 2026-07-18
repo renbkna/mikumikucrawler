@@ -2,8 +2,8 @@ import type {
 	CrawlCountersSchema,
 	CrawlListResponseSchema,
 	CrawlOptionsSchema,
+	CrawlRecoverySnapshotSchema,
 	CrawlSummarySchema,
-	ResumeCrawlResponseSchema,
 } from "./schemas.js";
 
 export const DEFAULT_CRAWL_LIST_LIMIT = 25;
@@ -72,7 +72,7 @@ export type StopCrawlMode = (typeof StopCrawlModeValues)[number];
 export type CrawlCounters = typeof CrawlCountersSchema.static;
 export type CrawlSummary = typeof CrawlSummarySchema.static;
 export type CrawlListResponse = typeof CrawlListResponseSchema.static;
-export type ResumeCrawlResponse = typeof ResumeCrawlResponseSchema.static;
+export type CrawlRecoverySnapshot = typeof CrawlRecoverySnapshotSchema.static;
 
 export interface ResumableSessionSummary {
 	id: string;

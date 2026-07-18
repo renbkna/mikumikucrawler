@@ -2,7 +2,9 @@ import { Elysia, t } from "elysia";
 import {
 	API_PATHS,
 	CRAWL_ROUTE_SEGMENTS,
+	type CrawlRecoverySnapshot,
 	type CrawlStatus,
+	type CrawlSummary,
 	DEFAULT_CRAWL_LIST_LIMIT,
 	isCrawlOptions,
 } from "../../shared/contracts/index.js";
@@ -10,12 +12,12 @@ import {
 	CrawlIdParamsSchema,
 	CrawlListResponseSchema,
 	CrawlPagesResponseSchema,
+	CrawlRecoverySnapshotSchema,
 	CreateCrawlBodySchema,
 	CreateCrawlResponseSchema,
 	ExportQuerySchema,
 	GetCrawlResponseSchema,
 	ResumableCrawlListResponseSchema,
-	ResumeCrawlResponseSchema,
 	StopCrawlBodySchema,
 	StopCrawlResponseSchema,
 } from "../../shared/contracts/schemas.js";
@@ -25,8 +27,26 @@ import { CrawlListQuerySchema, ResumableCrawlListQuerySchema } from "../contract
 import { ApiErrorSchema } from "../contracts/errors.js";
 import { OkResponseSchema } from "../contracts/http.js";
 import { createCrawlExportResponse } from "../domain/export/CrawlExportService.js";
-import { CrawlManagerClosingError } from "../runtime/CrawlManager.js";
+import { CrawlManagerClosingError, type ResumeCrawlResult } from "../runtime/CrawlManager.js";
+import type { StorageRepos } from "../storage/db.js";
 import type { RouteServicesPlugin } from "./context.js";
+
+const CRAWL_SERVICE_CLOSING_ERROR = {
+	error: "Crawl service is shutting down",
+	code: "SERVICE_CLOSING",
+} as const;
+
+function createCrawlRecoverySnapshot(
+	crawl: CrawlSummary,
+	repos: Pick<StorageRepos, "pages">,
+): CrawlRecoverySnapshot {
+	const pageSnapshot = repos.pages.listSnapshot(crawl.id);
+	return {
+		crawl,
+		pages: pageSnapshot.pages,
+		pageCount: pageSnapshot.count,
+	};
+}
 
 export function crawlsApi(services: RouteServicesPlugin) {
 	const crawlByIdRoutes = new Elysia().use(services).guard(
@@ -64,7 +84,15 @@ export function crawlsApi(services: RouteServicesPlugin) {
 				.post(
 					CRAWL_ROUTE_SEGMENTS.resume,
 					({ crawlManager, params, repos, status }) => {
-						const result = crawlManager.resume(params.id);
+						let result: ResumeCrawlResult;
+						try {
+							result = crawlManager.resume(params.id);
+						} catch (error) {
+							if (error instanceof CrawlManagerClosingError) {
+								return status(503, CRAWL_SERVICE_CLOSING_ERROR);
+							}
+							throw error;
+						}
 						if (result.type === "not-found") {
 							return status(404, { error: "Crawl not found" });
 						}
@@ -79,23 +107,40 @@ export function crawlsApi(services: RouteServicesPlugin) {
 							return status(409, { error: "Crawl is already running" });
 						}
 
-						const pageSnapshot = repos.pages.listSnapshot(params.id);
-						return {
-							crawl: result.crawl,
-							pages: pageSnapshot.pages,
-							pageCount: pageSnapshot.count,
-						};
+						return createCrawlRecoverySnapshot(result.crawl, repos);
 					},
 					{
 						response: {
-							200: ResumeCrawlResponseSchema,
+							200: CrawlRecoverySnapshotSchema,
 							404: ApiErrorSchema,
 							409: ApiErrorSchema,
 							422: ApiErrorSchema,
+							503: ApiErrorSchema,
 						},
 						detail: {
 							tags: ["Crawls"],
 							summary: "Resume a paused or interrupted crawl",
+						},
+					},
+				)
+				.get(
+					CRAWL_ROUTE_SEGMENTS.snapshot,
+					({ crawlManager, params, repos, status }) => {
+						const crawl = crawlManager.get(params.id);
+						if (!crawl) {
+							return status(404, { error: "Crawl not found" });
+						}
+						return createCrawlRecoverySnapshot(crawl, repos);
+					},
+					{
+						response: {
+							200: CrawlRecoverySnapshotSchema,
+							404: ApiErrorSchema,
+							422: ApiErrorSchema,
+						},
+						detail: {
+							tags: ["Crawls"],
+							summary: "Recover crawl lifecycle and durable page state",
 						},
 					},
 				)
@@ -115,7 +160,7 @@ export function crawlsApi(services: RouteServicesPlugin) {
 						},
 						detail: {
 							tags: ["Crawls"],
-							summary: "List the durable page snapshot for a crawl",
+							summary: "List latest durable page summaries and the total stored count",
 						},
 					},
 				)
@@ -220,7 +265,7 @@ export function crawlsApi(services: RouteServicesPlugin) {
 					return crawlManager.create(normalizedOptions);
 				} catch (error) {
 					if (error instanceof CrawlManagerClosingError) {
-						return status(503, { error: error.message, code: "SERVICE_CLOSING" });
+						return status(503, CRAWL_SERVICE_CLOSING_ERROR);
 					}
 					throw error;
 				}

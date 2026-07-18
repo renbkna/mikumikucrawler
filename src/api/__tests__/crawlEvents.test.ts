@@ -119,7 +119,8 @@ describe("crawl event parser", () => {
 				sequence: 5,
 				timestamp: "2026-03-21T12:02:00.000Z",
 				payload: {
-					id: null,
+					id: 1,
+					pageCount: 1,
 					url: "https://example.com/page",
 					title: 123,
 				},
@@ -129,21 +130,44 @@ describe("crawl event parser", () => {
 		expect(event).toBeNull();
 	});
 
-	test("rejects page payload ids looser than the server numeric schema", () => {
-		const event = parseCrawlEventEnvelope(
-			JSON.stringify({
-				type: "crawl.page",
-				crawlId: "crawl-1",
-				sequence: 5,
-				timestamp: "2026-03-21T12:02:00.000Z",
-				payload: {
-					id: 1.5,
-					url: "https://example.com/page",
-				},
-			}),
-		);
+	test("rejects non-positive, null, and fractional page identities", () => {
+		for (const id of [null, 0, 1.5]) {
+			const event = parseCrawlEventEnvelope(
+				JSON.stringify({
+					type: "crawl.page",
+					crawlId: "crawl-1",
+					sequence: 5,
+					timestamp: "2026-03-21T12:02:00.000Z",
+					payload: {
+						id,
+						pageCount: 1,
+						url: "https://example.com/page",
+					},
+				}),
+			);
 
-		expect(event).toBeNull();
+			expect(event).toBeNull();
+		}
+	});
+
+	test("rejects missing, non-positive, and fractional post-commit page counts", () => {
+		for (const pageCount of [undefined, -1, 0, 1.5]) {
+			const event = parseCrawlEventEnvelope(
+				JSON.stringify({
+					type: "crawl.page",
+					crawlId: "crawl-1",
+					sequence: 5,
+					timestamp: "2026-03-21T12:02:00.000Z",
+					payload: {
+						id: 1,
+						pageCount,
+						url: "https://example.com/page",
+					},
+				}),
+			);
+
+			expect(event).toBeNull();
+		}
 	});
 
 	test("rejects malformed nested processed page data", () => {
@@ -155,6 +179,7 @@ describe("crawl event parser", () => {
 				timestamp: "2026-03-21T12:02:00.000Z",
 				payload: {
 					id: 1,
+					pageCount: 1,
 					url: "https://example.com/page",
 					processedData: {
 						extractedData: {},

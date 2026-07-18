@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import type { CrawlOptions } from "../../../../shared/contracts/index.js";
 import type { Logger } from "../../../config/logging.js";
 import { CrawlQueue } from "../CrawlQueue.js";
+import { CrawlState } from "../CrawlState.js";
 
 const options: CrawlOptions = {
 	target: "https://example.com",
@@ -33,19 +34,41 @@ function createLogger(): Logger {
 }
 
 describe("CrawlQueue", () => {
+	test("durable enqueue succeeds before queue and admission state become visible", () => {
+		const state = new CrawlState({ ...options, maxPagesPerDomain: 1 });
+		const queue = new CrawlQueue(options, state, createLogger(), {
+			enqueueMany: () => {
+				throw new Error("queue persistence failed");
+			},
+			reschedule: mock(() => undefined),
+			clear: mock(() => undefined),
+		});
+
+		expect(() =>
+			queue.enqueue({
+				url: "https://example.com/persistence-failure",
+				domain: "example.com",
+				depth: 1,
+				retries: 0,
+			}),
+		).toThrow("queue persistence failed");
+		expect(queue.pendingCount).toBe(0);
+		expect(state.canAdmit("https://example.com/persistence-failure", "example.com")).toBe(true);
+	});
+
 	test("persists pending domain delay state for resume", () => {
 		const reschedule = mock(() => undefined);
 		const queue = new CrawlQueue(
 			options,
 			{
 				hasVisited: () => false,
-				tryAdmit: () => true,
+				canAdmit: () => true,
+				recordAdmission: () => undefined,
 			} as never,
 			createLogger(),
 			{
 				enqueueMany: mock(() => undefined),
 				reschedule,
-				remove: mock(() => undefined),
 				clear: mock(() => undefined),
 			},
 		);
@@ -76,6 +99,35 @@ describe("CrawlQueue", () => {
 		);
 	});
 
+	test("failed delay persistence cannot advance the in-memory projection", () => {
+		const item = {
+			url: "https://example.com/delay-write-failure",
+			domain: "example.com",
+			depth: 1,
+			retries: 0,
+			availableAt: 100,
+		};
+		const queue = new CrawlQueue(
+			options,
+			{
+				restoreAdmission: () => undefined,
+				restoreDomainAdmission: () => undefined,
+			} as never,
+			createLogger(),
+			{
+				enqueueMany: mock(() => undefined),
+				reschedule: () => {
+					throw new Error("delay persistence failed");
+				},
+				clear: mock(() => undefined),
+			},
+		);
+		queue.restore([item]);
+
+		expect(() => queue.deferPendingByDelayKey(() => 500)).toThrow("delay persistence failed");
+		expect(item.availableAt).toBe(100);
+	});
+
 	test("uses origin delay keys for scheduling while preserving host budget domains", () => {
 		const timeUntilDomainReady = mock((delayKey: string) =>
 			delayKey === "http://example.com:8080" ? 300 : 0,
@@ -85,7 +137,8 @@ describe("CrawlQueue", () => {
 			options,
 			{
 				hasVisited: () => false,
-				tryAdmit: () => true,
+				canAdmit: () => true,
+				recordAdmission: () => undefined,
 				timeUntilDomainReady,
 				reserveDomain,
 				nextAllowedAtForDomain: () => 300,
@@ -94,7 +147,6 @@ describe("CrawlQueue", () => {
 			{
 				enqueueMany: mock(() => undefined),
 				reschedule: mock(() => undefined),
-				remove: mock(() => undefined),
 				clear: mock(() => undefined),
 			},
 		);
@@ -121,13 +173,14 @@ describe("CrawlQueue", () => {
 		expect(reserveDomain).toHaveBeenCalledWith("https://example.com", 100);
 	});
 
-	test("preserves retry persistence until the retried item reaches a terminal outcome", () => {
-		const remove = mock(() => undefined);
+	test("keeps a rescheduled item pending for the completion owner", () => {
+		const reschedule = mock(() => undefined);
 		const queue = new CrawlQueue(
 			options,
 			{
 				hasVisited: () => false,
-				tryAdmit: () => true,
+				canAdmit: () => true,
+				recordAdmission: () => undefined,
 				timeUntilDomainReady: () => 0,
 				reserveDomain: mock(() => undefined),
 				nextAllowedAtForDomain: () => 0,
@@ -135,8 +188,7 @@ describe("CrawlQueue", () => {
 			createLogger(),
 			{
 				enqueueMany: mock(() => undefined),
-				reschedule: mock(() => undefined),
-				remove,
+				reschedule,
 				clear: mock(() => undefined),
 			},
 		);
@@ -150,7 +202,7 @@ describe("CrawlQueue", () => {
 
 		queue.scheduleRetry(item, 0);
 		queue.markDone(item);
-		expect(remove).not.toHaveBeenCalled();
+		expect(reschedule).toHaveBeenCalledWith(expect.objectContaining({ retries: 1 }));
 
 		const ready = queue.nextReady(Date.now() + 1);
 		expect(ready.item?.retries).toBe(1);
@@ -158,11 +210,46 @@ describe("CrawlQueue", () => {
 			throw new Error("Expected retried queue item");
 		}
 
-		queue.markDone(ready.item, { persist: false });
-		expect(remove).not.toHaveBeenCalled();
-
 		queue.markDone(ready.item);
-		expect(remove).toHaveBeenCalledWith("https://example.com/rate");
+		expect(queue.activeCount).toBe(0);
+	});
+
+	test("failed retry persistence cannot expose an in-memory retry", () => {
+		const queue = new CrawlQueue(
+			{ ...options, crawlDelay: 0 },
+			{
+				hasVisited: () => false,
+				canAdmit: () => true,
+				recordAdmission: () => undefined,
+				timeUntilDomainReady: () => 0,
+				reserveDomain: mock(() => undefined),
+				nextAllowedAtForDomain: () => 0,
+			} as never,
+			createLogger(),
+			{
+				enqueueMany: mock(() => undefined),
+				reschedule: () => {
+					throw new Error("retry persistence failed");
+				},
+				clear: mock(() => undefined),
+			},
+		);
+		queue.enqueue({
+			url: "https://example.com/retry-write-failure",
+			domain: "example.com",
+			depth: 1,
+			retries: 0,
+			availableAt: 0,
+		});
+		const active = queue.nextReady(Date.now()).item;
+		if (!active) {
+			throw new Error("Expected active queue item");
+		}
+
+		expect(() => queue.scheduleRetry(active, 0)).toThrow("retry persistence failed");
+		queue.markDone(active);
+		expect(queue.pendingCount).toBe(0);
+		expect(queue.nextReady(Date.now()).item).toBeNull();
 	});
 
 	test("does not dispatch a retried URL while the original item is active", () => {
@@ -170,7 +257,8 @@ describe("CrawlQueue", () => {
 			{ ...options, maxConcurrentRequests: 2, crawlDelay: 0 },
 			{
 				hasVisited: () => false,
-				tryAdmit: () => true,
+				canAdmit: () => true,
+				recordAdmission: () => undefined,
 				timeUntilDomainReady: () => 0,
 				reserveDomain: mock(() => undefined),
 				nextAllowedAtForDomain: () => 0,
@@ -179,7 +267,6 @@ describe("CrawlQueue", () => {
 			{
 				enqueueMany: mock(() => undefined),
 				reschedule: mock(() => undefined),
-				remove: mock(() => undefined),
 				clear: mock(() => undefined),
 			},
 		);
@@ -217,7 +304,8 @@ describe("CrawlQueue", () => {
 			{ ...options, crawlDelay: 1000 },
 			{
 				hasVisited: () => false,
-				tryAdmit: () => true,
+				canAdmit: () => true,
+				recordAdmission: () => undefined,
 				timeUntilDomainReady: () => 0,
 				reserveDomain: mock((_delayKey: string, now: number) => {
 					nextAllowedAt = now + 1000;
@@ -228,7 +316,6 @@ describe("CrawlQueue", () => {
 			{
 				enqueueMany: mock(() => undefined),
 				reschedule,
-				remove: mock(() => undefined),
 				clear: mock(() => undefined),
 			},
 		);
