@@ -12,7 +12,7 @@ import { CrawlState } from "../domain/crawl/CrawlState.js";
 import { DynamicRenderer } from "../domain/crawl/DynamicRenderer.js";
 import { FetchService } from "../domain/crawl/FetchService.js";
 import { PagePipeline, type PageProcessResult } from "../domain/crawl/PagePipeline.js";
-import { RobotsService } from "../domain/crawl/RobotsService.js";
+import type { RobotsService } from "../domain/crawl/RobotsService.js";
 import type { HttpClient, Resolver } from "../plugins/security.js";
 import type { StorageRepos } from "../storage/db.js";
 import { runWithTimeout } from "../utils/timeout.js";
@@ -26,6 +26,7 @@ export interface CrawlRuntimeDependencies {
 	eventStream: EventStream;
 	resolver: Resolver;
 	httpClient: HttpClient;
+	robotsService: RobotsService;
 	allowLocalhostSeed?: boolean;
 	initialSequence?: number;
 	initialCounters?: CrawlCounters;
@@ -83,13 +84,12 @@ export class CrawlRuntime {
 		this.lastDurableCounters = this.state.snapshotCounters();
 		this.dynamicRenderer = new DynamicRenderer(deps.options, deps.logger, deps.httpClient);
 		this.fetchService = new FetchService(
-			deps.repos.pages,
 			deps.httpClient,
 			this.dynamicRenderer,
 			deps.logger,
 			deps.allowLocalhostSeed ? deps.options.target : undefined,
 		);
-		this.robotsService = new RobotsService(deps.httpClient, deps.logger);
+		this.robotsService = deps.robotsService;
 		const toPersistedQueueItem = (item: QueueItem): QueueItem & { availableAt: number } => ({
 			...item,
 			availableAt: item.availableAt ?? 0,
@@ -99,7 +99,6 @@ export class CrawlRuntime {
 				deps.repos.crawlQueue.enqueueMany(deps.crawlId, items.map(toPersistedQueueItem)),
 			reschedule: (item) =>
 				deps.repos.crawlQueue.reschedule(deps.crawlId, toPersistedQueueItem(item)),
-			remove: (url) => deps.repos.crawlQueue.remove(deps.crawlId, url),
 			clear: () => deps.repos.crawlQueue.clear(deps.crawlId),
 		});
 		const eventSink: EventSink = {
@@ -109,11 +108,9 @@ export class CrawlRuntime {
 				}),
 		};
 		this.pipeline = new PagePipeline(
-			deps.crawlId,
 			deps.options,
 			this.state,
 			this.queue,
-			deps.repos.pages,
 			this.fetchService,
 			this.robotsService,
 			eventSink,
@@ -316,9 +313,7 @@ export class CrawlRuntime {
 				if (this.terminalizing) {
 					return;
 				}
-				this.finalizeItem(item, processResult, {
-					interrupted: this.interrupted,
-				});
+				this.finalizeItem(item, processResult);
 				this.lastDurableCounters = this.state.snapshotCounters();
 				finalized = true;
 			})
@@ -370,13 +365,9 @@ export class CrawlRuntime {
 		}
 	}
 
-	private finalizeItem(
-		item: QueueItem,
-		processResult: PageProcessResult,
-		options: { interrupted: boolean },
-	): void {
+	private finalizeItem(item: QueueItem, processResult: PageProcessResult): void {
 		if (processResult.aborted) {
-			this.queue.markDone(item, { persist: false });
+			this.queue.markDone(item);
 			return;
 		}
 
@@ -385,63 +376,74 @@ export class CrawlRuntime {
 			return;
 		}
 
-		if (options.interrupted && !processResult.terminalOutcome && !processResult.page) {
-			this.queue.markInterrupted(item);
-			return;
-		}
-
 		const terminalEffects = processResult.terminalEffects;
-		const willRecordTerminal =
-			processResult.terminalOutcome !== undefined && !this.state.hasVisited(item.url);
-		const domainBudgetCharged = willRecordTerminal && terminalEffects?.chargeDomainBudget === true;
-		const nextCounters =
-			processResult.terminalOutcome !== undefined
-				? this.state.previewTerminalCounters(item.url, processResult.terminalOutcome, {
-						...(terminalEffects?.dataKb !== undefined ? { dataKb: terminalEffects.dataKb } : {}),
-						...(terminalEffects?.mediaFiles !== undefined
-							? { mediaFiles: terminalEffects.mediaFiles }
-							: {}),
-						...(terminalEffects?.discoveredLinks !== undefined
-							? { discoveredLinks: terminalEffects.discoveredLinks }
-							: {}),
-					})
-				: this.state.snapshotCounters();
-		const pendingPageEvent = processResult.page ? 1 : 0;
-		const itemCommit = this.deps.repos.crawlItems.commitCompletedItem({
-			crawlId: this.deps.crawlId,
-			url: item.url,
-			...(willRecordTerminal && processResult.terminalOutcome !== undefined
-				? { outcome: processResult.terminalOutcome }
-				: {}),
-			domainBudgetCharged,
-			...(processResult.page?.saveInput ? { page: processResult.page.saveInput } : {}),
-			counters: nextCounters,
-			eventSequence: this.getCurrentSequence() + pendingPageEvent,
-		});
-
-		if (processResult.terminalOutcome !== undefined && willRecordTerminal) {
-			this.state.recordTerminal(item.url, processResult.terminalOutcome, {
-				...(terminalEffects?.dataKb !== undefined ? { dataKb: terminalEffects.dataKb } : {}),
-				...(terminalEffects?.mediaFiles !== undefined
+		if (this.state.hasVisited(item.url)) {
+			throw new Error(`Cannot complete already-terminal URL: ${item.url}`);
+		}
+		const domainBudgetCharged = terminalEffects.chargeDomainBudget;
+		const nextCounters = this.state.previewTerminalCounters(
+			item.url,
+			processResult.terminalOutcome,
+			{
+				...(terminalEffects.dataKb !== undefined ? { dataKb: terminalEffects.dataKb } : {}),
+				...(terminalEffects.mediaFiles !== undefined
 					? { mediaFiles: terminalEffects.mediaFiles }
 					: {}),
-				...(terminalEffects?.discoveredLinks !== undefined
+				...(terminalEffects.discoveredLinks !== undefined
 					? { discoveredLinks: terminalEffects.discoveredLinks }
 					: {}),
-			});
-			if (domainBudgetCharged) {
-				this.state.recordDomainPage(item.domain);
+			},
+		);
+		const pendingPageEvent = processResult.page ? 1 : 0;
+		const commitBase = {
+			crawlId: this.deps.crawlId,
+			url: item.url,
+			domainBudgetCharged,
+			counters: nextCounters,
+			eventSequence: this.getCurrentSequence() + pendingPageEvent,
+		};
+		const itemCommit = (() => {
+			if (processResult.page) {
+				return this.deps.repos.crawlItems.commitCompletedItem({
+					...commitBase,
+					outcome: "success",
+					page: processResult.page.pageData,
+				});
 			}
+
+			return this.deps.repos.crawlItems.commitCompletedItem({
+				...commitBase,
+				outcome: processResult.terminalOutcome,
+			});
+		})();
+
+		this.state.recordTerminal(item.url, processResult.terminalOutcome, {
+			...(terminalEffects.dataKb !== undefined ? { dataKb: terminalEffects.dataKb } : {}),
+			...(terminalEffects.mediaFiles !== undefined
+				? { mediaFiles: terminalEffects.mediaFiles }
+				: {}),
+			...(terminalEffects.discoveredLinks !== undefined
+				? { discoveredLinks: terminalEffects.discoveredLinks }
+				: {}),
+		});
+		if (domainBudgetCharged) {
+			this.state.recordDomainPage(item.domain);
+		} else {
+			this.state.releaseDomainAdmission(item.domain);
 		}
 
 		if (processResult.page) {
+			if (itemCommit.type !== "page-persisted") {
+				throw new Error("Page completion did not return its persisted identity");
+			}
 			this.publish("crawl.page", {
 				...processResult.page.eventPayload,
-				id: itemCommit.pageId ?? null,
+				id: itemCommit.pageId,
+				pageCount: itemCommit.pageCount,
 			});
 		}
 
-		this.queue.markDone(item, { persist: false });
+		this.queue.markDone(item);
 	}
 
 	private async initializeRuntime(): Promise<void> {

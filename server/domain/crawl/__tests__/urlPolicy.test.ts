@@ -1,21 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CrawlOptions } from "../../../../shared/contracts/index.js";
-import { filterDiscoveredLinks, getCrawlUrlIdentity } from "../UrlPolicy.js";
-
-/**
- * CONTRACT: filterDiscoveredLinks
- *
- * Input: (links: ExtractedLink[], options: CrawlOptions, currentDomain: string)
- * Output: filtered ExtractedLink[] with normalized isInternal and nofollow fields
- *
- * Filtering rules:
- *   1. Rejects non-http URLs
- *   2. Rejects non-document resource and binary-download extensions
- *   3. Rejects external links unless crawlMethod is "full"
- *   4. Sets isInternal based on domain match when not already set
- *   5. Coerces nofollow to boolean
- *   6. Rejects localhost and private IP targets (SSRF protection for discovered links)
- */
+import type { ExtractedLink } from "../../../../shared/types.js";
+import { getCrawlUrlIdentity, normalizeDiscoveredLink } from "../UrlPolicy.js";
 
 function makeOptions(overrides: Partial<CrawlOptions> = {}): CrawlOptions {
 	return {
@@ -35,8 +21,16 @@ function makeOptions(overrides: Partial<CrawlOptions> = {}): CrawlOptions {
 	};
 }
 
-describe("filterDiscoveredLinks", () => {
-	test("builds one canonical identity for queue, robots, budget, and origin checks", () => {
+function normalize(
+	link: ExtractedLink,
+	options = makeOptions(),
+	documentUrl = "https://example.com/start",
+) {
+	return normalizeDiscoveredLink(link, options, documentUrl);
+}
+
+describe("crawl URL identity", () => {
+	test("derives canonical, robots, origin, and budget identities from one URL", () => {
 		const identity = getCrawlUrlIdentity(
 			"HTTPS://Example.COM:443/path/?b=2&a=1&utm_source=x#section",
 		);
@@ -52,221 +46,102 @@ describe("filterDiscoveredLinks", () => {
 		});
 	});
 
-	test("preserves non-default ports in origin and robots keys", () => {
-		const identity = getCrawlUrlIdentity("http://example.com:8080/page");
+	test("preserves ports in origin identity while keeping hostname budget identity", () => {
+		const identity = getCrawlUrlIdentity("http://blog.example.com:8080/page");
 
 		expect(identity).toMatchObject({
-			canonicalUrl: "http://example.com:8080/page",
-			robotsMatchUrl: "http://example.com:8080/page",
-			originKey: "http://example.com:8080",
-			robotsKey: "http://example.com:8080",
-			domainBudgetKey: "example.com",
+			canonicalUrl: "http://blog.example.com:8080/page",
+			originKey: "http://blog.example.com:8080",
+			robotsKey: "http://blog.example.com:8080",
+			domainBudgetKey: "blog.example.com",
 		});
 	});
+});
 
-	test("keeps subdomains as distinct budget keys", () => {
-		const root = getCrawlUrlIdentity("https://example.com/page");
-		const subdomain = getCrawlUrlIdentity("https://blog.example.com/page");
+describe("discovered URL normalization", () => {
+	test("rejects unsupported schemes and skipped resource extensions with diagnostic reasons", () => {
+		const cases = [
+			["mailto:test@example.com", "invalid-url"],
+			["javascript:void(0)", "invalid-url"],
+			["ftp://files.example.com", "invalid-url"],
+			["https://example.com/app.css", "resource-extension"],
+			["https://example.com/archive.zip", "resource-extension"],
+		] as const;
 
-		expect("error" in root ? root.error : root.domainBudgetKey).toBe("example.com");
-		expect("error" in subdomain ? subdomain.error : subdomain.domainBudgetKey).toBe(
-			"blog.example.com",
-		);
+		for (const [url, reason] of cases) {
+			expect(normalize({ url })).toMatchObject({ reason });
+		}
 	});
 
-	test("rejects non-http URLs", () => {
-		const result = filterDiscoveredLinks(
-			[
-				{ url: "mailto:test@example.com", domain: "example.com" },
-				{ url: "javascript:void(0)", domain: "example.com" },
-				{ url: "ftp://files.example.com", domain: "example.com" },
-				{ url: "https://example.com/page", domain: "example.com" },
-			],
-			makeOptions(),
-			"example.com",
-		);
-
-		expect(result).toHaveLength(1);
-		expect(result[0].url).toBe("https://example.com/page");
-	});
-
-	test("rejects resource extensions", () => {
-		const extensions = [
-			".css",
-			".js",
-			".xml",
-			".txt",
-			".md",
-			".csv",
-			".svg",
-			".ico",
-			".msi",
-			".dmg",
-			".exe",
-			".zip",
-		];
-		const links = extensions.map((ext) => ({
-			url: `https://example.com/file${ext}`,
-			domain: "example.com",
-		}));
-		links.push({
-			url: "https://example.com/page",
-			domain: "example.com",
-		});
-
-		const result = filterDiscoveredLinks(links, makeOptions(), "example.com");
-
-		expect(result).toHaveLength(1);
-		expect(result[0].url).toBe("https://example.com/page");
-	});
-
-	test("rejects binary downloads while retaining supported JSON and PDF documents", () => {
-		const result = filterDiscoveredLinks(
-			[
-				{ url: "https://example.com/releases/app.MSI?download=1" },
-				{ url: "https://example.com/releases/app.dmg?source=latest" },
-				{ url: "https://example.com/releases/data.JSON?download=1" },
-				{ url: "https://example.com/releases/manual.pdf?download=1" },
-			],
-			makeOptions(),
-			"example.com",
-		);
-
-		expect(result.map((link) => link.url)).toEqual([
+	test("retains supported JSON and PDF documents", () => {
+		const urls = [
 			"https://example.com/releases/data.JSON?download=1",
 			"https://example.com/releases/manual.pdf?download=1",
-		]);
+		];
+
+		expect(
+			urls
+				.map((url) => normalize({ url }))
+				.map((result) => ("error" in result ? result.error : result.link.url)),
+		).toEqual(urls);
 	});
 
-	test("blocks external links when crawlMethod is 'links'", () => {
-		const result = filterDiscoveredLinks(
-			[
-				{
-					url: "https://external.com/page",
-					domain: "external.com",
-					isInternal: false,
-				},
-				{
-					url: "https://example.com/about",
-					domain: "example.com",
-					isInternal: true,
-				},
-			],
-			makeOptions({ crawlMethod: "links" }),
-			"example.com",
-		);
-
-		expect(result).toHaveLength(1);
-		expect(result[0].url).toBe("https://example.com/about");
-	});
-
-	test("does not trust stale extractor isInternal flags for crawl admission", () => {
-		const result = filterDiscoveredLinks(
-			[
-				{
-					url: "https://external.com/page",
-					domain: "external.com",
-					isInternal: true,
-				},
-				{
-					url: "https://example.com/about",
-					domain: "example.com",
-					isInternal: false,
-				},
-			],
-			makeOptions({ crawlMethod: "links" }),
-			"https://example.com/start",
-		);
-
-		expect(result).toEqual([
-			expect.objectContaining({
-				url: "https://example.com/about",
-				isInternal: true,
-			}),
-		]);
-	});
-
-	test("allows external links when crawlMethod is 'full'", () => {
-		const result = filterDiscoveredLinks(
-			[
-				{
-					url: "https://external.com/page",
-					domain: "external.com",
-					isInternal: false,
-				},
-				{
-					url: "https://example.com/about",
-					domain: "example.com",
-					isInternal: true,
-				},
-			],
+	test("derives internal status from the document origin instead of extractor flags", () => {
+		const internal = normalize({ url: "https://example.com/about", isInternal: false });
+		const external = normalize(
+			{ url: "https://external.example/page", isInternal: true },
 			makeOptions({ crawlMethod: "full" }),
-			"example.com",
 		);
 
-		expect(result).toHaveLength(2);
+		expect(internal).toMatchObject({ link: { isInternal: true } });
+		expect(external).toMatchObject({ link: { isInternal: false } });
 	});
 
-	test("infers isInternal from domain match when not set", () => {
-		const result = filterDiscoveredLinks(
-			[
-				{ url: "https://example.com/page", domain: "example.com" },
-				{ url: "https://other.com/page", domain: "other.com" },
-			],
-			makeOptions({ crawlMethod: "full" }),
-			"example.com",
-		);
-
-		expect(result[0].isInternal).toBe(true);
-		expect(result[1].isInternal).toBe(false);
+	test("treats scheme and port changes as external origin changes", () => {
+		for (const url of ["https://example.com/page", "http://example.com:8080/page"]) {
+			expect(normalize({ url }, makeOptions(), "http://example.com/start")).toMatchObject({
+				reason: "external-link",
+			});
+		}
 	});
 
-	test("classifies scheme changes as external when current URL is available", () => {
-		const result = filterDiscoveredLinks(
-			[{ url: "https://example.com/page", domain: "example.com" }],
-			makeOptions({ crawlMethod: "links" }),
-			"http://example.com/start",
-		);
+	test("allows external origins only in full crawl mode", () => {
+		const link = { url: "https://external.example/page" };
 
-		expect(result).toEqual([]);
+		expect(normalize(link)).toMatchObject({ reason: "external-link" });
+		expect(normalize(link, makeOptions({ crawlMethod: "full" }))).toMatchObject({
+			link: { url: link.url, isInternal: false },
+		});
 	});
 
-	test("coerces nofollow to boolean", () => {
-		const result = filterDiscoveredLinks(
-			[
-				{
-					url: "https://example.com/a",
-					domain: "example.com",
-					nofollow: undefined,
-				},
-				{
-					url: "https://example.com/b",
-					domain: "example.com",
-					nofollow: true,
-				},
-			],
-			makeOptions(),
-			"example.com",
-		);
+	test("rejects localhost and private IP targets in full crawl mode", () => {
+		const urls = [
+			"http://localhost:3000/admin",
+			"http://127.0.0.1:8080/internal",
+			"http://10.0.0.1/api",
+			"http://[::1]:9090",
+		];
 
-		expect(result[0].nofollow).toBe(false);
-		expect(result[1].nofollow).toBe(true);
+		for (const url of urls) {
+			expect(normalize({ url }, makeOptions({ crawlMethod: "full" }))).toMatchObject({
+				reason: "ssrf-blocked",
+			});
+		}
 	});
 
-	test("rejects localhost and private IP targets even in full crawl mode", () => {
-		const result = filterDiscoveredLinks(
-			[
-				{ url: "http://localhost:3000/admin", domain: "localhost" },
-				{ url: "http://127.0.0.1:8080/internal", domain: "127.0.0.1" },
-				{ url: "http://10.0.0.1/api", domain: "10.0.0.1" },
-				{ url: "http://[::1]:9090", domain: "::1" },
-				{ url: "https://example.com/page", domain: "example.com" },
-			],
-			makeOptions({ crawlMethod: "full" }),
-			"example.com",
-		);
+	test("normalizes a bare document hostname as HTTP instead of fabricating an HTTPS origin", () => {
+		expect(normalize({ url: "https://example.com/page" }, makeOptions(), "example.com")).toEqual({
+			error: "External links require full crawl mode",
+			reason: "external-link",
+		});
+	});
 
-		expect(result).toHaveLength(1);
-		expect(result[0].url).toBe("https://example.com/page");
+	test("normalizes nofollow to the boundary boolean contract", () => {
+		expect(normalize({ url: "https://example.com/a", nofollow: undefined })).toMatchObject({
+			link: { nofollow: false },
+		});
+		expect(normalize({ url: "https://example.com/b", nofollow: true })).toMatchObject({
+			link: { nofollow: true },
+		});
 	});
 });

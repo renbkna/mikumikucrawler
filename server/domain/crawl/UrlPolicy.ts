@@ -59,7 +59,7 @@ export function getCrawlUrlIdentity(url: string): CrawlUrlIdentityResult {
 	};
 }
 
-export function classifyCrawlUrl(
+function classifyCrawlUrl(
 	url: string,
 	currentOriginKey: string,
 ): (CrawlUrlIdentity & { isInternal: boolean }) | { error: string } {
@@ -74,39 +74,21 @@ export function classifyCrawlUrl(
 	};
 }
 
-function toCurrentOriginKey(currentUrlOrDomain: string): string {
-	if (/^https?:\/\//i.test(currentUrlOrDomain)) {
-		const identity = getCrawlUrlIdentity(currentUrlOrDomain);
-		if (!("error" in identity)) {
-			return identity.originKey;
-		}
-	}
-
-	return `https://${currentUrlOrDomain.toLowerCase()}`;
-}
-
-export function filterDiscoveredLinks(
-	links: ExtractedLink[],
-	options: CrawlOptions,
-	currentUrlOrDomain: string,
-): ExtractedLink[] {
-	return links.flatMap((link) => {
-		const normalized = normalizeDiscoveredLink(link, options, currentUrlOrDomain);
-		return "error" in normalized ? [] : [normalized.link];
-	});
-}
-
 export function normalizeDiscoveredLink(
 	link: ExtractedLink,
 	options: CrawlOptions,
-	currentUrlOrDomain: string,
+	documentUrl: string,
 ): NormalizedDiscoveredLink | { error: string; reason: UrlRejectionReason } {
 	if (!link.url) {
 		return { error: "Missing URL", reason: "missing-url" };
 	}
 
-	const currentOriginKey = toCurrentOriginKey(currentUrlOrDomain);
-	const identity = classifyCrawlUrl(link.url, currentOriginKey);
+	const currentIdentity = getCrawlUrlIdentity(documentUrl);
+	if ("error" in currentIdentity) {
+		return { error: "Invalid document URL", reason: "invalid-url" };
+	}
+
+	const identity = classifyCrawlUrl(link.url, currentIdentity.originKey);
 	if ("error" in identity) {
 		return { ...identity, reason: "invalid-url" };
 	}

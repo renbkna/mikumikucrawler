@@ -11,6 +11,40 @@ describe("security contract", () => {
 		await expect(resolver.resolveHost("example.com")).resolves.toEqual(["93.184.216.34"]);
 	});
 
+	test("coalesces concurrent lookups for the same hostname", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const lookup = mock(async () => {
+			await gate;
+			return [{ address: "93.184.216.34", family: 4 }];
+		});
+		const resolver = new DefaultResolver(lookup as never);
+
+		const first = resolver.resolveHost("example.com");
+		const second = resolver.resolveHost("example.com");
+		await Bun.sleep(0);
+
+		expect(lookup).toHaveBeenCalledTimes(1);
+		release();
+		await expect(Promise.all([first, second])).resolves.toEqual([
+			["93.184.216.34"],
+			["93.184.216.34"],
+		]);
+	});
+
+	test("does not expose mutable cached DNS answers", async () => {
+		const resolver = new DefaultResolver(
+			mock(async () => [{ address: "93.184.216.34", family: 4 }]) as never,
+		);
+
+		const first = await resolver.resolveHost("example.com");
+		expect(Object.isFrozen(first)).toBe(true);
+		expect(Reflect.set(first, 0, "127.0.0.1")).toBe(false);
+		await expect(resolver.resolveHost("example.com")).resolves.toEqual(["93.184.216.34"]);
+	});
+
 	test("blocks mixed DNS answers containing a private IP", async () => {
 		const resolver = new DefaultResolver(
 			mock(async () => [

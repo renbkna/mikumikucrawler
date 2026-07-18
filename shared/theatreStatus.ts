@@ -1,4 +1,4 @@
-export const THEATRE_STATUS_VALUES = ["idle", "blackout", "counting", "beam", "live"] as const;
+export const THEATRE_STATUS_VALUES = ["idle", "blackout", "live"] as const;
 
 export type TheatreStatus = (typeof THEATRE_STATUS_VALUES)[number];
 

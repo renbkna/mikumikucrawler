@@ -11,17 +11,6 @@ export interface QueueItemRecord {
 
 export function createCrawlQueueRepo(db: Database) {
 	const insertItem = db.prepare(`
-		INSERT OR IGNORE INTO crawl_queue_items (
-			crawl_id,
-			url,
-			depth,
-			retries,
-			parent_url,
-			domain,
-			available_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
-	`);
-	const upsertItem = db.prepare(`
 		INSERT INTO crawl_queue_items (
 			crawl_id,
 			url,
@@ -31,13 +20,17 @@ export function createCrawlQueueRepo(db: Database) {
 			domain,
 			available_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(crawl_id, url) DO UPDATE SET
-			depth = excluded.depth,
-			retries = excluded.retries,
-			parent_url = excluded.parent_url,
-			domain = excluded.domain,
-			available_at = excluded.available_at,
+	`);
+	const updateItem = db.prepare(`
+		UPDATE crawl_queue_items
+		SET
+			depth = ?,
+			retries = ?,
+			parent_url = ?,
+			domain = ?,
+			available_at = ?,
 			created_at = CURRENT_TIMESTAMP
+		WHERE crawl_id = ? AND url = ?
 	`);
 
 	const insertManyTransaction = db.transaction((crawlId: string, items: QueueItemRecord[]) => {
@@ -89,18 +82,18 @@ export function createCrawlQueueRepo(db: Database) {
 			}));
 		},
 		reschedule(crawlId: string, item: QueueItemRecord): void {
-			upsertItem.run(
-				crawlId,
-				item.url,
+			const result = updateItem.run(
 				item.depth,
 				item.retries,
 				item.parentUrl ?? null,
 				item.domain,
 				item.availableAt ?? 0,
+				crawlId,
+				item.url,
 			);
-		},
-		remove(crawlId: string, url: string): void {
-			db.query("DELETE FROM crawl_queue_items WHERE crawl_id = ? AND url = ?").run(crawlId, url);
+			if (result.changes !== 1) {
+				throw new Error(`Cannot reschedule non-pending crawl URL: ${item.url}`);
+			}
 		},
 		clear(crawlId: string): void {
 			db.query("DELETE FROM crawl_queue_items WHERE crawl_id = ?").run(crawlId);

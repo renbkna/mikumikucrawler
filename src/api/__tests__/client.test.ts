@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { buildCrawlEventsPath, buildCrawlExportPath } from "../../../shared/contracts/index.js";
-import { downloadCrawlExport, getBackendUrl, resolveBackendUrl } from "../client";
-import { createCrawl, subscribeToCrawlEvents } from "../crawls";
+import {
+	buildBackendApiUrl,
+	resolveBackendTransportPolicy,
+	resolveBackendUrl,
+} from "../backendUrl";
+import { downloadCrawlExport, getBackendUrl } from "../client";
+import { createCrawl, getCrawlRecoverySnapshot, subscribeToCrawlEvents } from "../crawls";
 
 const originalFetch = globalThis.fetch;
 const originalEventSource = globalThis.EventSource;
@@ -12,23 +17,69 @@ afterEach(() => {
 });
 
 describe("API client backend URL resolution", () => {
-	test("uses explicit VITE_BACKEND_URL when configured", () => {
+	test("normalizes one explicit backend endpoint for every transport", () => {
 		expect(
 			resolveBackendUrl(
-				{ VITE_BACKEND_URL: "https://api.example.test", DEV: true },
+				{ VITE_BACKEND_URL: "https://api.example.test/base///" },
 				"http://localhost:5173",
 			),
-		).toBe("https://api.example.test");
+		).toBe("https://api.example.test/base");
+		expect(
+			buildBackendApiUrl("https://api.example.test/base", buildCrawlEventsPath("crawl-1")),
+		).toBe("https://api.example.test/base/api/crawls/crawl-1/events");
 	});
 
-	test("defaults Vite dev builds to the Bun backend port", () => {
-		expect(resolveBackendUrl({ DEV: true }, "http://localhost:5173")).toBe("http://localhost:3000");
+	test("uses the browser origin when no cross-origin backend is configured", () => {
+		expect(resolveBackendUrl({}, "http://localhost:5173")).toBe("http://localhost:5173");
 	});
 
 	test("uses same origin outside Vite dev for backend-served static builds", () => {
 		expect(resolveBackendUrl({}, "https://crawler.example.test")).toBe(
 			"https://crawler.example.test",
 		);
+	});
+
+	test("projects only the configured HTTP origin into the document CSP", () => {
+		expect(resolveBackendTransportPolicy("https://api.example.test/base/path")).toEqual({
+			type: "cross-origin",
+			connectSource: "https://api.example.test",
+		});
+		expect(resolveBackendTransportPolicy(undefined).connectSource).toBe("");
+	});
+
+	test("rejects backend URLs that cannot be represented as HTTP CSP sources", () => {
+		expect(() => resolveBackendTransportPolicy("not a URL")).toThrow(
+			"VITE_BACKEND_URL must be an absolute HTTP(S) URL",
+		);
+		expect(() => resolveBackendTransportPolicy("file:///tmp/backend")).toThrow(
+			"VITE_BACKEND_URL must use HTTP or HTTPS",
+		);
+		expect(() => resolveBackendUrl({ VITE_BACKEND_URL: "https://user@api.example.test" })).toThrow(
+			"VITE_BACKEND_URL must not include credentials",
+		);
+		expect(() =>
+			resolveBackendUrl({ VITE_BACKEND_URL: "https://api.example.test/base?mode=direct" }),
+		).toThrow("VITE_BACKEND_URL must not include a query or fragment");
+	});
+
+	test("derives local proxy and explicit cross-origin transport as exclusive policies", () => {
+		expect(resolveBackendTransportPolicy(undefined, { rawPort: "4312" })).toEqual({
+			type: "same-origin-proxy",
+			connectSource: "",
+			proxyTarget: "http://localhost:4312",
+		});
+		expect(
+			resolveBackendTransportPolicy("https://api.example.test/base", {
+				rawPort: "invalid-but-unused",
+			}),
+		).toEqual({
+			type: "cross-origin",
+			connectSource: "https://api.example.test",
+		});
+		expect(resolveBackendTransportPolicy(undefined)).toEqual({
+			type: "same-origin",
+			connectSource: "",
+		});
 	});
 
 	test("download export uses the resolved backend API URL", async () => {
@@ -130,5 +181,30 @@ describe("API client backend URL resolution", () => {
 			expect(result.data.createdAt).toBe(createdAt);
 			expect(result.data.createdAt).not.toBeInstanceOf(Date);
 		}
+
+		globalThis.fetch = mock(async () =>
+			Response.json({
+				crawl: result.ok ? result.data : null,
+				pages: [],
+				pageCount: 0,
+			}),
+		) as unknown as typeof fetch;
+		const durableSnapshot = await getCrawlRecoverySnapshot("crawl-date-contract");
+		expect(durableSnapshot.ok).toBe(true);
+		if (durableSnapshot.ok) {
+			expect(durableSnapshot.data.crawl.createdAt).toBe(createdAt);
+		}
+
+		globalThis.fetch = mock(async () =>
+			Response.json({
+				crawl: result.ok ? result.data : null,
+				pages: [{ id: 1, url: "https://example.com/", domain: "example.com" }],
+				pageCount: 0,
+			}),
+		) as unknown as typeof fetch;
+		await expect(getCrawlRecoverySnapshot("crawl-date-contract")).resolves.toEqual({
+			ok: false,
+			error: "Unexpected crawl recovery response",
+		});
 	});
 });

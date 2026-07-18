@@ -13,6 +13,7 @@ import {
 } from "../../shared/contracts/index.js";
 import type { Logger } from "../config/logging.js";
 import type { DomainStateRecord } from "../domain/crawl/CrawlState.js";
+import { RobotsService } from "../domain/crawl/RobotsService.js";
 import type { HttpClient, Resolver } from "../plugins/security.js";
 import type { CrawlRunRecord, StorageRepos } from "../storage/db.js";
 import { CrawlRuntime } from "./CrawlRuntime.js";
@@ -53,8 +54,11 @@ export class CrawlManagerClosingError extends Error {
 
 export class CrawlManager {
 	private closing = false;
+	private readonly robotsService: RobotsService;
 
-	constructor(private readonly deps: CreateCrawlManagerOptions) {}
+	constructor(private readonly deps: CreateCrawlManagerOptions) {
+		this.robotsService = new RobotsService(deps.httpClient, deps.logger);
+	}
 
 	recoverOrphanedActiveCrawls(): void {
 		for (const crawl of this.deps.repos.crawlRuns.listActive()) {
@@ -90,6 +94,7 @@ export class CrawlManager {
 			eventStream: this.deps.eventStream,
 			resolver: this.deps.resolver,
 			httpClient: this.deps.httpClient,
+			robotsService: this.robotsService,
 			allowLocalhostSeed: this.deps.allowLocalhostSeed ?? false,
 			...(config.initialSequence !== undefined ? { initialSequence: config.initialSequence } : {}),
 			...(config.initialCounters !== undefined ? { initialCounters: config.initialCounters } : {}),
@@ -151,6 +156,10 @@ export class CrawlManager {
 	}
 
 	resume(crawlId: string): ResumeCrawlResult {
+		if (this.closing) {
+			throw new CrawlManagerClosingError();
+		}
+
 		const record = this.deps.repos.crawlRuns.getById(crawlId);
 		if (!record) return { type: "not-found" };
 		if (!isResumableCrawlStatus(record.status)) {
@@ -221,12 +230,13 @@ export class CrawlManager {
 	async shutdownAll(): Promise<void> {
 		this.closing = true;
 		const runtimes = [...this.deps.registry.values()];
+		const robotsShutdown = this.robotsService.close();
 		const interruptions: Promise<void>[] = [];
 		for (const runtime of runtimes) {
 			interruptions.push(runtime.interrupt("Process shutdown"));
 		}
 
-		await Promise.allSettled(interruptions);
+		await Promise.allSettled([robotsShutdown, ...interruptions]);
 		await Promise.allSettled(runtimes.map((runtime) => runtime.waitUntilSettled()));
 	}
 }

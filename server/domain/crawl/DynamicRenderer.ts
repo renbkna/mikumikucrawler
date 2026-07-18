@@ -26,6 +26,7 @@ import {
 	isJsonContentType,
 	isPdfContentType,
 	isSupportedDocumentContentType,
+	maxProcessableDocumentBytes,
 } from "../../processors/contentTypes.js";
 import { getErrorMessage } from "../../utils/helpers.js";
 import { logMemoryStatus } from "../../utils/memoryMonitor.js";
@@ -296,7 +297,7 @@ export async function extractRenderedSnapshot(
 					effectiveUrl: window.location.href,
 					title: document.title || "",
 				};
-			}, REQUEST_CONSTANTS.MAX_RESPONSE_BYTES),
+			}, REQUEST_CONSTANTS.MAX_TEXT_DOCUMENT_BYTES),
 	});
 }
 
@@ -371,7 +372,11 @@ export async function fulfillRouteWithPinnedHttpClient(
 			}
 		}
 		let responseBudgetExceeded = false;
-		const body = await readLimitedResponseBody(response, REQUEST_CONSTANTS.MAX_RESPONSE_BYTES, {
+		const responseLimit =
+			request.resourceType() === "document"
+				? maxProcessableDocumentBytes(contentType)
+				: REQUEST_CONSTANTS.MAX_RESPONSE_BYTES;
+		const body = await readLimitedResponseBody(response, responseLimit, {
 			tryConsume(bytes) {
 				if (bytes > budget.remainingBytes) {
 					responseBudgetExceeded = true;

@@ -2,7 +2,6 @@ import type { CrawlOptions } from "../../../shared/contracts/index.js";
 import { RETRY_CONSTANTS } from "../../constants.js";
 import { processContent } from "../../processors/ContentProcessor.js";
 import { isHtmlLikeContentType } from "../../processors/contentTypes.js";
-import type { PageRepo } from "../../storage/repos/pageRepo.js";
 import { CrawlAdmissionPolicy } from "./CrawlAdmissionPolicy.js";
 import type { CrawlQueue, QueueItem } from "./CrawlQueue.js";
 import type { CrawlState, TerminalOutcome } from "./CrawlState.js";
@@ -17,18 +16,36 @@ interface EventSink {
 	log(message: string): void;
 }
 
-export interface PageProcessResult {
-	terminalOutcome?: TerminalOutcome;
-	terminalEffects?: {
-		chargeDomainBudget: boolean;
-		dataKb?: number;
-		mediaFiles?: number;
-		discoveredLinks?: number;
-	};
-	rescheduled?: boolean;
-	aborted?: boolean;
-	page?: Pick<BuiltPageResult, "saveInput" | "eventPayload">;
+interface TerminalEffects {
+	chargeDomainBudget: boolean;
+	dataKb?: number;
+	mediaFiles?: number;
+	discoveredLinks?: number;
 }
+
+interface NonTerminalPageResult {
+	terminalOutcome?: never;
+	terminalEffects?: never;
+	page?: never;
+}
+
+export type PageProcessResult =
+	| (NonTerminalPageResult & { rescheduled: true; aborted?: never })
+	| (NonTerminalPageResult & { aborted: true; rescheduled?: never })
+	| {
+			terminalOutcome: Exclude<TerminalOutcome, "success">;
+			terminalEffects: TerminalEffects;
+			page?: never;
+			aborted?: never;
+			rescheduled?: never;
+	  }
+	| {
+			terminalOutcome: "success";
+			terminalEffects: TerminalEffects;
+			page: Pick<BuiltPageResult, "pageData" | "eventPayload">;
+			aborted?: never;
+			rescheduled?: never;
+	  };
 
 function throwIfAborted(signal?: AbortSignal): void {
 	if (!signal?.aborted) {
@@ -58,11 +75,9 @@ export class PagePipeline {
 	private readonly admissionPolicy: CrawlAdmissionPolicy;
 
 	constructor(
-		private readonly crawlId: string,
 		private readonly options: CrawlOptions,
 		private readonly state: CrawlState,
 		private readonly queue: CrawlQueue,
-		private readonly pageRepo: PageRepo,
 		private readonly fetchService: FetchService,
 		robotsService: RobotsService,
 		private readonly eventSink: EventSink,
@@ -81,9 +96,9 @@ export class PagePipeline {
 	}
 
 	private recordTerminal(
-		outcome: TerminalOutcome,
+		outcome: Exclude<TerminalOutcome, "success">,
 		options: { dataKb?: number; mediaFiles?: number; discoveredLinks?: number } = {},
-	): PageProcessResult {
+	): Extract<PageProcessResult, { terminalOutcome: "failure" | "skip" }> {
 		return {
 			terminalOutcome: outcome,
 			terminalEffects: { chargeDomainBudget: false, ...options },
@@ -91,9 +106,9 @@ export class PagePipeline {
 	}
 
 	private recordFetchedTerminal(
-		outcome: TerminalOutcome,
+		outcome: Exclude<TerminalOutcome, "success">,
 		options: { dataKb?: number; mediaFiles?: number; discoveredLinks?: number } = {},
-	): PageProcessResult {
+	): Extract<PageProcessResult, { terminalOutcome: "failure" | "skip" }> {
 		return {
 			terminalOutcome: outcome,
 			terminalEffects: { chargeDomainBudget: true, ...options },
@@ -102,14 +117,14 @@ export class PagePipeline {
 
 	async process(item: QueueItem, signal?: AbortSignal): Promise<PageProcessResult> {
 		throwIfAborted(signal);
-		if (!this.state.canScheduleMore() && !this.state.hasVisited(item.url)) {
+		if (this.state.hasVisited(item.url)) {
+			throw new Error(`Queued URL is already terminal: ${item.url}`);
+		}
+
+		if (!this.state.canScheduleMore()) {
 			const result = this.recordTerminal("skip");
 			this.eventSink.log(`[Limit] Max pages reached: ${item.url}`);
 			return result;
-		}
-
-		if (this.state.hasVisited(item.url)) {
-			return {};
 		}
 
 		if (this.state.isDomainBudgetExceeded(item.domain)) {
@@ -118,25 +133,8 @@ export class PagePipeline {
 			return result;
 		}
 
-		const fetchResult = await this.fetchService.fetch(this.crawlId, item, signal);
+		const fetchResult = await this.fetchService.fetch(item, signal);
 		throwIfAborted(signal);
-		if (fetchResult.type === "unchanged") {
-			const cachedLinks = this.admissionPolicy.normalizeDiscoveredLinks(
-				item,
-				this.pageRepo.getLinksByPageUrl(this.crawlId, item.url),
-			);
-			const discoveredLinkCount =
-				this.pageRepo.getDiscoveredLinkCountByPageUrl?.(this.crawlId, item.url) ??
-				cachedLinks.length;
-			await this.enqueueLinks(item, cachedLinks, signal);
-			throwIfAborted(signal);
-			const result = this.recordFetchedTerminal("success", {
-				discoveredLinks: discoveredLinkCount,
-			});
-			this.eventSink.log(`[Crawler] Unchanged: ${item.url} (304)`);
-			return result;
-		}
-
 		if (fetchResult.type === "rateLimited" || fetchResult.type === "transientFailure") {
 			const delayMs = retryDelayMs(fetchResult, item.retries);
 			this.state.adaptDomainDelay(getDelayKey(item), fetchResult.statusCode, delayMs);
@@ -179,7 +177,8 @@ export class PagePipeline {
 		}
 
 		// Queue/page identity remains the requested item URL. The validated effective URL
-		// is the document base and is retained in processed-content metadata.
+		// owns document-base resolution and link-origin classification, and is retained in
+		// processed-content metadata.
 		const processedContent = await processContent(
 			fetchResult.content,
 			fetchResult.effectiveUrl,
@@ -202,10 +201,12 @@ export class PagePipeline {
 
 		const normalizedCrawlLinks =
 			isHtmlLikeContentType(fetchResult.contentType) && processedContent.links?.length
-				? this.admissionPolicy.normalizeDiscoveredLinks(item, processedContent.links)
+				? this.admissionPolicy.normalizeDiscoveredLinks(
+						fetchResult.effectiveUrl,
+						processedContent.links,
+					)
 				: [];
 		const pageResult = buildPageResult(
-			this.crawlId,
 			this.options,
 			item,
 			fetchResult,
@@ -241,17 +242,17 @@ export class PagePipeline {
 			await this.enqueueLinks(item, normalizedCrawlLinks, signal);
 		}
 
-		const result = this.recordFetchedTerminal("success", {
-			dataKb: pageResult.dataSizeKb,
-			mediaFiles: pageResult.mediaCount,
-			discoveredLinks: processedContent.links?.length ?? 0,
-		});
-
 		this.eventSink.log(`[Crawler] Crawled ${item.url}`);
 		return {
-			...result,
+			terminalOutcome: "success",
+			terminalEffects: {
+				chargeDomainBudget: true,
+				dataKb: pageResult.dataSizeKb,
+				mediaFiles: pageResult.mediaCount,
+				discoveredLinks: processedContent.links?.length ?? 0,
+			},
 			page: {
-				saveInput: pageResult.saveInput,
+				pageData: pageResult.pageData,
 				eventPayload: pageResult.eventPayload,
 			},
 		};

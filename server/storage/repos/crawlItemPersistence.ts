@@ -1,21 +1,40 @@
 import type { Database } from "bun:sqlite";
 import type { CrawlCounters } from "../../../shared/contracts/index.js";
+import type { ExtractedLink } from "../../../shared/types.js";
 import type { TerminalOutcome } from "../../domain/crawl/CrawlState.js";
-import { createPageWriter, type SavePageInput } from "./pageRepo.js";
+import type { ProcessedContent } from "../../types.js";
 
-export interface CommitCompletedItemInput {
+export interface CompletedPageData {
+	contentType: string;
+	statusCode: number;
+	contentLength: number;
+	title: string;
+	description: string;
+	content: string | null;
+	isDynamic: boolean;
+	lastModified: string | null;
+	etag: string | null;
+	processedContent: ProcessedContent;
+	links: ExtractedLink[];
+}
+
+interface CommitCompletedItemBase {
 	crawlId: string;
 	url: string;
-	outcome?: TerminalOutcome;
 	domainBudgetCharged: boolean;
-	page?: Omit<SavePageInput, "crawlId" | "url">;
 	counters: CrawlCounters;
 	eventSequence: number;
 }
 
-export interface CommitCompletedItemResult {
-	pageId?: number;
-}
+export type CommitCompletedItemInput = CommitCompletedItemBase &
+	(
+		| { outcome: "success"; page: CompletedPageData }
+		| { outcome: Exclude<TerminalOutcome, "success">; page?: never }
+	);
+
+export type CommitCompletedItemResult =
+	| { type: "page-persisted"; pageId: number; pageCount: number }
+	| { type: "no-page" };
 
 export interface TerminalUrlRecord {
 	url: string;
@@ -24,7 +43,76 @@ export interface TerminalUrlRecord {
 }
 
 export function createCrawlItemPersistence(db: Database) {
-	const pageWriter = createPageWriter(db);
+	const insertPage = db.prepare(`
+		INSERT INTO pages (
+			crawl_id,
+			url,
+			domain,
+			content_type,
+			status_code,
+			data_length,
+			title,
+			description,
+			content,
+			is_dynamic,
+			last_modified,
+			etag,
+			main_content,
+			word_count,
+			reading_time,
+			language,
+			keywords,
+			quality_score,
+			structured_data,
+			media_count,
+			internal_links_count,
+			external_links_count,
+			discovered_links_count
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		RETURNING id
+	`);
+	const insertLink = db.prepare(
+		"INSERT OR IGNORE INTO page_links (page_id, target_url, text, nofollow) VALUES (?, ?, ?, ?)",
+	);
+
+	function insertCompletedPage(
+		crawlId: string,
+		url: string,
+		domain: string,
+		page: CompletedPageData,
+	): number {
+		const pageRow = insertPage.get(
+			crawlId,
+			url,
+			domain,
+			page.contentType,
+			page.statusCode,
+			page.contentLength,
+			page.title,
+			page.description,
+			page.content,
+			page.isDynamic ? 1 : 0,
+			page.lastModified,
+			page.etag,
+			page.processedContent.extractedData?.mainContent ?? "",
+			page.processedContent.analysis?.wordCount ?? 0,
+			page.processedContent.analysis?.readingTime ?? 0,
+			page.processedContent.analysis?.language ?? "unknown",
+			JSON.stringify(page.processedContent.analysis?.keywords ?? []),
+			page.processedContent.analysis?.quality?.score ?? 0,
+			JSON.stringify(page.processedContent.extractedData ?? {}),
+			page.processedContent.media?.length ?? 0,
+			page.links.filter((link) => link.isInternal).length,
+			page.links.filter((link) => !link.isInternal).length,
+			page.processedContent.links?.length ?? page.links.length,
+		) as { id: number };
+
+		for (const link of page.links) {
+			insertLink.run(pageRow.id, link.url, link.text ?? "", link.nofollow ? 1 : 0);
+		}
+
+		return pageRow.id;
+	}
 	const insertTerminal = db.prepare(`
 		INSERT INTO crawl_terminal_urls (
 				crawl_id,
@@ -32,11 +120,10 @@ export function createCrawlItemPersistence(db: Database) {
 				outcome,
 				domain_budget_charged
 			) VALUES (?, ?, ?, ?)
-			ON CONFLICT(crawl_id, url) DO NOTHING
 	`);
 
-	const removeQueueItem = db.prepare(
-		"DELETE FROM crawl_queue_items WHERE crawl_id = ? AND url = ?",
+	const takeQueueItem = db.prepare<{ domain: string }, [string, string]>(
+		"DELETE FROM crawl_queue_items WHERE crawl_id = ? AND url = ? RETURNING domain",
 	);
 
 	const updateProgress = db.prepare(`
@@ -53,27 +140,26 @@ export function createCrawlItemPersistence(db: Database) {
 			event_sequence = ?
 		WHERE id = ?
 	`);
+	const countPages = db.prepare<{ count: number }, [string]>(
+		"SELECT COUNT(*) AS count FROM pages WHERE crawl_id = ?",
+	);
 
 	const commitCompletedTransaction = db.transaction(
 		(input: CommitCompletedItemInput): CommitCompletedItemResult => {
+			const queueItem = takeQueueItem.get(input.crawlId, input.url);
+			if (!queueItem) {
+				throw new Error(`Cannot complete non-pending crawl URL: ${input.url}`);
+			}
+			insertTerminal.run(
+				input.crawlId,
+				input.url,
+				input.outcome,
+				input.domainBudgetCharged ? 1 : 0,
+			);
 			const pageId = input.page
-				? pageWriter.savePage({
-						...input.page,
-						crawlId: input.crawlId,
-						url: input.url,
-					})
+				? insertCompletedPage(input.crawlId, input.url, queueItem.domain, input.page)
 				: undefined;
 
-			if (input.outcome) {
-				insertTerminal.run(
-					input.crawlId,
-					input.url,
-					input.outcome,
-					input.domainBudgetCharged ? 1 : 0,
-				);
-			}
-
-			removeQueueItem.run(input.crawlId, input.url);
 			updateProgress.run(
 				input.counters.pagesScanned,
 				input.counters.successCount,
@@ -86,8 +172,18 @@ export function createCrawlItemPersistence(db: Database) {
 				input.crawlId,
 			);
 
+			if (pageId === undefined) {
+				return { type: "no-page" };
+			}
+			const pageCount = countPages.get(input.crawlId)?.count;
+			if (pageCount === undefined || pageCount < 1) {
+				throw new Error("Persisted page completion did not produce a positive page count");
+			}
+
 			return {
-				...(pageId !== undefined ? { pageId } : {}),
+				type: "page-persisted",
+				pageId,
+				pageCount,
 			};
 		},
 	);

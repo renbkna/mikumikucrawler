@@ -13,11 +13,11 @@
       http-equiv="Content-Security-Policy"
       content="
     default-src 'self';
-    script-src 'self' 'unsafe-inline';
+    script-src 'self' __VITE_SCRIPT_SOURCE__;
     style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
     font-src 'self' https://fonts.gstatic.com;
     img-src 'self' data: https://*.vercel.app;
-    connect-src 'self' https://*.onrender.com http://localhost:*;
+    connect-src 'self' __VITE_BACKEND_CONNECT_SOURCE__;
     upgrade-insecure-requests;"
     />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
@@ -159,23 +159,7 @@
 
     <div id="root"></div>
 
-    <script>
-      document.addEventListener('DOMContentLoaded', () => {
-        // The app will handle removing this when ready,
-        // but as a fallback we fade it out after a timeout if React takes too long
-        setTimeout(() => {
-          const loadingScreen = document.getElementById('loading-screen');
-          if (loadingScreen) {
-            loadingScreen.style.opacity = '0';
-            loadingScreen.style.transition = 'opacity 0.5s ease-in-out';
-            setTimeout(() => {
-              loadingScreen.style.display = 'none';
-            }, 500);
-          }
-        }, 3000); // Wait a bit longer for React to hydrate
-      });
-    </script>
-
+    <script src="/loading-fallback.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

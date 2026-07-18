@@ -2,6 +2,7 @@ import { createApp, createDefaultAppDependencies } from "./app.js";
 import { config } from "./config/env.js";
 import { createServerListenOptions } from "./config/listen.js";
 import { setupLogging } from "./config/logging.js";
+import { acquireListenerAndRecover } from "./startup.js";
 
 const logger = await setupLogging();
 const dependencies = createDefaultAppDependencies(logger);
@@ -10,8 +11,10 @@ const crawlManager = dependencies.crawlManager;
 
 const instance = await (async () => {
 	try {
-		const listeningApp = app.listen(createServerListenOptions(config.port));
-		crawlManager.recoverOrphanedActiveCrawls();
+		const listeningApp = acquireListenerAndRecover(
+			() => app.listen(createServerListenOptions(config.port)),
+			() => crawlManager.recoverOrphanedActiveCrawls(),
+		);
 		logger.info(
 			{
 				port: listeningApp.server?.port ?? config.port,

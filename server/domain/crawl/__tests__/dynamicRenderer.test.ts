@@ -98,11 +98,12 @@ describe("dynamic renderer network contract", () => {
 			effectiveUrl: "https://www.youtube.com/shorts/final-id",
 			title: "Final document",
 		};
-		const evaluate = mock(async () => snapshot);
+		const evaluate = mock(async (_callback: unknown, _limit: number) => snapshot);
 		const page = { evaluate } as unknown as Page;
 
 		await expect(extractRenderedSnapshot(page)).resolves.toEqual(snapshot);
 		expect(evaluate).toHaveBeenCalledTimes(1);
+		expect(evaluate.mock.calls[0]?.[1]).toBe(REQUEST_CONSTANTS.MAX_TEXT_DOCUMENT_BYTES);
 	});
 
 	test("matches site policies by hostname ownership and optional path", () => {
@@ -273,6 +274,36 @@ describe("dynamic renderer network contract", () => {
 		await fulfillRouteWithPinnedHttpClient(route, httpClient);
 
 		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(calls.abort).toHaveBeenCalled();
+		expect(calls.fulfill).not.toHaveBeenCalled();
+		expect(bodyRead).toBe(false);
+	});
+
+	test("applies the parse-safe limit to browser document responses", async () => {
+		let bodyRead = false;
+		const { route, calls } = createRoute({
+			url: "https://example.com/huge-document",
+			resourceType: "document",
+		});
+		const httpClient: HttpClient = {
+			fetch: async () =>
+				({
+					status: 200,
+					headers: new Headers({
+						"content-type": "text/html",
+						"content-length": String(REQUEST_CONSTANTS.MAX_TEXT_DOCUMENT_BYTES + 1),
+					}),
+					body: {
+						getReader() {
+							bodyRead = true;
+							throw new Error("body should not be read");
+						},
+					},
+				}) as unknown as Response,
+		};
+
+		await fulfillRouteWithPinnedHttpClient(route, httpClient);
+
 		expect(calls.abort).toHaveBeenCalled();
 		expect(calls.fulfill).not.toHaveBeenCalled();
 		expect(bodyRead).toBe(false);

@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { CrawlOptions } from "../../../shared/contracts/index.js";
+import { persistPageFixture } from "../../__tests__/pageFixture.js";
 import { createApp } from "../../app.js";
 import type { AppLogger } from "../../config/logging.js";
 import type { HttpClient, Resolver } from "../../plugins/security.js";
@@ -102,7 +103,7 @@ describe("api contract", () => {
 			...crawlBody,
 			target: "https://injected.example",
 		});
-		storage.repos.pages.save({
+		persistPageFixture(storage, {
 			crawlId: "injected-storage-crawl",
 			url: "https://injected.example/page",
 			domain: "injected.example",
@@ -327,24 +328,41 @@ describe("api contract", () => {
 	});
 
 	test("rejects create admission after shutdown begins", async () => {
-		const { app, crawlManager } = buildApp({
+		const { app, crawlManager, registry, storage } = buildApp({
 			fetch: async () => new Response("unused"),
 		});
+		const paused = storage.repos.crawlRuns.createRun("shutdown-resume", {
+			...crawlBody,
+			target: "https://shutdown-resume.example",
+		});
+		storage.repos.crawlRuns.markPaused(paused.id, paused.counters, "Paused", 0);
 		const shutdown = crawlManager.shutdownAll();
-		const response = await app.handle(
+		const createResponse = await app.handle(
 			new Request("http://localhost/api/crawls", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify(crawlBody),
 			}),
 		);
+		const resumeResponse = await app.handle(
+			new Request(`http://localhost/api/crawls/${paused.id}/resume`, {
+				method: "POST",
+			}),
+		);
 		await shutdown;
 
-		expect(response.status).toBe(503);
-		expect(await response.json()).toEqual({
+		expect(createResponse.status).toBe(503);
+		expect(await createResponse.json()).toEqual({
 			error: "Crawl service is shutting down",
 			code: "SERVICE_CLOSING",
 		});
+		expect(resumeResponse.status).toBe(503);
+		expect(await resumeResponse.json()).toEqual({
+			error: "Crawl service is shutting down",
+			code: "SERVICE_CLOSING",
+		});
+		expect(storage.repos.crawlRuns.getById(paused.id)?.status).toBe("paused");
+		expect(registry.size).toBe(0);
 	});
 
 	test("create response matches the persisted startup snapshot", async () => {
@@ -435,6 +453,23 @@ describe("api contract", () => {
 				}),
 			],
 		});
+		const recoverySnapshotResponse = await app.handle(
+			new Request(`http://localhost/api/crawls/${created.id}/snapshot`),
+		);
+		expect(recoverySnapshotResponse.status).toBe(200);
+		expect(await recoverySnapshotResponse.json()).toEqual({
+			crawl: expect.objectContaining({
+				id: created.id,
+				status: "completed",
+			}),
+			pageCount: 1,
+			pages: [
+				expect.objectContaining({
+					id: pages[0].id,
+					url: pages[0].url,
+				}),
+			],
+		});
 		const pageContentResponse = await app.handle(
 			new Request(`http://localhost/api/pages/${pages[0].id}/content`),
 		);
@@ -480,12 +515,12 @@ describe("api contract", () => {
 			},
 			links: [],
 		};
-		const emptyId = storage.repos.pages.save({
+		const emptyId = persistPageFixture(storage, {
 			...basePage,
 			url: "https://example.com/empty",
 			content: "",
 		});
-		const nullId = storage.repos.pages.save({
+		const nullId = persistPageFixture(storage, {
 			...basePage,
 			url: "https://example.com/metadata-only",
 			content: null,
@@ -513,7 +548,7 @@ describe("api contract", () => {
 		const crawl = storage.repos.crawlRuns.createRun("crawl-search-export", crawlBody);
 
 		for (const index of [1, 2, 3]) {
-			storage.repos.pages.save({
+			persistPageFixture(storage, {
 				crawlId: crawl.id,
 				url: `https://example.com/page-${index}`,
 				domain: "example.com",
@@ -629,7 +664,7 @@ describe("api contract", () => {
 			["separated", "alpha gamma beta"],
 			["partial", "alpha only"],
 		]) {
-			storage.repos.pages.save({
+			persistPageFixture(storage, {
 				crawlId: crawl.id,
 				url: `https://example.com/${slug}`,
 				domain: "example.com",
@@ -680,7 +715,7 @@ describe("api contract", () => {
 			target: "https://content-only.example",
 			contentOnly: true,
 		});
-		storage.repos.pages.save({
+		persistPageFixture(storage, {
 			crawlId: crawl.id,
 			url: "https://content-only.example/page",
 			domain: "content-only.example",
@@ -713,7 +748,7 @@ describe("api contract", () => {
 		expect(search.results[0].snippet).toContain("uniquecontentonlyneedle");
 	});
 
-	test("resume returns the durable page snapshot before the new SSE generation", async () => {
+	test("resume returns the backend-owned recovery snapshot before the new SSE generation", async () => {
 		const { app, storage } = buildApp({
 			fetch: async () =>
 				new Response("<html><body><main>resumed target</main></body></html>", {
@@ -722,7 +757,7 @@ describe("api contract", () => {
 				}),
 		});
 		const crawl = storage.repos.crawlRuns.createRun("crawl-resume-snapshot", crawlBody);
-		storage.repos.pages.save({
+		persistPageFixture(storage, {
 			crawlId: crawl.id,
 			url: "https://example.com/prior",
 			domain: "example.com",

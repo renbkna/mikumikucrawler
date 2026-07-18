@@ -1,7 +1,20 @@
 import { describe, expect, test } from "bun:test";
+import {
+	DEFAULT_BACKEND_PORT,
+	developmentBackendUrl,
+	resolveBackendPort,
+} from "../../../shared/deploymentDefaults.js";
 import { allowsLocalhostTargets, resolveRobotsProductToken } from "../env.js";
 
 describe("environment policy", () => {
+	test("one validated PORT value owns the local backend endpoint", () => {
+		expect(resolveBackendPort(undefined)).toBe(DEFAULT_BACKEND_PORT);
+		expect(developmentBackendUrl(resolveBackendPort("4123"))).toBe("http://localhost:4123");
+		for (const rawPort of ["0", "65536", "3.5", "not-a-port"]) {
+			expect(() => resolveBackendPort(rawPort)).toThrow();
+		}
+	});
+
 	test("rejects a non-positive memory threshold at the configuration boundary", () => {
 		const result = Bun.spawnSync({
 			cmd: [process.execPath, "-e", 'await import("./server/config/env.ts")'],

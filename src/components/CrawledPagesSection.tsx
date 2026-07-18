@@ -27,10 +27,14 @@ const VirtuosoFooter = ({ context }: { context?: { pageLimit?: number; showFoote
 	return <PageLimitFooter pageLimit={context.pageLimit} />;
 };
 
+type PageContentState = { type: "unloaded" } | { type: "loaded"; content: string | null };
+
 const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledPage }) {
 	const [isExpanded, setIsExpanded] = useState(false);
 	const [showSource, setShowSource] = useState(false);
-	const [fetchedContent, setFetchedContent] = useState<string | null>(page.content ?? null);
+	const [contentState, setContentState] = useState<PageContentState>(() =>
+		page.content === undefined ? { type: "unloaded" } : { type: "loaded", content: page.content },
+	);
 	const [isLoadingContent, setIsLoadingContent] = useState(false);
 	const [fetchError, setFetchError] = useState<string | null>(null);
 	const contentRequestRef = useRef<AbortController | null>(null);
@@ -46,11 +50,6 @@ const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledP
 	const hasProcessedData = processedData?.analysis;
 
 	const fetchPageContent = async () => {
-		if (page.id === null) {
-			setFetchError("Cannot fetch content: Page ID is missing");
-			return;
-		}
-
 		setIsLoadingContent(true);
 		setFetchError(null);
 		contentRequestRef.current?.abort();
@@ -64,7 +63,7 @@ const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledP
 				return;
 			}
 			if (result.ok) {
-				setFetchedContent(result.data.content);
+				setContentState({ type: "loaded", content: result.data.content });
 			} else {
 				throw new Error(result.error);
 			}
@@ -99,7 +98,7 @@ const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledP
 		}
 
 		setShowSource(true);
-		if (fetchedContent === null) {
+		if (contentState.type === "unloaded") {
 			await fetchPageContent();
 		}
 	};
@@ -109,7 +108,10 @@ const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledP
 		: showSource
 			? "Hide Source"
 			: "View Source";
-	const sourceContent = fetchedContent ?? "(no content stored - metadata-only mode)";
+	const sourceContent =
+		contentState.type === "loaded" && contentState.content !== null
+			? contentState.content
+			: "(no content stored - metadata-only mode)";
 	const analysis = processedData?.analysis;
 	const hasSummaryMetrics =
 		typeof analysis?.wordCount === "number" ||
@@ -136,7 +138,7 @@ const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledP
 						type="button"
 						onClick={(e) => {
 							e.stopPropagation();
-							setFetchedContent(null);
+							setContentState({ type: "unloaded" });
 							void fetchPageContent();
 						}}
 						className="mt-2 px-3 py-1 bg-rose-500/20 hover:bg-rose-500/30 rounded text-xs text-rose-300 transition-colors"
@@ -248,7 +250,9 @@ const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledP
 							<div className="flex items-center justify-between mb-2">
 								<span className="text-xs font-bold text-slate-400">HTML Source</span>
 								<span className="text-xs text-slate-500">
-									{fetchedContent !== null ? `${fetchedContent.length} chars` : "0 chars"}
+									{contentState.type === "loaded" && contentState.content !== null
+										? `${contentState.content.length} chars`
+										: "0 chars"}
 								</span>
 							</div>
 
@@ -265,7 +269,7 @@ CrawledPageCard.displayName = "CrawledPageCard";
 
 const renderPageItem = (_index: number, page: CrawledPage) => <CrawledPageCard page={page} />;
 
-const getPageItemKey = (_index: number, page: CrawledPage) => page.id ?? page.url;
+const getPageItemKey = (_index: number, page: CrawledPage) => page.id;
 
 interface CrawledPagesSectionProps {
 	crawledPages: CrawledPage[];

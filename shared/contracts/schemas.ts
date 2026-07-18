@@ -179,8 +179,7 @@ export const QueueStatsSchema = t.Object({
 	pagesPerSecond: t.Number({ minimum: 0 }),
 });
 
-export const CrawlPagePayloadSchema = t.Object({
-	id: t.Nullable(t.Number({ multipleOf: 1 })),
+export const CrawlPageDataSchema = t.Object({
 	url: t.String(),
 	content: t.Optional(t.String()),
 	title: t.Optional(t.String()),
@@ -188,6 +187,16 @@ export const CrawlPagePayloadSchema = t.Object({
 	contentType: t.Optional(t.String()),
 	domain: t.Optional(t.String()),
 	processedData: t.Optional(ProcessedPageDataSchema),
+});
+
+export const CrawlPagePayloadSchema = t.Object({
+	id: t.Number({ minimum: 1, multipleOf: 1 }),
+	...CrawlPageDataSchema.properties,
+});
+
+export const CrawlPageEventPayloadSchema = t.Object({
+	...CrawlPagePayloadSchema.properties,
+	pageCount: t.Number({ minimum: 1, multipleOf: 1 }),
 });
 
 export const CrawlPageSummarySchema = t.Object({
@@ -204,7 +213,7 @@ export const CrawlPagesResponseSchema = t.Object({
 	count: t.Number({ minimum: 0, multipleOf: 1 }),
 });
 
-export const ResumeCrawlResponseSchema = t.Object({
+export const CrawlRecoverySnapshotSchema = t.Object({
 	crawl: CrawlSummarySchema,
 	pages: t.Array(CrawlPageSummarySchema),
 	pageCount: t.Number({ minimum: 0, multipleOf: 1 }),
@@ -268,7 +277,7 @@ export const CrawlEventEnvelopeSchema = t.Union([
 	t.Object({
 		type: t.Literal("crawl.page"),
 		...EventEnvelopeBaseSchema,
-		payload: CrawlPagePayloadSchema,
+		payload: CrawlPageEventPayloadSchema,
 	}),
 	t.Object({
 		type: t.Literal("crawl.log"),

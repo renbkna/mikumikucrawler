@@ -3,14 +3,13 @@ import { isCrawlCounters } from "../../../shared/contracts/index.js";
 import type { QueueStats } from "../../../shared/contracts/pageData.js";
 import { DOMAIN_DELAY_CONSTANTS } from "../../constants.js";
 import { shouldAdaptDomainDelay } from "./httpStatusPolicy.js";
+import { getCrawlUrlIdentity } from "./UrlPolicy.js";
 
 export type TerminalOutcome = "success" | "failure" | "skip";
 
 const FAILURE_CIRCUIT_BREAKER_THRESHOLD = 20;
-const VISITED_URL_LIMIT = 50_000;
 
 interface CrawlStateHooks {
-	onTerminal?: (url: string, outcome: TerminalOutcome) => void;
 	onDomainStateChanged?: (record: DomainStateRecord) => void;
 }
 
@@ -38,7 +37,6 @@ export interface TerminalCounterEffects {
 }
 
 export class CrawlState {
-	private readonly visited = new Map<string, true>();
 	private readonly terminalOutcomes = new Map<string, TerminalOutcome>();
 	private readonly admittedUrls = new Set<string>();
 	private readonly domainDelays = new Map<string, number>();
@@ -98,30 +96,27 @@ export class CrawlState {
 	}
 
 	hasVisited(url: string): boolean {
-		return this.visited.has(url);
-	}
-
-	markVisited(url: string): void {
-		if (this.visited.has(url)) {
-			this.visited.delete(url);
-		} else if (this.visited.size >= VISITED_URL_LIMIT) {
-			const oldestUrl = this.visited.keys().next().value;
-			if (oldestUrl !== undefined) {
-				this.visited.delete(oldestUrl);
-			}
-		}
-		this.visited.set(url, true);
+		return this.terminalOutcomes.has(url);
 	}
 
 	restoreTerminals(records: RestoredTerminalRecord[]): void {
+		const restoredUrls = new Set<string>();
+		const restoredDomains = new Map<string, string>();
 		for (const record of records) {
-			if (this.terminalOutcomes.has(record.url)) {
-				continue;
+			if (this.terminalOutcomes.has(record.url) || restoredUrls.has(record.url)) {
+				throw new Error(`Cannot restore duplicate terminal URL: ${record.url}`);
 			}
+			const identity = getCrawlUrlIdentity(record.url);
+			if ("error" in identity || identity.canonicalUrl !== record.url) {
+				throw new Error(`Cannot restore invalid terminal URL: ${record.url}`);
+			}
+			restoredUrls.add(record.url);
+			restoredDomains.set(record.url, identity.domainBudgetKey);
+		}
 
+		for (const record of records) {
 			this.terminalOutcomes.set(record.url, record.outcome);
 			this.restoreAdmission(record.url);
-			this.markVisited(record.url);
 			if (record.outcome === "failure") {
 				this.consecutiveFailures += 1;
 				if (this.consecutiveFailures >= FAILURE_CIRCUIT_BREAKER_THRESHOLD) {
@@ -137,33 +132,36 @@ export class CrawlState {
 				continue;
 			}
 
-			try {
-				const domain = new URL(record.url).hostname;
-				this.recordDomainPage(domain);
-				this.restoreDomainAdmission(domain);
-			} catch {}
+			const domain = restoredDomains.get(record.url);
+			if (domain === undefined) {
+				throw new Error(`Missing validated terminal domain for ${record.url}`);
+			}
+			this.recordDomainPage(domain);
+			this.restoreDomainAdmission(domain);
 		}
 	}
 
 	restoreAdmission(url: string): void {
+		if (this.admittedUrls.has(url)) {
+			throw new Error(`Cannot restore duplicate admitted URL: ${url}`);
+		}
 		this.admittedUrls.add(url);
 	}
 
-	tryAdmit(url: string): boolean {
-		if (this.admittedUrls.has(url)) {
-			return true;
-		}
-
-		if (this.admittedUrls.size >= this.options.maxPages) {
+	canAdmit(url: string, domain: string): boolean {
+		if (this.admittedUrls.has(url) || this.admittedUrls.size >= this.options.maxPages) {
 			return false;
 		}
-
-		this.admittedUrls.add(url);
-		return true;
+		const domainBudget = this.options.maxPagesPerDomain;
+		return domainBudget <= 0 || (this.domainAdmissionCounts.get(domain) ?? 0) < domainBudget;
 	}
 
-	canAdmitUrl(url: string): boolean {
-		return this.admittedUrls.has(url) || this.admittedUrls.size < this.options.maxPages;
+	recordAdmission(url: string, domain: string): void {
+		if (!this.canAdmit(url, domain)) {
+			throw new Error(`Cannot record unavailable crawl admission: ${url}`);
+		}
+		this.admittedUrls.add(url);
+		this.restoreDomainAdmission(domain);
 	}
 
 	requestStop(reason: string, options: { overrideReason?: boolean } = {}): void {
@@ -218,16 +216,21 @@ export class CrawlState {
 	}
 
 	restoreDomainAdmission(domain: string): void {
+		if (this.options.maxPagesPerDomain <= 0) return;
 		this.domainAdmissionCounts.set(domain, (this.domainAdmissionCounts.get(domain) ?? 0) + 1);
 	}
 
-	tryAdmitDomain(domain: string): boolean {
-		const budget = this.options.maxPagesPerDomain;
-		if (budget <= 0) return true;
+	releaseDomainAdmission(domain: string): void {
+		if (this.options.maxPagesPerDomain <= 0) return;
 		const admitted = this.domainAdmissionCounts.get(domain) ?? 0;
-		if (admitted >= budget) return false;
-		this.domainAdmissionCounts.set(domain, admitted + 1);
-		return true;
+		if (admitted < 1) {
+			throw new Error(`Cannot release missing domain admission: ${domain}`);
+		}
+		if (admitted === 1) {
+			this.domainAdmissionCounts.delete(domain);
+			return;
+		}
+		this.domainAdmissionCounts.set(domain, admitted - 1);
 	}
 
 	isDomainBudgetExceeded(domain: string): boolean {
@@ -256,11 +259,11 @@ export class CrawlState {
 		outcome: TerminalOutcome,
 		effects: TerminalCounterEffects = {},
 	): CrawlCounters {
-		const counters = this.snapshotCounters();
 		if (this.terminalOutcomes.has(url)) {
-			return counters;
+			throw new Error(`Cannot complete already-terminal URL: ${url}`);
 		}
 
+		const counters = this.snapshotCounters();
 		const dataKb = this.requireCounterIncrement(effects.dataKb ?? 0, "data KB");
 		const mediaFiles = this.requireCounterIncrement(effects.mediaFiles ?? 0, "media file");
 		const discoveredLinks = this.requireCounterIncrement(
@@ -289,14 +292,9 @@ export class CrawlState {
 		url: string,
 		outcome: TerminalOutcome,
 		options: TerminalCounterEffects = {},
-	): boolean {
-		if (this.terminalOutcomes.has(url)) {
-			return false;
-		}
-
+	): void {
 		const nextCounters = this.previewTerminalCounters(url, outcome, options);
 		this.terminalOutcomes.set(url, outcome);
-		this.markVisited(url);
 		Object.assign(this.counters, nextCounters);
 
 		switch (outcome) {
@@ -315,9 +313,6 @@ export class CrawlState {
 				this.consecutiveFailures = 0;
 				break;
 		}
-
-		this.hooks.onTerminal?.(url, outcome);
-		return true;
 	}
 
 	snapshotCounters(): CrawlCounters {

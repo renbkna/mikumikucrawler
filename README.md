@@ -116,8 +116,11 @@ On Linux systems missing browser libraries, run `bunx playwright install --with-
 | ⚙️ | Backend | <http://localhost:3000> |
 | 📋 | OpenAPI | <http://localhost:3000/openapi> |
 
-The backend owns port `3000` exclusively and fails clearly if another process already owns it.
-Set `PORT` and `VITE_BACKEND_URL` together when using a different development port.
+By default, the backend owns port `3000` exclusively and fails clearly if another process already owns it.
+The checked-in default is owned by `shared/deploymentDefaults.ts`; the documented URLs are projections of that value.
+Local Vite development proxies `/api` to `PORT`, so changing `PORT` needs no duplicate frontend setting.
+Set `VITE_BACKEND_URL` only when the browser must connect directly to a separate backend origin.
+It accepts an absolute HTTP(S) base URL (including a path prefix), without credentials, a query, or a fragment.
 
 <details>
 <summary>🔧 <b>Environment Variables</b></summary>
@@ -130,7 +133,8 @@ Copy `.env.example` → `.env`. All variables have sensible defaults. Frontend v
 PORT=3000
 NODE_ENV=development
 FRONTEND_URL=http://localhost:5173
-VITE_BACKEND_URL=http://localhost:3000
+# Optional direct-browser backend override; local Vite development uses PORT.
+# VITE_BACKEND_URL=https://api.example.com
 DB_PATH=./data/crawler.db
 LOG_LEVEL=info
 USER_AGENT=MikuCrawler/3.0.0
@@ -176,13 +180,15 @@ MEMORY_THRESHOLD_MB=600
 | 🆕 | `POST` | `/api/crawls` | Create a crawl run |
 | 📋 | `GET` | `/api/crawls` | List crawl runs |
 | 🔍 | `GET` | `/api/crawls/:id` | Get crawl state & counters |
+| ♻️ | `GET` | `/api/crawls/:id/snapshot` | Recover crawl state, latest stored pages, and total stored count in one response |
 | ⏹️ | `POST` | `/api/crawls/:id/stop` | Request graceful stop |
 | ▶️ | `POST` | `/api/crawls/:id/resume` | Resume a paused or interrupted crawl |
 | 📡 | `GET` | `/api/crawls/:id/events` | SSE event stream |
+| 📄 | `GET` | `/api/crawls/:id/pages` | List the latest stored page summaries and total stored count |
 | 📦 | `GET` | `/api/crawls/:id/export` | Export pages (JSON / CSV) |
 | 🗑️ | `DELETE` | `/api/crawls/:id` | Delete a stored crawl |
 | 📄 | `GET` | `/api/pages/:id/content` | Fetch stored page content |
-| 🔎 | `GET` | `/api/search?q=keyword` | Full-text search (FTS5) |
+| 🔎 | `GET` | `/api/search?crawlId=:id&q=keyword` | Search one crawl's stored pages (FTS5) |
 | 💚 | `GET` | `/health` | Health check |
 
 ### 📡 Event Stream
@@ -202,7 +208,7 @@ source.addEventListener("crawl.progress", (event) => {
 |-------|------|
 | `crawl.started` | Crawl begins processing |
 | `crawl.progress` | Counter & queue stats update |
-| `crawl.page` | A page was crawled |
+| `crawl.page` | A page was persisted, with its positive row ID and post-commit stored-page count |
 | `crawl.log` | Runtime log message |
 | `crawl.completed` | Crawl finished normally |
 | `crawl.paused` | Paused by user and available to resume |
@@ -210,7 +216,9 @@ source.addEventListener("crawl.progress", (event) => {
 | `crawl.failed` | Terminated due to error |
 
 Events are sequenced. `Last-Event-ID` replays recent in-memory events; after a
-restart or cleanup, recover from the persisted crawl summary and stored pages.
+restart or cleanup, recover from the backend-owned crawl snapshot, which contains
+the persisted crawl summary, bounded latest-page window, and total stored count.
+Search and export cover the full stored set.
 
 ---
 

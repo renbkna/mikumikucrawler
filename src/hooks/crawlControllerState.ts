@@ -1,10 +1,16 @@
 import type {
+	CrawlCounters,
 	CrawlEventEnvelope,
 	CrawlOptions,
-	CrawlSummary,
+	CrawlRecoverySnapshot,
+	CrawlStatus,
 	ResumableSessionSummary,
 } from "../../shared/contracts/index.js";
-import { normalizeCrawlOptions } from "../../shared/contracts/index.js";
+import {
+	isResumableCrawlStatus,
+	isTerminalCrawlStatus,
+	normalizeCrawlOptions,
+} from "../../shared/contracts/index.js";
 import type { CrawledPage, QueueStats } from "../../shared/contracts/pageData.js";
 import type { Stats } from "../../shared/types.js";
 import { CRAWLER_DEFAULTS, TOAST_DEFAULTS, UI_LIMITS } from "../constants";
@@ -20,7 +26,8 @@ export type RunPhase =
 	| "stopping"
 	| "completed"
 	| "failed"
-	| "stopped";
+	| "stopped"
+	| "interrupted";
 
 export interface CommandStatus {
 	kind: "none" | "start" | "stop" | "forceStop" | "resume" | "export" | "refresh" | "delete";
@@ -49,6 +56,7 @@ export interface CrawlControllerState {
 	stats: Stats;
 	queueStats: QueueStats | null;
 	crawledPages: CrawledPage[];
+	storedPageCount: number;
 	progress: number;
 	logs: string[];
 	hasShownStaticFallbackHint: boolean;
@@ -135,6 +143,7 @@ export function createInitialCrawlControllerState(): CrawlControllerState {
 		stats: INITIAL_STATS,
 		queueStats: null,
 		crawledPages: [],
+		storedPageCount: 0,
 		progress: 0,
 		logs: [],
 		hasShownStaticFallbackHint: false,
@@ -160,21 +169,12 @@ function toElapsedTime(totalSeconds: number) {
 	};
 }
 
-function buildStats(
-	counters: {
-		pagesScanned: number;
-		successCount: number;
-		failureCount: number;
-		skippedCount: number;
-		linksFound: number;
-		mediaFiles: number;
-		totalDataKb: number;
-	},
-	extras?: {
-		elapsedSeconds?: number;
-		pagesPerSecond?: number;
-	},
-): Stats {
+interface StatsTelemetry {
+	elapsedSeconds?: number;
+	pagesPerSecond?: number;
+}
+
+function buildStats(counters: CrawlCounters, extras?: StatsTelemetry): Stats {
 	const successRate = counters.pagesScanned
 		? `${((counters.successCount / counters.pagesScanned) * 100).toFixed(1)}%`
 		: "0%";
@@ -195,6 +195,36 @@ function buildStats(
 			: {}),
 		successRate,
 	};
+}
+
+function reconcileMonotonicStats(
+	current: Stats,
+	counters: CrawlCounters,
+	telemetry?: StatsTelemetry,
+): Stats {
+	// Crawl counters are one validated tuple: pagesScanned equals the sum of its
+	// outcome counters. Select the newer tuple as a unit instead of constructing
+	// an invalid mixture from independently maximized fields.
+	const merged = counters.pagesScanned > current.pagesScanned ? buildStats(counters) : current;
+
+	return {
+		...merged,
+		...(telemetry?.elapsedSeconds !== undefined
+			? { elapsedTime: toElapsedTime(telemetry.elapsedSeconds) }
+			: current.elapsedTime !== undefined
+				? { elapsedTime: current.elapsedTime }
+				: {}),
+		...(telemetry?.pagesPerSecond !== undefined
+			? { pagesPerSecond: telemetry.pagesPerSecond.toFixed(2) }
+			: current.pagesPerSecond !== undefined
+				? { pagesPerSecond: current.pagesPerSecond }
+				: {}),
+		...(current.lastProcessed !== undefined ? { lastProcessed: current.lastProcessed } : {}),
+	};
+}
+
+function reconcileStoredPageCount(current: number, durableCount: number): number {
+	return Math.max(current, durableCount);
 }
 
 function appendLog(state: CrawlControllerState, message: string): ControllerStateTransition {
@@ -228,10 +258,30 @@ function appendLog(state: CrawlControllerState, message: string): ControllerStat
 function isTerminalRunPhase(runPhase: RunPhase): boolean {
 	return (
 		runPhase === "paused" ||
+		runPhase === "interrupted" ||
 		runPhase === "completed" ||
 		runPhase === "failed" ||
 		runPhase === "stopped"
 	);
+}
+
+function runPhaseFromCrawlStatus(status: CrawlStatus): RunPhase {
+	switch (status) {
+		case "pending":
+		case "starting":
+			return "starting";
+		case "running":
+		case "pausing":
+		case "paused":
+		case "stopping":
+		case "completed":
+		case "stopped":
+		case "failed":
+		case "interrupted":
+			return status;
+		default:
+			return assertNever(status);
+	}
 }
 
 export function getCrawlCommandAvailability(
@@ -303,11 +353,7 @@ export type CrawlControllerAction =
 	| { type: "logsCleared" }
 	| { type: "logAppended"; message: string }
 	| { type: "liveStateReset" }
-	| {
-			type: "crawlSnapshotHydrated";
-			crawl: Pick<CrawlSummary, "counters">;
-			pages: CrawledPage[];
-	  }
+	| { type: "crawlRecoverySnapshotSynchronized"; snapshot: CrawlRecoverySnapshot }
 	| { type: "connectionChanged"; connectionState: ConnectionState }
 	| { type: "commandStarted"; kind: CommandKind }
 	| { type: "commandSucceeded"; kind: CommandKind }
@@ -483,17 +529,21 @@ function applySseEvent(
 		}
 		case "crawl.log":
 			return appendLog(nextStateBase, envelope.payload.message);
-		case "crawl.page":
+		case "crawl.page": {
+			const { pageCount, ...page } = envelope.payload;
+			const crawledPages = mergeCrawledPages([page], nextStateBase.crawledPages);
 			return {
 				state: {
 					...nextStateBase,
-					crawledPages: mergeCrawledPages([envelope.payload], nextStateBase.crawledPages),
+					crawledPages,
+					storedPageCount: reconcileStoredPageCount(nextStateBase.storedPageCount, pageCount),
 				},
 				effects: [],
 			};
+		}
 		case "crawl.progress": {
 			const nextQueue = envelope.payload.queue;
-			const nextStats = buildStats(envelope.payload.counters, {
+			const nextStats = reconcileMonotonicStats(nextStateBase.stats, envelope.payload.counters, {
 				elapsedSeconds: envelope.payload.elapsedSeconds,
 				pagesPerSecond: envelope.payload.pagesPerSecond,
 			});
@@ -523,21 +573,15 @@ function applySseEvent(
 	}
 }
 
-function pageIdentity(page: CrawledPage): string {
-	return page.id === null ? `url:${page.url}` : `id:${page.id}`;
-}
-
 function mergeCrawledPages(incoming: CrawledPage[], existing: CrawledPage[]): CrawledPage[] {
-	const identities = new Set<string>();
+	const identities = new Set<number>();
 	const pages: CrawledPage[] = [];
 	for (const page of [...incoming, ...existing]) {
-		const identity = pageIdentity(page);
-		if (identities.has(identity)) continue;
-		identities.add(identity);
+		if (identities.has(page.id)) continue;
+		identities.add(page.id);
 		pages.push(page);
-		if (pages.length >= UI_LIMITS.MAX_PAGE_BUFFER) break;
 	}
-	return pages;
+	return pages.sort((left, right) => right.id - left.id).slice(0, UI_LIMITS.MAX_PAGE_BUFFER);
 }
 
 export function crawlControllerReducer(
@@ -585,6 +629,7 @@ export function crawlControllerReducer(
 					stats: INITIAL_STATS,
 					queueStats: null,
 					crawledPages: [],
+					storedPageCount: 0,
 					progress: 0,
 					logs: [],
 					hasShownStaticFallbackHint: false,
@@ -592,14 +637,56 @@ export function crawlControllerReducer(
 				},
 				effects: [],
 			};
-		case "crawlSnapshotHydrated": {
-			const stats = buildStats(action.crawl.counters);
+		case "crawlRecoverySnapshotSynchronized": {
+			const { crawl, pages, pageCount } = action.snapshot;
+			if (state.activeCrawlId !== crawl.id) {
+				return { state, effects: [] };
+			}
+
+			const snapshotSettled =
+				isResumableCrawlStatus(crawl.status) || isTerminalCrawlStatus(crawl.status);
+			const controllerSettled = isTerminalRunPhase(state.runPhase);
+			let synchronizedState = state;
+			if (!snapshotSettled && !controllerSettled) {
+				const stats = reconcileMonotonicStats(state.stats, crawl.counters);
+				synchronizedState = {
+					...state,
+					activeCrawlOptions: crawl.options,
+					stats,
+					progress: computeProgress(
+						{ ...state, activeCrawlOptions: crawl.options },
+						stats,
+						state.queueStats,
+					),
+				};
+			} else if (snapshotSettled && !controllerSettled) {
+				const stats = buildStats(crawl.counters);
+				synchronizedState = {
+					...state,
+					activeCrawlOptions: crawl.options,
+					stats,
+					progress: isTerminalCrawlStatus(crawl.status)
+						? 100
+						: computeProgress(
+								{ ...state, activeCrawlOptions: crawl.options },
+								stats,
+								state.queueStats,
+							),
+					runPhase: runPhaseFromCrawlStatus(crawl.status),
+					connectionState: "disconnected",
+					lastCommand: createIdleCommandStatus(),
+				};
+			}
+
+			// Durable snapshots contain summary projections. Existing live page
+			// payloads carry richer fields for the same persisted page identity and
+			// must not be downgraded when the snapshot fills replay gaps.
+			const crawledPages = mergeCrawledPages(synchronizedState.crawledPages, pages);
 			return {
 				state: {
-					...state,
-					stats,
-					crawledPages: mergeCrawledPages(action.pages, state.crawledPages),
-					progress: computeProgress(state, stats, state.queueStats),
+					...synchronizedState,
+					crawledPages,
+					storedPageCount: reconcileStoredPageCount(synchronizedState.storedPageCount, pageCount),
 				},
 				effects: [],
 			};
@@ -805,6 +892,7 @@ export function crawlControllerReducer(
 								stats: INITIAL_STATS,
 								queueStats: null,
 								crawledPages: [],
+								storedPageCount: 0,
 								progress: 0,
 								logs: [],
 								hasShownStaticFallbackHint: false,

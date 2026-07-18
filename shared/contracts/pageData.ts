@@ -1,5 +1,6 @@
 import type {
 	ContentAnalysisSchema,
+	CrawlPageDataSchema,
 	CrawlPagePayloadSchema,
 	CrawlPageSummarySchema,
 	CrawlPagesResponseSchema,
@@ -23,6 +24,7 @@ export type ExtractedData = typeof ExtractedDataSchema.static;
 export type PageMetadata = typeof PageMetadataSchema.static;
 export type ProcessedPageData = typeof ProcessedPageDataSchema.static;
 export type QueueStats = typeof QueueStatsSchema.static;
+export type CrawlPageData = typeof CrawlPageDataSchema.static;
 export type CrawledPage = typeof CrawlPagePayloadSchema.static;
 export type CrawlPageSummary = typeof CrawlPageSummarySchema.static;
 export type CrawlPagesResponse = typeof CrawlPagesResponseSchema.static;

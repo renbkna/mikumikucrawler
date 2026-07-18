@@ -14,7 +14,7 @@ const ORIGIN_BOUND_HEADERS = new Set(["authorization", "cookie", "host", "proxy-
 const BODY_HEADERS = new Set(["content-length", "content-type"]);
 
 export interface Resolver {
-	resolveHost(hostname: string, options?: { allowLocalhost?: boolean }): Promise<string[]>;
+	resolveHost(hostname: string, options?: { allowLocalhost?: boolean }): Promise<readonly string[]>;
 	assertPublicHostname(hostname: string): Promise<void>;
 }
 
@@ -34,10 +34,11 @@ export interface HttpClient {
 }
 
 export class DefaultResolver implements Resolver {
-	private readonly cache = new LRUCache<string, string[]>({
+	private readonly cache = new LRUCache<string, readonly string[]>({
 		max: RESOLUTION_CACHE_MAX_ENTRIES,
 		ttl: RESOLUTION_TTL_MS,
 	});
+	private readonly inFlightResolutions = new Map<string, Promise<readonly string[]>>();
 
 	constructor(
 		private readonly lookupFn: typeof lookup = lookup,
@@ -51,7 +52,7 @@ export class DefaultResolver implements Resolver {
 	async resolveHost(
 		hostname: string,
 		options: { allowLocalhost?: boolean } = {},
-	): Promise<string[]> {
+	): Promise<readonly string[]> {
 		if (!hostname) {
 			throw new Error("Target host is empty");
 		}
@@ -61,7 +62,7 @@ export class DefaultResolver implements Resolver {
 
 		if (normalizedHost.toLowerCase() === "localhost") {
 			if (this.allowLocalhost && options.allowLocalhost === true) {
-				return ["127.0.0.1"];
+				return Object.freeze(["127.0.0.1"]);
 			}
 			throw new Error("Localhost targets are not allowed");
 		}
@@ -72,7 +73,7 @@ export class DefaultResolver implements Resolver {
 				throw new Error(`Private or reserved IP address: ${normalizedHost}`);
 			}
 
-			return [normalizedHost];
+			return Object.freeze([normalizedHost]);
 		}
 
 		const cached = this.cache.get(normalizedHost);
@@ -80,23 +81,36 @@ export class DefaultResolver implements Resolver {
 			return cached;
 		}
 
-		const records = await this.lookupFn(normalizedHost, {
-			all: true,
-			verbatim: false,
-		});
-		const addresses = records.map((record) => record.address);
+		let pending = this.inFlightResolutions.get(normalizedHost);
+		if (!pending) {
+			pending = this.lookupFn(normalizedHost, {
+				all: true,
+				verbatim: false,
+			})
+				.then((records) => {
+					const addresses = records.map((record) => record.address);
 
-		if (addresses.length === 0) {
-			throw new Error(`No DNS records for ${normalizedHost}`);
+					if (addresses.length === 0) {
+						throw new Error(`No DNS records for ${normalizedHost}`);
+					}
+
+					if (addresses.some((address) => isInvalidIpAddress(address))) {
+						throw new Error(`Hostname ${normalizedHost} resolves to a private or reserved IP`);
+					}
+
+					const immutableAddresses = Object.freeze(addresses);
+					this.cache.set(normalizedHost, immutableAddresses);
+					return immutableAddresses;
+				})
+				.finally(() => {
+					if (this.inFlightResolutions.get(normalizedHost) === pending) {
+						this.inFlightResolutions.delete(normalizedHost);
+					}
+				});
+			this.inFlightResolutions.set(normalizedHost, pending);
 		}
 
-		if (addresses.some((address) => isInvalidIpAddress(address))) {
-			throw new Error(`Hostname ${normalizedHost} resolves to a private or reserved IP`);
-		}
-
-		this.cache.set(normalizedHost, addresses);
-
-		return addresses;
+		return pending;
 	}
 }
 

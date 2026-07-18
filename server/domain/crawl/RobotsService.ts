@@ -32,34 +32,65 @@ type RobotsRulesResult =
 	| { type: "no-rules" }
 	| { type: "unavailable"; reason: string };
 
+function abortReason(signal: AbortSignal): Error {
+	return signal.reason instanceof Error ? signal.reason : new Error("Robots evaluation aborted");
+}
+
+function waitForSharedRules(
+	promise: Promise<RobotsRulesResult>,
+	signal?: AbortSignal,
+): Promise<RobotsRulesResult> {
+	if (!signal) return promise;
+	if (signal.aborted) return Promise.reject(abortReason(signal));
+
+	return new Promise((resolve, reject) => {
+		const onAbort = () => {
+			signal.removeEventListener("abort", onAbort);
+			reject(abortReason(signal));
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+		promise.then(
+			(result) => {
+				signal.removeEventListener("abort", onAbort);
+				resolve(result);
+			},
+			(error) => {
+				signal.removeEventListener("abort", onAbort);
+				reject(error);
+			},
+		);
+	});
+}
+
 export class RobotsService {
 	private readonly cache = new LRUCache<string, RobotsResult | false>({
 		max: MEMORY_CONSTANTS.ROBOTS_CACHE_MAX_SIZE,
 		ttl: MEMORY_CONSTANTS.ROBOTS_CACHE_TTL_MS,
 	});
+	private readonly inFlightRules = new Map<string, Promise<RobotsRulesResult>>();
+	private readonly lifecycleController = new AbortController();
 
 	constructor(
 		private readonly httpClient: HttpClient,
 		private readonly logger: Logger,
 	) {}
 
-	private async fetchRulesForOrigin(
-		originKey: string,
-		signal?: AbortSignal,
-	): Promise<RobotsRulesResult> {
+	private async loadRulesForOrigin(originKey: string): Promise<RobotsRulesResult> {
 		const cached = this.cache.get(originKey);
 		if (cached !== undefined) {
 			return cached === false ? { type: "no-rules" } : { type: "rules", rules: cached };
 		}
 
-		const timeoutSignal = AbortSignal.timeout(REQUEST_CONSTANTS.ROBOTS_FETCH_TIMEOUT_MS);
-		const fetchSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+		const timeoutSignal = AbortSignal.any([
+			this.lifecycleController.signal,
+			AbortSignal.timeout(REQUEST_CONSTANTS.ROBOTS_FETCH_TIMEOUT_MS),
+		]);
 
 		try {
 			const response = await this.httpClient.fetch({
 				url: `${originKey}/robots.txt`,
 				headers: { "User-Agent": config.userAgent },
-				signal: fetchSignal,
+				signal: timeoutSignal,
 			});
 			if (response.ok) {
 				const body = await readLimitedResponseBody(
@@ -90,16 +121,46 @@ export class RobotsService {
 				reason: `robots.txt returned HTTP ${response.status}`,
 			};
 		} catch (error) {
-			if (signal?.aborted) {
-				throw signal.reason instanceof Error
-					? signal.reason
-					: new Error("Robots evaluation aborted");
+			if (this.lifecycleController.signal.aborted) {
+				throw abortReason(this.lifecycleController.signal);
 			}
-
 			const reason = error instanceof Error ? error.message : String(error);
 			this.logger.debug(`[Robots] Failed to fetch robots.txt for ${originKey}: ${reason}`);
 			return { type: "unavailable", reason };
 		}
+	}
+
+	private fetchRulesForOrigin(originKey: string, signal?: AbortSignal): Promise<RobotsRulesResult> {
+		if (this.lifecycleController.signal.aborted) {
+			return Promise.reject(abortReason(this.lifecycleController.signal));
+		}
+		if (signal?.aborted) {
+			return Promise.reject(abortReason(signal));
+		}
+
+		const cached = this.cache.get(originKey);
+		if (cached !== undefined) {
+			return Promise.resolve(
+				cached === false ? { type: "no-rules" } : { type: "rules", rules: cached },
+			);
+		}
+
+		let pending = this.inFlightRules.get(originKey);
+		if (!pending) {
+			pending = this.loadRulesForOrigin(originKey).finally(() => {
+				if (this.inFlightRules.get(originKey) === pending) {
+					this.inFlightRules.delete(originKey);
+				}
+			});
+			this.inFlightRules.set(originKey, pending);
+		}
+
+		return waitForSharedRules(pending, signal);
+	}
+
+	async close(): Promise<void> {
+		this.lifecycleController.abort(new Error("Robots service is shutting down"));
+		await Promise.allSettled([...this.inFlightRules.values()]);
 	}
 
 	async evaluate(url: string, signal?: AbortSignal): Promise<RobotsPolicy> {

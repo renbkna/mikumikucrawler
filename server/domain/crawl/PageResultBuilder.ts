@@ -1,11 +1,9 @@
-import type { CrawlOptions, CrawlPagePayload } from "../../../shared/contracts/index.js";
-import type { SavePageInput } from "../../storage/repos/pageRepo.js";
+import type { CrawlOptions, CrawlPageData } from "../../../shared/contracts/index.js";
+import type { CompletedPageData } from "../../storage/repos/crawlItemPersistence.js";
 import type { ProcessedContent } from "../../types.js";
 import type { QueueItem } from "./CrawlQueue.js";
 import type { FetchResult } from "./FetchService.js";
 import { mergeRobotsDirectives } from "./PageDecisionPolicy.js";
-
-export type PendingCrawlPagePayload = Omit<CrawlPagePayload, "id">;
 
 type SuccessfulFetchResult = Extract<FetchResult, { type: "success" }>;
 
@@ -21,17 +19,16 @@ export interface BuiltPageResult {
 	retainedMedia: ProcessedContent["media"];
 	mediaCount: number;
 	dataSizeKb: number;
-	saveInput: SavePageInput;
-	eventPayload: PendingCrawlPagePayload;
+	pageData: CompletedPageData;
+	eventPayload: CrawlPageData;
 }
 
 export function buildPageResult(
-	crawlId: string,
 	options: CrawlOptions,
 	item: QueueItem,
 	fetchResult: SuccessfulFetchResult,
 	processedContent: ProcessedContent,
-	crawlLinks: SavePageInput["links"],
+	crawlLinks: CompletedPageData["links"],
 ): BuiltPageResult {
 	const resolvedTitle = fetchResult.title || processedContent.metadata?.title || "";
 	const resolvedDescription =
@@ -59,10 +56,7 @@ export function buildPageResult(
 		retainedMedia,
 		mediaCount: retainedMedia.length,
 		dataSizeKb: Math.floor(fetchResult.contentLength / 1024),
-		saveInput: {
-			crawlId,
-			url: item.url,
-			domain: item.domain,
+		pageData: {
 			contentType: fetchResult.contentType,
 			statusCode: fetchResult.statusCode,
 			contentLength: fetchResult.contentLength,
