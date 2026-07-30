@@ -1,5 +1,9 @@
 node_modules
 npm-debug.log
+.agents
+.codex
+.tmp-peer-test
+journal.md
 .git
 .gitignore
 README.md

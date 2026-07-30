@@ -46,7 +46,6 @@
 		"domhandler": "^6.0.1",
 		"elysia": "^1.4.29",
 		"elysia-rate-limit": "^4.6.2",
-		"exact-mirror": "^0.2.7",
 		"file-type": "^21.3.4",
 		"franc": "^6.2.0",
 		"ipaddr.js": "^2.4.0",

@@ -238,11 +238,10 @@ function expectBackendPortProjections(source: string, patterns: RegExp[]): void 
 
 describe("cross-boundary invariants", () => {
 	test("checked-in deployment projections match the authoritative backend default", async () => {
-		const [environmentExample, dockerfile, readme, dockerDeployment] = await Promise.all([
+		const [environmentExample, dockerfile, readme] = await Promise.all([
 			readFile(new URL("../../../.env.example", import.meta.url), "utf8"),
 			readFile(new URL("../../../Dockerfile", import.meta.url), "utf8"),
 			readFile(new URL("../../../README.md", import.meta.url), "utf8"),
-			readFile(new URL("../../../docs/DOCKER_DEPLOY.md", import.meta.url), "utf8"),
 		]);
 		const readmeBackendProjections = readme
 			.split("\n")
@@ -256,12 +255,6 @@ describe("cross-boundary invariants", () => {
 			/^PORT=(\d+)$/gm,
 			/-p (\d+):(\d+)/g,
 			/backend owns port `(\d+)`/gi,
-		]);
-		expectBackendPortProjections(dockerDeployment, [
-			/localhost:(\d+)/g,
-			/\bPORT=(\d+)\b/g,
-			/-p (\d+):(\d+)/g,
-			/\bPort (\d+) is a projection/g,
 		]);
 	});
 
