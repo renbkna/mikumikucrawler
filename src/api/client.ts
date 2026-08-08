@@ -1,14 +1,13 @@
-import { type Treaty, treaty } from "@elysiajs/eden";
+import { type Treaty, treaty } from "@elysia/eden";
 import type { App } from "../../server/app";
 import {
 	buildCrawlEventsPath,
 	buildCrawlExportPath,
 	type CrawlExportFormat,
 } from "../../shared/contracts/index.js";
-import { buildBackendApiUrl, resolveBackendUrl } from "./backendUrl";
-import { getApiErrorMessage } from "./errors";
+import { resolveBackendUrl } from "./backendUrl";
 
-const backendUrl = resolveBackendUrl({
+export const backendUrl = resolveBackendUrl({
 	VITE_BACKEND_URL: import.meta.env.VITE_BACKEND_URL,
 });
 
@@ -19,39 +18,10 @@ export const api: Treaty.Create<App> = treaty<App>(backendUrl, {
 	parseDate: false,
 });
 
-export type { CrawlExportFormat } from "../../shared/contracts/index.js";
-
-export function getBackendUrl(): string {
-	return backendUrl;
-}
-
-export function getBackendApiUrl(path: string): string {
-	return buildBackendApiUrl(getBackendUrl(), path);
-}
-
 export function createCrawlEventSource(crawlId: string): EventSource {
-	return new EventSource(getBackendApiUrl(buildCrawlEventsPath(crawlId)));
+	return new EventSource(`${backendUrl}${buildCrawlEventsPath(crawlId)}`);
 }
 
-export async function downloadCrawlExport(
-	crawlId: string,
-	format: CrawlExportFormat,
-): Promise<{ blob: Blob; filename: string }> {
-	const response = await fetch(getBackendApiUrl(buildCrawlExportPath(crawlId, format)));
-
-	if (!response.ok) {
-		let body: unknown = null;
-		try {
-			body = await response.json();
-		} catch {}
-		throw new Error(getApiErrorMessage(body));
-	}
-
-	const contentDisposition = response.headers.get("content-disposition");
-	const fileNameMatch = contentDisposition?.match(/filename="([^"]+)"/);
-
-	return {
-		blob: await response.blob(),
-		filename: fileNameMatch?.[1] ?? `miku-crawler-export.${format}`,
-	};
+export function getCrawlExportUrl(crawlId: string, format: CrawlExportFormat): string {
+	return `${backendUrl}${buildCrawlExportPath(crawlId, format)}`;
 }

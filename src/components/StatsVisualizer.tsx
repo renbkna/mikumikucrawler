@@ -1,12 +1,17 @@
 import { PieChart } from "lucide-react";
-import type { Stats } from "../../shared/types.js";
+import type { CrawlCounters, QueueStats } from "../../shared/contracts/index.js";
 
 interface StatsVisualizerProps {
-	stats: Stats;
+	stats: CrawlCounters;
+	queueStats: QueueStats | null;
 }
 
 /** Renders success rate, speed, and elapsed time using themed progress indicators. */
-export function StatsVisualizer({ stats }: Readonly<StatsVisualizerProps>) {
+export function StatsVisualizer({ stats, queueStats }: Readonly<StatsVisualizerProps>) {
+	const successRate = stats.pagesScanned
+		? `${((stats.successCount / stats.pagesScanned) * 100).toFixed(1)}%`
+		: "0%";
+	const elapsedSeconds = queueStats?.elapsedTime ?? 0;
 	return (
 		<div className="glass-panel p-5 mt-1">
 			<h3 className="flex items-center mb-4 font-bold text-miku-teal">
@@ -14,33 +19,33 @@ export function StatsVisualizer({ stats }: Readonly<StatsVisualizerProps>) {
 			</h3>
 
 			<div className="space-y-4">
-				{stats.successRate && (
-					<div>
-						<div className="flex justify-between mb-2 text-sm text-miku-text font-medium">
-							<span>Success Rate ✧</span>
-							<span className="text-emerald-500 font-bold">{stats.successRate}</span>
-						</div>
-						<div className="h-2.5 bg-miku-pink/8 rounded-full overflow-hidden border border-miku-pink/15">
-							<div
-								className="h-full bg-emerald-300 rounded-full transition-all duration-500"
-								style={{ width: stats.successRate }}
-							/>
-						</div>
+				<div>
+					<div className="flex justify-between mb-2 text-sm text-miku-text font-medium">
+						<span>Success Rate ✧</span>
+						<span className="text-emerald-500 font-bold">{successRate}</span>
 					</div>
-				)}
+					<div className="h-2.5 bg-miku-pink/8 rounded-full overflow-hidden border border-miku-pink/15">
+						<div
+							className="h-full bg-emerald-300 rounded-full transition-all duration-500"
+							style={{ width: successRate }}
+						/>
+					</div>
+				</div>
 
-				{stats.pagesPerSecond && (
+				{!!queueStats?.pagesPerSecond && (
 					<div>
 						<div className="flex justify-between mb-2 text-sm text-miku-text font-medium">
 							<span>Speed ♥</span>
-							<span className="text-miku-teal font-bold">{stats.pagesPerSecond} pages/sec</span>
+							<span className="text-miku-teal font-bold">
+								{queueStats.pagesPerSecond.toFixed(2)} pages/sec
+							</span>
 						</div>
 						<div className="h-2.5 bg-miku-teal/8 rounded-full overflow-hidden border border-miku-teal/15">
 							<div
 								className="h-full bg-miku-teal rounded-full transition-all duration-500"
 								style={{
 									// Scale: 5 pages/sec = 100% width (Arbitrary visual cap)
-									width: `${Math.min(Number(stats.pagesPerSecond) * 20, 100)}%`,
+									width: `${Math.min(queueStats.pagesPerSecond * 20, 100)}%`,
 								}}
 							/>
 						</div>
@@ -48,12 +53,13 @@ export function StatsVisualizer({ stats }: Readonly<StatsVisualizerProps>) {
 				)}
 			</div>
 
-			{stats.elapsedTime && (
+			{queueStats && (
 				<div className="mt-6 text-center">
 					<div className="inline-block cute-badge">
 						⏱ Time elapsed:{" "}
 						<span className="text-miku-teal font-bold">
-							{stats.elapsedTime.hours}h {stats.elapsedTime.minutes}m {stats.elapsedTime.seconds}s
+							{Math.floor(elapsedSeconds / 3600)}h {Math.floor((elapsedSeconds % 3600) / 60)}m{" "}
+							{elapsedSeconds % 60}s
 						</span>
 					</div>
 				</div>

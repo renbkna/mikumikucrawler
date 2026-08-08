@@ -50,10 +50,6 @@ export function resolveBackendUrl(
 	return origin ?? "http://localhost";
 }
 
-export function buildBackendApiUrl(baseUrl: string, path: string): string {
-	return `${baseUrl}${path}`;
-}
-
 export function resolveBackendTransportPolicy(
 	configuredBackendUrl: string | undefined,
 	localProxy?: { rawPort: string | undefined },

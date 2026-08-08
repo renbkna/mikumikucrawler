@@ -5,11 +5,10 @@ import { isPrivateOrReservedIpAddressLiteral } from "./ipPolicy.js";
  * - input: user-entered or discovered URL text
  * - output: normalized HTTP(S) URL string or an explicit error
  * - shared invariants: lowercase hostname, no fragment, default ports removed,
- *   conservative path preservation
- * - canonical mode: tracking/session params stripped, query params sorted,
- *   terminal slash trimmed except for root path
- * - robots-match mode: query params and query ordering preserved for robots rule
- *   matching while still sharing parse/scheme/host/default-port invariants
+ *   one terminal DNS dot removed, and otherwise lossless path/query preservation
+ * - canonical and robots-match modes share the same fetch-semantic URL. A
+ *   crawler must not merge distinct resources by guessing which path or query
+ *   components an origin considers significant.
  * - forbidden states: non-HTTP(S) schemes and unparsable URLs
  */
 export type NormalizedUrlResult = { url: string } | { error: string };
@@ -18,30 +17,6 @@ export type ValidateUrlOptions = { allowLocalhost?: boolean };
 
 /** Maximum untrusted URL text accepted before parsing or normalization. */
 export const MAX_URL_LENGTH = 2000;
-
-const STRIP_PARAMS = new Set([
-	"utm_source",
-	"utm_medium",
-	"utm_campaign",
-	"utm_term",
-	"utm_content",
-	"utm_id",
-	"fbclid",
-	"gclid",
-	"gbraid",
-	"wbraid",
-	"msclkid",
-	"ttclid",
-	"twclid",
-	"li_fat_id",
-	"_ga",
-	"_gid",
-	"sessionid",
-	"phpsessid",
-	"jsessionid",
-	"aspsessionid",
-	"sid",
-]);
 
 export function validatePublicHttpUrl(
 	url: string,
@@ -91,8 +66,7 @@ function parseHttpUrl(url: string): URL | { error: string } {
 		if (!["http:", "https:"].includes(parsed.protocol)) {
 			return { error: "Only HTTP and HTTPS URLs are supported" };
 		}
-
-		parsed.hostname = parsed.hostname.toLowerCase();
+		parsed.hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
 
 		if (
 			(parsed.protocol === "http:" && parsed.port === "80") ||
@@ -109,33 +83,6 @@ function parseHttpUrl(url: string): URL | { error: string } {
 }
 
 export function normalizeCanonicalHttpUrl(url: string): NormalizedUrlResult {
-	const parsed = parseHttpUrl(url);
-	if ("error" in parsed) {
-		return parsed;
-	}
-
-	if (parsed.search) {
-		const params = new URLSearchParams(parsed.search);
-		for (const key of Array.from(params.keys())) {
-			if (STRIP_PARAMS.has(key.toLowerCase())) {
-				params.delete(key);
-			}
-		}
-		const sorted = new URLSearchParams(
-			[...params.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
-		);
-		parsed.search = sorted.toString() ? `?${sorted.toString()}` : "";
-	}
-
-	let result = parsed.toString();
-	if (result.endsWith("/") && parsed.pathname !== "/") {
-		result = result.slice(0, -1);
-	}
-
-	return { url: result };
-}
-
-export function normalizeRobotsMatchHttpUrl(url: string): NormalizedUrlResult {
 	const parsed = parseHttpUrl(url);
 	if ("error" in parsed) {
 		return parsed;

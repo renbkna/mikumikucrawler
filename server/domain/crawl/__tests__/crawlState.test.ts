@@ -32,6 +32,18 @@ function makeOptions(overrides: Partial<CrawlOptions> = {}): CrawlOptions {
 	};
 }
 
+function makeCounters(successCount = 0, failureCount = 0, skippedCount = 0) {
+	return {
+		pagesScanned: successCount + failureCount + skippedCount,
+		successCount,
+		failureCount,
+		skippedCount,
+		linksFound: 0,
+		mediaFiles: 0,
+		totalDataKb: 0,
+	};
+}
+
 describe("CrawlState", () => {
 	describe("invariant: counter identity", () => {
 		test("pagesScanned always equals success + failure + skipped", () => {
@@ -140,7 +152,7 @@ describe("CrawlState", () => {
 		});
 
 		test("a restored skip resets the restored failure streak", () => {
-			const state = new CrawlState(makeOptions({ maxPages: 100 }));
+			const state = new CrawlState(makeOptions({ maxPages: 100 }), makeCounters(0, 19, 1));
 
 			state.restoreTerminals([
 				...Array.from({ length: 19 }, (_, index) => ({
@@ -155,7 +167,7 @@ describe("CrawlState", () => {
 		});
 
 		test("restored failures preserve the circuit breaker streak across resume", () => {
-			const state = new CrawlState(makeOptions({ maxPages: 100 }));
+			const state = new CrawlState(makeOptions({ maxPages: 100 }), makeCounters(0, 19));
 
 			state.restoreTerminals(
 				Array.from({ length: 19 }, (_, index) => ({
@@ -171,7 +183,7 @@ describe("CrawlState", () => {
 		});
 
 		test("restored failures trip the circuit breaker when resume starts at the threshold", () => {
-			const state = new CrawlState(makeOptions({ maxPages: 100 }));
+			const state = new CrawlState(makeOptions({ maxPages: 100 }), makeCounters(0, 20));
 
 			state.restoreTerminals(
 				Array.from({ length: 20 }, (_, index) => ({
@@ -194,6 +206,7 @@ describe("CrawlState", () => {
 
 			state.recordTerminal("https://a.example/2", "success");
 			expect(state.canScheduleMore()).toBe(false);
+			expect(state.hasPageCapacity()).toBe(false);
 		});
 
 		test("false when stop requested", () => {
@@ -202,6 +215,45 @@ describe("CrawlState", () => {
 
 			state.requestStop("Manual stop");
 			expect(state.canScheduleMore()).toBe(false);
+			expect(state.hasPageCapacity()).toBe(true);
+		});
+	});
+
+	describe("restored admission policy", () => {
+		test("rejects crawl-wide and domain overflow before exposing any restored admission", () => {
+			const globalState = new CrawlState(makeOptions({ maxPages: 1 }));
+			expect(() =>
+				globalState.restoreQueueAdmissions([
+					{ url: "https://a.example/1", domain: "a.example" },
+					{ url: "https://b.example/2", domain: "b.example" },
+				]),
+			).toThrow("Restored queue exceeds the crawl page budget");
+			expect(globalState.canAdmit("https://a.example/1", "a.example")).toBe(true);
+
+			const domainState = new CrawlState(makeOptions({ maxPages: 3, maxPagesPerDomain: 1 }));
+			expect(() =>
+				domainState.restoreQueueAdmissions([
+					{ url: "https://a.example/1", domain: "a.example" },
+					{ url: "https://a.example/2", domain: "a.example" },
+				]),
+			).toThrow("Restored queue exceeds the domain page budget");
+			expect(domainState.canAdmit("https://a.example/1", "a.example")).toBe(true);
+		});
+
+		test("restored terminal rows must exactly match the durable terminal counter", () => {
+			const state = new CrawlState(makeOptions({ maxPages: 3 }), {
+				pagesScanned: 1,
+				successCount: 1,
+				failureCount: 0,
+				skippedCount: 0,
+				linksFound: 0,
+				mediaFiles: 0,
+				totalDataKb: 0,
+			});
+
+			expect(() => state.restoreTerminals([])).toThrow(
+				"Persisted terminal rows must match the durable terminal counter",
+			);
 		});
 	});
 
@@ -259,8 +311,26 @@ describe("CrawlState", () => {
 	});
 
 	describe("domain budget", () => {
-		test("uncharged terminal work releases its reserved domain capacity", () => {
+		test("redirect reservations exclude concurrent admissions to the destination domain", () => {
 			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 1 }));
+
+			expect(
+				state.tryReserveRedirectDomain(
+					"https://source.example/start",
+					"destination.example",
+					"source.example",
+				),
+			).toBe(true);
+			expect(state.canAdmit("https://destination.example/other", "destination.example")).toBe(
+				false,
+			);
+
+			state.releaseRedirectReservation("https://source.example/start");
+			expect(state.canAdmit("https://destination.example/other", "destination.example")).toBe(true);
+		});
+
+		test("uncharged terminal work releases its reserved domain capacity", () => {
+			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 1 }), makeCounters(0, 0, 1));
 
 			expect(state.canAdmit("https://example.com/first", "example.com")).toBe(true);
 			state.recordAdmission("https://example.com/first", "example.com");
@@ -299,7 +369,7 @@ describe("CrawlState", () => {
 		});
 
 		test("restores persisted domain budget charges across resume", () => {
-			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 1 }));
+			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 1 }), makeCounters(0, 0, 1));
 
 			state.restoreTerminals([
 				{
@@ -313,7 +383,7 @@ describe("CrawlState", () => {
 		});
 
 		test("does not infer domain budget charges from terminal outcome alone", () => {
-			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 1 }));
+			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 1 }), makeCounters(0, 0, 1));
 
 			state.restoreTerminals([
 				{

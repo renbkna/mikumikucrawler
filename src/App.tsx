@@ -1,21 +1,21 @@
-import { Heart, History, Music } from "lucide-react";
+import { History, Music2, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { shouldResetTheatreStatus, type TheatreStatus } from "../shared/theatreStatus.js";
+import type { CrawlExportFormat } from "../shared/contracts/index.js";
 import { ActionButtons } from "./components/ActionButtons";
 import { ConfigurationView } from "./components/ConfigurationView";
 import { CrawledPagesSection } from "./components/CrawledPagesSection";
 import { CrawlerForm } from "./components/CrawlerForm";
 import { ExportDialog } from "./components/ExportDialog";
-import { HeartIcon, NoteIcon, SparkleIcon } from "./components/KawaiiIcons";
 import { LogsSection } from "./components/LogsSection";
 import { MikuBanner } from "./components/MikuBanner";
 import { ProgressBar } from "./components/ProgressBar";
 import { ResumeSessionsPanel } from "./components/ResumeSessionsPanel";
 import { StatsGrid } from "./components/StatsGrid";
 import { StatsVisualizer } from "./components/StatsVisualizer";
-import { TheatreOverlay } from "./components/TheatreOverlay";
+import { TheatreOverlay, type TheatreStatus } from "./components/TheatreOverlay";
 import { ToastNotification } from "./components/ToastNotification";
 import { UI_LIMITS } from "./constants";
+import { isTerminalRunPhase } from "./hooks/crawlControllerState";
 import { useCrawlController } from "./hooks/useCrawlController";
 import { useToast } from "./hooks/useToast";
 
@@ -32,6 +32,7 @@ function App() {
 	const {
 		target,
 		crawlOptions,
+		activeCrawlOptions,
 		setCrawlOptions,
 		handleTargetChange,
 		stats,
@@ -39,6 +40,7 @@ function App() {
 		crawledPages,
 		storedPageCount,
 		progress,
+		runPhase,
 		logs,
 		clearLogs,
 		searchQuery,
@@ -95,13 +97,13 @@ function App() {
 	}, [forceStopCrawl]);
 
 	useEffect(() => {
-		if (shouldResetTheatreStatus(theatreStatus, isAttacking)) {
+		if (theatreStatus !== "idle" && !isAttacking) {
 			setTheatreStatus("idle");
 		}
 	}, [isAttacking, theatreStatus]);
 
 	const handleExport = useCallback(
-		(format: string) => {
+		(format: CrawlExportFormat) => {
 			void exportCrawl(format);
 		},
 		[exportCrawl],
@@ -144,14 +146,6 @@ function App() {
 			<div
 				className={`relative w-full h-full px-4 pb-12 transition-all duration-1000 ${isUIHidden ? "opacity-0 scale-95 blur-xl pointer-events-none" : "opacity-100 scale-100 blur-0"} ${isModalOpen ? "overflow-hidden" : "overflow-y-auto"}`}
 			>
-				<div className="app-atmosphere fixed inset-0 pointer-events-none overflow-hidden z-0">
-					<div className="absolute top-10 left-10 w-32 h-32 bg-miku-teal/10 rounded-full blur-3xl animate-float" />
-					<div
-						className="absolute bottom-20 right-20 w-40 h-40 bg-miku-pink/10 rounded-full blur-3xl animate-float"
-						style={{ animationDelay: "1s" }}
-					/>
-				</div>
-
 				<div className="fixed top-4 right-4 z-50 space-y-2">
 					{toasts.map((toast: (typeof toasts)[number]) => (
 						<ToastNotification key={toast.id} toast={toast} onDismiss={dismissToast} />
@@ -161,24 +155,13 @@ function App() {
 				<main className="relative z-10 max-w-7xl mx-auto space-y-3">
 					<header className="flex items-center justify-center py-4">
 						<div className="brand-shell glass-panel px-4 py-2 inline-flex items-center gap-3">
-							<div className="hidden">
-								<Music className="w-5 h-5 text-white" />
-							</div>
-
 							<div>
 								<h1 className="text-lg font-bold uppercase tracking-[0.12em] flex items-center gap-2 text-miku-accent">
-									<SparkleIcon className="text-miku-accent/40" size={15} />
+									<Sparkles className="text-miku-accent/40" size={15} />
 									<span>Miku</span>
-									<HeartIcon className="hidden" size={16} />
 									<span>Miku</span>
-									<HeartIcon className="hidden" size={16} />
 									<span>Crawler</span>
 								</h1>
-								<p className="hidden">web crawling, but cuter</p>
-							</div>
-
-							<div className="hidden">
-								<Heart className="w-5 h-5 text-white animate-heart-beat" fill="white" />
 							</div>
 						</div>
 					</header>
@@ -192,7 +175,7 @@ function App() {
 						<CrawlerForm
 							target={target}
 							setTarget={handleTargetChange}
-							crawlOptions={crawlOptions}
+							crawlOptions={isAttacking ? (activeCrawlOptions ?? crawlOptions) : crawlOptions}
 							isAttacking={isAttacking}
 							canStart={canStart}
 							canForceStop={canForceStop}
@@ -229,7 +212,7 @@ function App() {
 							<StatsGrid stats={stats} queueStats={queueStats} isAttacking={isAttacking} />
 						</div>
 						<div className="glass-panel p-5 flex flex-col justify-center">
-							<ProgressBar progress={progress} />
+							<ProgressBar progress={progress} runPhase={runPhase} />
 						</div>
 					</section>
 
@@ -240,7 +223,7 @@ function App() {
 						setShowDetails={setShowDetails}
 					/>
 
-					{showDetails && <StatsVisualizer stats={stats} />}
+					{showDetails && <StatsVisualizer stats={stats} queueStats={queueStats} />}
 
 					<div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
 						<section
@@ -253,7 +236,7 @@ function App() {
 									className="text-base font-bold uppercase tracking-wide text-miku-teal-dark flex items-center gap-2"
 								>
 									<span className="w-2 h-2 rounded-full bg-miku-teal animate-pulse" />
-									System Logs <NoteIcon className="hidden" size={14} />
+									System Logs
 								</h2>
 							</div>
 							<LogsSection logs={logs} clearLogs={clearLogs} />
@@ -268,12 +251,9 @@ function App() {
 									className="text-base font-bold uppercase tracking-wide text-miku-pink-dark flex items-center gap-2"
 								>
 									<span className="w-2 h-2 rounded-full bg-miku-pink animate-pulse" />
-									Captured Data <HeartIcon className="hidden" size={14} />
+									Captured Data
 								</h2>
-								<span className="cute-badge flex items-center gap-1">
-									<SparkleIcon className="hidden" size={12} />
-									{storedPageCount} stored
-								</span>
+								<span className="cute-badge flex items-center gap-1">{storedPageCount} stored</span>
 							</div>
 							<CrawledPagesSection
 								crawledPages={crawledPages}
@@ -293,16 +273,8 @@ function App() {
 				<footer className="mt-4 pb-6 text-center">
 					<div className="inline-block glass-panel px-6 py-3 rounded-full">
 						<div className="flex items-center gap-4">
-							<HeartIcon className="hidden" size={14} />
-							<span className="hidden">
-								Miku Miku Crawler <span className="text-miku-teal-dark">v3.0.0</span>
-							</span>
-							<HeartIcon className="hidden" size={14} style={{ animationDelay: "0.5s" }} />
-
-							<div className="hidden" />
-
 							<div className="flex items-center gap-2">
-								<NoteIcon className="text-miku-accent/50" size={13} />
+								<Music2 className="text-miku-accent/50" size={13} />
 								<span className="text-xs text-miku-teal-dark font-bold">VOL</span>
 								<input
 									type="range"
@@ -325,6 +297,7 @@ function App() {
 				isOpen={openedConfig}
 				onClose={() => setOpenedConfig(false)}
 				options={crawlOptions}
+				editingNextRun={activeCrawlOptions !== null && !isTerminalRunPhase(runPhase)}
 				onSave={(options) => {
 					setCrawlOptions(options);
 					addToast("success", "Configuration saved! ✨");

@@ -105,16 +105,32 @@ describe("spa static plugin", () => {
 		}
 	});
 
-	test("keeps API and health namespaces outside static-file ownership", async () => {
+	test("keeps backend namespaces outside static-file ownership", async () => {
 		const distPath = createDist();
 		mkdirSync(path.join(distPath, "api"));
+		mkdirSync(path.join(distPath, "openapi"));
 		writeFileSync(path.join(distPath, "api", "private.json"), "private static file");
 		writeFileSync(path.join(distPath, "health"), "static health file");
+		writeFileSync(path.join(distPath, "openapi", "json"), "private static specification");
 		try {
 			const app = await spaStaticPlugin({ distPath });
 
-			for (const requestPath of ["/api/private.json", "/health"]) {
-				const response = await app.handle(new Request(`http://localhost${requestPath}`));
+			for (const requestPath of [
+				"/api/private.json",
+				"/api%2Fprivate.json",
+				"/health",
+				"/%68ealth",
+				"/openapi",
+				"/openapi/json",
+				"/openapi%2Fjson",
+				"/%6fpenapi/json",
+				"/%",
+			]) {
+				const response = await app.handle(
+					new Request(`http://localhost${requestPath}`, {
+						headers: { Accept: "text/html" },
+					}),
+				);
 				expect(response.status).toBe(404);
 				expect(await response.json()).toEqual({ error: "Not Found" });
 			}

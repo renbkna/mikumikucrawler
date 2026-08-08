@@ -12,17 +12,6 @@ const PageContentParamsSchema = t.Object({
 export function pagesApi(services: RouteServicesPlugin) {
 	return new Elysia({ name: "pages-api", prefix: API_PATHS.pages }).use(services).get(
 		PAGE_ROUTE_SEGMENTS.content,
-		({ params, repos, status }) => {
-			const content = repos.pages.getContentById(params.id);
-			if (content === undefined) {
-				return status(404, { error: "Page not found" });
-			}
-
-			return {
-				status: "ok",
-				content,
-			};
-		},
 		{
 			params: PageContentParamsSchema,
 			response: {
@@ -34,6 +23,17 @@ export function pagesApi(services: RouteServicesPlugin) {
 				tags: ["Pages"],
 				summary: "Fetch stored page content",
 			},
+		},
+		({ params, repos, status }) => {
+			const content = repos.pages.getContentById(params.id);
+			if (content === undefined) {
+				return status(404, { error: "Page not found" });
+			}
+
+			return {
+				status: "ok",
+				content,
+			};
 		},
 	);
 }

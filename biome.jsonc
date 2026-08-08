@@ -12,6 +12,7 @@
 		"ignoreUnknown": true,
 		"includes": [
 			"**",
+			"!!seccomp_profile.json",
 			"!!**/dist",
 			"!!**/coverage",
 			"!!**/node_modules",

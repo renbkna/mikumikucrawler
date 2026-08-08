@@ -18,7 +18,7 @@
 
 <p align="center">
   A <b>real-time web crawler</b> with a <b>Miku-themed UI</b> and <b>live visualization</b>.<br/>
-  Watch pages get crawled in real-time, analyze content quality, and export structured data<br/>
+  Watch pages get crawled in real-time, inspect essential page details, and export stored pages<br/>
   — all wrapped in a cute interface.
 </p>
 
@@ -49,28 +49,25 @@
 | 🎭 | **Playwright** — renders JavaScript-heavy pages with headless Chromium |
 | ⚡ | **Cheerio** — fast HTML extraction for static pages |
 | 🤖 | **robots.txt** — optional compliance with crawl rules and crawl-delay |
-| 🔀 | **Concurrency** — configurable parallel fetch workers |
+| 🔀 | **Concurrency** — configurable parallel page jobs |
 | 🔄 | **Retry with backoff** — delayed retries for rate-limit and backpressure responses |
 | 💾 | **Session resume** — interrupted crawls persist and resume from where they stopped |
-| 🚦 | **Domain throttling** — per-domain rate limiting to be a polite crawler |
+| 🚦 | **Domain throttling** — hostname-scoped page scheduling to be a polite crawler |
 
 </td></tr>
 <tr><td>
 
 ### 📊 Content Processing
 
-Every crawled page goes through a full analysis pipeline:
+Every crawled page is reduced to the data used by crawling, recovery, search, and export:
 
 | | Analysis |
 |---|---------|
-| 🔑 | **Keywords** — frequency-based extraction, filters stop words (EN/ES/FR/DE) |
 | 🌐 | **Language** — detection via `franc` |
-| 💭 | **Sentiment** — custom lexicon-based analyzer |
-| 📖 | **Readability** — Flesch-Kincaid scoring |
-| ⭐ | **Quality** — title, meta, content length, headings, alt text, links |
-| 🏗️ | **Structured data** — JSON-LD, Open Graph, Twitter Cards, microdata |
-| 🖼️ | **Media** — images and videos with URLs and alt text |
-| 🔗 | **Links** — classified as internal, external, social, or navigation |
+| 📖 | **Reading time** — derived from the stored main-content word count |
+| 📝 | **Page metadata** — bounded title, description, and robots directives |
+| 🖼️ | **Media count** — optional bounded count of unique image, video, and audio references |
+| 🔗 | **Links** — canonical HTTP(S) targets with `nofollow` admission policy |
 
 </td></tr>
 <tr><td>
@@ -82,8 +79,8 @@ Every crawled page goes through a full analysis pipeline:
 | `CrawlerForm` | Configure and launch crawls |
 | `StatsGrid` | Live counters — pages, data size, speed |
 | `ProgressBar` | Visual crawl progress |
-| `CrawledPagesSection` | Virtualized page list with search & filter |
-| `TheatreOverlay` | Full page preview with processed data |
+| `CrawledPagesSection` | Bounded page list with durable search |
+| `TheatreOverlay` | Timed crawl launch sequence with optional audio |
 | `ExportDialog` | JSON / CSV export |
 | `ResumeSessionsPanel` | Browse & resume interrupted sessions |
 | `LogsSection` | Live crawl log stream |
@@ -114,7 +111,7 @@ On Linux systems missing browser libraries, run `bunx playwright install --with-
 |---|---------|-----|
 | 🎨 | Frontend | <http://localhost:5173> |
 | ⚙️ | Backend | <http://localhost:3000> |
-| 📋 | OpenAPI | <http://localhost:3000/openapi> |
+| 📋 | OpenAPI (development UI) | <http://localhost:3000/openapi> |
 
 By default, the backend owns port `3000` exclusively and fails clearly if another process already owns it.
 The checked-in default is owned by `shared/deploymentDefaults.ts`; the documented URLs are projections of that value.
@@ -136,6 +133,8 @@ FRONTEND_URL=http://localhost:5173
 # Optional direct-browser backend override; local Vite development uses PORT.
 # VITE_BACKEND_URL=https://api.example.com
 DB_PATH=./data/crawler.db
+# SQLite allocation budget. Admission reserves an 8 MiB safety allowance per remaining page.
+MAX_STORAGE_MB=2048
 LOG_LEVEL=info
 USER_AGENT=MikuCrawler/3.0.0
 ROBOTS_PRODUCT_TOKEN=MikuCrawler
@@ -145,6 +144,11 @@ RENDER=false
 # Defaults to 350 on Render and 600 elsewhere.
 MEMORY_THRESHOLD_MB=600
 ```
+
+One process exclusively owns `DB_PATH` while it is running. New and resumed
+crawls reserve an 8 MiB safety allowance for each remaining page. When necessary,
+the storage owner removes the oldest completed, stopped, or failed runs first;
+active, paused, and interrupted checkpoints are never reclaimed automatically.
 
 </details>
 
@@ -158,14 +162,18 @@ MEMORY_THRESHOLD_MB=600
 | Crawl Depth | `2` | 1–5 |
 | Max Pages | `50` | 1–200 |
 | Max Pages Per Domain | `0` | 0–1000 (`0` = unlimited) |
-| Crawl Delay | `1000ms` | 200–10000ms |
+| Page Crawl Delay | `1000ms` | 200–10000ms |
 | Method | `full` | links / media / full |
-| Concurrent Requests | `5` | 1–10 |
+| Concurrent Page Jobs | `5` | 1–10 |
 | Retry Limit | `3` | 0–5 |
 | Dynamic Content | `true` | — |
 | Respect Robots | `true` | — |
 | Content Only | `false` | — |
-| Save Media | `false` | — |
+| Count Media (`saveMedia`) | `false` | — |
+
+Dynamic pages use a separate fixed subrequest policy: at most four concurrent
+subrequests, at least 50 ms between same-host dispatches, and at most 100
+requests or 20 MiB of response bodies per page.
 
 </details>
 
@@ -173,15 +181,16 @@ MEMORY_THRESHOLD_MB=600
 
 ## 🔌 API
 
-> Full OpenAPI spec at [`/openapi`](http://localhost:3000/openapi)
+> The OpenAPI JSON specification is always available at `/openapi/json`; the interactive `/openapi` UI is development-only.
 
 | | Method | Endpoint | Description |
 |---|--------|----------|-------------|
 | 🆕 | `POST` | `/api/crawls` | Create a crawl run |
 | 📋 | `GET` | `/api/crawls` | List crawl runs |
+| ♻️ | `GET` | `/api/crawls/resumable?limit=25` | List paused/interrupted runs (`limit` defaults to 25, maximum 100) |
 | 🔍 | `GET` | `/api/crawls/:id` | Get crawl state & counters |
 | ♻️ | `GET` | `/api/crawls/:id/snapshot` | Recover crawl state, latest stored pages, and total stored count in one response |
-| ⏹️ | `POST` | `/api/crawls/:id/stop` | Request graceful stop |
+| ⏹️ | `POST` | `/api/crawls/:id/stop` | Request pause or force stop |
 | ▶️ | `POST` | `/api/crawls/:id/resume` | Resume a paused or interrupted crawl |
 | 📡 | `GET` | `/api/crawls/:id/events` | SSE event stream |
 | 📄 | `GET` | `/api/crawls/:id/pages` | List the latest stored page summaries and total stored count |
@@ -250,7 +259,6 @@ Search and export cover the full stored set.
 | 🦊 | Elysia + OpenAPI |
 | 🎭 | Playwright |
 | 📝 | Pino |
-| ⏱️ | Development Server Timing |
 | 🔒 | IP validation + rate limiting |
 
 </td>
@@ -267,7 +275,7 @@ server/
 ├── api/                    # Elysia route handlers
 ├── contracts/              # OpenAPI schemas + shared type re-exports
 ├── domain/crawl/           # Core crawl logic
-│   ├── CrawlQueue.ts      #   Priority queue with domain throttling
+│   ├── CrawlQueue.ts      #   Durable FIFO/delayed queue
 │   ├── CrawlState.ts      #   Counters, visited URLs, stop logic
 │   ├── DynamicRenderer.ts  #   Playwright lifecycle
 │   ├── FetchService.ts     #   HTTP fetching with security checks
@@ -280,18 +288,21 @@ server/
 │   └── EventStream.ts      #   Sequenced bounded live SSE publishing
 ├── processors/             # Content analysis
 │   ├── ContentProcessor.ts #   Dispatch by content type
-│   ├── analysisUtils.ts    #   Keywords, quality scoring
-│   ├── extractionUtils.ts  #   Metadata, structured data, links
-│   └── sentimentAnalyzer.ts
+│   ├── analysisUtils.ts    #   Word count, reading time, language
+│   └── extractionUtils.ts  #   Main content, metadata, media count, links
 ├── storage/                # SQLite persistence
 │   ├── migrations/         #   Schema migrations
 │   └── repos/              #   Query repositories
-├── plugins/                # Elysia plugins (security, SSE, OpenAPI, static)
+├── outbound/               # SSRF-safe DNS resolution and pinned HTTP
+├── plugins/                # Elysia plugins (SSE, OpenAPI, static)
 └── config/                 # Env validation, logging setup
 
-shared/                     # Cross-boundary contracts
+shared/                     # Cross-boundary contracts and policy
 ├── contracts/              #   Domain types (status, events, pages)
-├── types.ts                #   Shared domain types
+├── crawl.ts                #   Crawl option bounds
+├── deploymentDefaults.ts   #   Deployment defaults
+├── ipPolicy.ts             #   Public-address policy
+├── text.ts                 #   Text/byte conversion helpers
 └── url.ts                  #   URL validation & normalization
 ```
 
@@ -311,24 +322,33 @@ graph TD
     E --> G[📊 ContentProcessor]
     F --> G
     G --> C
-    C --> H[💾 SQLite]
-    C --> I[📡 EventStream]
+    C --> B
+    B --> H[💾 SQLite]
+    B --> I[📡 EventStream]
     I --> J[🎨 React UI]
 ```
 
 1. **Client** creates a crawl via `POST /api/crawls`
 2. **CrawlManager** spawns a **CrawlRuntime** with its own queue and state
 3. **PagePipeline** fetches each URL via **FetchService** (static) or **Playwright** (dynamic)
-4. **ContentProcessor** analyzes the page, then **PagePipeline** stores results and enqueues discovered links
-5. **EventStream** publishes sequenced SSE events to the frontend ✨
+4. **ContentProcessor** analyzes the page and **PagePipeline** admits discovered links
+5. **CrawlRuntime** commits each terminal result and its counters atomically, then **EventStream** publishes sequenced events ✨
 
 ---
 
 ## 🚢 Deployment
 
 ```bash
-bun run build && bun start
+bun run build
+NODE_ENV=production \
+FRONTEND_URL=https://crawler.example.com \
+DB_PATH=./data/crawler.db \
+bun start
 ```
+
+Development mode permits localhost crawl targets and therefore binds only to
+`127.0.0.1`. Production mode denies localhost targets and binds to `0.0.0.0`.
+Set `FRONTEND_URL` to the browser-visible production origin.
 
 Render's public load balancer owns Brotli/gzip response compression. Any direct
 self-host—including `bun start` and the container below—emits uncompressed
@@ -341,11 +361,35 @@ responses unless a compression-capable reverse proxy is placed in front.
 
 ```bash
 docker build -t mikumikucrawler .
-docker run -p 3000:3000 mikumikucrawler
+docker run --rm --init --ipc=host \
+  --security-opt seccomp=seccomp_profile.json \
+  -p 3000:3000 \
+  -v mikumikucrawler-data:/app/data \
+  -e FRONTEND_URL=http://localhost:3000 \
+  mikumikucrawler
 ```
 
-The image pins Bun 1.3.14 and installs the Chromium build matched to the locked
-Playwright dependency.
+The named volume owns SQLite state across container replacement. The final image
+runs as Playwright's unprivileged `pwuser`, explicitly enables Chromium's
+sandbox, and uses the checked-in seccomp profile required for user namespaces.
+That profile derives from Moby's `seccomp/v0.2.1` default, adds Playwright's
+`clone`/`setns`/`unshare` user-namespace allowance, and keeps `socketcall`
+blocked. Its SHA-256 is
+`dfea086789bff2999aab1f950ffa6e50cf3d38492a3c7476aee637780e42c75b`.
+
+Both the Bun build image and Playwright runtime/browser image are pinned by OCI
+digest. Update those digests, the Playwright dependency, and the seccomp profile
+together as one reviewed browser-runtime migration.
+
+`VITE_BACKEND_URL` is a frontend build-time setting, not a container runtime
+variable. Same-origin deployments should omit it. To build a browser bundle
+that talks directly to a separate backend, use:
+
+```bash
+docker build \
+  --build-arg VITE_BACKEND_URL=https://api.example.com \
+  -t mikumikucrawler .
+```
 
 </details>
 
@@ -354,6 +398,7 @@ NODE_ENV=production
 PORT=3000
 FRONTEND_URL=https://your-domain.com
 DB_PATH=/app/data/crawler.db
+MAX_STORAGE_MB=2048
 ```
 
 ---

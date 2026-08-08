@@ -1,17 +1,15 @@
 import type { CrawlOptions } from "../../../shared/contracts/index.js";
 import { isPrivateOrReservedIpAddressLiteral } from "../../../shared/ipPolicy.js";
-import type { ExtractedLink } from "../../../shared/types.js";
-import { normalizeCanonicalHttpUrl, normalizeRobotsMatchHttpUrl } from "../../../shared/url.js";
+import { normalizeCanonicalHttpUrl } from "../../../shared/url.js";
+import type { ExtractedLink } from "../../types.js";
 
 const SKIPPED_EXTENSIONS =
 	/\.(7z|apk|appimage|bz2|csv|css|deb|dmg|exe|git|gitignore|gz|ico|iso|js|md|msi|msix|pkg|rar|rpm|svg|tar|tgz|txt|xml|xz|zip|zst)$/i;
 
 export interface CrawlUrlIdentity {
 	canonicalUrl: string;
-	robotsMatchUrl: string;
 	hostname: string;
 	originKey: string;
-	robotsKey: string;
 	domainBudgetKey: string;
 	skippedByExtension: boolean;
 }
@@ -26,12 +24,7 @@ export type UrlRejectionReason =
 	| "ssrf-blocked";
 
 export type NormalizedDiscoveredLink = {
-	link: ExtractedLink & {
-		url: string;
-		domain: string;
-		isInternal: boolean;
-		nofollow: boolean;
-	};
+	link: { url: string; nofollow: boolean };
 	identity: CrawlUrlIdentity;
 };
 
@@ -40,37 +33,15 @@ export function getCrawlUrlIdentity(url: string): CrawlUrlIdentityResult {
 	if ("error" in normalized) {
 		return normalized;
 	}
-	const robotsMatch = normalizeRobotsMatchHttpUrl(url);
-	if ("error" in robotsMatch) {
-		return robotsMatch;
-	}
-
 	const parsed = new URL(normalized.url);
 	const originKey = parsed.origin.toLowerCase();
 
 	return {
 		canonicalUrl: normalized.url,
-		robotsMatchUrl: robotsMatch.url,
 		hostname: parsed.hostname,
 		originKey,
-		robotsKey: originKey,
 		domainBudgetKey: parsed.hostname,
 		skippedByExtension: SKIPPED_EXTENSIONS.test(parsed.pathname),
-	};
-}
-
-function classifyCrawlUrl(
-	url: string,
-	currentOriginKey: string,
-): (CrawlUrlIdentity & { isInternal: boolean }) | { error: string } {
-	const identity = getCrawlUrlIdentity(url);
-	if ("error" in identity) {
-		return identity;
-	}
-
-	return {
-		...identity,
-		isInternal: identity.originKey === currentOriginKey,
 	};
 }
 
@@ -88,7 +59,7 @@ export function normalizeDiscoveredLink(
 		return { error: "Invalid document URL", reason: "invalid-url" };
 	}
 
-	const identity = classifyCrawlUrl(link.url, currentIdentity.originKey);
+	const identity = getCrawlUrlIdentity(link.url);
 	if ("error" in identity) {
 		return { ...identity, reason: "invalid-url" };
 	}
@@ -110,7 +81,7 @@ export function normalizeDiscoveredLink(
 		};
 	}
 
-	const isInternal = identity.isInternal;
+	const isInternal = identity.originKey === currentIdentity.originKey;
 	if (options.crawlMethod !== "full" && !isInternal) {
 		return {
 			error: "External links require full crawl mode",
@@ -121,10 +92,7 @@ export function normalizeDiscoveredLink(
 	return {
 		identity,
 		link: {
-			...link,
 			url: identity.canonicalUrl,
-			domain: identity.domainBudgetKey,
-			isInternal,
 			nofollow: Boolean(link.nofollow),
 		},
 	};

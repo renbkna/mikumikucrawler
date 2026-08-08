@@ -1,4 +1,10 @@
-import type { CrawlOptions, CrawlPageData } from "../../../shared/contracts/index.js";
+import {
+	type CrawlOptions,
+	type CrawlPageData,
+	isCrawlPageData,
+	PAGE_TEXT_LIMITS,
+} from "../../../shared/contracts/index.js";
+import { truncateUtf8Text } from "../../../shared/text.js";
 import type { CompletedPageData } from "../../storage/repos/crawlItemPersistence.js";
 import type { ProcessedContent } from "../../types.js";
 import type { QueueItem } from "./CrawlQueue.js";
@@ -12,13 +18,7 @@ function omitUndefined<T extends Record<string, unknown>>(value: T): T {
 }
 
 export interface BuiltPageResult {
-	resolvedTitle: string;
-	resolvedDescription: string;
-	mainContent: string;
 	robotsDirectives: ReturnType<typeof mergeRobotsDirectives>;
-	retainedMedia: ProcessedContent["media"];
-	mediaCount: number;
-	dataSizeKb: number;
 	pageData: CompletedPageData;
 	eventPayload: CrawlPageData;
 }
@@ -28,70 +28,61 @@ export function buildPageResult(
 	item: QueueItem,
 	fetchResult: SuccessfulFetchResult,
 	processedContent: ProcessedContent,
-	crawlLinks: CompletedPageData["links"],
 ): BuiltPageResult {
-	const resolvedTitle = fetchResult.title || processedContent.metadata?.title || "";
-	const resolvedDescription =
-		fetchResult.description || processedContent.metadata?.description || "";
+	const resolvedTitle = truncateUtf8Text(
+		fetchResult.title || processedContent.metadata.title || "",
+		PAGE_TEXT_LIMITS.metadataValueBytes,
+	);
+	const resolvedDescription = truncateUtf8Text(
+		fetchResult.description || processedContent.metadata.description || "",
+		PAGE_TEXT_LIMITS.metadataValueBytes,
+	);
 	const robotsDirectives = mergeRobotsDirectives(
-		processedContent.metadata?.robots,
+		processedContent.metadata.robots,
 		fetchResult.xRobotsTag,
 	);
-	const retainedMedia =
+	const mediaCount =
 		options.saveMedia && (options.crawlMethod === "media" || options.crawlMethod === "full")
-			? (processedContent.media ?? [])
-			: [];
-	const mainContent = processedContent.extractedData?.mainContent ?? "";
-	const crawlVisibleLinks = robotsDirectives.nofollow ? [] : crawlLinks;
-	const processedContentForPage = {
-		...processedContent,
-		media: retainedMedia,
+			? processedContent.mediaCount
+			: 0;
+	const mainContent = processedContent.extractedData.mainContent ?? "";
+	const language = processedContent.analysis.language
+		? truncateUtf8Text(processedContent.analysis.language, PAGE_TEXT_LIMITS.languageBytes)
+		: undefined;
+	const details = omitUndefined({
+		wordCount: processedContent.analysis.wordCount,
+		readingTime: processedContent.analysis.readingTime,
+		language,
+	});
+
+	const eventPayload: CrawlPageData = {
+		url: item.url,
+		title: resolvedTitle,
+		description: resolvedDescription,
+		contentType: fetchResult.contentType,
+		domain: item.domain,
+		details,
 	};
+	if (!isCrawlPageData(eventPayload)) {
+		throw new Error("Page event projection violates the shared crawl-page contract");
+	}
 
 	return {
-		resolvedTitle,
-		resolvedDescription,
-		mainContent,
 		robotsDirectives,
-		retainedMedia,
-		mediaCount: retainedMedia.length,
-		dataSizeKb: Math.floor(fetchResult.contentLength / 1024),
 		pageData: {
 			contentType: fetchResult.contentType,
-			statusCode: fetchResult.statusCode,
 			contentLength: fetchResult.contentLength,
 			title: resolvedTitle,
 			description: resolvedDescription,
 			content:
 				options.contentOnly || typeof fetchResult.content !== "string" ? null : fetchResult.content,
-			isDynamic: fetchResult.isDynamic,
-			lastModified: fetchResult.lastModified,
-			etag: fetchResult.etag,
-			processedContent: processedContentForPage,
-			links: crawlVisibleLinks,
+			mainContent,
+			wordCount: processedContent.analysis.wordCount ?? 0,
+			readingTime: processedContent.analysis.readingTime ?? 0,
+			language: language ?? "unknown",
+			mediaCount,
+			discoveredLinkCount: processedContent.links.length,
 		},
-		eventPayload: {
-			url: item.url,
-			title: resolvedTitle,
-			description: resolvedDescription,
-			contentType: fetchResult.contentType,
-			domain: item.domain,
-			processedData: {
-				extractedData: omitUndefined({
-					mainContent: processedContent.extractedData?.mainContent,
-					jsonLd: processedContent.extractedData?.jsonLd ?? [],
-					microdata: processedContent.extractedData?.microdata,
-					openGraph: processedContent.extractedData?.openGraph,
-					twitterCards: processedContent.extractedData?.twitterCards,
-					schema: processedContent.extractedData?.schema,
-				}),
-				metadata: processedContent.metadata,
-				analysis: processedContent.analysis,
-				media: retainedMedia,
-				errors: processedContent.errors,
-				qualityScore: processedContent.analysis?.quality?.score ?? 0,
-				language: processedContent.analysis?.language ?? "unknown",
-			},
-		},
+		eventPayload,
 	};
 }

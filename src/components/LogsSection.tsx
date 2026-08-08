@@ -1,15 +1,12 @@
-import { Copy, Filter, Terminal, Trash2, X } from "lucide-react";
-import { memo, useCallback, useMemo, useState } from "react";
-import { Virtuoso } from "react-virtuoso";
+import { Copy, Filter, Music2, Trash2, X } from "lucide-react";
+import { memo, useMemo, useState } from "react";
 import {
-	formatTimestamp,
 	getLogCategory,
 	getLogLevelConfig,
 	highlightUrls,
 	type ParsedLog,
 	parseLog,
 } from "../utils/logParser";
-import { NoteIcon } from "./KawaiiIcons";
 
 interface LogItemProps {
 	log: ParsedLog;
@@ -17,15 +14,10 @@ interface LogItemProps {
 	onCopy: (text: string) => void;
 }
 
-const LogItem = memo(function LogItem({ log, stableIndex, onCopy }: LogItemProps) {
+function LogItem({ log, stableIndex, onCopy }: LogItemProps) {
 	const config = getLogLevelConfig(log.level);
 	const Icon = config.icon;
 	const category = getLogCategory(log.message);
-	const timestamp = formatTimestamp(log.timestamp);
-
-	const handleCopy = useCallback(() => {
-		onCopy(log.raw);
-	}, [log.raw, onCopy]);
 
 	return (
 		<div className="group relative py-3 px-3 border-b border-miku-border/60 hover:bg-white/55 transition-colors duration-200 animate-in slide-in-from-left-2 fade-in duration-500">
@@ -52,16 +44,12 @@ const LogItem = memo(function LogItem({ log, stableIndex, onCopy }: LogItemProps
 							{config.label}
 						</span>
 
-						{timestamp && (
-							<span className="text-[10px] text-miku-text/40 font-mono">{timestamp}</span>
-						)}
-
 						<span className="text-[10px] text-miku-text/30">{category}</span>
 
 						{/* Copy button - appears on hover */}
 						<button
 							type="button"
-							onClick={handleCopy}
+							onClick={() => onCopy(log.raw)}
 							className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-miku-text/10 text-miku-text/40 hover:text-miku-text/60"
 							title="Copy log"
 						>
@@ -77,10 +65,10 @@ const LogItem = memo(function LogItem({ log, stableIndex, onCopy }: LogItemProps
 			</div>
 		</div>
 	);
-});
+}
 
 interface LogsSectionProps {
-	logs: string[];
+	logs: ReadonlyArray<{ id: number; message: string }>;
 	clearLogs: () => void;
 }
 
@@ -92,15 +80,15 @@ export const LogsSection = memo(function LogsSection({
 	const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
 	const parsedLogs = useMemo(() => {
-		return logs.map((log) => parseLog(log));
+		return logs.map(({ id, message }) => ({ id, parsed: parseLog(message) }));
 	}, [logs]);
 
 	const filteredLogs = useMemo(() => {
 		if (filterLevel === "all") return parsedLogs;
-		return parsedLogs.filter((log) => log.level === filterLevel);
+		return parsedLogs.filter(({ parsed }) => parsed.level === filterLevel);
 	}, [parsedLogs, filterLevel]);
 
-	const handleCopy = useCallback((text: string) => {
+	const handleCopy = (text: string) => {
 		void navigator.clipboard
 			.writeText(text)
 			.then(() => {
@@ -109,19 +97,11 @@ export const LogsSection = memo(function LogsSection({
 				setTimeout(() => setCopiedIndex((prev) => (prev === index ? null : prev)), 2000);
 			})
 			.catch(() => undefined);
-	}, []);
+	};
 
-	const clearFilter = useCallback(() => {
+	const clearFilter = () => {
 		setFilterLevel("all");
-	}, []);
-
-	const renderLogItem = useCallback(
-		(index: number, log: ParsedLog) => {
-			const stableIndex = filteredLogs.length - index;
-			return <LogItem log={log} stableIndex={stableIndex} onCopy={handleCopy} />;
-		},
-		[filteredLogs.length, handleCopy],
-	);
+	};
 
 	const levelOptions: {
 		value: ParsedLog["level"] | "all";
@@ -132,49 +112,30 @@ export const LogsSection = memo(function LogsSection({
 		{
 			value: "info",
 			label: "Info",
-			count: parsedLogs.filter((l) => l.level === "info").length,
+			count: parsedLogs.filter(({ parsed }) => parsed.level === "info").length,
 		},
 		{
 			value: "error",
 			label: "Error",
-			count: parsedLogs.filter((l) => l.level === "error").length,
+			count: parsedLogs.filter(({ parsed }) => parsed.level === "error").length,
 		},
 		{
 			value: "warn",
 			label: "Warn",
-			count: parsedLogs.filter((l) => l.level === "warn").length,
+			count: parsedLogs.filter(({ parsed }) => parsed.level === "warn").length,
 		},
 		{
 			value: "success",
 			label: "Success",
-			count: parsedLogs.filter((l) => l.level === "success").length,
+			count: parsedLogs.filter(({ parsed }) => parsed.level === "success").length,
 		},
 	];
 
 	return (
 		<div className="h-full flex flex-col relative">
-			{/* Decorative line */}
-			<div className="hidden" />
-
 			<div className="flex-1 relative z-10 flex flex-col h-full overflow-hidden">
 				{/* Header */}
 				<div className="flex items-center justify-end pb-3 border-b border-miku-teal/10 shrink-0">
-					<div className="hidden">
-						<div>
-							<Terminal className="w-4 h-4" />
-						</div>
-						<div className="flex flex-col">
-							<span className="text-sm font-bold text-miku-text flex items-center gap-2">
-								System Logs
-								<span className="cute-badge flex items-center gap-1 text-[10px]">
-									<NoteIcon className="hidden" size={10} />
-									{logs.length} total
-								</span>
-							</span>
-							<span className="text-[10px] text-miku-text/40">{filteredLogs.length} shown</span>
-						</div>
-					</div>
-
 					<div className="flex items-center gap-2">
 						{/* Level filter */}
 						<div className="flex items-center gap-1 bg-white/55 rounded-lg p-1 border border-miku-border">
@@ -233,14 +194,16 @@ export const LogsSection = memo(function LogsSection({
 				)}
 
 				{/* Logs list */}
-				<div className="flex-1 overflow-hidden">
+				<div className="flex-1 overflow-y-auto custom-scrollbar">
 					{filteredLogs.length > 0 ? (
-						<Virtuoso
-							style={{ height: "100%" }}
-							data={filteredLogs}
-							itemContent={renderLogItem}
-							overscan={5}
-						/>
+						filteredLogs.map(({ id, parsed }, index) => (
+							<LogItem
+								key={id}
+								log={parsed}
+								stableIndex={filteredLogs.length - index}
+								onCopy={handleCopy}
+							/>
+						))
 					) : logs.length > 0 ? (
 						<div className="h-full flex flex-col items-center justify-center text-miku-text/40">
 							<Filter className="w-12 h-12 mb-4 text-miku-text/20" />
@@ -255,7 +218,7 @@ export const LogsSection = memo(function LogsSection({
 						</div>
 					) : (
 						<div className="h-full flex flex-col items-center justify-center text-miku-text/40">
-							<NoteIcon className="text-miku-teal/35 mb-3" size={34} />
+							<Music2 className="text-miku-teal/35 mb-3" size={34} />
 							<p className="font-medium">Waiting for Miku to start writing...</p>
 							<p className="text-xs mt-1 opacity-60">Logs will appear here when crawling begins</p>
 						</div>
@@ -265,5 +228,3 @@ export const LogsSection = memo(function LogsSection({
 		</div>
 	);
 });
-
-LogsSection.displayName = "LogsSection";

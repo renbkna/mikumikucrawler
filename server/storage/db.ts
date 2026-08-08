@@ -9,12 +9,10 @@ import {
 	isCrawlOptions,
 	isResumableCrawlStatus,
 } from "../../shared/contracts/index.js";
+import { bytesToKilobytes } from "../../shared/text.js";
 import { config } from "../config/env.js";
-import {
-	archiveLegacySchema,
-	importArchivedLegacyData,
-	prepareCanonicalMigrationColumns,
-} from "./legacyMigration.js";
+import { DurableStorageBudget } from "./DurableStorageBudget.js";
+import { canonicalizeStorageDateTime } from "./dateTime.js";
 import { createCrawlDomainStateRepo } from "./repos/crawlDomainStateRepo.js";
 import { createCrawlItemPersistence } from "./repos/crawlItemPersistence.js";
 import { createCrawlQueueRepo } from "./repos/crawlQueueRepo.js";
@@ -38,6 +36,15 @@ export interface StorageRepos {
 export interface Storage {
 	db: Database;
 	repos: StorageRepos;
+	budget: DurableStorageBudget;
+	close(): void;
+}
+
+export type OwnStatement = <T extends { finalize(): void }>(statement: T) => T;
+
+export interface CreateStorageOptions {
+	maxBytes?: number;
+	pageReservationBytes?: number;
 }
 
 function ensureDatabaseDirectory(databasePath: string): void {
@@ -48,12 +55,31 @@ function ensureDatabaseDirectory(databasePath: string): void {
 	}
 }
 
-function configurePragmas(db: Database): void {
+export class DatabaseOwnershipError extends Error {
+	constructor(databasePath: string, options?: ErrorOptions) {
+		super(`Database is already owned by another crawler process: ${databasePath}`, options);
+		this.name = "DatabaseOwnershipError";
+	}
+}
+
+function configurePragmas(db: Database, databasePath: string): void {
+	db.exec(`
+		PRAGMA busy_timeout = 0;
+		PRAGMA locking_mode = EXCLUSIVE;
+	`);
+	try {
+		db.exec("BEGIN EXCLUSIVE");
+		db.exec("COMMIT");
+	} catch (error) {
+		if (db.inTransaction) db.exec("ROLLBACK");
+		throw new DatabaseOwnershipError(databasePath, { cause: error });
+	}
+
 	db.exec(`
 		PRAGMA journal_mode = WAL;
 		PRAGMA synchronous = NORMAL;
 		PRAGMA cache_size = -16000;
-		PRAGMA temp_store = MEMORY;
+		PRAGMA temp_store = FILE;
 		PRAGMA mmap_size = 67108864;
 		PRAGMA busy_timeout = 5000;
 		PRAGMA foreign_keys = ON;
@@ -64,34 +90,6 @@ function migrationChecksum(sql: string): string {
 	return createHash("sha256").update(sql).digest("hex");
 }
 
-const LEGACY_UNVERIFIED_CHECKSUM = "legacy-unverified";
-const acceptedHistoricalChecksums: Readonly<Record<string, ReadonlySet<string>>> = {
-	"0001_crawl_runs.sql": new Set([
-		"8f3a188974f103571720f1976bec802baa5b218b6b4c71549914458d5b57ce65",
-	]),
-	"0002_queue_pages.sql": new Set([
-		"d832a13bed5bc51ad65eab821e48d12674200147f7e16b5fbdbbaa2341a3b473",
-	]),
-	"0003_pages_fts.sql": new Set([
-		"fc7cddafb8f76c8258bfeee2e4bca143de3f5712210f4eb83d5b4a507d76c7d6",
-	]),
-	"0004_runtime_persistence.sql": new Set([
-		"af6fe768ee351c1581eebfdf7862210a4ed2c064cc5635e063b9ec3bde3e1cc6",
-	]),
-};
-
-function isAcceptedAppliedChecksum(
-	migrationId: string,
-	appliedChecksum: string,
-	currentChecksum: string,
-): boolean {
-	return (
-		appliedChecksum === currentChecksum ||
-		appliedChecksum === LEGACY_UNVERIFIED_CHECKSUM ||
-		acceptedHistoricalChecksums[migrationId]?.has(appliedChecksum) === true
-	);
-}
-
 export function applyMigrations(db: Database, migrationDirectory = migrationsDirectory): void {
 	const migrationFiles = readdirSync(migrationDirectory)
 		.filter((fileName) => fileName.endsWith(".sql"))
@@ -99,7 +97,6 @@ export function applyMigrations(db: Database, migrationDirectory = migrationsDir
 	const knownMigrationIds = new Set(migrationFiles);
 
 	db.transaction(() => {
-		const legacyArchive = archiveLegacySchema(db);
 		db.exec(`
 			CREATE TABLE IF NOT EXISTS schema_migrations (
 				id TEXT PRIMARY KEY,
@@ -108,100 +105,97 @@ export function applyMigrations(db: Database, migrationDirectory = migrationsDir
 			)
 		`);
 
-		const columns = db.query("PRAGMA table_info(schema_migrations)").all() as Array<{
-			name: string;
-		}>;
-		if (!columns.some((column) => column.name === "checksum")) {
-			db.exec("ALTER TABLE schema_migrations ADD COLUMN checksum TEXT");
-		}
-
 		const ledgerRows = db
 			.query("SELECT id, checksum FROM schema_migrations ORDER BY id")
-			.all() as Array<{ id: string; checksum: string | null }>;
+			.all() as Array<{ id: string; checksum: string }>;
 		const unknownAppliedMigration = ledgerRows.find((row) => !knownMigrationIds.has(row.id));
 		if (unknownAppliedMigration !== undefined) {
 			throw new Error(
 				`Applied migration ${unknownAppliedMigration.id} is not present in this release lineage`,
 			);
 		}
-		db.query("UPDATE schema_migrations SET checksum = ? WHERE checksum IS NULL").run(
-			LEGACY_UNVERIFIED_CHECKSUM,
-		);
-
-		if (legacyArchive.archivedPages) {
-			db.exec(`
-				DELETE FROM schema_migrations
-				WHERE id IN (
-					'0002_queue_pages.sql',
-					'0003_pages_fts.sql',
-					'0005_domain_state_search_content.sql',
-					'0006_canonical_schema.sql'
-				)
-			`);
+		for (const [index, row] of ledgerRows.entries()) {
+			if (migrationFiles[index] !== row.id) {
+				throw new Error(
+					`Applied migrations must form an ordered prefix; found ${row.id} at position ${index + 1}`,
+				);
+			}
 		}
-
-		const applied = new Map(
-			(
-				db.query("SELECT id, checksum FROM schema_migrations ORDER BY id").all() as Array<{
-					id: string;
-					checksum: string;
-				}>
-			).map((row) => [row.id, row.checksum] as const),
-		);
+		const applied = new Map(ledgerRows.map((row) => [row.id, row.checksum] as const));
 		const insertMigration = db.prepare(
 			"INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)",
 		);
-
-		for (const fileName of migrationFiles) {
-			const sql = readFileSync(path.join(migrationDirectory, fileName), "utf8");
-			const checksum = migrationChecksum(sql);
-			const appliedChecksum = applied.get(fileName);
-			if (appliedChecksum !== undefined) {
-				if (!isAcceptedAppliedChecksum(fileName, appliedChecksum, checksum)) {
-					throw new Error(
-						`Applied migration ${fileName} checksum mismatch; database was migrated with different SQL`,
-					);
+		try {
+			for (const fileName of migrationFiles) {
+				const sql = readFileSync(path.join(migrationDirectory, fileName), "utf8");
+				const checksum = migrationChecksum(sql);
+				const appliedChecksum = applied.get(fileName);
+				if (appliedChecksum !== undefined) {
+					if (appliedChecksum !== checksum) {
+						throw new Error(
+							`Applied migration ${fileName} checksum mismatch; database was migrated with different SQL`,
+						);
+					}
+					continue;
 				}
-				continue;
-			}
 
-			if (fileName === "0006_canonical_schema.sql") {
-				prepareCanonicalMigrationColumns(db);
+				db.exec(sql);
+				insertMigration.run(fileName, checksum);
 			}
-			db.exec(sql);
-			insertMigration.run(fileName, checksum);
+		} finally {
+			insertMigration.finalize();
 		}
-
-		importArchivedLegacyData(db, legacyArchive);
 	})();
 }
 
-export function createStorage(databasePath = config.dbPath): Storage {
+export function createStorage(
+	databasePath = config.dbPath,
+	options: CreateStorageOptions = {},
+): Storage {
 	ensureDatabaseDirectory(databasePath);
 	const db = new Database(databasePath);
-	configurePragmas(db);
-	applyMigrations(db);
-
-	return {
-		db,
-		repos: {
-			crawlRuns: createCrawlRunRepo(db),
-			crawlQueue: createCrawlQueueRepo(db),
-			crawlItems: createCrawlItemPersistence(db),
-			crawlDomainState: createCrawlDomainStateRepo(db),
-			pages: createPageRepo(db),
-			search: createSearchRepo(db),
-		},
+	const ownedStatements: Array<{ finalize(): void }> = [];
+	const ownStatement: OwnStatement = (statement) => {
+		ownedStatements.push(statement);
+		return statement;
 	};
-}
+	try {
+		configurePragmas(db, databasePath);
+		applyMigrations(db);
+		let closed = false;
 
-export function createInMemoryStorage(): Storage {
-	return createStorage(":memory:");
+		return {
+			db,
+			budget: new DurableStorageBudget(db, {
+				maxBytes: options.maxBytes ?? config.maxStorageBytes,
+				...(options.pageReservationBytes === undefined
+					? {}
+					: { pageReservationBytes: options.pageReservationBytes }),
+			}),
+			repos: {
+				crawlRuns: createCrawlRunRepo(db, ownStatement),
+				crawlQueue: createCrawlQueueRepo(db, ownStatement),
+				crawlItems: createCrawlItemPersistence(db, ownStatement),
+				crawlDomainState: createCrawlDomainStateRepo(db, ownStatement),
+				pages: createPageRepo(db, ownStatement),
+				search: createSearchRepo(db),
+			},
+			close(): void {
+				if (closed) return;
+				for (const statement of ownedStatements) statement.finalize();
+				db.close(true);
+				closed = true;
+			},
+		};
+	} catch (error) {
+		for (const statement of ownedStatements) statement.finalize();
+		db.close();
+		throw error;
+	}
 }
 
 export interface CrawlRunRow {
 	id: string;
-	target: string;
 	status: CrawlStatus;
 	stop_reason: string | null;
 	options_json: string;
@@ -215,7 +209,7 @@ export interface CrawlRunRow {
 	skipped_count: number;
 	links_found: number;
 	media_files: number;
-	total_data_kb: number;
+	total_data_bytes: number;
 	event_sequence: number;
 }
 
@@ -246,8 +240,11 @@ function toIsoDateTime(value: string | null): string | null {
 	if (!value) {
 		return null;
 	}
-
-	return value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+	const canonical = canonicalizeStorageDateTime(value);
+	if (!canonical) {
+		throw new Error(`Persisted timestamp is outside the date-time contract: ${value}`);
+	}
+	return canonical;
 }
 
 export function mapCrawlRunRow(row: CrawlRunRow): CrawlRunRecord {
@@ -262,10 +259,6 @@ export function mapCrawlRunRow(row: CrawlRunRow): CrawlRunRecord {
 	if (!isCrawlOptions(options)) {
 		throw new Error(`Crawl run ${row.id} contains options outside the current contract`);
 	}
-	if (row.target !== options.target) {
-		throw new Error(`Crawl run ${row.id} has conflicting target projections`);
-	}
-
 	const counters = {
 		pagesScanned: row.pages_scanned,
 		successCount: row.success_count,
@@ -273,7 +266,7 @@ export function mapCrawlRunRow(row: CrawlRunRow): CrawlRunRecord {
 		skippedCount: row.skipped_count,
 		linksFound: row.links_found,
 		mediaFiles: row.media_files,
-		totalDataKb: row.total_data_kb,
+		totalDataKb: bytesToKilobytes(row.total_data_bytes),
 	};
 	if (!isCrawlCounters(counters)) {
 		throw new Error(`Crawl run ${row.id} contains invalid counters`);
@@ -288,9 +281,9 @@ export function mapCrawlRunRow(row: CrawlRunRow): CrawlRunRecord {
 		status: row.status,
 		options,
 		stopReason: row.stop_reason,
-		createdAt: toIsoDateTime(row.created_at) ?? row.created_at,
+		createdAt: toIsoDateTime(row.created_at) as string,
 		startedAt: toIsoDateTime(row.started_at),
-		updatedAt: toIsoDateTime(row.updated_at) ?? row.updated_at,
+		updatedAt: toIsoDateTime(row.updated_at) as string,
 		completedAt: toIsoDateTime(row.completed_at),
 		counters,
 		eventSequence: row.event_sequence,

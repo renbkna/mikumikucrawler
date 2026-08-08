@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
+	MAX_URL_LENGTH,
 	normalizeCanonicalHttpUrl,
-	normalizeRobotsMatchHttpUrl,
 	validatePublicHttpUrl,
 } from "../../../shared/url";
+
+function urlOfLength(length: number): string {
+	const prefix = "https://example.com/";
+	return `${prefix}${"a".repeat(length - prefix.length)}`;
+}
 
 /**
  * CONTRACT: normalizeCanonicalHttpUrl
@@ -15,9 +20,8 @@ import {
  *   - lowercase hostname
  *   - no fragment
  *   - default ports removed (80 for http, 443 for https)
- *   - tracking/session params stripped (utm_*, fbclid, gclid, etc.)
- *   - query params sorted alphabetically
- *   - trailing slash trimmed (except root path)
+ *   - one terminal DNS dot removed
+ *   - fetch-significant path and query shape preserved
  *   - bare hostnames get http:// prepended
  *
  * Forbidden states:
@@ -27,11 +31,11 @@ import {
  */
 
 describe("normalizeCanonicalHttpUrl", () => {
-	test("canonical normalization: lowercase, port strip, param sort, tracking strip, fragment strip", () => {
+	test("normalizes transport syntax without rewriting fetch semantics", () => {
 		expect(
 			normalizeCanonicalHttpUrl(" Example.COM:80/path/?b=2&utm_source=newsletter&a=1#section "),
 		).toEqual({
-			url: "http://example.com/path/?a=1&b=2",
+			url: "http://example.com/path/?b=2&utm_source=newsletter&a=1",
 		});
 	});
 
@@ -64,9 +68,9 @@ describe("normalizeCanonicalHttpUrl", () => {
 		expect(result).toEqual({ url: "http://example.com/page" });
 	});
 
-	test("trims trailing slash except for root path", () => {
+	test("preserves trailing slashes including non-root paths", () => {
 		expect(normalizeCanonicalHttpUrl("https://example.com/path/")).toEqual({
-			url: "https://example.com/path",
+			url: "https://example.com/path/",
 		});
 		// Root path keeps its slash
 		expect(normalizeCanonicalHttpUrl("https://example.com/")).toEqual({
@@ -74,13 +78,40 @@ describe("normalizeCanonicalHttpUrl", () => {
 		});
 	});
 
-	test("strips tracking params (utm_*, fbclid, gclid)", () => {
+	test("preserves the path slash and query values ending in a slash", () => {
+		expect(normalizeCanonicalHttpUrl("https://example.com/redirect?next=/")).toEqual({
+			url: "https://example.com/redirect?next=/",
+		});
+		expect(normalizeCanonicalHttpUrl("https://example.com/path/?next=/")).toEqual({
+			url: "https://example.com/path/?next=/",
+		});
+	});
+
+	test("preserves query order and duplicate order", () => {
+		expect(normalizeCanonicalHttpUrl("https://example.com/?ä=2&z=1&a=first&a=second")).toEqual({
+			url: "https://example.com/?%C3%A4=2&z=1&a=first&a=second",
+		});
+	});
+
+	test("preserves parameters whose meaning belongs to the origin", () => {
 		expect(
 			normalizeCanonicalHttpUrl(
-				"https://example.com/page?q=search&utm_medium=email&fbclid=abc&gclid=def",
+				"https://example.com/page/?q=search&utm_medium=email&sessionid=abc",
 			),
 		).toEqual({
-			url: "https://example.com/page?q=search",
+			url: "https://example.com/page/?q=search&utm_medium=email&sessionid=abc",
+		});
+	});
+
+	test("preserves URL userinfo", () => {
+		expect(normalizeCanonicalHttpUrl("https://user:secret@example.com/private")).toEqual({
+			url: "https://user:secret@example.com/private",
+		});
+	});
+
+	test("collapses a DNS trailing-dot alias", () => {
+		expect(normalizeCanonicalHttpUrl("https://Example.COM./path")).toEqual({
+			url: "https://example.com/path",
 		});
 	});
 
@@ -104,26 +135,11 @@ describe("normalizeCanonicalHttpUrl", () => {
 			error: "Invalid URL format",
 		});
 	});
-});
 
-describe("normalizeRobotsMatchHttpUrl", () => {
-	test("shares parse invariants but preserves query shape for robots matching", () => {
-		expect(
-			normalizeRobotsMatchHttpUrl("HTTPS://Example.COM:443/path/?b=2&a=1&utm_source=x#section"),
-		).toEqual({
-			url: "https://example.com/path/?b=2&a=1&utm_source=x",
-		});
-	});
-
-	test("preserves trailing slash and non-default ports", () => {
-		expect(normalizeRobotsMatchHttpUrl("http://Example.COM:8080/path/?b=2&a=1")).toEqual({
-			url: "http://example.com:8080/path/?b=2&a=1",
-		});
-	});
-
-	test("rejects the same forbidden schemes as canonical mode", () => {
-		expect(normalizeRobotsMatchHttpUrl("javascript:void(0)")).toEqual({
-			error: "Only HTTP and HTTPS URLs are supported",
+	test("accepts the maximum length and rejects one character more", () => {
+		expect(normalizeCanonicalHttpUrl(urlOfLength(MAX_URL_LENGTH))).toHaveProperty("url");
+		expect(normalizeCanonicalHttpUrl(urlOfLength(MAX_URL_LENGTH + 1))).toEqual({
+			error: `URL exceeds maximum length of ${MAX_URL_LENGTH} characters`,
 		});
 	});
 });

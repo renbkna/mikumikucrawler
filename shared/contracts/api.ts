@@ -25,8 +25,6 @@ export const PAGE_ROUTE_SEGMENTS = {
 
 export const OPENAPI_CRAWL_EVENTS_PATH = `${API_PATHS.crawls}/{id}/events`;
 export const OPENAPI_CRAWL_EXPORT_PATH = `${API_PATHS.crawls}/{id}/export`;
-export const OPENAPI_CRAWL_PAGES_PATH = `${API_PATHS.crawls}/{id}/pages`;
-export const OPENAPI_CRAWL_SNAPSHOT_PATH = `${API_PATHS.crawls}/{id}/snapshot`;
 
 export const CRAWL_EXPORT_FORMAT_VALUES = ["json", "csv"] as const;
 export type CrawlExportFormat = (typeof CRAWL_EXPORT_FORMAT_VALUES)[number];
@@ -44,30 +42,6 @@ export function buildCrawlExportPath(crawlId: string, format: CrawlExportFormat 
 	return `${API_PATHS.crawls}/${encodePathSegment(crawlId)}/export?${query}`;
 }
 
-export function buildCrawlPagesPath(crawlId: string): string {
-	return `${API_PATHS.crawls}/${encodePathSegment(crawlId)}/pages`;
-}
-
-export function buildCrawlSnapshotPath(crawlId: string): string {
-	return `${API_PATHS.crawls}/${encodePathSegment(crawlId)}/snapshot`;
-}
-
-export function buildPageContentPath(pageId: number): string {
-	return `${API_PATHS.pages}/${encodePathSegment(pageId)}/content`;
-}
-
 export function isApiPath(pathname: string): boolean {
 	return pathname === API_PATHS.root || pathname.startsWith(`${API_PATHS.root}/`);
-}
-
-export function isCrawlEventsPath(pathname: string): boolean {
-	const prefix = `${API_PATHS.crawls}/`;
-	const suffix = CRAWL_ROUTE_SEGMENTS.events.replace("/:id", "");
-
-	if (!pathname.startsWith(prefix) || !pathname.endsWith(suffix)) {
-		return false;
-	}
-
-	const crawlIdSegment = pathname.slice(prefix.length, -suffix.length);
-	return crawlIdSegment.length > 0 && !crawlIdSegment.includes("/");
 }

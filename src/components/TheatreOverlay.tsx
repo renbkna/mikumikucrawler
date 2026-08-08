@@ -1,7 +1,8 @@
 import { CircleStop } from "lucide-react";
 import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
-import type { TheatreStatus } from "../../shared/theatreStatus.js";
 import { SEQUENCE_TIMINGS } from "../constants";
+
+export type TheatreStatus = "idle" | "blackout" | "live";
 
 const RIPPLE_ANIMATION_DURATION_MS = 1500;
 const LOOP_START = 15.86;
@@ -145,7 +146,7 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 	}, [status]);
 
 	if (status === "idle") return null;
-	if (status === "live") return <div className="hidden" />;
+	if (status === "live") return null;
 
 	return (
 		<div className="fixed inset-0 z-[100] flex items-center justify-center bg-black overflow-hidden">
@@ -208,5 +209,3 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 		</div>
 	);
 });
-
-TheatreOverlay.displayName = "TheatreOverlay";

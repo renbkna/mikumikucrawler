@@ -1,30 +1,35 @@
+import type { Static } from "typebox";
 import type {
 	ContentAnalysisSchema,
 	CrawlPageDataSchema,
+	CrawlPageDetailsSchema,
 	CrawlPagePayloadSchema,
 	CrawlPageSummarySchema,
 	CrawlPagesResponseSchema,
 	ExtractedDataSchema,
-	MediaInfoSchema,
+	PageContentResponseSchema,
 	PageMetadataSchema,
-	ProcessedPageDataSchema,
-	ProcessingErrorSchema,
-	QualityAnalysisSchema,
 	QueueStatsSchema,
 } from "./schemas.js";
 
-export const MediaTypeValues = ["image", "video", "audio"] as const;
 export const CRAWL_PAGE_SNAPSHOT_LIMIT = 200;
+export const PAGE_TEXT_LIMITS = {
+	metadataValueBytes: 2048,
+	languageBytes: 64,
+	summaryTextCharacters: 512,
+	searchSnippetCharacters: 512,
+} as const;
 
-export type MediaInfo = typeof MediaInfoSchema.static;
-export type ProcessingError = typeof ProcessingErrorSchema.static;
-export type QualityAnalysis = typeof QualityAnalysisSchema.static;
-export type ContentAnalysis = typeof ContentAnalysisSchema.static;
-export type ExtractedData = typeof ExtractedDataSchema.static;
-export type PageMetadata = typeof PageMetadataSchema.static;
-export type ProcessedPageData = typeof ProcessedPageDataSchema.static;
-export type QueueStats = typeof QueueStatsSchema.static;
-export type CrawlPageData = typeof CrawlPageDataSchema.static;
-export type CrawledPage = typeof CrawlPagePayloadSchema.static;
-export type CrawlPageSummary = typeof CrawlPageSummarySchema.static;
-export type CrawlPagesResponse = typeof CrawlPagesResponseSchema.static;
+/** TypeBox measures strings in UTF-16 units; SQLite projections count Unicode code points. */
+export const maxUtf16LengthForCodePoints = (limit: number): number => limit * 2;
+
+export type ContentAnalysis = Static<typeof ContentAnalysisSchema>;
+export type ExtractedData = Static<typeof ExtractedDataSchema>;
+export type PageContentResponse = Static<typeof PageContentResponseSchema>;
+export type PageMetadata = Static<typeof PageMetadataSchema>;
+export type QueueStats = Static<typeof QueueStatsSchema>;
+export type CrawlPageData = Static<typeof CrawlPageDataSchema>;
+export type CrawlPageDetails = Static<typeof CrawlPageDetailsSchema>;
+export type CrawledPage = Static<typeof CrawlPagePayloadSchema>;
+export type CrawlPageSummary = Static<typeof CrawlPageSummarySchema>;
+export type CrawlPagesResponse = Static<typeof CrawlPagesResponseSchema>;

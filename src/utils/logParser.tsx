@@ -4,8 +4,6 @@ export interface ParsedLog {
 	raw: string;
 	level: "info" | "error" | "warn" | "debug" | "success" | "unknown";
 	message: string;
-	timestamp?: string;
-	metadata?: Record<string, unknown>;
 }
 
 const LOG_LEVELS = {
@@ -54,70 +52,28 @@ const LOG_LEVELS = {
 };
 
 export function parseLog(log: string): ParsedLog {
-	try {
-		const parsed = JSON.parse(log) as unknown;
-		if (!parsed || typeof parsed !== "object") {
-			throw new Error("Not an object log");
-		}
-		const record = parsed as Record<string, unknown>;
-		const rawLevel = record.level;
-		const rawMessage = record.message;
-		const rawTimestamp = record.timestamp;
-		const level =
-			typeof rawLevel === "string" && rawLevel in LOG_LEVELS
-				? (rawLevel as ParsedLog["level"])
-				: "unknown";
-		return {
-			raw: log,
-			level,
-			message: typeof rawMessage === "string" ? rawMessage : log,
-			...(typeof rawTimestamp === "string" ? { timestamp: rawTimestamp } : {}),
-			metadata: record,
-		};
-	} catch {
-		// Try to detect level from plain text
-		let level: ParsedLog["level"] = "unknown";
-		const lowerLog = log.toLowerCase();
+	let level: ParsedLog["level"] = "unknown";
+	const lowerLog = log.toLowerCase();
 
-		if (lowerLog.includes("error") || lowerLog.includes("failed")) {
-			level = "error";
-		} else if (lowerLog.includes("warn")) {
-			level = "warn";
-		} else if (lowerLog.includes("success") || lowerLog.includes("completed")) {
-			level = "success";
-		} else if (
-			lowerLog.includes("info") ||
-			lowerLog.includes("starting") ||
-			lowerLog.includes("fetching")
-		) {
-			level = "info";
-		}
-
-		return {
-			raw: log,
-			level,
-			message: log,
-		};
+	if (lowerLog.includes("error") || lowerLog.includes("failed")) {
+		level = "error";
+	} else if (lowerLog.includes("warn")) {
+		level = "warn";
+	} else if (lowerLog.includes("success") || lowerLog.includes("completed")) {
+		level = "success";
+	} else if (
+		lowerLog.includes("info") ||
+		lowerLog.includes("starting") ||
+		lowerLog.includes("fetching")
+	) {
+		level = "info";
 	}
+
+	return { raw: log, level, message: log };
 }
 
 export function getLogLevelConfig(level: ParsedLog["level"]) {
 	return LOG_LEVELS[level] || LOG_LEVELS.unknown;
-}
-
-export function formatTimestamp(timestamp?: string): string {
-	if (!timestamp) return "";
-	try {
-		const date = new Date(timestamp);
-		return date.toLocaleTimeString("en-US", {
-			hour: "2-digit",
-			minute: "2-digit",
-			second: "2-digit",
-			hour12: false,
-		});
-	} catch {
-		return "";
-	}
 }
 
 export function highlightUrls(text: string): React.ReactNode {

@@ -1,24 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { Logger } from "../../../config/logging.js";
+import { silentLogger } from "../../../__tests__/runtimeFixture.js";
 import { DOMAIN_DELAY_CONSTANTS, REQUEST_CONSTANTS } from "../../../constants.js";
 import { RobotsService } from "../RobotsService.js";
 
-function createLogger(): Logger {
-	return {
-		level: "info",
-		info: mock(() => undefined),
-		warn: mock(() => undefined),
-		error: mock(() => undefined),
-		debug: mock(() => undefined),
-		fatal: mock(() => undefined),
-		trace: mock(() => undefined),
-		silent: mock(() => undefined),
-		child: mock(() => createLogger()),
-	} as unknown as Logger;
-}
-
 describe("RobotsService", () => {
-	test("separates transient robots fetch failures from robots denial", async () => {
+	test("bounds transient robots failures per origin and retries after the containment TTL", async () => {
 		const fetch = mock(async () => {
 			if (fetch.mock.calls.length === 1) {
 				throw new Error("temporary outage");
@@ -28,24 +14,25 @@ describe("RobotsService", () => {
 				status: 200,
 			});
 		});
-		const service = new RobotsService({ fetch }, createLogger());
+		const service = new RobotsService({ fetch }, silentLogger, 20);
 
-		await expect(service.evaluate("https://example.com/private")).resolves.toEqual({
+		await expect(service.evaluate("https://example.com/another")).resolves.toEqual({
 			type: "unavailable",
-			delayKey: "https://example.com",
+			delayKey: "example.com",
 			reason: "temporary outage",
 		});
+		expect(fetch).toHaveBeenCalledTimes(1);
+		await Bun.sleep(30);
 		await expect(service.evaluate("https://example.com/private")).resolves.toEqual({
 			type: "disallowed",
-			delayKey: "https://example.com",
-			crawlDelayMs: undefined,
+			delayKey: "example.com",
 		});
 		expect(fetch).toHaveBeenCalledTimes(2);
 	});
 
 	test("caches explicit missing robots.txt as allow-all", async () => {
 		const fetch = mock(async () => new Response("not found", { status: 404 }));
-		const service = new RobotsService({ fetch }, createLogger());
+		const service = new RobotsService({ fetch }, silentLogger);
 
 		await expect(
 			service.evaluate("https://example.com/anything").then((policy) => policy.type),
@@ -65,7 +52,7 @@ describe("RobotsService", () => {
 			await gate;
 			return new Response("User-agent: *\nAllow: /");
 		});
-		const service = new RobotsService({ fetch }, createLogger());
+		const service = new RobotsService({ fetch }, silentLogger);
 
 		const first = service.evaluate("https://example.com/one");
 		const second = service.evaluate("https://example.com/two");
@@ -88,7 +75,7 @@ describe("RobotsService", () => {
 			await gate;
 			return new Response("User-agent: *\nAllow: /");
 		});
-		const service = new RobotsService({ fetch }, createLogger());
+		const service = new RobotsService({ fetch }, silentLogger);
 		const controller = new AbortController();
 
 		const canceled = service.evaluate("https://example.com/canceled", controller.signal);
@@ -101,9 +88,9 @@ describe("RobotsService", () => {
 		await expect(survivor).resolves.toMatchObject({ type: "allowed" });
 	});
 
-	test("treats denied robots fetches as unavailable policy", async () => {
+	test("caches denied robots fetches briefly instead of refetching per discovered link", async () => {
 		const fetch = mock(async () => new Response("forbidden", { status: 403 }));
-		const service = new RobotsService({ fetch }, createLogger());
+		const service = new RobotsService({ fetch }, silentLogger);
 
 		await expect(
 			service.evaluate("https://example.com/anything").then((policy) => policy.type),
@@ -111,7 +98,7 @@ describe("RobotsService", () => {
 		await expect(
 			service.evaluate("https://example.com/anything-else").then((policy) => policy.type),
 		).resolves.toBe("unavailable");
-		expect(fetch).toHaveBeenCalledTimes(2);
+		expect(fetch).toHaveBeenCalledTimes(1);
 	});
 
 	test("propagates caller aborts instead of converting them to allow-all", async () => {
@@ -124,7 +111,7 @@ describe("RobotsService", () => {
 					});
 				}),
 		);
-		const service = new RobotsService({ fetch }, createLogger());
+		const service = new RobotsService({ fetch }, silentLogger);
 
 		const evaluation = service.evaluate("https://example.com/private", controller.signal);
 		controller.abort(new Error("force stop"));
@@ -139,7 +126,7 @@ describe("RobotsService", () => {
 					status: 200,
 				}),
 		);
-		const service = new RobotsService({ fetch }, createLogger());
+		const service = new RobotsService({ fetch }, silentLogger);
 
 		await expect(
 			service.evaluate("https://example.com/search?b=2&a=1").then((policy) => policy.type),
@@ -157,28 +144,28 @@ User-agent: MikuCrawler
 Disallow: /same
 `),
 		);
-		const service = new RobotsService({ fetch }, createLogger());
+		const service = new RobotsService({ fetch }, silentLogger);
 
 		await expect(
 			service.evaluate("https://example.com/same").then((policy) => policy.type),
 		).resolves.toBe("disallowed");
 	});
 
-	test("returns an origin-scoped crawl-delay key", async () => {
+	test("returns a hostname-scoped crawl-delay key", async () => {
 		const fetch = mock(
 			async () =>
 				new Response("User-agent: *\nCrawl-delay: 2", {
 					status: 200,
 				}),
 		);
-		const service = new RobotsService({ fetch }, createLogger());
+		const service = new RobotsService({ fetch }, silentLogger);
 
 		const policy = await service.evaluate("http://example.com:8080/page");
 
 		expect(policy).toMatchObject({
 			type: "allowed",
 			crawlDelayMs: 2000,
-			delayKey: "http://example.com:8080",
+			delayKey: "example.com",
 		});
 	});
 
@@ -202,7 +189,7 @@ Disallow: /same
 		];
 		const service = new RobotsService(
 			{ fetch: mock(async () => responses.shift() ?? new Response()) },
-			createLogger(),
+			silentLogger,
 		);
 
 		await expect(service.evaluate("https://one.example/page")).resolves.toMatchObject({
@@ -220,7 +207,7 @@ Disallow: /same
 				{
 					fetch: mock(async () => new Response(`User-agent: *\nCrawl-delay: ${value}`)),
 				},
-				createLogger(),
+				silentLogger,
 			);
 
 			await expect(service.evaluate("https://example.com/page")).resolves.toMatchObject({

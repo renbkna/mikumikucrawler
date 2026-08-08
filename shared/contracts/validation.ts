@@ -1,36 +1,34 @@
-import type { Static, TSchema } from "@sinclair/typebox";
-import { Value } from "@sinclair/typebox/value";
+import type { Static, TSchema } from "typebox";
+import { Value } from "typebox/value";
 import type { CrawlMethod } from "../crawl.js";
 import type {
 	CrawlCounters,
-	CrawlListResponse,
 	CrawlOptions,
 	CrawlRecoverySnapshot,
 	CrawlSummary,
+	ResumableCrawlListResponse,
 } from "./crawl.js";
 import type { CrawlEventEnvelope } from "./events.js";
-import type { PageContentResponse } from "./page.js";
+import { type DeleteCrawlResponse, DeleteCrawlResponseSchema } from "./http.js";
 import type {
-	CrawledPage,
+	CrawlPageData,
+	CrawlPageDetails,
 	CrawlPageSummary,
-	CrawlPagesResponse,
-	ProcessedPageData,
-	QueueStats,
+	PageContentResponse,
 } from "./pageData.js";
 import {
 	CrawlCountersSchema,
 	CrawlEventEnvelopeSchema,
-	CrawlListResponseSchema,
 	CrawlOptionsSchema,
-	CrawlPagePayloadSchema,
+	CrawlPageDataSchema,
+	CrawlPageDetailsSchema,
 	CrawlPageSummarySchema,
-	CrawlPagesResponseSchema,
 	CrawlRecoverySnapshotSchema,
 	CrawlSummarySchema,
 	PageContentResponseSchema,
-	ProcessedPageDataSchema,
-	QueueStatsSchema,
+	ResumableCrawlListResponseSchema,
 } from "./schemas.js";
+import { type SearchResponse, SearchResponseSchema } from "./search.js";
 
 function check<T extends TSchema>(schema: T, value: unknown): value is Static<T> {
 	return Value.Check(schema, value);
@@ -71,35 +69,35 @@ export function isCrawlSummary(value: unknown): value is CrawlSummary {
 		return false;
 	}
 
-	return isCrawlOptions(value.options) && isCrawlCounters(value.counters);
+	return (
+		isCrawlOptions(value.options) &&
+		isCrawlCounters(value.counters) &&
+		value.target === value.options.target
+	);
 }
 
-export function isCrawlListResponse(value: unknown): value is CrawlListResponse {
-	return check(CrawlListResponseSchema, value) && value.crawls.every(isCrawlSummary);
+export function isResumableCrawlListResponse(value: unknown): value is ResumableCrawlListResponse {
+	return check(ResumableCrawlListResponseSchema, value) && value.crawls.every(isCrawlSummary);
+}
+
+export function isDeleteCrawlResponse(value: unknown): value is DeleteCrawlResponse {
+	return check(DeleteCrawlResponseSchema, value);
 }
 
 export function isPageContentResponse(value: unknown): value is PageContentResponse {
 	return check(PageContentResponseSchema, value);
 }
 
-export function isProcessedPageData(value: unknown): value is ProcessedPageData {
-	return check(ProcessedPageDataSchema, value);
+export function isCrawlPageData(value: unknown): value is CrawlPageData {
+	return check(CrawlPageDataSchema, value);
 }
 
-export function isCrawledPage(value: unknown): value is CrawledPage {
-	return check(CrawlPagePayloadSchema, value);
+export function isCrawlPageDetails(value: unknown): value is CrawlPageDetails {
+	return check(CrawlPageDetailsSchema, value);
 }
 
 export function isCrawlPageSummary(value: unknown): value is CrawlPageSummary {
 	return check(CrawlPageSummarySchema, value);
-}
-
-export function isCrawlPagesResponse(value: unknown): value is CrawlPagesResponse {
-	return (
-		check(CrawlPagesResponseSchema, value) &&
-		value.pages.every(isCrawlPageSummary) &&
-		value.count >= value.pages.length
-	);
 }
 
 export function isCrawlRecoverySnapshot(value: unknown): value is CrawlRecoverySnapshot {
@@ -111,8 +109,8 @@ export function isCrawlRecoverySnapshot(value: unknown): value is CrawlRecoveryS
 	);
 }
 
-export function isQueueStats(value: unknown): value is QueueStats {
-	return check(QueueStatsSchema, value);
+export function isSearchResponse(value: unknown): value is SearchResponse {
+	return check(SearchResponseSchema, value) && value.count >= value.results.length;
 }
 
 export function isCrawlEventEnvelope(value: unknown): value is CrawlEventEnvelope {

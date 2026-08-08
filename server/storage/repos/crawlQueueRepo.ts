@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import type { OwnStatement } from "../db.js";
 
 export interface QueueItemRecord {
 	url: string;
@@ -9,8 +10,9 @@ export interface QueueItemRecord {
 	availableAt?: number;
 }
 
-export function createCrawlQueueRepo(db: Database) {
-	const insertItem = db.prepare(`
+export function createCrawlQueueRepo(db: Database, own: OwnStatement) {
+	const insertItem = own(
+		db.prepare(`
 		INSERT INTO crawl_queue_items (
 			crawl_id,
 			url,
@@ -20,8 +22,10 @@ export function createCrawlQueueRepo(db: Database) {
 			domain,
 			available_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?)
-	`);
-	const updateItem = db.prepare(`
+	`),
+	);
+	const updateItem = own(
+		db.prepare(`
 		UPDATE crawl_queue_items
 		SET
 			depth = ?,
@@ -31,7 +35,8 @@ export function createCrawlQueueRepo(db: Database) {
 			available_at = ?,
 			created_at = CURRENT_TIMESTAMP
 		WHERE crawl_id = ? AND url = ?
-	`);
+	`),
+	);
 
 	const insertManyTransaction = db.transaction((crawlId: string, items: QueueItemRecord[]) => {
 		for (const item of items) {

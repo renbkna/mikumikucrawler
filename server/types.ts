@@ -1,23 +1,22 @@
-import type {
-	ContentAnalysis,
-	ExtractedData,
-	MediaInfo,
-	PageMetadata,
-	ProcessingError,
-} from "../shared/contracts/pageData.js";
-import type { ExtractedLink } from "../shared/types.js";
+import type { ContentAnalysis, ExtractedData, PageMetadata } from "../shared/contracts/pageData.js";
 
-/**
- * Server-side superset of processed data.
- * Includes 'links' which are extracted but not sent to frontend in the same structure.
- */
+export interface ExtractedLink {
+	url: string;
+	/** True when the anchor element carries rel="nofollow" or rel="ugc". */
+	nofollow?: boolean;
+}
+
+export interface ProcessingError {
+	type: string;
+	message: string;
+	timestamp?: string;
+}
+
 export interface ProcessedContent {
-	url?: string;
-	contentType?: string;
 	extractedData: ExtractedData;
 	metadata: PageMetadata;
 	analysis: ContentAnalysis;
-	media: MediaInfo[];
+	mediaCount: number;
 	links: ExtractedLink[];
 	errors: ProcessingError[];
 }

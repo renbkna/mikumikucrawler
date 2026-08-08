@@ -1,8 +1,7 @@
-import { History, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useEffectEvent } from "react";
+import { Heart, History, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { useEffect, useEffectEvent } from "react";
 import type { ResumableSessionSummary } from "../../shared/contracts/index.js";
 import { useDialogModal } from "../hooks/useDialogModal";
-import { HeartIcon, SparkleIcon } from "./KawaiiIcons";
 
 export type SessionSummary = ResumableSessionSummary;
 
@@ -71,19 +70,16 @@ export function ResumeSessionsPanel({
 
 	// ── Event handlers ─────────────────────────────────────────────────────────
 
-	const handleResume = useCallback(
-		async (session: SessionSummary) => {
-			if (isActionPending) {
-				return;
-			}
+	const handleResume = async (session: SessionSummary) => {
+		if (isActionPending) {
+			return;
+		}
 
-			const resumed = await onResume(session.id);
-			if (resumed) {
-				onClose();
-			}
-		},
-		[isActionPending, onClose, onResume],
-	);
+		const resumed = await onResume(session.id);
+		if (resumed) {
+			onClose();
+		}
+	};
 
 	if (!isOpen) return null;
 
@@ -110,7 +106,6 @@ export function ResumeSessionsPanel({
 					>
 						<History className="text-miku-teal w-5 h-5" />
 						Resume Crawl
-						<SparkleIcon className="hidden" size={20} />
 					</h2>
 
 					<div className="flex items-center gap-2">
@@ -156,7 +151,7 @@ export function ResumeSessionsPanel({
 					{/* Empty state */}
 					{!isLoading && sessions.length === 0 && !fetchError && (
 						<div className="py-12 text-center">
-							<HeartIcon className="text-miku-pink/30 mx-auto mb-3" size={40} />
+							<Heart className="text-miku-pink/30 mx-auto mb-3" size={40} fill="currentColor" />
 							<p className="text-miku-text/40 font-medium text-sm">No resumable crawls found.</p>
 							<p className="text-miku-text/30 text-xs mt-1">
 								Paused and interrupted crawls appear here.
@@ -193,7 +188,11 @@ export function ResumeSessionsPanel({
 								<div className="flex items-center gap-2 shrink-0">
 									<button
 										type="button"
-										onClick={() => onDelete(session.id)}
+										onClick={() => {
+											if (window.confirm(`Delete the saved crawl for ${session.target}?`)) {
+												onDelete(session.id);
+											}
+										}}
 										disabled={isActionPending}
 										className="p-2 rounded-xl text-miku-text/30 hover:text-rose-500 hover:bg-rose-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
 										aria-label={`Delete session for ${session.target}`}

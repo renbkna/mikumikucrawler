@@ -1,12 +1,13 @@
 import type { Logger } from "../../config/logging.js";
 import { FETCH_HEADERS, RETRY_CONSTANTS, TIMEOUT_CONSTANTS } from "../../constants.js";
-import type { HttpClient } from "../../plugins/security.js";
+import { type HttpClient, isOutboundPolicyError } from "../../outbound/HttpClient.js";
 import {
 	isPdfContentType,
 	isSupportedDocumentContentType,
 	maxProcessableDocumentBytes,
 } from "../../processors/contentTypes.js";
 import { disposeResponseBody, readLimitedResponseBody } from "../../utils/responseBody.js";
+import type { AcquireWork, WorkLease } from "../../utils/WorkPermitPool.js";
 import type { QueueItem } from "./CrawlQueue.js";
 import type { DynamicRenderer } from "./DynamicRenderer.js";
 import {
@@ -26,10 +27,8 @@ export type FetchResult =
 			contentLength: number;
 			title: string;
 			description: string;
-			lastModified: string | null;
-			etag: string | null;
 			xRobotsTag: string | null;
-			isDynamic: boolean;
+			releasePdfWork?: WorkLease;
 	  }
 	| {
 			type: "rateLimited";
@@ -56,6 +55,9 @@ export type FetchResult =
 			reason?: string;
 	  };
 
+export type DestinationAuthorizer = (url: string, signal?: AbortSignal) => Promise<void> | void;
+type DocumentRenderer = Pick<DynamicRenderer, "isEnabled" | "render">;
+
 function parseRetryAfter(value: string | null): number | undefined {
 	if (!value) return undefined;
 	if (/^\d+$/.test(value.trim())) {
@@ -73,10 +75,15 @@ function parseRetryAfter(value: string | null): number | undefined {
 async function readResponseContent(
 	response: Response,
 	contentType: string,
+	signal?: AbortSignal,
 ): Promise<
 	{ type: "content"; content: string | Buffer; contentLength: number } | { type: "tooLarge" }
 > {
-	const body = await readLimitedResponseBody(response, maxProcessableDocumentBytes(contentType));
+	const body = await readLimitedResponseBody(
+		response,
+		maxProcessableDocumentBytes(contentType),
+		signal,
+	);
 	if (body.type === "tooLarge") {
 		return { type: "tooLarge" };
 	}
@@ -84,29 +91,38 @@ async function readResponseContent(
 	return isPdfContentType(contentType)
 		? {
 				type: "content",
-				content: Buffer.from(body.bytes),
+				content: Buffer.from(body.bytes.buffer, body.bytes.byteOffset, body.bytes.byteLength),
 				contentLength: body.contentLength,
 			}
 		: {
 				type: "content",
-				content: new TextDecoder().decode(body.bytes),
+				content: decodeDocumentBytes(body.bytes, contentType),
 				contentLength: body.contentLength,
 			};
 }
 
+function decodeDocumentBytes(bytes: Uint8Array, contentType: string): string {
+	const match = /(?:^|;)\s*charset\s*=\s*(?:"([^"]*)"|'([^']*)'|([^;\s]*))/i.exec(contentType);
+	const declared = match?.[1] ?? match?.[2] ?? match?.[3];
+	if (declared) {
+		try {
+			return new TextDecoder(declared).decode(bytes);
+		} catch {
+			// Unsupported labels fall back to the platform's replacement-mode UTF-8 decoder.
+		}
+	}
+	return new TextDecoder("utf-8").decode(bytes);
+}
+
 function classifyFetchStatus(
 	statusCode: number,
-	options: {
-		retryAfterMs?: number;
-		blockedStatuses: readonly number[];
-		blockedReason?: string;
-	},
+	retryAfterMs?: number,
 ): Exclude<FetchResult, { type: "success" }> | null {
 	if (isRateLimitedStatus(statusCode)) {
 		return {
 			type: "rateLimited",
 			statusCode,
-			retryAfterMs: options.retryAfterMs,
+			retryAfterMs,
 		};
 	}
 
@@ -121,15 +137,7 @@ function classifyFetchStatus(
 		return {
 			type: "transientFailure",
 			statusCode,
-			retryAfterMs: options.retryAfterMs,
-		};
-	}
-
-	if (options.blockedStatuses.includes(statusCode)) {
-		return {
-			type: "blocked",
-			statusCode,
-			reason: options.blockedReason,
+			retryAfterMs,
 		};
 	}
 
@@ -139,19 +147,34 @@ function classifyFetchStatus(
 export class FetchService {
 	constructor(
 		private readonly httpClient: HttpClient,
-		private readonly dynamicRenderer: DynamicRenderer,
+		private readonly dynamicRenderer: DocumentRenderer,
 		private readonly logger: Logger,
 		private readonly localSeedUrl?: string,
+		private readonly acquirePdfWork?: AcquireWork,
 	) {}
 
-	async fetch(item: QueueItem, signal?: AbortSignal): Promise<FetchResult> {
+	async fetch(
+		item: QueueItem,
+		signal?: AbortSignal,
+		authorizeDestination?: DestinationAuthorizer,
+	): Promise<FetchResult> {
+		const documentSignal = signal
+			? AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_CONSTANTS.DOCUMENT_FETCH)])
+			: AbortSignal.timeout(TIMEOUT_CONSTANTS.DOCUMENT_FETCH);
+		const documentTimedOut = () => documentSignal.aborted && signal?.aborted !== true;
+		let staticUrl = item.url;
 		let dynamicResult: Awaited<ReturnType<DynamicRenderer["render"]>> | undefined;
 		if (this.dynamicRenderer.isEnabled()) {
 			try {
-				dynamicResult = await this.dynamicRenderer.render(item, signal);
+				dynamicResult = await this.dynamicRenderer.render(
+					item,
+					documentSignal,
+					authorizeDestination,
+				);
 			} catch (error) {
-				if (signal?.aborted) {
-					throw signal.reason instanceof Error ? signal.reason : new Error("Fetch aborted");
+				signal?.throwIfAborted();
+				if (documentTimedOut()) {
+					return { type: "transientFailure", statusCode: 0 };
 				}
 				this.logger.warn(
 					`[Fetch] Dynamic render failed for ${item.url}; falling back to static crawl: ${error instanceof Error ? error.message : String(error)}`,
@@ -159,14 +182,12 @@ export class FetchService {
 			}
 		}
 
-		if (signal?.aborted) {
-			throw signal.reason instanceof Error ? signal.reason : new Error("Fetch aborted");
+		if (documentSignal.aborted) {
+			signal?.throwIfAborted();
+			return { type: "transientFailure", statusCode: 0 };
 		}
 
 		if (dynamicResult) {
-			if (signal?.aborted) {
-				throw signal.reason instanceof Error ? signal.reason : new Error("Fetch aborted");
-			}
 			if (dynamicResult.type === "consentBlocked") {
 				this.logger.warn(dynamicResult.message);
 				return {
@@ -175,6 +196,9 @@ export class FetchService {
 					reason: dynamicResult.message,
 				};
 			}
+			if (dynamicResult.type === "policyBlocked") {
+				return { type: "blocked", statusCode: 0, reason: dynamicResult.message };
+			}
 			if (dynamicResult.type === "transportFailure") {
 				this.logger.warn(
 					`[Fetch] Dynamic document transport failed for ${item.url}: ${dynamicResult.message}`,
@@ -182,7 +206,6 @@ export class FetchService {
 				return {
 					type: "transientFailure",
 					statusCode: 0,
-					retryAfterMs: RETRY_CONSTANTS.BASE_DELAY,
 				};
 			}
 			if (dynamicResult.type === "tooLarge") {
@@ -200,14 +223,14 @@ export class FetchService {
 				};
 			}
 			if (dynamicResult.type === "staticFallback") {
+				staticUrl = dynamicResult.targetUrl ?? item.url;
 				dynamicResult = undefined;
 			} else {
 				const renderedPage = dynamicResult.result;
-				const classifiedDynamicStatus = classifyFetchStatus(renderedPage.statusCode, {
-					retryAfterMs: parseRetryAfter(renderedPage.retryAfter ?? null),
-					blockedStatuses: [],
-					blockedReason: `Access blocked for ${item.url}`,
-				});
+				const classifiedDynamicStatus = classifyFetchStatus(
+					renderedPage.statusCode,
+					parseRetryAfter(renderedPage.retryAfter ?? null),
+				);
 				if (classifiedDynamicStatus) {
 					return classifiedDynamicStatus;
 				}
@@ -220,7 +243,15 @@ export class FetchService {
 					};
 				}
 
-				if (renderedPage.statusCode >= 400) {
+				if (renderedPage.statusCode === 304) {
+					return {
+						type: "blocked",
+						statusCode: 304,
+						reason: `Received unexpected 304 for unconditional request to ${item.url}`,
+					};
+				}
+
+				if (renderedPage.statusCode < 200 || renderedPage.statusCode >= 300) {
 					return {
 						type: "permanentFailure",
 						statusCode: renderedPage.statusCode,
@@ -246,32 +277,37 @@ export class FetchService {
 					contentLength,
 					title: renderedPage.title,
 					description: renderedPage.description,
-					lastModified: renderedPage.lastModified ?? null,
-					etag: renderedPage.etag ?? null,
 					xRobotsTag: renderedPage.xRobotsTag ?? null,
-					isDynamic: true,
 				};
 			}
 		}
 
 		// Consent-sensitive domains should not silently degrade to static junk when
 		// the dynamic path already proved access is blocked by an interstitial wall.
-		this.logger.info(`[Fetch] Static crawl for ${item.url}`);
+		this.logger.info(`[Fetch] Static crawl for ${staticUrl}`);
 		let response: Response;
 		try {
 			response = await this.httpClient.fetch({
-				url: item.url,
+				url: staticUrl,
 				headers: FETCH_HEADERS,
-				signal:
-					signal && "any" in AbortSignal
-						? AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH)])
-						: AbortSignal.timeout(TIMEOUT_CONSTANTS.STATIC_FETCH),
+				signal: documentSignal,
 				allowLocalhostOnInitialRequest:
-					this.localSeedUrl !== undefined && item.url === this.localSeedUrl,
+					this.localSeedUrl !== undefined && staticUrl === this.localSeedUrl,
+				...(authorizeDestination
+					? {
+							authorizeRedirect: (hop, redirectSignal) =>
+								authorizeDestination(hop.toUrl, redirectSignal),
+						}
+					: {}),
 			});
 		} catch (error) {
-			if (signal?.aborted) {
-				throw signal.reason instanceof Error ? signal.reason : new Error("Fetch aborted");
+			signal?.throwIfAborted();
+			if (isOutboundPolicyError(error)) {
+				return {
+					type: "blocked",
+					statusCode: 0,
+					reason: error.message,
+				};
 			}
 			this.logger.warn(
 				`[Fetch] Transient fetch failure for ${item.url}: ${error instanceof Error ? error.message : String(error)}`,
@@ -279,12 +315,12 @@ export class FetchService {
 			return {
 				type: "transientFailure",
 				statusCode: 0,
-				retryAfterMs: RETRY_CONSTANTS.BASE_DELAY,
 			};
 		}
-		if (signal?.aborted) {
+		if (documentSignal.aborted) {
 			await disposeResponseBody(response);
-			throw signal.reason instanceof Error ? signal.reason : new Error("Fetch aborted");
+			signal?.throwIfAborted();
+			return { type: "transientFailure", statusCode: 0 };
 		}
 
 		if (response.status === 304) {
@@ -295,13 +331,12 @@ export class FetchService {
 				reason: `Received unexpected 304 for unconditional request to ${item.url}`,
 			};
 		}
-		const effectiveUrl = response.url || item.url;
+		const effectiveUrl = response.url || staticUrl;
 
-		const classifiedStaticStatus = classifyFetchStatus(response.status, {
-			retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
-			blockedStatuses: [],
-			blockedReason: `Access blocked for ${item.url}`,
-		});
+		const classifiedStaticStatus = classifyFetchStatus(
+			response.status,
+			parseRetryAfter(response.headers.get("retry-after")),
+		);
 		if (classifiedStaticStatus) {
 			await disposeResponseBody(response);
 			return classifiedStaticStatus;
@@ -333,8 +368,32 @@ export class FetchService {
 				contentType,
 			};
 		}
-		const readContent = await readResponseContent(response, contentType);
+		let releasePdfWork: WorkLease | undefined;
+		try {
+			if (isPdfContentType(contentType) && this.acquirePdfWork) {
+				releasePdfWork = await this.acquirePdfWork(documentSignal);
+			}
+		} catch (error) {
+			await disposeResponseBody(response);
+			signal?.throwIfAborted();
+			if (documentTimedOut()) {
+				return { type: "transientFailure", statusCode: 0 };
+			}
+			throw error;
+		}
+		let readContent: Awaited<ReturnType<typeof readResponseContent>>;
+		try {
+			readContent = await readResponseContent(response, contentType, documentSignal);
+		} catch (error) {
+			releasePdfWork?.();
+			signal?.throwIfAborted();
+			if (documentTimedOut()) {
+				return { type: "transientFailure", statusCode: 0 };
+			}
+			throw error;
+		}
 		if (readContent.type === "tooLarge") {
+			releasePdfWork?.();
 			return {
 				type: "blocked",
 				statusCode: 413,
@@ -350,10 +409,8 @@ export class FetchService {
 			contentLength: readContent.contentLength,
 			title: "",
 			description: "",
-			lastModified: response.headers.get("last-modified"),
-			etag: response.headers.get("etag"),
 			xRobotsTag: response.headers.get("x-robots-tag"),
-			isDynamic: false,
+			...(releasePdfWork ? { releasePdfWork } : {}),
 		};
 	}
 }

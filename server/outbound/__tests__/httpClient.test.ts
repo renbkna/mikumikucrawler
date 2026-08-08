@@ -1,8 +1,13 @@
 import { describe, expect, mock, test } from "bun:test";
 import { lookup } from "node:dns/promises";
-import { DefaultResolver, PinnedHttpClient, type Resolver } from "../security.js";
+import {
+	DefaultResolver,
+	OutboundPolicyError,
+	PinnedHttpClient,
+	type Resolver,
+} from "../HttpClient.js";
 
-describe("security contract", () => {
+describe("outbound HTTP contract", () => {
 	test("allows public hostnames resolved by injected lookup", async () => {
 		const resolver = new DefaultResolver(
 			mock(async () => [{ address: "93.184.216.34", family: 4 }]) as never,
@@ -34,6 +39,28 @@ describe("security contract", () => {
 		]);
 	});
 
+	test("aborted DNS waiters return promptly and cannot populate the cache", async () => {
+		let release!: (records: Array<{ address: string; family: number }>) => void;
+		const lookup = mock(
+			() =>
+				new Promise<Array<{ address: string; family: number }>>((resolve) => {
+					release = resolve;
+				}),
+		);
+		const resolver = new DefaultResolver(lookup);
+		const controller = new AbortController();
+		const pending = resolver.resolveHost("aborted.example", { signal: controller.signal });
+		controller.abort(new Error("request deadline"));
+
+		await expect(pending).rejects.toThrow("request deadline");
+		release([{ address: "93.184.216.34", family: 4 }]);
+		await Bun.sleep(0);
+		const second = resolver.resolveHost("aborted.example");
+		expect(lookup).toHaveBeenCalledTimes(2);
+		release([{ address: "93.184.216.35", family: 4 }]);
+		await expect(second).resolves.toEqual(["93.184.216.35"]);
+	});
+
 	test("does not expose mutable cached DNS answers", async () => {
 		const resolver = new DefaultResolver(
 			mock(async () => [{ address: "93.184.216.34", family: 4 }]) as never,
@@ -58,7 +85,9 @@ describe("security contract", () => {
 
 	test("blocks direct private IP targets", async () => {
 		const resolver = new DefaultResolver();
-		await expect(resolver.resolveHost("127.0.0.1")).rejects.toThrow("Private or reserved IP");
+		const denial = resolver.resolveHost("127.0.0.1");
+		await expect(denial).rejects.toBeInstanceOf(OutboundPolicyError);
+		await expect(denial).rejects.toThrow("Private or reserved IP");
 	});
 
 	test("allows localhost when allowLocalhost is true", async () => {
@@ -94,8 +123,24 @@ describe("security contract", () => {
 			RequestInit & { tls?: { serverName?: string } },
 		];
 		expect(url).toBe("https://93.184.216.34/docs");
-		expect((init.headers as Record<string, string>).Host).toBe("example.com");
+		expect(new Headers(init.headers).get("host")).toBe("example.com");
 		expect(init.tls?.serverName).toBe("example.com");
+	});
+
+	test("preserves secure-prefixed browser cookies on the initial HTTPS request", async () => {
+		const resolver: Resolver = {
+			assertPublicHostname: async () => {},
+			resolveHost: async () => ["93.184.216.34"],
+		};
+		const fetchMock = mock(async (_url: string, init?: RequestInit) => {
+			expect(new Headers(init?.headers).get("cookie")).toBe("__Host-session=secret");
+			return new Response("ok");
+		});
+
+		await new PinnedHttpClient(resolver, fetchMock as unknown as typeof fetch).fetch({
+			url: "https://example.com/private",
+			headers: { Cookie: "__Host-session=secret" },
+		});
 	});
 
 	test("rejects non-http protocols before resolving or fetching", async () => {
@@ -163,6 +208,101 @@ describe("security contract", () => {
 		expect(response.url).toBe("https://final.example/docs/");
 	});
 
+	test("returns an authorized absolute redirect for controlled browser navigation", async () => {
+		const resolver: Resolver = {
+			resolveHost: async () => ["93.184.216.34"],
+			assertPublicHostname: mock(async () => {}),
+		};
+		const fetchMock = mock(
+			async () => new Response(null, { status: 302, headers: { location: "/final" } }),
+		);
+		const authorizeRedirect = mock(async () => {});
+		const client = new PinnedHttpClient(resolver, fetchMock as unknown as typeof fetch);
+
+		const response = await client.fetch({
+			url: "https://example.com/start",
+			redirect: "manual",
+			authorizeRedirect,
+		});
+
+		expect(response.status).toBe(302);
+		expect(response.url).toBe("https://example.com/start");
+		expect(response.headers.get("location")).toBe("https://example.com/final");
+		expect(authorizeRedirect).toHaveBeenCalledWith(
+			{
+				fromUrl: "https://example.com/start",
+				toUrl: "https://example.com/final",
+				statusCode: 302,
+				hopNumber: 1,
+			},
+			undefined,
+		);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	test("authorizes every redirect before dispatching its destination", async () => {
+		const resolver: Resolver = {
+			resolveHost: async () => ["93.184.216.34"],
+			assertPublicHostname: async () => {},
+		};
+		const fetchMock = mock(async (url: string) =>
+			url.includes("/start")
+				? new Response(null, { status: 302, headers: { location: "https://other.example/" } })
+				: new Response("must not run"),
+		);
+		const client = new PinnedHttpClient(resolver, fetchMock as unknown as typeof fetch);
+
+		await expect(
+			client.fetch({
+				url: "https://example.com/start",
+				authorizeRedirect: ({ toUrl }) => {
+					throw new OutboundPolicyError("crawl-policy", `denied ${toUrl}`);
+				},
+			}),
+		).rejects.toThrow("denied https://other.example/");
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	test("carries redirect response cookies into the next eligible request", async () => {
+		const resolver: Resolver = {
+			resolveHost: async () => ["93.184.216.34"],
+			assertPublicHostname: async () => {},
+		};
+		const fetchMock = mock(async (url: string, init?: RequestInit) => {
+			if (url.includes("/start")) {
+				return new Response(null, {
+					status: 302,
+					headers: { location: "/final", "set-cookie": "redirect=kept; Path=/; HttpOnly" },
+				});
+			}
+			expect(new Headers(init?.headers).get("cookie")).toBe("redirect=kept");
+			return new Response("ok");
+		});
+		const client = new PinnedHttpClient(resolver, fetchMock as unknown as typeof fetch);
+
+		await client.fetch({ url: "https://example.com/start" });
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	for (const status of [300, 304, 305, 306]) {
+		test(`does not follow non-redirect ${status} responses with Location`, async () => {
+			const resolver: Resolver = {
+				resolveHost: async () => ["93.184.216.34"],
+				assertPublicHostname: mock(async () => {}),
+			};
+			const fetchMock = mock(
+				async () => new Response(null, { status, headers: { location: "/unexpected" } }),
+			);
+			const client = new PinnedHttpClient(resolver, fetchMock as unknown as typeof fetch);
+
+			const response = await client.fetch({ url: "https://example.com/start" });
+
+			expect(response.status).toBe(status);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(resolver.assertPublicHostname).not.toHaveBeenCalled();
+		});
+	}
+
 	test("cancels redirect bodies before following the next hop", async () => {
 		let canceled = false;
 		const resolver: Resolver = {
@@ -227,7 +367,7 @@ describe("security contract", () => {
 		).rejects.toThrow("Localhost targets are not allowed");
 	});
 
-	test("cross-origin redirects rewrite unsafe methods and strip origin-bound headers", async () => {
+	test("cross-origin redirects strip origin-bound headers", async () => {
 		const resolver: Resolver = {
 			resolveHost: async () => ["93.184.216.34"],
 			assertPublicHostname: async () => {},
@@ -244,36 +384,25 @@ describe("security contract", () => {
 
 		await httpClient.fetch({
 			url: "https://example.com/start",
-			method: "POST",
-			body: "secret-body",
 			headers: {
 				Authorization: "Bearer secret",
 				Cookie: "session=secret",
-				"Content-Type": "application/json",
 				"X-Public": "kept",
 			},
 		});
 
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 		const [, secondInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
-		const secondHeaders = secondInit.headers as Record<string, string>;
+		const secondHeaders = new Headers(secondInit.headers);
 		expect(secondInit.method).toBe("GET");
-		expect(secondInit.body).toBeUndefined();
-		expect(secondHeaders.Authorization).toBeUndefined();
-		expect(secondHeaders.Cookie).toBeUndefined();
-		expect(secondHeaders["Content-Type"]).toBeUndefined();
-		expect(secondHeaders["X-Public"]).toBe("kept");
-		expect(secondHeaders.Host).toBe("other.example");
+		expect(secondHeaders.get("authorization")).toBeNull();
+		expect(secondHeaders.get("cookie")).toBeNull();
+		expect(secondHeaders.get("x-public")).toBe("kept");
+		expect(secondHeaders.get("host")).toBe("other.example");
 	});
 
-	for (const [status, expectedMethod, expectedBody] of [
-		[301, "GET", undefined],
-		[302, "GET", undefined],
-		[303, "GET", undefined],
-		[307, "POST", "payload"],
-		[308, "POST", "payload"],
-	] as const) {
-		test(`applies browser redirect method semantics for ${status}`, async () => {
+	for (const method of ["GET", "HEAD"] as const) {
+		test(`preserves crawler ${method} across redirects`, async () => {
 			const resolver: Resolver = {
 				resolveHost: async () => ["93.184.216.34"],
 				assertPublicHostname: async () => {},
@@ -281,7 +410,7 @@ describe("security contract", () => {
 			const fetchMock = mock(async (url: string) =>
 				url.endsWith("/start")
 					? new Response(null, {
-							status,
+							status: 302,
 							headers: { location: "/next" },
 						})
 					: new Response("ok"),
@@ -290,15 +419,12 @@ describe("security contract", () => {
 
 			await httpClient.fetch({
 				url: "https://example.com/start",
-				method: "POST",
-				body: "payload",
-				headers: { "Content-Type": "text/plain" },
+				method,
 			});
 
 			expect(fetchMock).toHaveBeenCalledTimes(2);
 			const [, secondInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
-			expect(secondInit.method).toBe(expectedMethod);
-			expect(secondInit.body).toBe(expectedBody);
+			expect(secondInit.method).toBe(method);
 		});
 	}
 

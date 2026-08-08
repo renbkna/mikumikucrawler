@@ -1,4 +1,5 @@
 import { t } from "elysia";
+import type { Static } from "typebox";
 
 export const SSE_LAST_EVENT_ID_MAX = Number.MAX_SAFE_INTEGER;
 
@@ -11,10 +12,6 @@ export const SSE_LAST_EVENT_ID_MAX = Number.MAX_SAFE_INTEGER;
 export const PositiveIntegerIdSchema = t.Numeric({
 	minimum: 1,
 	multipleOf: 1,
-});
-
-export const OkResponseSchema = t.Object({
-	status: t.Literal("ok"),
 });
 
 export const SseHeadersSchema = t.Object(
@@ -37,4 +34,4 @@ export const ValidationErrorDetailSchema = t.Object({
 	message: t.String(),
 });
 
-export type ValidationErrorDetail = typeof ValidationErrorDetailSchema.static;
+export type ValidationErrorDetail = Static<typeof ValidationErrorDetailSchema>;

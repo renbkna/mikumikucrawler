@@ -3,12 +3,13 @@ import robotsParserModule from "robots-parser";
 import { config } from "../../config/env.js";
 import type { Logger } from "../../config/logging.js";
 import { DOMAIN_DELAY_CONSTANTS, MEMORY_CONSTANTS, REQUEST_CONSTANTS } from "../../constants.js";
-import type { HttpClient } from "../../plugins/security.js";
+import { type HttpClient, isOutboundPolicyError } from "../../outbound/HttpClient.js";
 import { disposeResponseBody, readLimitedResponseBody } from "../../utils/responseBody.js";
 import { shouldTreatRobotsResponseAsNoRules } from "./httpStatusPolicy.js";
 import { type CrawlUrlIdentity, getCrawlUrlIdentity } from "./UrlPolicy.js";
 
 type RobotsResult = ReturnType<typeof robotsParserModule>;
+export const ROBOTS_UNAVAILABLE_CACHE_TTL_MS = 5_000;
 
 export type RobotsPolicy =
 	| {
@@ -25,11 +26,17 @@ export type RobotsPolicy =
 			type: "unavailable";
 			delayKey: string;
 			reason: string;
+	  }
+	| {
+			type: "blocked";
+			delayKey: string;
+			reason: string;
 	  };
 
 type RobotsRulesResult =
 	| { type: "rules"; rules: RobotsResult }
 	| { type: "no-rules" }
+	| { type: "blocked"; reason: string }
 	| { type: "unavailable"; reason: string };
 
 function abortReason(signal: AbortSignal): Error {
@@ -68,14 +75,24 @@ export class RobotsService {
 		ttl: MEMORY_CONSTANTS.ROBOTS_CACHE_TTL_MS,
 	});
 	private readonly inFlightRules = new Map<string, Promise<RobotsRulesResult>>();
+	private readonly unavailableCache: LRUCache<string, string>;
 	private readonly lifecycleController = new AbortController();
 
 	constructor(
 		private readonly httpClient: HttpClient,
 		private readonly logger: Logger,
-	) {}
+		unavailableTtlMs = ROBOTS_UNAVAILABLE_CACHE_TTL_MS,
+	) {
+		this.unavailableCache = new LRUCache({
+			max: MEMORY_CONSTANTS.ROBOTS_CACHE_MAX_SIZE,
+			ttl: unavailableTtlMs,
+		});
+	}
 
-	private async loadRulesForOrigin(originKey: string): Promise<RobotsRulesResult> {
+	private async loadRulesForOrigin(
+		originKey: string,
+		allowLocalhostOnInitialRequest: boolean,
+	): Promise<RobotsRulesResult> {
 		const cached = this.cache.get(originKey);
 		if (cached !== undefined) {
 			return cached === false ? { type: "no-rules" } : { type: "rules", rules: cached };
@@ -91,11 +108,13 @@ export class RobotsService {
 				url: `${originKey}/robots.txt`,
 				headers: { "User-Agent": config.userAgent },
 				signal: timeoutSignal,
+				...(allowLocalhostOnInitialRequest ? { allowLocalhostOnInitialRequest: true } : {}),
 			});
 			if (response.ok) {
 				const body = await readLimitedResponseBody(
 					response,
 					REQUEST_CONSTANTS.MAX_ROBOTS_RESPONSE_BYTES,
+					timeoutSignal,
 				);
 				if (body.type === "tooLarge") {
 					return {
@@ -125,12 +144,19 @@ export class RobotsService {
 				throw abortReason(this.lifecycleController.signal);
 			}
 			const reason = error instanceof Error ? error.message : String(error);
+			if (isOutboundPolicyError(error)) {
+				return { type: "blocked", reason };
+			}
 			this.logger.debug(`[Robots] Failed to fetch robots.txt for ${originKey}: ${reason}`);
 			return { type: "unavailable", reason };
 		}
 	}
 
-	private fetchRulesForOrigin(originKey: string, signal?: AbortSignal): Promise<RobotsRulesResult> {
+	private fetchRulesForOrigin(
+		originKey: string,
+		signal?: AbortSignal,
+		allowLocalhostOnInitialRequest = false,
+	): Promise<RobotsRulesResult> {
 		if (this.lifecycleController.signal.aborted) {
 			return Promise.reject(abortReason(this.lifecycleController.signal));
 		}
@@ -144,15 +170,27 @@ export class RobotsService {
 				cached === false ? { type: "no-rules" } : { type: "rules", rules: cached },
 			);
 		}
+		const requestKey = `${allowLocalhostOnInitialRequest ? "local" : "public"}:${originKey}`;
+		const unavailableReason = this.unavailableCache.get(requestKey);
+		if (unavailableReason !== undefined) {
+			return Promise.resolve({ type: "unavailable", reason: unavailableReason });
+		}
 
-		let pending = this.inFlightRules.get(originKey);
+		let pending = this.inFlightRules.get(requestKey);
 		if (!pending) {
-			pending = this.loadRulesForOrigin(originKey).finally(() => {
-				if (this.inFlightRules.get(originKey) === pending) {
-					this.inFlightRules.delete(originKey);
-				}
-			});
-			this.inFlightRules.set(originKey, pending);
+			pending = this.loadRulesForOrigin(originKey, allowLocalhostOnInitialRequest)
+				.then((result) => {
+					if (result.type === "unavailable") {
+						this.unavailableCache.set(requestKey, result.reason);
+					}
+					return result;
+				})
+				.finally(() => {
+					if (this.inFlightRules.get(requestKey) === pending) {
+						this.inFlightRules.delete(requestKey);
+					}
+				});
+			this.inFlightRules.set(requestKey, pending);
 		}
 
 		return waitForSharedRules(pending, signal);
@@ -163,21 +201,40 @@ export class RobotsService {
 		await Promise.allSettled([...this.inFlightRules.values()]);
 	}
 
-	async evaluate(url: string, signal?: AbortSignal): Promise<RobotsPolicy> {
+	async evaluate(
+		url: string,
+		signal?: AbortSignal,
+		options: { allowLocalhostOnInitialRequest?: boolean } = {},
+	): Promise<RobotsPolicy> {
 		const identity = getCrawlUrlIdentity(url);
 		if ("error" in identity) {
 			throw new Error(identity.error);
 		}
 
-		return this.evaluateIdentity(identity, signal);
+		return this.evaluateIdentity(identity, signal, options);
 	}
 
-	async evaluateIdentity(identity: CrawlUrlIdentity, signal?: AbortSignal): Promise<RobotsPolicy> {
-		const rulesResult = await this.fetchRulesForOrigin(identity.robotsKey, signal);
+	async evaluateIdentity(
+		identity: CrawlUrlIdentity,
+		signal?: AbortSignal,
+		options: { allowLocalhostOnInitialRequest?: boolean } = {},
+	): Promise<RobotsPolicy> {
+		const rulesResult = await this.fetchRulesForOrigin(
+			identity.originKey,
+			signal,
+			options.allowLocalhostOnInitialRequest ?? false,
+		);
+		if (rulesResult.type === "blocked") {
+			return {
+				type: "blocked",
+				delayKey: identity.domainBudgetKey,
+				reason: rulesResult.reason,
+			};
+		}
 		if (rulesResult.type === "unavailable") {
 			return {
 				type: "unavailable",
-				delayKey: identity.originKey,
+				delayKey: identity.domainBudgetKey,
 				reason: rulesResult.reason,
 			};
 		}
@@ -188,17 +245,17 @@ export class RobotsService {
 		if (crawlDelayMs === null) {
 			return {
 				type: "unavailable",
-				delayKey: identity.originKey,
+				delayKey: identity.domainBudgetKey,
 				reason: `robots.txt crawl-delay must be between 0 and ${DOMAIN_DELAY_CONSTANTS.MAX_MS}ms`,
 			};
 		}
 		const allowed = rules
-			? (rules.isAllowed(identity.robotsMatchUrl, config.robotsProductToken) ?? true)
+			? (rules.isAllowed(identity.canonicalUrl, config.robotsProductToken) ?? true)
 			: true;
 
 		return {
 			type: allowed ? "allowed" : "disallowed",
-			delayKey: identity.originKey,
+			delayKey: identity.domainBudgetKey,
 			...(crawlDelayMs === undefined ? {} : { crawlDelayMs }),
 		};
 	}

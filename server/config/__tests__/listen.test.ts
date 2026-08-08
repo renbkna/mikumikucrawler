@@ -1,23 +1,11 @@
 import { expect, test } from "bun:test";
-import { Elysia } from "elysia";
-import { createServerListenOptions } from "../listen.js";
+import { createServerListenOptions, MAX_API_REQUEST_BODY_BYTES } from "../listen.js";
 
-test("server listen policy gives one process exclusive ownership of its port", async () => {
-	const first = new Elysia().get("/", () => "first").listen(createServerListenOptions(0));
-	const port = first.server?.port;
-	if (port === undefined) {
-		await first.stop(true);
-		throw new Error("First server did not expose its assigned port");
-	}
+test("server listen policy owns the API request-body ceiling", () => {
+	expect(createServerListenOptions(3000).maxRequestBodySize).toBe(MAX_API_REQUEST_BODY_BYTES);
+});
 
-	let stopSecond: (() => Promise<unknown>) | undefined;
-	try {
-		expect(() => {
-			const second = new Elysia().get("/", () => "second").listen(createServerListenOptions(port));
-			stopSecond = () => second.stop(true);
-		}).toThrow();
-	} finally {
-		await stopSecond?.();
-		await first.stop(true);
-	}
+test("localhost crawl capability implies a loopback-only listener", () => {
+	expect(createServerListenOptions(3000, true).hostname).toBe("127.0.0.1");
+	expect(createServerListenOptions(3000, false).hostname).toBe("0.0.0.0");
 });

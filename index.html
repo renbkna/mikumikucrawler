@@ -17,8 +17,7 @@
     style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
     font-src 'self' https://fonts.gstatic.com;
     img-src 'self' data: https://*.vercel.app;
-    connect-src 'self' __VITE_BACKEND_CONNECT_SOURCE__;
-    upgrade-insecure-requests;"
+    connect-src 'self' __VITE_BACKEND_CONNECT_SOURCE__;"
     />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
 
@@ -44,7 +43,7 @@
     <meta name="color-scheme" content="light" />
 
     <!-- Favicon & Icons -->
-    <link rel="icon" type="image/svg+xml" href="/miku.ico" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/miku-192.png" />
     <link rel="manifest" href="/manifest.json" />
 
     <!-- Preconnect & DNS Prefetch -->
@@ -137,6 +136,21 @@
         letter-spacing: 1px;
       }
 
+      .loading-retry {
+        border: 0;
+        border-radius: 999px;
+        padding: 10px 18px;
+        background: var(--miku-teal);
+        color: white;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .loading-retry[hidden] {
+        display: none;
+      }
+
       @keyframes spin {
         0% { transform: rotate(0deg); }
         100% { transform: rotate(360deg); }
@@ -151,10 +165,11 @@
   <body>
     <div class="loading-screen" id="loading-screen">
       <div class="miku-loader">
-        <img src="/miku.ico" alt="Miku" />
+        <img src="/icons/miku-192.png" alt="Miku" />
       </div>
-      <h1>Miku Miku Crawler</h1>
-      <p>LOADING...</p>
+      <h1 id="loading-title">Miku Miku Crawler</h1>
+      <p id="loading-status">LOADING...</p>
+      <button class="loading-retry" id="loading-retry" type="button" hidden>Reload</button>
     </div>
 
     <div id="root"></div>

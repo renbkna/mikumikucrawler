@@ -1,5 +1,5 @@
 import path from "node:path";
-import { staticPlugin } from "@elysiajs/static";
+import { staticPlugin } from "@elysia/static";
 import { Elysia, status } from "elysia";
 import { API_PATHS, isApiPath } from "../../shared/contracts/index.js";
 
@@ -13,6 +13,7 @@ const ROOT_STATIC_IGNORES = [
 	/(?:^|[\\/])assets(?:[\\/]|$)/,
 	/(?:^|[\\/])api(?:[\\/]|$)/,
 	/(?:^|[\\/])health$/,
+	/(?:^|[\\/])openapi(?:[\\/]|$)/,
 	/(?:^|[\\/])index\.html$/,
 	/(?:^|[\\/])\.DS_Store$/,
 	/(?:^|[\\/])\.git(?:[\\/]|$)/,
@@ -22,6 +23,14 @@ const ROOT_STATIC_IGNORES = [
 function isSpaDocumentRequest(request: Request, requestPath: string): boolean {
 	if (requestPath === "/" || requestPath === "/index.html") return true;
 	return request.headers.get("accept")?.toLowerCase().includes("text/html") === true;
+}
+
+function decodeRequestPath(requestPath: string): string | null {
+	try {
+		return decodeURIComponent(requestPath);
+	} catch {
+		return null;
+	}
 }
 
 export async function spaStaticPlugin({ distPath }: SpaStaticPluginOptions) {
@@ -39,9 +48,8 @@ export async function spaStaticPlugin({ distPath }: SpaStaticPluginOptions) {
 		prefix: "",
 		alwaysStatic: true,
 		ignorePatterns: ROOT_STATIC_IGNORES,
-		headers: {
-			"Cache-Control": "no-cache",
-		},
+		maxAge: 0,
+		directive: "no-cache",
 	});
 	const indexPath = path.join(distPath, "index.html");
 
@@ -49,9 +57,13 @@ export async function spaStaticPlugin({ distPath }: SpaStaticPluginOptions) {
 		.use(versionedAssets)
 		.use(publicFiles)
 		.get("*", ({ path: requestPath, request }) => {
+			const decodedPath = decodeRequestPath(requestPath);
 			if (
-				isApiPath(requestPath) ||
-				requestPath === API_PATHS.health ||
+				decodedPath === null ||
+				isApiPath(decodedPath) ||
+				decodedPath === API_PATHS.health ||
+				decodedPath === API_PATHS.openapi ||
+				decodedPath.startsWith(`${API_PATHS.openapi}/`) ||
 				!isSpaDocumentRequest(request, requestPath)
 			) {
 				return status(404, { error: "Not Found" });

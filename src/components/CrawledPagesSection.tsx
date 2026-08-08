@@ -1,40 +1,25 @@
-import { AlertCircle, ChevronDown, ChevronUp, Code, ExternalLink, Filter, X } from "lucide-react";
-import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Virtuoso } from "react-virtuoso";
-import type { CrawledPage } from "../../shared/contracts/pageData.js";
-import { createPageContentRequestSignal, getPageContent } from "../api/pages";
-import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
-
-const PageLimitFooter = memo(function PageLimitFooter({
-	pageLimit,
-}: {
-	pageLimit: number | undefined;
-}) {
-	if (pageLimit === undefined) {
-		return null;
-	}
-	return (
-		<div className="text-center text-xs font-bold text-miku-text/30 py-4 uppercase tracking-widest flex items-center justify-center gap-2">
-			<NoteIcon className="text-miku-teal/50" size={10} />
-			Showing latest {pageLimit} pages
-			<NoteIcon className="text-miku-pink/50" size={10} />
-		</div>
-	);
-});
-
-const VirtuosoFooter = ({ context }: { context?: { pageLimit?: number; showFooter: boolean } }) => {
-	if (!context?.showFooter || !context.pageLimit) return null;
-	return <PageLimitFooter pageLimit={context.pageLimit} />;
-};
+import {
+	AlertCircle,
+	ChevronDown,
+	ChevronUp,
+	Code,
+	ExternalLink,
+	Filter,
+	Heart,
+	Music2,
+	Sparkles,
+	X,
+} from "lucide-react";
+import { memo, useEffect, useRef, useState } from "react";
+import { type CrawledPage, MAX_SEARCH_QUERY_LENGTH } from "../../shared/contracts/index.js";
+import { getPageContent } from "../api/pages";
 
 type PageContentState = { type: "unloaded" } | { type: "loaded"; content: string | null };
 
 const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledPage }) {
 	const [isExpanded, setIsExpanded] = useState(false);
 	const [showSource, setShowSource] = useState(false);
-	const [contentState, setContentState] = useState<PageContentState>(() =>
-		page.content === undefined ? { type: "unloaded" } : { type: "loaded", content: page.content },
-	);
+	const [contentState, setContentState] = useState<PageContentState>({ type: "unloaded" });
 	const [isLoadingContent, setIsLoadingContent] = useState(false);
 	const [fetchError, setFetchError] = useState<string | null>(null);
 	const contentRequestRef = useRef<AbortController | null>(null);
@@ -46,19 +31,15 @@ const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledP
 		[],
 	);
 
-	const processedData = page.processedData;
-	const hasProcessedData = processedData?.analysis;
-
 	const fetchPageContent = async () => {
 		setIsLoadingContent(true);
 		setFetchError(null);
 		contentRequestRef.current?.abort();
 		const lifetimeController = new AbortController();
 		contentRequestRef.current = lifetimeController;
-		const requestSignal = createPageContentRequestSignal(lifetimeController.signal);
 
 		try {
-			const result = await getPageContent(page.id, requestSignal);
+			const result = await getPageContent(page.id, lifetimeController.signal);
 			if (lifetimeController.signal.aborted) {
 				return;
 			}
@@ -72,13 +53,7 @@ const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledP
 				return;
 			}
 
-			setFetchError(
-				requestSignal.aborted
-					? "Page content request timed out"
-					: err instanceof Error
-						? err.message
-						: "Failed to fetch content",
-			);
+			setFetchError(err instanceof Error ? err.message : "Failed to fetch content");
 		} finally {
 			if (!lifetimeController.signal.aborted) {
 				setIsLoadingContent(false);
@@ -112,17 +87,17 @@ const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledP
 		contentState.type === "loaded" && contentState.content !== null
 			? contentState.content
 			: "(no content stored - metadata-only mode)";
-	const analysis = processedData?.analysis;
+	const details = page.details;
 	const hasSummaryMetrics =
-		typeof analysis?.wordCount === "number" ||
-		typeof analysis?.readingTime === "number" ||
-		typeof analysis?.language === "string";
+		typeof details.wordCount === "number" ||
+		typeof details.readingTime === "number" ||
+		typeof details.language === "string";
 
 	const renderSourceContent = () => {
 		if (isLoadingContent) {
 			return (
 				<div className="h-40 flex items-center justify-center text-slate-500 gap-2">
-					<SparkleIcon className="animate-spin text-miku-teal" size={24} />
+					<Sparkles className="animate-spin text-miku-teal" size={24} />
 					<span className="text-sm font-bold">Fetching content...</span>
 				</div>
 			);
@@ -181,24 +156,24 @@ const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledP
 				<ExternalLink className="w-3 h-3" />
 			</a>
 
-			{hasProcessedData && hasSummaryMetrics && !isExpanded && (
+			{hasSummaryMetrics && !isExpanded && (
 				<div className="flex flex-wrap gap-2 mt-4">
-					{typeof analysis?.wordCount === "number" && (
+					{typeof details.wordCount === "number" && (
 						<span className="cute-badge text-blue-500 border-blue-100 flex items-center gap-1">
-							<NoteIcon className="text-blue-400" size={10} />
-							{analysis.wordCount} words
+							<Music2 className="text-blue-400" size={10} />
+							{details.wordCount} words
 						</span>
 					)}
-					{typeof analysis?.readingTime === "number" && (
+					{typeof details.readingTime === "number" && (
 						<span className="cute-badge text-emerald-500 border-emerald-100 flex items-center gap-1">
-							<SparkleIcon className="text-emerald-400" size={10} />
-							{analysis.readingTime} min
+							<Sparkles className="text-emerald-400" size={10} />
+							{details.readingTime} min
 						</span>
 					)}
-					{typeof analysis?.language === "string" && (
+					{typeof details.language === "string" && (
 						<span className="cute-badge text-purple-500 border-purple-100 flex items-center gap-1">
-							<HeartIcon className="text-purple-400" size={10} />
-							{analysis.language}
+							<Heart className="text-purple-400" size={10} fill="currentColor" />
+							{details.language}
 						</span>
 					)}
 				</div>
@@ -210,25 +185,6 @@ const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledP
 						<p className="text-sm text-miku-text/70 italic bg-miku-teal/5 p-4 rounded-xl border border-miku-teal/10">
 							"{page.description}"
 						</p>
-					)}
-
-					{processedData?.errors && processedData.errors.length > 0 && (
-						<div className="bg-rose-50 border border-rose-100 rounded-xl p-3 space-y-2">
-							<div className="flex items-center gap-2 text-rose-500 font-bold text-xs uppercase tracking-wide">
-								<AlertCircle size={14} />
-								Processing Errors
-							</div>
-							<ul className="space-y-1">
-								{processedData.errors.map((error) => (
-									<li
-										key={`${error.type}-${error.message}-${error.timestamp ?? "no-timestamp"}`}
-										className="text-xs text-rose-600 font-medium"
-									>
-										{error.message}
-									</li>
-								))}
-							</ul>
-						</div>
 					)}
 
 					<div className="flex gap-2">
@@ -264,12 +220,6 @@ const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledP
 		</div>
 	);
 });
-
-CrawledPageCard.displayName = "CrawledPageCard";
-
-const renderPageItem = (_index: number, page: CrawledPage) => <CrawledPageCard page={page} />;
-
-const getPageItemKey = (_index: number, page: CrawledPage) => page.id;
 
 interface CrawledPagesSectionProps {
 	crawledPages: CrawledPage[];
@@ -309,27 +259,12 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 		return () => clearTimeout(timer);
 	}, [localQuery, onSearchChange, searchQuery]);
 
-	const handleSearchChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
-		setLocalQuery(e.target.value);
-	}, []);
-	const handleClearSearch = useCallback(() => {
-		setLocalQuery("");
-		onClearSearch();
-	}, [onClearSearch]);
-
-	const virtuosoComponents = useMemo(
-		() => ({
-			Footer: VirtuosoFooter,
-		}),
-		[],
-	);
-
-	const listContent = useMemo(() => {
+	const listContent = (() => {
 		const hasSearchQuery = searchQuery.trim().length > 0;
 		if (isSearching && displayedPages.length === 0) {
 			return (
 				<div className="h-full flex items-center justify-center text-miku-text/40">
-					<SparkleIcon className="animate-spin text-miku-teal mr-2" size={20} />
+					<Sparkles className="animate-spin text-miku-teal mr-2" size={20} />
 					<p className="font-bold">Searching stored page content...</p>
 				</div>
 			);
@@ -348,10 +283,11 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 		if (!hasSearchQuery && crawledPages.length === 0) {
 			return (
 				<div className="h-full flex flex-col items-center justify-center text-miku-text/40">
-					<NoteIcon className="text-miku-pink/45 mb-3" size={34} />
+					<Music2 className="text-miku-pink/45 mb-3" size={34} />
 					<p className="font-semibold text-base">No pages crawled yet...</p>
 					<p className="text-xs mt-1 font-medium flex items-center gap-1">
-						Start the Miku Beam to begin! <HeartIcon className="text-miku-pink" size={12} />
+						Start the Miku Beam to begin!{" "}
+						<Heart className="text-miku-pink" size={12} fill="currentColor" />
 					</p>
 				</div>
 			);
@@ -367,15 +303,17 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 							{searchResultCount === 1 ? "" : "es"}
 						</p>
 					)}
-					<div className="flex-1 min-h-0">
-						<Virtuoso
-							style={{ height: "100%" }}
-							data={displayedPages}
-							computeItemKey={getPageItemKey}
-							context={{ pageLimit: hasSearchQuery ? undefined : pageLimit, showFooter }}
-							itemContent={renderPageItem}
-							components={virtuosoComponents}
-						/>
+					<div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+						{displayedPages.map((page) => (
+							<CrawledPageCard key={page.id} page={page} />
+						))}
+						{showFooter && (
+							<div className="text-center text-xs font-bold text-miku-text/30 py-4 uppercase tracking-widest flex items-center justify-center gap-2">
+								<Music2 className="text-miku-teal/50" size={10} />
+								Showing latest {pageLimit} pages
+								<Music2 className="text-miku-pink/50" size={10} />
+							</div>
+						)}
 					</div>
 				</div>
 			);
@@ -386,35 +324,30 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 				<p className="font-medium">No stored pages match this search</p>
 			</div>
 		);
-	}, [
-		crawledPages.length,
-		displayedPages,
-		isSearching,
-		pageLimit,
-		searchError,
-		searchQuery,
-		searchResultCount,
-		virtuosoComponents,
-	]);
+	})();
 
 	return (
 		<div className="space-y-3 h-full flex flex-col">
-			<p className="hidden">Search uses the durable full-text index for the active crawl.</p>
 			<div className="bg-white/60 rounded-xl p-1.5 flex items-center gap-2 border border-miku-accent/15 shrink-0">
 				<div className="p-1.5 text-miku-accent/50">
 					<Filter className="w-4 h-4" />
 				</div>
 				<input
 					type="text"
+					aria-label="Search stored page content"
 					value={localQuery}
-					onChange={handleSearchChange}
+					onChange={(event) => setLocalQuery(event.target.value)}
+					maxLength={MAX_SEARCH_QUERY_LENGTH}
 					placeholder="Search stored page content..."
 					className="flex-1 bg-transparent border-none outline-none text-miku-text placeholder-miku-text/30 font-medium"
 				/>
 				{localQuery && (
 					<button
 						type="button"
-						onClick={handleClearSearch}
+						onClick={() => {
+							setLocalQuery("");
+							onClearSearch();
+						}}
 						aria-label="Clear page search"
 						title="Clear search"
 						className="p-2 rounded-full hover:bg-rose-50 text-miku-text/30 hover:text-rose-400 transition-colors"
@@ -428,5 +361,3 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 		</div>
 	);
 });
-
-CrawledPagesSection.displayName = "CrawledPagesSection";

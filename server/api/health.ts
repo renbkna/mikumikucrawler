@@ -5,11 +5,6 @@ import type { RouteServicesPlugin } from "./context.js";
 export function healthApi(services: RouteServicesPlugin) {
 	return new Elysia({ name: "health-api" }).use(services).get(
 		API_PATHS.health,
-		({ runtimeRegistry }) => ({
-			status: "ok",
-			activeCrawls: runtimeRegistry.size,
-			uptime: process.uptime(),
-		}),
 		{
 			response: t.Object({
 				status: t.String(),
@@ -21,5 +16,10 @@ export function healthApi(services: RouteServicesPlugin) {
 				summary: "Process health",
 			},
 		},
+		({ crawlManager }) => ({
+			status: "ok",
+			activeCrawls: crawlManager.activeRuntimeCount,
+			uptime: process.uptime(),
+		}),
 	);
 }

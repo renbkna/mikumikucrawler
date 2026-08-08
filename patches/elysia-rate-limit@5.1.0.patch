@@ -1,0 +1,57 @@
+diff --git a/dist/index.mjs b/dist/index.mjs
+index 1a6add266ca9da1184f6be2db53e53637fd6c15e..cb774252ed9466aeeaab5b173f752b5d8c294a62 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -184,46 +184,33 @@ const plugin = function rateLimitPlugin(userOptions) {
+ 			writeRateLimitHeaders(set.headers, maxLimit, remaining, reset);
+ 			logger("plugin", "clientKey %s passed through with %d/%d request used (resetting in %d seconds)", clientKey, maxLimit - remaining, maxLimit, reset);
+ 		};
+-		plugin.beforeHandle(options.scoping, async function onBeforeHandleRateLimitHandler({ set, request, cookie }) {
++		plugin.request(async function onRequestRateLimitHandler({ set, request, server }) {
+ 			const context = arguments[0];
+ 			let clientKey;
+-			const enhancedRequest = attachCookieToRequest(request, cookie);
++			const enhancedRequest = attachCookieToRequest(request, {});
+ 			/**
+ 			* if a skip option has two parameters,
+ 			* then we will generate clientKey ahead of time.
+ 			* this is made to skip generating key unnecessary if only check for request
+ 			* and saving some cpu consumption when actually skipped
+ 			*/
+-			if (options.skip.length >= 2) clientKey = await options.generator(enhancedRequest, options.injectServer?.() ?? app.server, getGeneratorDerived(context));
++			if (options.skip.length >= 2) clientKey = await options.generator(enhancedRequest, options.injectServer?.() ?? server, getGeneratorDerived(context));
+ 			if (await options.skip(enhancedRequest, clientKey) === false) {
+ 				/**
+ 				* if a skip option has less than two parameters,
+ 				* that's mean clientKey does not have a key yet
+ 				* then generate one
+ 				*/
+-				if (options.skip.length < 2) clientKey = await options.generator(enhancedRequest, options.injectServer?.() ?? app.server, getGeneratorDerived(context));
++				if (options.skip.length < 2) clientKey = await options.generator(enhancedRequest, options.injectServer?.() ?? server, getGeneratorDerived(context));
+ 				const limitResult = await applyRateLimit(set, enhancedRequest, clientKey);
+ 				if (limitResult !== void 0) return limitResult;
+ 			}
+ 		});
+-		plugin.error(options.scoping, async function onErrorRateLimitHandler({ request, cookie, set }) {
++		plugin.error(options.scoping, async function onErrorRateLimitHandler({ request, cookie, server }) {
+ 			const context = arguments[0];
+-			const error = context.error;
+-			const code = context.code;
+-			const errorStatus = typeof error === "object" && error !== null ? error.status ?? error.statusCode : void 0;
+-			const currentStatus = typeof set?.status === "number" ? set.status : void 0;
+-			if (code === "NOT_FOUND" || currentStatus === 404 || errorStatus === 404) {
+-				const enhancedRequest = attachCookieToRequest(request, cookie);
+-				const clientKey = await options.generator(enhancedRequest, options.injectServer?.() ?? app.server, getGeneratorDerived(context));
+-				if (await options.skip(enhancedRequest, clientKey) === false) {
+-					const limitResult = await applyRateLimit(set, enhancedRequest, clientKey);
+-					if (limitResult !== void 0) return limitResult;
+-				}
+-				return;
+-			}
+ 			if (!options.countFailedRequest) {
+ 				const enhancedRequest = attachCookieToRequest(request, cookie);
+-				const clientKey = await options.generator(enhancedRequest, options.injectServer?.() ?? app.server, getGeneratorDerived(context));
++				const clientKey = await options.generator(enhancedRequest, options.injectServer?.() ?? server, getGeneratorDerived(context));
+ 				logger("plugin", "request failed for clientKey: %s, refunding", clientKey);
+ 				await options.context.decrement(clientKey);
+ 			}

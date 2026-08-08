@@ -1,27 +1,31 @@
 import { describe, expect, mock, test } from "bun:test";
+import { silentLogger, successfulHtmlHttpClient } from "../../../__tests__/runtimeFixture.js";
 import { config } from "../../../config/env.js";
-import type { Logger } from "../../../config/logging.js";
-import { PDF_CONSTANTS, REQUEST_CONSTANTS } from "../../../constants.js";
+import { PDF_CONSTANTS, REQUEST_CONSTANTS, TIMEOUT_CONSTANTS } from "../../../constants.js";
 import { FetchService } from "../FetchService.js";
 
-function createLogger(): Logger {
-	return {
-		level: "info",
-		info: mock(() => undefined),
-		warn: mock(() => undefined),
-		error: mock(() => undefined),
-		debug: mock(() => undefined),
-		fatal: mock(() => undefined),
-		trace: mock(() => undefined),
-		silent: mock(() => undefined),
-		child: mock(() => createLogger()),
-	} as unknown as Logger;
+type DocumentRenderer = ConstructorParameters<typeof FetchService>[1];
+
+const disabledRenderer: DocumentRenderer = {
+	isEnabled: () => false,
+	render: async () => ({ type: "staticFallback", reason: "renderer-unavailable" }),
+};
+
+class FetchServiceHarness extends FetchService {
+	constructor(
+		httpClient: ConstructorParameters<typeof FetchService>[0] = successfulHtmlHttpClient,
+		renderer: DocumentRenderer = disabledRenderer,
+		localSeedUrl?: string,
+		acquirePdfWork?: ConstructorParameters<typeof FetchService>[4],
+	) {
+		super(httpClient, renderer, silentLogger, localSeedUrl, acquirePdfWork);
+	}
 }
 
 describe("fetch service contract", () => {
 	test("does not fall back to static crawl when a strict consent wall blocks dynamic rendering", async () => {
 		const httpFetch = mock(async () => new Response("should not be called"));
-		const service = new FetchService(
+		const service = new FetchServiceHarness(
 			{ fetch: httpFetch },
 			{
 				isEnabled: () => true,
@@ -30,8 +34,7 @@ describe("fetch service contract", () => {
 					message: "Consent wall could not be bypassed for https://www.youtube.com/watch?v=test",
 					statusCode: 403,
 				}),
-			} as never,
-			createLogger(),
+			},
 		);
 
 		const result = await service.fetch({
@@ -50,7 +53,7 @@ describe("fetch service contract", () => {
 	});
 
 	test("maps browser-rendered 403 responses to blocked instead of success", async () => {
-		const service = new FetchService(
+		const service = new FetchServiceHarness(
 			{
 				fetch: mock(async () => new Response("should not be called")),
 			},
@@ -59,20 +62,17 @@ describe("fetch service contract", () => {
 				render: async () => ({
 					type: "success",
 					result: {
-						isDynamic: true,
 						content: "<html>blocked</html>",
+						effectiveUrl: "https://example.com/blocked",
 						statusCode: 403,
 						contentType: "text/html",
 						contentLength: 20,
 						title: "Blocked",
 						description: "",
-						lastModified: undefined,
-						etag: '"dynamic-blocked"',
 						xRobotsTag: null,
 					},
 				}),
-			} as never,
-			createLogger(),
+			},
 		);
 
 		const result = await service.fetch({
@@ -89,8 +89,51 @@ describe("fetch service contract", () => {
 		});
 	});
 
+	test("rejects unresolved dynamic redirects and unconditional 304 responses", async () => {
+		for (const [statusCode, expected] of [
+			[302, { type: "permanentFailure", statusCode: 302 }],
+			[
+				304,
+				{
+					type: "blocked",
+					statusCode: 304,
+					reason: "Received unexpected 304 for unconditional request to https://example.com/status",
+				},
+			],
+		] as const) {
+			const service = new FetchServiceHarness(
+				{ fetch: mock(async () => new Response("should not be called")) },
+				{
+					isEnabled: () => true,
+					render: async () => ({
+						type: "success",
+						result: {
+							content: "<html>status</html>",
+							effectiveUrl: "https://example.com/status",
+							statusCode,
+							contentType: "text/html",
+							contentLength: 19,
+							title: "Status",
+							description: "",
+							xRobotsTag: null,
+						},
+					}),
+				},
+			);
+
+			await expect(
+				service.fetch({
+					url: "https://example.com/status",
+					domain: "example.com",
+					depth: 0,
+					retries: 0,
+				}),
+			).resolves.toEqual(expected);
+		}
+	});
+
 	test("maps transient browser-rendered HTTP errors to retryable failures", async () => {
-		const service = new FetchService(
+		const service = new FetchServiceHarness(
 			{
 				fetch: mock(async () => new Response("should not be called")),
 			},
@@ -99,20 +142,17 @@ describe("fetch service contract", () => {
 				render: async () => ({
 					type: "success",
 					result: {
-						isDynamic: true,
 						content: "<html>server error</html>",
+						effectiveUrl: "https://example.com/error",
 						statusCode: 500,
 						contentType: "text/html",
 						contentLength: 25,
 						title: "Server error",
 						description: "",
-						lastModified: undefined,
-						etag: null,
 						xRobotsTag: null,
 					},
 				}),
-			} as never,
-			createLogger(),
+			},
 		);
 
 		const result = await service.fetch({
@@ -129,16 +169,9 @@ describe("fetch service contract", () => {
 	});
 
 	test("maps transient static HTTP errors to retryable failures", async () => {
-		const service = new FetchService(
-			{
-				fetch: async () => new Response("server error", { status: 500 }),
-			},
-			{
-				isEnabled: () => false,
-				render: async () => null,
-			} as never,
-			createLogger(),
-		);
+		const service = new FetchServiceHarness({
+			fetch: async () => new Response("server error", { status: 500 }),
+		});
 
 		const result = await service.fetch({
 			url: "https://example.com/static-error",
@@ -154,7 +187,7 @@ describe("fetch service contract", () => {
 	});
 
 	test("honors browser-rendered retry-after values", async () => {
-		const service = new FetchService(
+		const service = new FetchServiceHarness(
 			{
 				fetch: mock(async () => new Response("should not be called")),
 			},
@@ -163,21 +196,18 @@ describe("fetch service contract", () => {
 				render: async () => ({
 					type: "success",
 					result: {
-						isDynamic: true,
 						content: "<html>rate limited</html>",
+						effectiveUrl: "https://example.com/rate-limited-dynamic",
 						statusCode: 429,
 						contentType: "text/html",
 						contentLength: 25,
 						title: "Rate limited",
 						description: "",
-						lastModified: undefined,
-						etag: null,
 						xRobotsTag: null,
 						retryAfter: "1",
 					},
 				}),
-			} as never,
-			createLogger(),
+			},
 		);
 
 		const result = await service.fetch({
@@ -195,16 +225,9 @@ describe("fetch service contract", () => {
 	});
 
 	test("leaves missing rate-limit retry fallback to the pipeline", async () => {
-		const service = new FetchService(
-			{
-				fetch: async () => new Response("", { status: 429 }),
-			},
-			{
-				isEnabled: () => false,
-				render: async () => null,
-			} as never,
-			createLogger(),
-		);
+		const service = new FetchServiceHarness({
+			fetch: async () => new Response("", { status: 429 }),
+		});
 
 		await expect(
 			service.fetch({
@@ -228,15 +251,14 @@ describe("fetch service contract", () => {
 					headers: { "content-type": "text/html" },
 				}),
 		);
-		const service = new FetchService(
+		const service = new FetchServiceHarness(
 			{ fetch: httpFetch },
 			{
 				isEnabled: () => true,
 				render: async () => {
 					throw new Error("browser page creation failed");
 				},
-			} as never,
-			createLogger(),
+			},
 		);
 
 		const result = await service.fetch({
@@ -251,7 +273,6 @@ describe("fetch service contract", () => {
 			throw new Error("Expected successful static fallback result");
 		}
 		expect(result.content).toBe("<html><main>Static fallback</main></html>");
-		expect(result.isDynamic).toBe(false);
 		expect(httpFetch).toHaveBeenCalled();
 	});
 
@@ -263,17 +284,20 @@ describe("fetch service contract", () => {
 					headers: { "content-type": "application/json" },
 				}),
 		);
-		const service = new FetchService(
+		const service = new FetchServiceHarness(
 			{ fetch: httpFetch },
 			{
 				isEnabled: () => true,
-				render: async () => ({ type: "staticFallback", reason: "non-html" }),
-			} as never,
-			createLogger(),
+				render: async () => ({
+					type: "staticFallback",
+					reason: "non-html",
+					targetUrl: "https://example.com/data.json",
+				}),
+			},
 		);
 
 		const result = await service.fetch({
-			url: "https://example.com/data",
+			url: "https://example.com/landing",
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
@@ -282,20 +306,22 @@ describe("fetch service contract", () => {
 		expect(result).toMatchObject({
 			type: "success",
 			content: '{"source":"raw-json"}',
+			effectiveUrl: "https://example.com/data.json",
 			contentType: "application/json",
-			isDynamic: false,
 		});
+		expect(httpFetch).toHaveBeenCalledWith(
+			expect.objectContaining({ url: "https://example.com/data.json" }),
+		);
 	});
 
 	test("does not replay dynamic document transport failures through static fetch", async () => {
 		const httpFetch = mock(async () => new Response("must not run"));
-		const service = new FetchService(
+		const service = new FetchServiceHarness(
 			{ fetch: httpFetch },
 			{
 				isEnabled: () => true,
 				render: async () => ({ type: "transportFailure", message: "connection reset" }),
-			} as never,
-			createLogger(),
+			},
 		);
 
 		await expect(
@@ -308,20 +334,43 @@ describe("fetch service contract", () => {
 		).resolves.toEqual({
 			type: "transientFailure",
 			statusCode: 0,
-			retryAfterMs: 1000,
+		});
+		expect(httpFetch).not.toHaveBeenCalled();
+	});
+
+	test("does not replay denied dynamic document navigations through static fetch", async () => {
+		const httpFetch = mock(async () => new Response("must not run"));
+		const service = new FetchServiceHarness(
+			{ fetch: httpFetch },
+			{
+				isEnabled: () => true,
+				render: async () => ({ type: "policyBlocked", message: "destination denied" }),
+			},
+		);
+
+		await expect(
+			service.fetch({
+				url: "https://example.com/policy-failure",
+				domain: "example.com",
+				depth: 0,
+				retries: 0,
+			}),
+		).resolves.toEqual({
+			type: "blocked",
+			statusCode: 0,
+			reason: "destination denied",
 		});
 		expect(httpFetch).not.toHaveBeenCalled();
 	});
 
 	test("does not retry oversized dynamic documents through static fetch", async () => {
 		const httpFetch = mock(async () => new Response("must not run"));
-		const service = new FetchService(
+		const service = new FetchServiceHarness(
 			{ fetch: httpFetch },
 			{
 				isEnabled: () => true,
 				render: async () => ({ type: "tooLarge" }),
-			} as never,
-			createLogger(),
+			},
 		);
 
 		await expect(
@@ -340,16 +389,9 @@ describe("fetch service contract", () => {
 	});
 
 	test("maps static 401 responses to blocked instead of thrown failures", async () => {
-		const service = new FetchService(
-			{
-				fetch: async () => new Response("auth required", { status: 401 }),
-			},
-			{
-				isEnabled: () => false,
-				render: async () => null,
-			} as never,
-			createLogger(),
-		);
+		const service = new FetchServiceHarness({
+			fetch: async () => new Response("auth required", { status: 401 }),
+		});
 
 		const result = await service.fetch({
 			url: "https://example.com/private",
@@ -374,14 +416,7 @@ describe("fetch service contract", () => {
 				headers: { "content-type": "text/html" },
 			});
 		});
-		const service = new FetchService(
-			{ fetch: httpFetch },
-			{
-				isEnabled: () => false,
-				render: async () => null,
-			} as never,
-			createLogger(),
-		);
+		const service = new FetchServiceHarness({ fetch: httpFetch });
 
 		await service.fetch({
 			url: "https://example.com/ua",
@@ -395,20 +430,13 @@ describe("fetch service contract", () => {
 
 	test("honors short HTTP-date retry-after values instead of forcing the max delay", async () => {
 		const retryAfterAt = new Date(Date.now() + 5_000).toUTCString();
-		const service = new FetchService(
-			{
-				fetch: async () =>
-					new Response("", {
-						status: 429,
-						headers: { "retry-after": retryAfterAt },
-					}),
-			},
-			{
-				isEnabled: () => false,
-				render: async () => null,
-			} as never,
-			createLogger(),
-		);
+		const service = new FetchServiceHarness({
+			fetch: async () =>
+				new Response("", {
+					status: 429,
+					headers: { "retry-after": retryAfterAt },
+				}),
+		});
 
 		const result = await service.fetch({
 			url: "https://example.com/rate-limited",
@@ -428,24 +456,17 @@ describe("fetch service contract", () => {
 	test("measures contentLength from the decoded response body instead of the header value", async () => {
 		const content =
 			"<html><body><main>This body is longer than the compressed header would imply.</main></body></html>";
-		const service = new FetchService(
-			{
-				fetch: async () =>
-					new Response(content, {
-						status: 200,
-						headers: {
-							"content-type": "text/html",
-							"content-length": "12",
-							"content-encoding": "gzip",
-						},
-					}),
-			},
-			{
-				isEnabled: () => false,
-				render: async () => null,
-			} as never,
-			createLogger(),
-		);
+		const service = new FetchServiceHarness({
+			fetch: async () =>
+				new Response(content, {
+					status: 200,
+					headers: {
+						"content-type": "text/html",
+						"content-length": "12",
+						"content-encoding": "gzip",
+					},
+				}),
+		});
 
 		const result = await service.fetch({
 			url: "https://example.com/decoded",
@@ -461,11 +482,49 @@ describe("fetch service contract", () => {
 		expect(result.contentLength).toBe(Buffer.byteLength(content, "utf8"));
 	});
 
+	test("decodes static documents with their declared charset", async () => {
+		const service = new FetchServiceHarness({
+			fetch: async () =>
+				new Response(new Uint8Array([0x43, 0x61, 0x66, 0xe9, 0x20, 0x80]), {
+					headers: { "content-type": 'text/html; charset="windows-1252"' },
+				}),
+		});
+
+		const result = await service.fetch({
+			url: "https://example.com/encoded",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(result).toMatchObject({ type: "success", content: "Café €" });
+	});
+
+	test("falls back to replacement-mode UTF-8 for unsupported charset labels", async () => {
+		const service = new FetchServiceHarness({
+			fetch: async () =>
+				new Response(new TextEncoder().encode("snowman: ☃"), {
+					headers: { "content-type": "text/html; charset=not-a-real-charset" },
+				}),
+		});
+
+		const result = await service.fetch({
+			url: "https://example.com/fallback-charset",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(result).toMatchObject({ type: "success", content: "snowman: ☃" });
+	});
+
 	test("preserves static PDF response bytes instead of text-decoding them", async () => {
 		const pdfBytes = new Uint8Array([
 			0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0x0a, 0xff, 0x00,
 		]);
-		const service = new FetchService(
+		const releasePdfWork = mock(() => undefined);
+		const acquirePdfWork = mock(async () => releasePdfWork);
+		const service = new FetchServiceHarness(
 			{
 				fetch: async () =>
 					new Response(pdfBytes, {
@@ -473,11 +532,9 @@ describe("fetch service contract", () => {
 						headers: { "content-type": "Application/PDF; charset=binary" },
 					}),
 			},
-			{
-				isEnabled: () => false,
-				render: async () => null,
-			} as never,
-			createLogger(),
+			disabledRenderer,
+			undefined,
+			acquirePdfWork,
 		);
 
 		const result = await service.fetch({
@@ -494,6 +551,9 @@ describe("fetch service contract", () => {
 		expect(Buffer.isBuffer(result.content)).toBe(true);
 		expect(result.content).toEqual(Buffer.from(pdfBytes));
 		expect(result.contentLength).toBe(pdfBytes.byteLength);
+		expect(acquirePdfWork).toHaveBeenCalledTimes(1);
+		expect(result.releasePdfWork).toBe(releasePdfWork);
+		result.releasePdfWork?.();
 	});
 
 	test("rejects unsupported static response types before buffering", async () => {
@@ -506,11 +566,7 @@ describe("fetch service contract", () => {
 			bodyRead = true;
 			return new ArrayBuffer(0);
 		};
-		const service = new FetchService(
-			{ fetch: async () => response },
-			{ isEnabled: () => false, render: async () => null } as never,
-			createLogger(),
-		);
+		const service = new FetchServiceHarness({ fetch: async () => response });
 
 		const result = await service.fetch({
 			url: "https://example.com/download",
@@ -529,7 +585,7 @@ describe("fetch service contract", () => {
 
 	test("rejects unsupported dynamic response types", async () => {
 		const httpFetch = mock(async () => new Response("should not be called"));
-		const service = new FetchService(
+		const service = new FetchServiceHarness(
 			{ fetch: httpFetch },
 			{
 				isEnabled: () => true,
@@ -538,8 +594,7 @@ describe("fetch service contract", () => {
 					statusCode: 200,
 					contentType: "application/octet-stream",
 				}),
-			} as never,
-			createLogger(),
+			},
 		);
 
 		const result = await service.fetch({
@@ -570,16 +625,9 @@ describe("fetch service contract", () => {
 			textRead = true;
 			return "unused";
 		};
-		const service = new FetchService(
-			{
-				fetch: async () => response,
-			},
-			{
-				isEnabled: () => false,
-				render: async () => null,
-			} as never,
-			createLogger(),
-		);
+		const service = new FetchServiceHarness({
+			fetch: async () => response,
+		});
 
 		const result = await service.fetch({
 			url: "https://example.com/too-large",
@@ -597,19 +645,15 @@ describe("fetch service contract", () => {
 
 	test("retains the larger PDF acquisition budget", async () => {
 		const pdf = Buffer.from("%PDF-small-body");
-		const service = new FetchService(
-			{
-				fetch: async () =>
-					new Response(pdf, {
-						headers: {
-							"content-type": "application/pdf",
-							"content-length": String(REQUEST_CONSTANTS.MAX_TEXT_DOCUMENT_BYTES + 1),
-						},
-					}),
-			},
-			{ isEnabled: () => false, render: async () => null } as never,
-			createLogger(),
-		);
+		const service = new FetchServiceHarness({
+			fetch: async () =>
+				new Response(pdf, {
+					headers: {
+						"content-type": "application/pdf",
+						"content-length": String(REQUEST_CONSTANTS.MAX_TEXT_DOCUMENT_BYTES + 1),
+					},
+				}),
+		});
 
 		const result = await service.fetch({
 			url: "https://example.com/document.pdf",
@@ -625,19 +669,15 @@ describe("fetch service contract", () => {
 	});
 
 	test("rejects PDFs beyond their dedicated acquisition budget", async () => {
-		const service = new FetchService(
-			{
-				fetch: async () =>
-					new Response("unused", {
-						headers: {
-							"content-type": "application/pdf",
-							"content-length": String(PDF_CONSTANTS.MAX_FILE_SIZE_MB * 1024 * 1024 + 1),
-						},
-					}),
-			},
-			{ isEnabled: () => false, render: async () => null } as never,
-			createLogger(),
-		);
+		const service = new FetchServiceHarness({
+			fetch: async () =>
+				new Response("unused", {
+					headers: {
+						"content-type": "application/pdf",
+						"content-length": String(PDF_CONSTANTS.MAX_FILE_SIZE_MB * 1024 * 1024 + 1),
+					},
+				}),
+		});
 
 		const result = await service.fetch({
 			url: "https://example.com/oversized.pdf",
@@ -653,18 +693,11 @@ describe("fetch service contract", () => {
 	});
 
 	test("classifies thrown static fetches as retryable transient failures", async () => {
-		const service = new FetchService(
-			{
-				fetch: async () => {
-					throw new Error("socket reset");
-				},
+		const service = new FetchServiceHarness({
+			fetch: async () => {
+				throw new Error("socket reset");
 			},
-			{
-				isEnabled: () => false,
-				render: async () => null,
-			} as never,
-			createLogger(),
-		);
+		});
 
 		const result = await service.fetch({
 			url: "https://example.com/socket-reset",
@@ -682,7 +715,7 @@ describe("fetch service contract", () => {
 	test("measures dynamic contentLength from rendered DOM instead of renderer metadata", async () => {
 		const content =
 			"<html><body><main>This dynamic DOM is larger than the stale content-length metadata.</main></body></html>";
-		const service = new FetchService(
+		const service = new FetchServiceHarness(
 			{
 				fetch: mock(async () => new Response("should not be called")),
 			},
@@ -691,20 +724,17 @@ describe("fetch service contract", () => {
 				render: async () => ({
 					type: "success",
 					result: {
-						isDynamic: true,
 						content,
+						effectiveUrl: "https://example.com/dynamic",
 						statusCode: 200,
 						contentType: "text/html",
 						contentLength: 12,
 						title: "Dynamic",
 						description: "",
-						lastModified: undefined,
-						etag: '"dynamic-etag"',
 						xRobotsTag: null,
 					},
 				}),
-			} as never,
-			createLogger(),
+			},
 		);
 
 		const result = await service.fetch({
@@ -718,9 +748,8 @@ describe("fetch service contract", () => {
 		if (result.type !== "success") {
 			throw new Error("Expected successful dynamic fetch result");
 		}
-		expect(result.isDynamic).toBe(true);
 		expect(result.contentLength).toBe(Buffer.byteLength(content, "utf8"));
-		expect(result.etag).toBe('"dynamic-etag"');
+		expect(result.title).toBe("Dynamic");
 	});
 
 	test("carries the effective URL from static and dynamic acquisition", async () => {
@@ -728,19 +757,14 @@ describe("fetch service contract", () => {
 			headers: { "content-type": "text/html" },
 		});
 		Object.defineProperty(staticResponse, "url", { value: "https://final.example/docs/" });
-		const staticService = new FetchService(
-			{ fetch: async () => staticResponse },
-			{ isEnabled: () => false, render: async () => null } as never,
-			createLogger(),
-		);
-		const dynamicService = new FetchService(
+		const staticService = new FetchServiceHarness({ fetch: async () => staticResponse });
+		const dynamicService = new FetchServiceHarness(
 			{ fetch: mock(async () => new Response("unused")) },
 			{
 				isEnabled: () => true,
 				render: async () => ({
 					type: "success",
 					result: {
-						isDynamic: true,
 						content: "<html><main>dynamic</main></html>",
 						effectiveUrl: "https://dynamic.example/final/",
 						statusCode: 200,
@@ -751,8 +775,7 @@ describe("fetch service contract", () => {
 						xRobotsTag: null,
 					},
 				}),
-			} as never,
-			createLogger(),
+			},
 		);
 		const item = {
 			url: "https://example.com/start",
@@ -773,11 +796,7 @@ describe("fetch service contract", () => {
 
 	test("rejects an unexpected unconditional 304 without retrying", async () => {
 		const fetch = mock(async () => new Response(null, { status: 304 }));
-		const service = new FetchService(
-			{ fetch },
-			{ isEnabled: () => false, render: async () => null } as never,
-			createLogger(),
-		);
+		const service = new FetchServiceHarness({ fetch });
 
 		await expect(
 			service.fetch({
@@ -796,21 +815,17 @@ describe("fetch service contract", () => {
 
 	test("cancels classified error response bodies", async () => {
 		let canceled = false;
-		const service = new FetchService(
-			{
-				fetch: async () =>
-					new Response(
-						new ReadableStream({
-							cancel() {
-								canceled = true;
-							},
-						}),
-						{ status: 500 },
-					),
-			},
-			{ isEnabled: () => false, render: async () => null } as never,
-			createLogger(),
-		);
+		const service = new FetchServiceHarness({
+			fetch: async () =>
+				new Response(
+					new ReadableStream({
+						cancel() {
+							canceled = true;
+						},
+					}),
+					{ status: 500 },
+				),
+		});
 
 		await service.fetch({
 			url: "https://example.com/error",
@@ -822,9 +837,58 @@ describe("fetch service contract", () => {
 		expect(canceled).toBe(true);
 	});
 
+	test("keeps the document deadline active through rendering and response body reads", async () => {
+		const timeoutConstants = TIMEOUT_CONSTANTS as { DOCUMENT_FETCH: number };
+		const originalTimeout = timeoutConstants.DOCUMENT_FETCH;
+		timeoutConstants.DOCUMENT_FETCH = 5;
+		let canceled = false;
+		try {
+			const service = new FetchServiceHarness({
+				fetch: async () =>
+					new Response(
+						new ReadableStream({
+							pull: () => new Promise(() => {}),
+							cancel() {
+								canceled = true;
+							},
+						}),
+						{ headers: { "content-type": "text/html" } },
+					),
+			});
+
+			await expect(
+				service.fetch({
+					url: "https://example.com/stalled",
+					domain: "example.com",
+					depth: 0,
+					retries: 0,
+				}),
+			).resolves.toEqual({ type: "transientFailure", statusCode: 0 });
+			expect(canceled).toBe(true);
+
+			const delayedRenderer = new FetchServiceHarness(successfulHtmlHttpClient, {
+				isEnabled: () => true,
+				render: async () => {
+					await Bun.sleep(10);
+					return { type: "staticFallback", reason: "renderer-unavailable" };
+				},
+			});
+			await expect(
+				delayedRenderer.fetch({
+					url: "https://example.com/slow-render",
+					domain: "example.com",
+					depth: 0,
+					retries: 0,
+				}),
+			).resolves.toEqual({ type: "transientFailure", statusCode: 0 });
+		} finally {
+			timeoutConstants.DOCUMENT_FETCH = originalTimeout;
+		}
+	});
+
 	test("grants local networking only to the configured seed identity", async () => {
 		const requests: Array<{ allowLocalhostOnInitialRequest?: boolean }> = [];
-		const service = new FetchService(
+		const service = new FetchServiceHarness(
 			{
 				fetch: async (request) => {
 					requests.push(request);
@@ -833,8 +897,7 @@ describe("fetch service contract", () => {
 					});
 				},
 			},
-			{ isEnabled: () => false, render: async () => null } as never,
-			createLogger(),
+			disabledRenderer,
 			"http://localhost:3000/",
 		);
 

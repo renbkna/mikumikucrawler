@@ -1,7 +1,5 @@
 import {
 	CircleStop,
-	FileText,
-	Globe,
 	Loader2,
 	Pause,
 	Settings,
@@ -11,11 +9,10 @@ import {
 	WifiOff,
 	Zap,
 } from "lucide-react";
-import { type ChangeEvent, memo, useCallback, useMemo } from "react";
+import { type ChangeEvent, memo } from "react";
 import type { CrawlOptions } from "../../shared/contracts/index.js";
-import { validatePublicHttpUrl } from "../../shared/url";
+import { normalizeCanonicalHttpUrl } from "../../shared/url";
 import type { ConnectionState } from "../hooks/crawlControllerState";
-import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 
 interface CrawlerFormProps {
 	target: string;
@@ -46,12 +43,9 @@ export const CrawlerForm = memo(function CrawlerForm({
 	setOpenedConfig,
 	connectionState,
 }: CrawlerFormProps) {
-	const validateUrl = useCallback((input: string): string | null => {
-		if (!input) return null;
-		const result = validatePublicHttpUrl(input, { allowLocalhost: import.meta.env.DEV });
-		return "error" in result ? result.error : null;
-	}, []);
-	const validationError = useMemo(() => validateUrl(target), [target, validateUrl]);
+	const targetValidation = target ? normalizeCanonicalHttpUrl(target) : null;
+	const validationError =
+		targetValidation && "error" in targetValidation ? targetValidation.error : null;
 	const hasRunnableTarget = target.trim().length > 0;
 
 	const handleTargetChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -80,34 +74,21 @@ export const CrawlerForm = memo(function CrawlerForm({
 	const buttonLabel = (() => {
 		if (connectionState === "connecting") return "Connecting~";
 		if (isAttacking) {
-			return (
-				<>
-					PAUSE <HeartIcon className="hidden" size={12} />
-				</>
-			);
+			return <>PAUSE</>;
 		}
-		return (
-			<>
-				MIKU BEAM! <SparkleIcon className="hidden" size={12} />
-			</>
-		);
+		return <>MIKU BEAM!</>;
 	})();
 
 	return (
 		<div className="relative mb-0 space-y-0">
 			<div className="glass-panel rounded-t-[18px] rounded-b-none p-5 relative overflow-hidden group">
-				<div className="hidden" />
-				<div className="hidden" />
-
 				<div className="relative z-10 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-4 items-end">
 					<div className="space-y-2">
 						<label
 							htmlFor="target-url"
 							className="text-xs font-bold uppercase tracking-[0.08em] text-miku-accent/65 ml-1 flex items-center gap-2"
 						>
-							<NoteIcon className="hidden" size={12} />
 							TARGET URL
-							<NoteIcon className="hidden" size={12} />
 						</label>
 						<div className="relative">
 							<input
@@ -154,8 +135,6 @@ export const CrawlerForm = memo(function CrawlerForm({
 								title="Lightning Strike! (Skip Animation)"
 								aria-label="Lightning Strike Attack (Skip Animation)"
 							>
-								<SparkleIcon className="hidden" size={10} />
-								<NoteIcon className="hidden" size={10} />
 								<Zap className="w-5 h-5" />
 							</button>
 						)}
@@ -173,14 +152,9 @@ export const CrawlerForm = memo(function CrawlerForm({
 							}`}
 							aria-label={isAttacking ? "Pause Crawl" : "Start Miku Beam Crawl"}
 						>
-							<NoteIcon className="hidden" size={10} />
-							<SparkleIcon className="hidden" size={10} style={{ animationDelay: "0.5s" }} />
-
 							{isAttacking ? <Pause className="w-5 h-5" /> : <Wand2 className="w-5 h-5" />}
 
 							<span className="relative flex items-center gap-1">{buttonLabel}</span>
-
-							<span className="hidden" />
 						</button>
 
 						{canForceStop && (
@@ -211,15 +185,12 @@ export const CrawlerForm = memo(function CrawlerForm({
 
 			<div className="crawl-readouts flex flex-wrap gap-1 justify-center px-4 py-3 rounded-b-[18px] border border-t-0 border-miku-border bg-white/55">
 				<div className="cute-badge">
-					<Globe className="hidden" />
 					Depth: <span className="text-teal-700 font-bold">{crawlOptions.crawlDepth}</span>
 				</div>
 				<div className="cute-badge">
-					<FileText className="hidden" />
 					Pages: <span className="text-pink-700 font-bold">{crawlOptions.maxPages}</span>
 				</div>
 				<div className="cute-badge">
-					<Zap className="hidden" />
 					Method:{" "}
 					<span className="text-miku-teal-dark font-bold capitalize">
 						{crawlOptions.crawlMethod}
@@ -240,5 +211,3 @@ export const CrawlerForm = memo(function CrawlerForm({
 		</div>
 	);
 });
-
-CrawlerForm.displayName = "CrawlerForm";

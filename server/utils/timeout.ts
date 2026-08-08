@@ -15,10 +15,6 @@ interface RunWithTimeoutOptions<T> {
 	run: (signal: AbortSignal) => Promise<T>;
 }
 
-interface RunWithTimeoutFallbackOptions<T> extends RunWithTimeoutOptions<T> {
-	fallback: T;
-}
-
 function getAbortError(
 	operationSignal: AbortSignal,
 	timeoutSignal: AbortSignal,
@@ -38,8 +34,8 @@ function getAbortError(
  * Runs an operation with a single AbortSignal-based deadline model.
  *
  * The signal is created before the operation starts, so abort-aware operations
- * can stop work. The race remains as the deadline bridge for operations that
- * do not observe AbortSignal themselves.
+ * can stop work. A deadline is not settlement: after abort wins the race, this
+ * owner waits for the operation to release its resources before returning.
  */
 export async function runWithTimeout<T>({
 	timeoutMs,
@@ -70,34 +66,21 @@ export async function runWithTimeout<T>({
 		};
 	});
 
-	const operationPromise = Promise.resolve().then(() => run(operationSignal));
-	operationPromise.catch(() => {});
+	const operationPromise = Promise.resolve().then(() => {
+		operationSignal.throwIfAborted();
+		return run(operationSignal);
+	});
 
 	try {
 		return await Promise.race([operationPromise, abortPromise]);
 	} catch (error) {
-		if (timeoutSignal.aborted && !signal?.aborted) {
-			throw getAbortError(operationSignal, timeoutSignal, signal, operationName, timeoutMs);
-		}
-		throw error;
+		const rejection =
+			timeoutSignal.aborted && !signal?.aborted
+				? getAbortError(operationSignal, timeoutSignal, signal, operationName, timeoutMs)
+				: error;
+		await Promise.allSettled([operationPromise]);
+		throw rejection;
 	} finally {
 		removeAbortListener();
-	}
-}
-
-/**
- * Like runWithTimeout, but resolves with a fallback only when the timeout
- * deadline expires. External aborts and operation failures still reject.
- */
-export async function runWithTimeoutFallback<T>(
-	options: RunWithTimeoutFallbackOptions<T>,
-): Promise<T> {
-	try {
-		return await runWithTimeout(options);
-	} catch (error) {
-		if (error instanceof OperationTimeoutError) {
-			return options.fallback;
-		}
-		throw error;
 	}
 }

@@ -12,6 +12,7 @@ if (!rootElement) {
 
 function ApplicationRoot() {
 	useEffect(() => {
+		document.documentElement.dataset.applicationReady = "true";
 		document.getElementById("loading-screen")?.remove();
 	}, []);
 

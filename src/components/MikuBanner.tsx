@@ -1,4 +1,4 @@
-import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
+import { Heart, Sparkles } from "lucide-react";
 
 interface MikuBannerProps {
 	active: boolean;
@@ -25,17 +25,16 @@ export const MikuBanner = ({ active }: MikuBannerProps) => {
 
 			{active && (
 				<div className="absolute inset-0 pointer-events-none">
-					<SparkleIcon
+					<Sparkles
 						className="absolute top-4 right-[8%] text-white/70 sparkle drop-shadow-sm"
 						size={16}
 					/>
-					<NoteIcon className="hidden" size={16} style={{ animationDelay: "0.3s" }} />
-					<HeartIcon
+					<Heart
 						className="absolute bottom-5 left-1/2 text-miku-pink/75 drop-shadow-sm"
 						size={14}
+						fill="currentColor"
 						style={{ animationDelay: "0.7s" }}
 					/>
-					<SparkleIcon className="hidden" size={18} style={{ animationDelay: "1s" }} />
 				</div>
 			)}
 
@@ -50,14 +49,14 @@ export const MikuBanner = ({ active }: MikuBannerProps) => {
 									<span className="text-2xl md:text-3xl font-bold text-white drop-shadow-sm tracking-[0.08em]">
 										MIKU
 									</span>
-									<HeartIcon
+									<Heart
 										className="text-miku-pink mx-2 drop-shadow-sm animate-heart-beat"
 										size={18}
+										fill="currentColor"
 									/>
 									<span className="text-2xl md:text-3xl font-bold text-white drop-shadow-sm tracking-[0.08em]">
 										MIKU
 									</span>
-									<HeartIcon className="hidden" size={18} style={{ animationDelay: "0.3s" }} />
 									<span className="text-2xl md:text-3xl font-bold text-white drop-shadow-sm tracking-[0.08em]">
 										BEAM!
 									</span>

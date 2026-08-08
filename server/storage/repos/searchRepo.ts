@@ -1,23 +1,6 @@
 import type { Database } from "bun:sqlite";
+import { PAGE_TEXT_LIMITS } from "../../../shared/contracts/index.js";
 import type { SearchResult } from "../../contracts/search.js";
-
-type SearchResultRow = SearchResult;
-
-function mapSearchResultRow(row: SearchResultRow): SearchResult {
-	return {
-		id: row.id,
-		crawlId: row.crawlId,
-		url: row.url,
-		title: row.title,
-		description: row.description,
-		domain: row.domain,
-		crawledAt: row.crawledAt,
-		wordCount: row.wordCount,
-		qualityScore: row.qualityScore,
-		titleHighlight: row.titleHighlight,
-		snippet: row.snippet,
-	};
-}
 
 export function createSearchRepo(db: Database) {
 	return {
@@ -40,55 +23,13 @@ export function createSearchRepo(db: Database) {
 					`
 					SELECT
 						p.id,
-						p.crawl_id as crawlId,
 						p.url,
-						COALESCE(p.title, '') as title,
-						COALESCE(p.description, '') as description,
+						SUBSTR(COALESCE(p.title, ''), 1, ${PAGE_TEXT_LIMITS.summaryTextCharacters}) as title,
+						SUBSTR(COALESCE(p.description, ''), 1, ${PAGE_TEXT_LIMITS.summaryTextCharacters}) as description,
 						p.domain,
-						strftime('%Y-%m-%dT%H:%M:%SZ', p.crawled_at) as crawledAt,
-						p.word_count as wordCount,
-						p.quality_score as qualityScore,
-						COALESCE(
-							highlight(pages_fts, 1, '<mark>', '</mark>'),
-							COALESCE(p.title, '')
-							) AS titleHighlight,
+						SUBSTR(
 							COALESCE(
-								NULLIF(
-									REPLACE(REPLACE(
-										CASE
-											WHEN instr(snippet(pages_fts, 1, '<mark>', '</mark>', '…', 32), '<mark>') > 0
-											THEN snippet(pages_fts, 1, '<mark>', '</mark>', '…', 32)
-											ELSE ''
-										END,
-										'<mark>',
-										''
-									), '</mark>', ''),
-									''
-								),
-								NULLIF(
-									REPLACE(REPLACE(
-										CASE
-											WHEN instr(snippet(pages_fts, 2, '<mark>', '</mark>', '…', 32), '<mark>') > 0
-											THEN snippet(pages_fts, 2, '<mark>', '</mark>', '…', 32)
-											ELSE ''
-										END,
-										'<mark>',
-										''
-									), '</mark>', ''),
-									''
-								),
-								NULLIF(
-									REPLACE(REPLACE(
-										CASE
-											WHEN instr(snippet(pages_fts, 3, '<mark>', '</mark>', '…', 32), '<mark>') > 0
-											THEN snippet(pages_fts, 3, '<mark>', '</mark>', '…', 32)
-											ELSE ''
-										END,
-										'<mark>',
-										''
-									), '</mark>', ''),
-									''
-								),
+								snippet(pages_fts, -1, '', '', '…', 32),
 								substr(
 										COALESCE(
 											NULLIF(p.main_content, ''),
@@ -100,6 +41,9 @@ export function createSearchRepo(db: Database) {
 								1,
 								240
 							)
+							),
+							1,
+							${PAGE_TEXT_LIMITS.searchSnippetCharacters}
 						) AS snippet
 					FROM pages_fts
 					JOIN pages p ON p.id = pages_fts.rowid
@@ -108,8 +52,8 @@ export function createSearchRepo(db: Database) {
 					LIMIT ?
 				`,
 				)
-				.all(crawlId, query, limit) as SearchResultRow[];
-			return rows.map(mapSearchResultRow);
+				.all(crawlId, query, limit) as SearchResult[];
+			return rows;
 		},
 	};
 }

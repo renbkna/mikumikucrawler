@@ -1,19 +1,22 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { BrowserContext, Frame, Page, Route, WebSocketRoute } from "playwright";
+import { runInNewContext } from "node:vm";
+import type { Browser, BrowserContext, Frame, Page, Route, WebSocketRoute } from "playwright";
 import type { CrawlOptions } from "../../../../shared/contracts/index.js";
-import type { Logger } from "../../../config/logging.js";
-import { REQUEST_CONSTANTS } from "../../../constants.js";
-import type { HttpClient } from "../../../plugins/security.js";
+import { silentLogger } from "../../../__tests__/runtimeFixture.js";
+import { DYNAMIC_RENDERER_CONSTANTS, REQUEST_CONSTANTS } from "../../../constants.js";
+import { type HttpClient, OutboundPolicyError } from "../../../outbound/HttpClient.js";
+import { OperationTimeoutError } from "../../../utils/timeout.js";
 import {
 	configurePinnedBrowserContext,
 	createDynamicBrowserContextOptions,
+	createDynamicBrowserLaunchArgs,
 	createDynamicRouteBudget,
+	createDynamicSubrequestAdmission,
 	DynamicRenderer,
 	extractRenderedSnapshot,
 	fulfillRouteWithPinnedHttpClient,
-	matchesOwnedSitePattern,
 	openBrowserPageWithRetry,
-	renderedContentByteLength,
+	readBoundedDocumentText,
 	requiresStaticRepresentationFetch,
 } from "../DynamicRenderer.js";
 
@@ -40,6 +43,7 @@ function createRoute(input: {
 	resourceType?: string;
 	headers?: Record<string, string>;
 	postData?: Buffer;
+	frame?: Frame;
 }) {
 	const calls = {
 		abort: mock(async () => undefined),
@@ -53,6 +57,7 @@ function createRoute(input: {
 			resourceType: () => input.resourceType ?? "document",
 			headers: () => input.headers ?? {},
 			postDataBuffer: () => input.postData ?? null,
+			frame: () => input.frame,
 		}),
 		abort: calls.abort,
 		continue: calls.continue,
@@ -68,26 +73,18 @@ describe("dynamic renderer network contract", () => {
 			beforeExit: process.listenerCount("beforeExit"),
 			exit: process.listenerCount("exit"),
 		};
-		const logger = {
-			debug: mock(() => undefined),
-			info: mock(() => undefined),
-			warn: mock(() => undefined),
-		} as unknown as Logger;
 		const httpClient: HttpClient = {
 			fetch: mock(async () => new Response("unused")),
 		};
-		const renderer = new DynamicRenderer({ ...dynamicOptions, dynamic: false }, logger, httpClient);
+		const renderer = new DynamicRenderer(
+			{ ...dynamicOptions, dynamic: false },
+			silentLogger,
+			httpClient,
+		);
 
 		expect(process.listenerCount("beforeExit")).toBe(listenerCounts.beforeExit);
 		expect(process.listenerCount("exit")).toBe(listenerCounts.exit);
 		await renderer.close();
-	});
-
-	test("measures rendered HTML limits in UTF-8 bytes, not JS characters", () => {
-		const content = "a\u0100\u0100";
-
-		expect(content.length).toBe(3);
-		expect(renderedContentByteLength(content)).toBe(5);
 	});
 
 	test("captures rendered content, metadata, and effective URL in one document observation", async () => {
@@ -98,24 +95,95 @@ describe("dynamic renderer network contract", () => {
 			effectiveUrl: "https://www.youtube.com/shorts/final-id",
 			title: "Final document",
 		};
-		const evaluate = mock(async (_callback: unknown, _limit: number) => snapshot);
+		const evaluate = mock(async (_callback: unknown, _limits: object) => snapshot);
 		const page = { evaluate } as unknown as Page;
 
 		await expect(extractRenderedSnapshot(page)).resolves.toEqual(snapshot);
 		expect(evaluate).toHaveBeenCalledTimes(1);
-		expect(evaluate.mock.calls[0]?.[1]).toBe(REQUEST_CONSTANTS.MAX_TEXT_DOCUMENT_BYTES);
+		expect(evaluate.mock.calls[0]?.[1]).toEqual({
+			maxBytes: REQUEST_CONSTANTS.MAX_TEXT_DOCUMENT_BYTES,
+			maxNodes: 50_000,
+		});
 	});
 
-	test("matches site policies by hostname ownership and optional path", () => {
-		expect(matchesOwnedSitePattern("https://www.youtube.com/watch?v=1", "youtube.com/watch")).toBe(
-			true,
+	test("rejects oversized UTF-8 markup before materializing outerHTML", async () => {
+		let serialized = false;
+		const root = {
+			nodeType: 1,
+			tagName: "HTML",
+			attributes: [{ name: "界".repeat(20), value: "" }],
+			childNodes: [],
+			get outerHTML() {
+				serialized = true;
+				throw new Error("outerHTML must not be materialized");
+			},
+		};
+		const evaluate = mock(async (callback: (limits: object) => unknown) =>
+			runInNewContext(`(${callback.toString()})({ maxBytes: 64, maxNodes: 50_000 })`, {
+				document: { documentElement: root },
+				window: { location: { href: "https://example.com/" } },
+				Node: { ELEMENT_NODE: 1, COMMENT_NODE: 8 },
+			}),
 		);
-		expect(
-			matchesOwnedSitePattern("https://youtube.com.evil.test/watch", "youtube.com/watch"),
-		).toBe(false);
-		expect(
-			matchesOwnedSitePattern("https://evil.test/?next=youtube.com/watch", "youtube.com/watch"),
-		).toBe(false);
+
+		await expect(extractRenderedSnapshot({ evaluate } as unknown as Page)).resolves.toBe(
+			"tooLarge",
+		);
+		expect(serialized).toBe(false);
+	});
+
+	test("bounds consent text returned from the browser document", () => {
+		const nodes = ["abcdefgh", "ijklmnop", "must-not-be-read"].map((nodeValue) => ({
+			nodeType: 3,
+			nodeValue,
+		}));
+		let index = 0;
+		const text = runInNewContext(
+			`(${readBoundedDocumentText.toString()})({ maxChars: 12, maxNodes: 2, visibleOnly: false })`,
+			{
+				document: {
+					body: {},
+					createTreeWalker: () => ({
+						currentNode: undefined as (typeof nodes)[number] | undefined,
+						nextNode() {
+							this.currentNode = nodes[index];
+							index += 1;
+							return this.currentNode !== undefined;
+						},
+					}),
+				},
+				Node: { TEXT_NODE: 3 },
+				NodeFilter: { SHOW_ALL: 0xffff_ffff },
+			},
+		);
+
+		expect(text).toBe("abcdefgh ijk");
+		expect(index).toBe(3);
+	});
+
+	test("retires the page and settles evaluation before an abort escapes", async () => {
+		const evaluation = Promise.withResolvers<never>();
+		const evaluationStarted = Promise.withResolvers<void>();
+		let pageClosed = false;
+		const page = {
+			evaluate: mock(() => {
+				evaluationStarted.resolve();
+				return evaluation.promise;
+			}),
+			close: mock(async () => {
+				pageClosed = true;
+				evaluation.reject(new Error("page closed"));
+			}),
+		} as unknown as Page;
+		const controller = new AbortController();
+		const snapshot = extractRenderedSnapshot(page, controller.signal);
+
+		await evaluationStarted.promise;
+		controller.abort(new Error("item deadline"));
+
+		await expect(snapshot).rejects.toThrow("item deadline");
+		expect(pageClosed).toBe(true);
+		expect(page.close).toHaveBeenCalledTimes(1);
 	});
 
 	test("routes supported non-HTML documents back to static representation acquisition", () => {
@@ -130,7 +198,15 @@ describe("dynamic renderer network contract", () => {
 		});
 	});
 
-	test("routes the whole browser context and aborts websocket channels", async () => {
+	test("browser launch disables QUIC channels that bypass request routing", () => {
+		expect(createDynamicBrowserLaunchArgs()).toContain("--disable-quic");
+	});
+
+	test("blocks direct page networking and routes the remaining browser context", async () => {
+		let initScript: (() => void) | undefined;
+		const addInitScript = mock(async (script: () => void) => {
+			initScript = script;
+		});
 		const route = mock(async () => undefined);
 		const routeWebSocket = mock(async (_pattern, handler) => {
 			const ws = {
@@ -143,6 +219,7 @@ describe("dynamic renderer network contract", () => {
 			});
 		});
 		const context = {
+			addInitScript,
 			route,
 			routeWebSocket,
 		} as unknown as BrowserContext;
@@ -151,7 +228,21 @@ describe("dynamic renderer network contract", () => {
 		};
 
 		await configurePinnedBrowserContext(context, httpClient);
+		if (!initScript) throw new Error("Expected a browser initialization script");
+		const realm = {
+			RTCPeerConnection: class {},
+			webkitRTCPeerConnection: class {},
+			WebTransport: class {},
+		};
+		runInNewContext(`(${initScript.toString()})()`, realm);
 
+		for (const name of ["RTCPeerConnection", "webkitRTCPeerConnection", "WebTransport"] as const) {
+			expect(Object.getOwnPropertyDescriptor(realm, name)).toMatchObject({
+				value: undefined,
+				writable: false,
+				configurable: false,
+			});
+		}
 		expect(route).toHaveBeenCalledWith("**/*", expect.any(Function));
 		expect(routeWebSocket).toHaveBeenCalledWith("**/*", expect.any(Function));
 	});
@@ -159,6 +250,7 @@ describe("dynamic renderer network contract", () => {
 	test("grants localhost capability only to the exact seed document request", async () => {
 		let handler: ((route: Route) => Promise<void>) | undefined;
 		const context = {
+			addInitScript: mock(async () => undefined),
 			route: mock(async (_pattern: string, next: (route: Route) => Promise<void>) => {
 				handler = next;
 			}),
@@ -178,6 +270,162 @@ describe("dynamic renderer network contract", () => {
 		expect(fetch.mock.calls[1]?.[0]).not.toHaveProperty("allowLocalhostOnInitialRequest");
 	});
 
+	test("blocks an unauthorized client-side main-frame navigation before dispatch", async () => {
+		let handler: ((route: Route) => Promise<void>) | undefined;
+		const mainFrame = {} as Frame;
+		const context = {
+			addInitScript: mock(async () => undefined),
+			route: mock(async (_pattern: string, next: (route: Route) => Promise<void>) => {
+				handler = next;
+			}),
+			routeWebSocket: mock(async () => undefined),
+		} as unknown as BrowserContext;
+		const fetch = mock(
+			async () => new Response("<html>ok</html>", { headers: { "content-type": "text/html" } }),
+		);
+		const authorizeDestination = mock(async (url: string) => {
+			if (url === "https://blocked.example/final") {
+				throw new OutboundPolicyError("crawl-policy", "destination denied");
+			}
+		});
+		const onDocumentResult = mock(() => undefined);
+		await configurePinnedBrowserContext(
+			context,
+			{ fetch },
+			undefined,
+			undefined,
+			onDocumentResult,
+			authorizeDestination,
+			mainFrame,
+		);
+		if (!handler) throw new Error("Expected browser route handler");
+
+		await handler(createRoute({ url: "https://source.example/start", frame: mainFrame }).route);
+		const blocked = createRoute({
+			url: "https://blocked.example/final",
+			frame: mainFrame,
+		});
+		await handler(blocked.route);
+
+		expect(authorizeDestination).toHaveBeenCalledWith("https://blocked.example/final", undefined);
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(blocked.calls.abort).toHaveBeenCalledTimes(1);
+		expect(onDocumentResult).toHaveBeenLastCalledWith(
+			{
+				type: "aborted",
+				reason: "policy",
+				message: "destination denied",
+			},
+			"https://blocked.example/final",
+		);
+	});
+
+	test("does not authorize an HTTP redirect destination twice when the browser follows it", async () => {
+		let handler: ((route: Route) => Promise<void>) | undefined;
+		const mainFrame = {} as Frame;
+		const context = {
+			addInitScript: mock(async () => undefined),
+			route: mock(async (_pattern: string, next: (route: Route) => Promise<void>) => {
+				handler = next;
+			}),
+			routeWebSocket: mock(async () => undefined),
+		} as unknown as BrowserContext;
+		const fetch = mock(async (request: Parameters<HttpClient["fetch"]>[0]) => {
+			if (request.url === "https://source.example/start") {
+				await request.authorizeRedirect?.({
+					fromUrl: request.url,
+					toUrl: "https://final.example/page",
+					statusCode: 302,
+					hopNumber: 1,
+				});
+				return new Response(null, {
+					status: 302,
+					headers: { location: "https://final.example/page" },
+				});
+			}
+			return new Response("<html>final</html>", {
+				status: 451,
+				headers: {
+					"content-type": "text/html; charset=utf-8",
+					"x-robots-tag": "noindex, nofollow",
+				},
+			});
+		});
+		const authorizeDestination = mock(async () => undefined);
+		const onDocumentResult = mock(() => undefined);
+		await configurePinnedBrowserContext(
+			context,
+			{ fetch },
+			undefined,
+			undefined,
+			onDocumentResult,
+			authorizeDestination,
+			mainFrame,
+		);
+		if (!handler) throw new Error("Expected browser route handler");
+
+		await handler(createRoute({ url: "https://source.example/start", frame: mainFrame }).route);
+		await handler(createRoute({ url: "https://final.example/page", frame: mainFrame }).route);
+
+		expect(authorizeDestination).toHaveBeenCalledTimes(1);
+		expect(authorizeDestination).toHaveBeenCalledWith("https://final.example/page", undefined);
+		expect(fetch).toHaveBeenCalledTimes(2);
+		expect(onDocumentResult).toHaveBeenLastCalledWith(
+			{
+				type: "fulfilled",
+				documentResponse: {
+					url: "https://final.example/page",
+					statusCode: 451,
+					contentType: "text/html; charset=utf-8",
+					xRobotsTag: "noindex, nofollow",
+					retryAfter: null,
+				},
+			},
+			"https://final.example/page",
+		);
+	});
+
+	test("keeps iframe documents out of main-document policy and result ownership", async () => {
+		let handler: ((route: Route) => Promise<void>) | undefined;
+		const mainFrame = {} as Frame;
+		const childFrame = {} as Frame;
+		const context = {
+			addInitScript: mock(async () => undefined),
+			route: mock(async (_pattern: string, next: (route: Route) => Promise<void>) => {
+				handler = next;
+			}),
+			routeWebSocket: mock(async () => undefined),
+		} as unknown as BrowserContext;
+		const fetch = mock(
+			async (_request: Parameters<HttpClient["fetch"]>[0]) =>
+				new Response("<html>frame</html>", { headers: { "content-type": "text/html" } }),
+		);
+		const authorizeDestination = mock(async () => undefined);
+		const onDocumentResult = mock(() => undefined);
+		await configurePinnedBrowserContext(
+			context,
+			{ fetch },
+			undefined,
+			undefined,
+			onDocumentResult,
+			authorizeDestination,
+			mainFrame,
+		);
+		if (!handler) throw new Error("Expected browser route handler");
+
+		await handler(
+			createRoute({
+				url: "https://frame.example/embed",
+				resourceType: "document",
+				frame: childFrame,
+			}).route,
+		);
+
+		expect(authorizeDestination).not.toHaveBeenCalled();
+		expect(onDocumentResult).not.toHaveBeenCalled();
+		expect(fetch.mock.calls[0]?.[0]).toMatchObject({ redirect: "manual" });
+	});
+
 	test("fulfills HTTP browser requests through the pinned HTTP client", async () => {
 		const { route, calls } = createRoute({
 			url: "https://example.com/app",
@@ -191,20 +439,60 @@ describe("dynamic renderer network contract", () => {
 		});
 		const httpClient: HttpClient = { fetch };
 
-		await fulfillRouteWithPinnedHttpClient(route, httpClient);
+		const result = await fulfillRouteWithPinnedHttpClient(route, httpClient);
 
-		expect(fetch).toHaveBeenCalledWith({
-			url: "https://example.com/app",
-			headers: { accept: "text/html" },
-			method: "GET",
-			signal: undefined,
-		});
+		expect(fetch).toHaveBeenCalledWith(
+			expect.objectContaining({
+				url: "https://example.com/app",
+				headers: { accept: "text/html" },
+				method: "GET",
+				signal: undefined,
+				redirect: "manual",
+			}),
+		);
 		expect(calls.continue).not.toHaveBeenCalled();
 		expect(calls.abort).not.toHaveBeenCalled();
 		expect(calls.fulfill).toHaveBeenCalledWith(
 			expect.objectContaining({
 				status: 200,
 				headers: expect.objectContaining({ "content-type": "text/html" }),
+			}),
+		);
+		expect(result).toEqual({
+			type: "fulfilled",
+			documentResponse: {
+				url: "https://example.com/app",
+				statusCode: 200,
+				contentType: "text/html",
+				xRobotsTag: null,
+				retryAfter: null,
+			},
+		});
+	});
+
+	test("returns authorized document redirects to the browser navigation owner", async () => {
+		const { route, calls } = createRoute({ url: "https://example.com/start" });
+		const httpClient: HttpClient = {
+			fetch: mock(
+				async () =>
+					new Response(null, {
+						status: 302,
+						headers: {
+							"content-type": "application/json",
+							location: "https://example.com/final",
+						},
+					}),
+			),
+		};
+
+		await expect(fulfillRouteWithPinnedHttpClient(route, httpClient)).resolves.toEqual({
+			type: "fulfilled",
+		});
+		expect(httpClient.fetch).toHaveBeenCalledWith(expect.objectContaining({ redirect: "manual" }));
+		expect(calls.fulfill).toHaveBeenCalledWith(
+			expect.objectContaining({
+				status: 302,
+				headers: expect.objectContaining({ location: "https://example.com/final" }),
 			}),
 		);
 	});
@@ -259,7 +547,9 @@ describe("dynamic renderer network contract", () => {
 			return {
 				status: 200,
 				headers: new Headers({
-					"content-length": String(REQUEST_CONSTANTS.MAX_RESPONSE_BYTES + 1),
+					"content-length": String(
+						DYNAMIC_RENDERER_CONSTANTS.NETWORK_BUDGET.MAX_RESPONSE_BYTES_PER_PAGE + 1,
+					),
 				}),
 				body: {
 					getReader() {
@@ -344,7 +634,11 @@ describe("dynamic renderer network contract", () => {
 
 		const result = await fulfillRouteWithPinnedHttpClient(route, httpClient);
 
-		expect(result).toEqual({ type: "aborted", reason: "static-representation" });
+		expect(result).toEqual({
+			type: "aborted",
+			reason: "static-representation",
+			url: "https://example.com/data.json",
+		});
 		expect(cancel).toHaveBeenCalledTimes(1);
 		expect(calls.abort).toHaveBeenCalledTimes(1);
 		expect(calls.fulfill).not.toHaveBeenCalled();
@@ -378,19 +672,105 @@ describe("dynamic renderer network contract", () => {
 		const third = createRoute({ url: "https://example.com/extra", resourceType: "fetch" });
 
 		await expect(
-			fulfillRouteWithPinnedHttpClient(first.route, httpClient, undefined, false, budget),
+			fulfillRouteWithPinnedHttpClient(first.route, httpClient, { budget }),
 		).resolves.toEqual({ type: "fulfilled" });
 		await expect(
-			fulfillRouteWithPinnedHttpClient(second.route, httpClient, undefined, false, budget),
+			fulfillRouteWithPinnedHttpClient(second.route, httpClient, { budget }),
 		).resolves.toEqual({ type: "aborted", reason: "response-budget" });
 		await expect(
-			fulfillRouteWithPinnedHttpClient(third.route, httpClient, undefined, false, budget),
+			fulfillRouteWithPinnedHttpClient(third.route, httpClient, { budget }),
 		).resolves.toEqual({ type: "aborted", reason: "request-budget" });
 
 		expect(first.calls.fulfill).toHaveBeenCalledTimes(1);
 		expect(second.calls.abort).toHaveBeenCalledTimes(1);
 		expect(third.calls.abort).toHaveBeenCalledTimes(1);
 		expect(httpClient.fetch).toHaveBeenCalledTimes(2);
+	});
+
+	test("bounds dynamic subrequest concurrency and same-host dispatch rate", async () => {
+		const admission = createDynamicSubrequestAdmission(2, 0);
+		const releaseFirst = await admission.acquire("https://one.example/a.js");
+		const releaseSecond = await admission.acquire("https://two.example/b.js");
+		let thirdAdmitted = false;
+		const third = admission.acquire("https://three.example/c.js").then((release) => {
+			thirdAdmitted = true;
+			return release;
+		});
+		await Promise.resolve();
+		expect(thirdAdmitted).toBe(false);
+		releaseFirst();
+		const releaseThird = await third;
+		expect(thirdAdmitted).toBe(true);
+		releaseSecond();
+		releaseThird();
+
+		const delayedAdmission = createDynamicSubrequestAdmission(1, 20);
+		const releaseInitial = await delayedAdmission.acquire("https://same.example/a.js");
+		releaseInitial();
+		const startedAt = Date.now();
+		const releaseDelayed = await delayedAdmission.acquire("https://same.example/b.js");
+		expect(Date.now() - startedAt).toBeGreaterThanOrEqual(15);
+		releaseDelayed();
+	});
+
+	test("applies same-host dispatch spacing to internal subrequest redirects", async () => {
+		const admission = createDynamicSubrequestAdmission(1, 20);
+		const dispatchTimes: number[] = [];
+		const { route } = createRoute({
+			url: "https://same.example/start.js",
+			resourceType: "script",
+		});
+		const httpClient: HttpClient = {
+			fetch: async (request) => {
+				dispatchTimes.push(Date.now());
+				await request.authorizeRedirect?.({
+					fromUrl: request.url,
+					toUrl: "https://same.example/final.js",
+					statusCode: 302,
+					hopNumber: 1,
+				});
+				dispatchTimes.push(Date.now());
+				return new Response("ok");
+			},
+		};
+
+		await fulfillRouteWithPinnedHttpClient(route, httpClient, {
+			admitSubrequest: admission,
+			isMainDocument: false,
+		});
+
+		expect((dispatchTimes[1] ?? 0) - (dispatchTimes[0] ?? 0)).toBeGreaterThanOrEqual(15);
+	});
+
+	test("charges internal redirect hops to the same dynamic request budget", async () => {
+		const budget = createDynamicRouteBudget(2, 100);
+		const { route, calls } = createRoute({
+			url: "https://example.com/start",
+			resourceType: "script",
+		});
+		const httpClient: HttpClient = {
+			fetch: async (request) => {
+				await request.authorizeRedirect?.({
+					fromUrl: request.url,
+					toUrl: "https://example.com/one",
+					statusCode: 302,
+					hopNumber: 1,
+				});
+				await request.authorizeRedirect?.({
+					fromUrl: "https://example.com/one",
+					toUrl: "https://example.com/two",
+					statusCode: 302,
+					hopNumber: 2,
+				});
+				return new Response("must not run");
+			},
+		};
+
+		await expect(
+			fulfillRouteWithPinnedHttpClient(route, httpClient, { budget }),
+		).resolves.toMatchObject({ type: "aborted", reason: "request-budget" });
+		expect(calls.abort).toHaveBeenCalledTimes(1);
+		expect(calls.fulfill).not.toHaveBeenCalled();
 	});
 
 	test("does not let HTTP subresources continue on Playwright native networking", async () => {
@@ -428,56 +808,184 @@ describe("dynamic renderer network contract", () => {
 
 	test("waits for a detected consent wall to become actionable and verifies dismissal", async () => {
 		let frameEvaluationCount = 0;
-		const frame = {
-			evaluate: mock(async () => {
-				frameEvaluationCount += 1;
-				return frameEvaluationCount >= 2;
-			}),
-		} as unknown as Frame;
+		const evaluateFrame = mock(async (_callback: unknown, _options: unknown) => {
+			frameEvaluationCount += 1;
+			return frameEvaluationCount >= 2;
+		});
+		const frame = { evaluate: evaluateFrame } as unknown as Frame;
 		let pageEvaluationCount = 0;
-		const page = {
-			evaluate: mock(async () => {
-				pageEvaluationCount += 1;
-				if (pageEvaluationCount === 1) return "Before you continue to YouTube";
-				if (pageEvaluationCount === 2) {
-					throw new Error("Execution context was destroyed during consent navigation");
-				}
-				if (pageEvaluationCount === 3) throw new Error("Frame was detached");
-				return "Video content";
-			}),
-			frames: () => [frame],
-		} as unknown as Page;
-		const logger = {
-			debug: mock(() => undefined),
-			info: mock(() => undefined),
-			warn: mock(() => undefined),
-		} as unknown as Logger;
+		const evaluatePage = mock(async (_callback: unknown, _options: unknown) => {
+			pageEvaluationCount += 1;
+			if (pageEvaluationCount === 1) return "Before you continue to YouTube";
+			if (pageEvaluationCount === 2) {
+				throw new Error("Execution context was destroyed during consent navigation");
+			}
+			if (pageEvaluationCount === 3) throw new Error("Frame was detached");
+			return "Video content";
+		});
+		const page = { evaluate: evaluatePage, frames: () => [frame] } as unknown as Page;
 		const httpClient: HttpClient = {
 			fetch: mock(async () => new Response("unused")),
 		};
-		const renderer = new DynamicRenderer(dynamicOptions, logger, httpClient);
+		const renderer = new DynamicRenderer(dynamicOptions, silentLogger, httpClient);
 
 		const result = await renderer.handleConsentModals(page, "https://www.youtube.com/watch?v=test");
 
 		expect(result).toEqual({ detected: true, bypassed: true });
-		expect(frame.evaluate).toHaveBeenCalledTimes(2);
-		expect(page.evaluate).toHaveBeenCalledTimes(4);
+		expect(evaluateFrame).toHaveBeenCalledTimes(2);
+		expect(evaluateFrame.mock.calls[0]?.[1]).toMatchObject({
+			maxControls: 500,
+			maxControlTextChars: 512,
+			maxControlTextNodes: 100,
+			maxNodes: 50_000,
+		});
+		expect(evaluatePage).toHaveBeenCalledTimes(4);
+		expect(evaluatePage.mock.calls[0]?.[1]).toEqual({
+			maxChars: 256 * 1024,
+			maxNodes: 50_000,
+			visibleOnly: false,
+		});
 	});
 
-	test("retries page acquisition once after Crawlee retires a failed browser controller", async () => {
-		const page = {} as Page;
-		const newPage = mock(async () => {
-			if (newPage.mock.calls.length === 1) {
-				throw new Error(
-					"browserController.newPage() failed: stale\nCause: Target page, context or browser has been closed.",
-				);
-			}
-			return page;
-		});
-		const onRetry = mock(() => undefined);
+	test("retries page acquisition once after recoverable browser errors", async () => {
+		const errors = [
+			new Error(
+				"browserController.newPage() failed: stale\nCause: Target page, context or browser has been closed.",
+			),
+			new OperationTimeoutError("Rendered document snapshot", 10_000),
+		];
+		for (const error of errors) {
+			const page = {} as Page;
+			const newPage = mock(async () => {
+				if (newPage.mock.calls.length === 1) throw error;
+				return page;
+			});
+			const onRetry = mock(() => undefined);
 
-		await expect(openBrowserPageWithRetry(newPage, onRetry)).resolves.toBe(page);
-		expect(newPage).toHaveBeenCalledTimes(2);
-		expect(onRetry).toHaveBeenCalledTimes(1);
+			await expect(openBrowserPageWithRetry(newPage, onRetry)).resolves.toBe(page);
+			expect(newPage).toHaveBeenCalledTimes(2);
+			expect(onRetry).toHaveBeenCalledTimes(1);
+		}
+	});
+
+	test("relaunches before rendering when the crawl browser disconnected", async () => {
+		const renderer = new DynamicRenderer(dynamicOptions, silentLogger, {
+			fetch: mock(async () => new Response("unused")),
+		});
+		(renderer as unknown as { browser: Browser | null }).browser = {
+			isConnected: () => false,
+		} as Browser;
+		renderer.launchBrowser = mock(async () => {
+			throw new Error("replacement browser unavailable");
+		});
+
+		await expect(
+			renderer.render({
+				url: dynamicOptions.target,
+				domain: "www.youtube.com",
+				depth: 0,
+				retries: 0,
+			}),
+		).resolves.toEqual({ type: "staticFallback", reason: "renderer-unavailable" });
+		expect(renderer.launchBrowser).toHaveBeenCalledTimes(1);
+	});
+
+	test("shares one browser acquisition across concurrent relaunches", async () => {
+		const pendingBrowser = Promise.withResolvers<Browser>();
+		const launch = mock(async () => pendingBrowser.promise);
+		const closeContext = mock(async () => undefined);
+		const closeBrowser = mock(async () => undefined);
+		let page!: Page;
+		const context = {
+			newPage: mock(async () => page),
+			close: closeContext,
+		} as unknown as BrowserContext;
+		page = { context: () => context } as unknown as Page;
+		const browser = {
+			isConnected: () => true,
+			newContext: mock(async () => context),
+			close: closeBrowser,
+		} as unknown as Browser;
+		const renderer = new DynamicRenderer(
+			dynamicOptions,
+			silentLogger,
+			{ fetch: mock(async () => new Response("unused")) },
+			launch,
+		);
+
+		const first = renderer.launchBrowser();
+		const second = renderer.launchBrowser();
+		expect(launch).toHaveBeenCalledTimes(1);
+		pendingBrowser.resolve(browser);
+
+		await Promise.all([first, second]);
+		expect(browser.newContext).toHaveBeenCalledTimes(1);
+		expect(closeContext).toHaveBeenCalledTimes(1);
+		await renderer.close();
+		expect(closeBrowser).toHaveBeenCalledTimes(1);
+	});
+
+	test("lets shutdown finish during a stalled browser launch", async () => {
+		const pendingBrowser = Promise.withResolvers<Browser>();
+		const closeBrowser = mock(async () => undefined);
+		const lateBrowser = {
+			isConnected: () => true,
+			close: closeBrowser,
+		} as unknown as Browser;
+		const renderer = new DynamicRenderer(
+			dynamicOptions,
+			silentLogger,
+			{ fetch: mock(async () => new Response("unused")) },
+			mock(async () => pendingBrowser.promise),
+		);
+
+		const launchAttempt = renderer.launchBrowser();
+		const closing = renderer.close();
+		const closedPromptly = await Promise.race([
+			closing.then(() => true),
+			Bun.sleep(50).then(() => false),
+		]);
+		pendingBrowser.resolve(lateBrowser);
+
+		expect(closedPromptly).toBe(true);
+		await expect(launchAttempt).rejects.toThrow("closed during browser acquisition");
+		expect(closeBrowser).toHaveBeenCalledTimes(1);
+	});
+
+	test("rejects an aborted page acquisition and disposes its late page", async () => {
+		const pendingPage = Promise.withResolvers<Page>();
+		const disposed = Promise.withResolvers<void>();
+		const close = mock(async () => disposed.resolve());
+		const controller = new AbortController();
+		const acquisition = openBrowserPageWithRetry(
+			() => pendingPage.promise,
+			mock(() => undefined),
+			controller.signal,
+			{ isCurrent: () => true, close },
+		);
+
+		controller.abort(new Error("document deadline"));
+		await expect(acquisition).rejects.toThrow("document deadline");
+		pendingPage.resolve({} as Page);
+		await disposed.promise;
+		expect(close).toHaveBeenCalledTimes(1);
+	});
+
+	test("disposes a page whose acquisition finishes after renderer ownership ends", async () => {
+		let release!: (page: Page) => void;
+		let owned = true;
+		const page = {} as Page;
+		const close = mock(async () => undefined);
+		const acquisition = openBrowserPageWithRetry(
+			() => new Promise<Page>((resolve) => (release = resolve)),
+			mock(() => undefined),
+			undefined,
+			{ isCurrent: () => owned, close },
+		);
+		owned = false;
+		release(page);
+
+		await expect(acquisition).rejects.toThrow("ownership ended");
+		expect(close).toHaveBeenCalledWith(page);
 	});
 });

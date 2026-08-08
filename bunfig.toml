@@ -1,5 +1,5 @@
 [install]
-# Every non-optional peer required by a direct dependency is declared in
-# package.json. Do not materialize optional peer ecosystems such as Puppeteer
-# when Crawlee uses Playwright only.
+# The pinned Elysia beta is runtime-compatible with the direct Eden and rate-limit
+# dependencies, whose published peer ranges exclude prereleases. Remove this
+# exception when their pinned releases advertise compatible peer metadata.
 peer = false

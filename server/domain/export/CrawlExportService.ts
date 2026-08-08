@@ -5,7 +5,6 @@ import {
 	type ExportPageRow,
 } from "../../storage/repos/pageRepo.js";
 
-const CSV_INJECTION_PREFIX = /^[=+\-@|\t]/;
 const CSV_HEADERS = CSV_EXPORT_PAGE_FIELDS;
 const encoder = new TextEncoder();
 
@@ -13,9 +12,16 @@ function safeExportFilename(crawlId: string, format: CrawlExportFormat): string 
 	return `${crawlId.replace(/[^a-zA-Z0-9_-]/g, "_")}.${format}`;
 }
 
+function needsCsvInjectionPrefix(value: string): boolean {
+	if (value.charCodeAt(0) === 9) return true;
+	let index = 0;
+	while (index < value.length && value.charCodeAt(index) <= 0x20) index += 1;
+	return index < value.length && "=+-@|".includes(value[index] ?? "");
+}
+
 function escapeCsvCell(value: string | null | undefined): string {
 	const raw = value ?? "";
-	const sanitized = CSV_INJECTION_PREFIX.test(raw) ? `'${raw}` : raw;
+	const sanitized = needsCsvInjectionPrefix(raw) ? `'${raw}` : raw;
 	return `"${sanitized.replaceAll('"', '""')}"`;
 }
 

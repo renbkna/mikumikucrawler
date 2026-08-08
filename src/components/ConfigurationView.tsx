@@ -1,4 +1,4 @@
-import { Coffee, Database, TriangleAlert } from "lucide-react";
+import { Coffee, Database, Music2, Sparkles, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import {
 	type CrawlOptions,
@@ -7,13 +7,13 @@ import {
 } from "../../shared/contracts/index.js";
 import { CRAWL_OPTION_BOUNDS, isCrawlMethod } from "../../shared/crawl.js";
 import { useDialogModal } from "../hooks/useDialogModal";
-import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 
 interface ConfigurationViewProps {
 	isOpen: boolean;
 	onClose: () => void;
 	options: CrawlOptions;
 	onSave: (options: CrawlOptions) => void;
+	editingNextRun?: boolean;
 }
 
 type ConfigurationDialogProps = Omit<ConfigurationViewProps, "isOpen">;
@@ -33,24 +33,33 @@ export function ConfigurationView({
 	onClose,
 	options,
 	onSave,
+	editingNextRun = false,
 }: Readonly<ConfigurationViewProps>) {
 	if (!isOpen) return null;
 
-	return <ConfigurationDialog onClose={onClose} options={options} onSave={onSave} />;
+	return (
+		<ConfigurationDialog
+			onClose={onClose}
+			options={options}
+			onSave={onSave}
+			editingNextRun={editingNextRun}
+		/>
+	);
 }
 
 function ConfigurationDialog({
 	onClose,
 	options: committedOptions,
 	onSave,
+	editingNextRun,
 }: Readonly<ConfigurationDialogProps>) {
 	const { dialogRef } = useDialogModal({ isOpen: true });
 	const [draftOptions, setDraftOptions] = useState(() => normalizeCrawlOptions(committedOptions));
 
 	const crawlMethodDesc = {
-		links: "Follows internal HTML links and skips media metadata in saved results",
-		media: "Follows internal HTML links and keeps extracted image, video, and audio metadata",
-		full: "Follows internal and external HTML links and keeps extracted media metadata",
+		links: "Follows internal HTML links; media counting is unavailable",
+		media: "Follows internal HTML links and can count unique media references",
+		full: "Follows internal and external HTML links and can count unique media references",
 	}[draftOptions.crawlMethod];
 	const mediaRetentionDisabled = !crawlMethodSupportsSavedMedia(draftOptions.crawlMethod);
 	const updateOptions = (patch: Partial<CrawlOptions>) => {
@@ -77,9 +86,8 @@ function ConfigurationDialog({
 						id="config-dialog-title"
 						className="text-xl font-bold gradient-text tracking-tight flex items-center gap-2"
 					>
-						<NoteIcon className="text-miku-teal" size={20} />
+						<Music2 className="text-miku-teal" size={20} />
 						Advanced Configuration
-						<NoteIcon className="hidden" size={20} />
 					</h2>
 					<button
 						type="button"
@@ -90,6 +98,11 @@ function ConfigurationDialog({
 						✕
 					</button>
 				</div>
+				{editingNextRun && (
+					<p className="mb-4 rounded-lg border border-miku-accent/20 bg-miku-accent/5 p-3 text-sm text-miku-text/70">
+						These settings apply to the next crawl. The active crawl keeps its accepted settings.
+					</p>
+				)}
 
 				<div className="space-y-6">
 					{/* ── Performance Settings ─────────────────────────────── */}
@@ -97,7 +110,6 @@ function ConfigurationDialog({
 						<h3 className="flex items-center mb-4 text-lg font-bold text-miku-teal">
 							<Coffee className="w-5 h-5 mr-2" />
 							Performance Settings
-							<SparkleIcon className="hidden" size={14} />
 						</h3>
 
 						<div className="space-y-4">
@@ -122,11 +134,9 @@ function ConfigurationDialog({
 									}}
 									className="w-full px-4 py-2 border-2 border-miku-pink/20 rounded-xl bg-white text-miku-text focus:border-miku-teal focus:outline-none shadow-sm"
 								>
-									<option value="links">Links — internal links, no saved media metadata</option>
-									<option value="media">Media — internal links + saved media metadata</option>
-									<option value="full">
-										Full — internal + external links + saved media metadata
-									</option>
+									<option value="links">Links — internal links, no media count</option>
+									<option value="media">Media — internal links, optional media count</option>
+									<option value="full">Full — external links, optional media count</option>
 								</select>
 								<p className="mt-2 text-xs text-miku-text/50 font-medium">{crawlMethodDesc}</p>
 							</div>
@@ -217,13 +227,13 @@ function ConfigurationDialog({
 								</div>
 							</div>
 
-							{/* Crawl Delay — full-width slider */}
+							{/* Page Crawl Delay — full-width slider */}
 							<div>
 								<label
 									htmlFor="config-crawl-delay"
 									className="block mb-2 text-sm font-bold text-miku-text/70"
 								>
-									Crawl Delay
+									Page Crawl Delay
 									<span className="ml-2 text-miku-teal font-black">
 										{draftOptions.crawlDelay >= 1000
 											? `${draftOptions.crawlDelay / 1000}s`
@@ -249,7 +259,7 @@ function ConfigurationDialog({
 									<span>10s (polite)</span>
 								</div>
 								<p className="mt-1 text-xs text-miku-text/50 font-medium">
-									Minimum wait between requests to the same domain
+									Minimum wait between page jobs for the same hostname
 								</p>
 							</div>
 
@@ -260,7 +270,7 @@ function ConfigurationDialog({
 										htmlFor="config-max-concurrent"
 										className="block mb-2 text-sm font-bold text-miku-text/70"
 									>
-										Max Concurrent Requests
+										Concurrent Page Jobs
 									</label>
 									<input
 										id="config-max-concurrent"
@@ -279,7 +289,7 @@ function ConfigurationDialog({
 										step={1}
 									/>
 									<p className="mt-2 text-xs text-miku-text/50 font-medium">
-										Higher values crawl faster but may overload servers
+										Parallel page documents; browser subrequests use a separate fixed limit
 									</p>
 								</div>
 
@@ -316,7 +326,6 @@ function ConfigurationDialog({
 						<h3 className="flex items-center mb-4 text-lg font-bold text-miku-pink">
 							<Database className="w-5 h-5 mr-2" />
 							Content & Behavior
-							<HeartIcon className="hidden" size={14} />
 						</h3>
 
 						<div className="grid grid-cols-1 gap-4">
@@ -341,10 +350,10 @@ function ConfigurationDialog({
 								},
 								{
 									id: "saveMedia",
-									label: "Keep Media Metadata",
+									label: "Count Media References",
 									desc: mediaRetentionDisabled
 										? "(Requires Media or Full crawl method)"
-										: "(Store extracted image/video/audio metadata in results)",
+										: "(Include unique image/video/audio references in the aggregate total)",
 									checked: draftOptions.saveMedia,
 									disabled: mediaRetentionDisabled,
 								},
@@ -391,7 +400,7 @@ function ConfigurationDialog({
 							className="px-6 py-2.5 text-white font-bold bg-miku-teal hover:bg-miku-teal-dark rounded-xl shadow-sm transition-colors flex items-center gap-2"
 						>
 							Save Configuration
-							<SparkleIcon className="text-white/80" size={14} />
+							<Sparkles className="text-white/80" size={14} />
 						</button>
 					</div>
 				</div>

@@ -1,11 +1,11 @@
-import { Download } from "lucide-react";
+import { Download, Music2 } from "lucide-react";
+import type { CrawlExportFormat } from "../../shared/contracts/index.js";
 import { useDialogModal } from "../hooks/useDialogModal";
-import { HeartIcon, NoteIcon, SparkleIcon } from "./KawaiiIcons";
 
 interface ExportDialogProps {
 	isOpen: boolean;
 	onClose: () => void;
-	onExport: (format: string) => void;
+	onExport: (format: CrawlExportFormat) => void;
 }
 
 export function ExportDialog({ isOpen, onClose, onExport }: Readonly<ExportDialogProps>) {
@@ -32,9 +32,8 @@ export function ExportDialog({ isOpen, onClose, onExport }: Readonly<ExportDialo
 					id="export-dialog-title"
 					className="mb-4 text-xl font-bold gradient-text flex items-center gap-2"
 				>
-					<NoteIcon className="text-miku-teal" size={18} />
+					<Music2 className="text-miku-teal" size={18} />
 					Export Crawled Data
-					<NoteIcon className="hidden" size={18} />
 				</h2>
 
 				<div className="space-y-3">
@@ -46,9 +45,7 @@ export function ExportDialog({ isOpen, onClose, onExport }: Readonly<ExportDialo
 						}}
 						className="flex items-center justify-between w-full p-4 border border-miku-teal/25 rounded-xl bg-white/65 hover:bg-miku-teal/5 hover:border-miku-teal/40 focus:ring-2 focus:ring-miku-teal/20 focus:outline-none transition-colors group"
 					>
-						<span className="font-bold text-miku-text flex items-center gap-2">
-							JSON Format <SparkleIcon className="hidden" size={12} />
-						</span>
+						<span className="font-bold text-miku-text flex items-center gap-2">JSON Format</span>
 						<Download className="w-5 h-5 text-miku-teal group-hover:scale-110 transition-transform" />
 					</button>
 
@@ -60,9 +57,7 @@ export function ExportDialog({ isOpen, onClose, onExport }: Readonly<ExportDialo
 						}}
 						className="flex items-center justify-between w-full p-4 border border-miku-pink/25 rounded-xl bg-white/65 hover:bg-miku-pink/5 hover:border-miku-pink/40 focus:ring-2 focus:ring-miku-pink/20 focus:outline-none transition-colors group"
 					>
-						<span className="font-bold text-miku-text flex items-center gap-2">
-							CSV Format <HeartIcon className="hidden" size={12} />
-						</span>
+						<span className="font-bold text-miku-text flex items-center gap-2">CSV Format</span>
 						<Download className="w-5 h-5 text-miku-pink group-hover:scale-110 transition-transform" />
 					</button>
 				</div>

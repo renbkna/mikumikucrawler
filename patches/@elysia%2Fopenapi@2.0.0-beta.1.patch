@@ -1,0 +1,77 @@
+diff --git a/dist/gen/index.js b/dist/gen/index.js
+index 500863734b896bafa4522c9d5f4500b7d9a3d883..54a4f9f5b97ec28536c815068ddddfd8709cc0b0 100644
+--- a/dist/gen/index.js
++++ b/dist/gen/index.js
+@@ -1,6 +1,5 @@
+ Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
+-const require_script = require('../node_modules/typebox/build/type/script/script.js');
+-require('../node_modules/typebox/build/type/index.js');
++const require_script = require('typebox');
+ 
+ //#region src/gen/index.ts
+ const matchRoute = /: Elysia<(.*)>/gs;
+diff --git a/dist/gen/index.mjs b/dist/gen/index.mjs
+index 27baa3f4900963856809d0b13dc49e91f454a1d3..0d3a2bd2a6bdd7521063ebecd14ae643b20daca9 100644
+--- a/dist/gen/index.mjs
++++ b/dist/gen/index.mjs
+@@ -1,5 +1,4 @@
+-import { Script } from "../node_modules/typebox/build/type/script/script.mjs";
+-import "../node_modules/typebox/build/type/index.mjs";
++import { Script } from "typebox";
+ 
+ //#region src/gen/index.ts
+ const matchRoute = /: Elysia<(.*)>/gs;
+diff --git a/dist/index.js b/dist/index.js
+index 07fce4ec7bac2209ecaeb5b0630978b8184885a0..40b525ff50452e032d6ec146ece87e96f05ee253 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -57,10 +57,9 @@ const openapi = ({ enabled = true, path = "/openapi", provider = "scalar", specP
+ 	};
+ 	return (host) => {
+ 		const plugin = new elysia.Elysia({
+-			name: "@elysiajs/openapi",
+-			introspect: provider !== null
++			name: "@elysia/openapi",
++			introspect: true
+ 		});
+-		if (provider === null) return host.use(plugin);
+ 		const page = () => new Response(provider === "swagger-ui" ? require_swagger_index.SwaggerUIRender(info, {
+ 			url: relativePath,
+ 			dom_id: "#swagger-ui",
+@@ -74,7 +73,8 @@ const openapi = ({ enabled = true, path = "/openapi", provider = "scalar", specP
+ 			...scalar,
+ 			_integration: "elysiajs"
+ 		}, embedSpec ? JSON.stringify(totalRoutes === host.routes.length ? cachedSchema : toFullSchema(require_openapi.toOpenAPISchema(host, exclude, references, mapJsonSchema))) : void 0), { headers: { "content-type": "text/html; charset=utf8" } });
+-		plugin.get(path, { detail: { hide: true } }, embedSpec || isCloudflareWorker() ? page : page()).get(specPath, {
++		if (provider !== null) plugin.get(path, { detail: { hide: true } }, embedSpec || isCloudflareWorker() ? page : page());
++		plugin.get(specPath, {
+ 			error({ error }) {
+ 				console.log("[@elysia/openapi] error at specPath");
+ 				console.warn(error);
+diff --git a/dist/index.mjs b/dist/index.mjs
+index f5913c72eea31133f2688221b133c5b3cb6cb86d..be8d7854c4b6141e97abc9e0bebd8ebb98338a2f 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -56,10 +56,9 @@ const openapi = ({ enabled = true, path = "/openapi", provider = "scalar", specP
+ 	};
+ 	return (host) => {
+ 		const plugin = new Elysia({
+-			name: "@elysiajs/openapi",
+-			introspect: provider !== null
++			name: "@elysia/openapi",
++			introspect: true
+ 		});
+-		if (provider === null) return host.use(plugin);
+ 		const page = () => new Response(provider === "swagger-ui" ? SwaggerUIRender(info, {
+ 			url: relativePath,
+ 			dom_id: "#swagger-ui",
+@@ -73,7 +72,8 @@ const openapi = ({ enabled = true, path = "/openapi", provider = "scalar", specP
+ 			...scalar,
+ 			_integration: "elysiajs"
+ 		}, embedSpec ? JSON.stringify(totalRoutes === host.routes.length ? cachedSchema : toFullSchema(toOpenAPISchema(host, exclude, references, mapJsonSchema))) : void 0), { headers: { "content-type": "text/html; charset=utf8" } });
+-		plugin.get(path, { detail: { hide: true } }, embedSpec || isCloudflareWorker() ? page : page()).get(specPath, {
++		if (provider !== null) plugin.get(path, { detail: { hide: true } }, embedSpec || isCloudflareWorker() ? page : page());
++		plugin.get(specPath, {
+ 			error({ error }) {
+ 				console.log("[@elysia/openapi] error at specPath");
+ 				console.warn(error);

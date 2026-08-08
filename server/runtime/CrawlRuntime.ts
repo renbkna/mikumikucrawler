@@ -1,9 +1,11 @@
 import type {
+	ActiveCrawlStatus,
 	CrawlCounters,
 	CrawlEventMap,
 	CrawlEventType,
 	CrawlOptions,
 } from "../../shared/contracts/index.js";
+import { isActiveCrawlStatus } from "../../shared/contracts/index.js";
 import type { Logger } from "../config/logging.js";
 import { CRAWL_QUEUE_CONSTANTS } from "../constants.js";
 import { CrawlQueue, type QueueItem } from "../domain/crawl/CrawlQueue.js";
@@ -11,11 +13,16 @@ import type { DomainStateRecord } from "../domain/crawl/CrawlState.js";
 import { CrawlState } from "../domain/crawl/CrawlState.js";
 import { DynamicRenderer } from "../domain/crawl/DynamicRenderer.js";
 import { FetchService } from "../domain/crawl/FetchService.js";
-import { PagePipeline, type PageProcessResult } from "../domain/crawl/PagePipeline.js";
+import {
+	PagePipeline,
+	PagePipelineError,
+	type PageProcessResult,
+} from "../domain/crawl/PagePipeline.js";
 import type { RobotsService } from "../domain/crawl/RobotsService.js";
-import type { HttpClient, Resolver } from "../plugins/security.js";
+import type { HttpClient } from "../outbound/HttpClient.js";
+import type { DurableStorageBudget } from "../storage/DurableStorageBudget.js";
 import type { StorageRepos } from "../storage/db.js";
-import { runWithTimeout } from "../utils/timeout.js";
+import type { AcquireWork } from "../utils/WorkPermitPool.js";
 import type { EventStream } from "./EventStream.js";
 
 export interface CrawlRuntimeDependencies {
@@ -23,12 +30,12 @@ export interface CrawlRuntimeDependencies {
 	options: CrawlOptions;
 	logger: Logger;
 	repos: StorageRepos;
+	storageBudget: DurableStorageBudget;
 	eventStream: EventStream;
-	resolver: Resolver;
 	httpClient: HttpClient;
 	robotsService: RobotsService;
+	acquirePdfWork?: AcquireWork;
 	allowLocalhostSeed?: boolean;
-	initialSequence?: number;
 	initialCounters?: CrawlCounters;
 	initialStartedAtMs?: number;
 	initialDomainStates?: DomainStateRecord[];
@@ -54,8 +61,6 @@ export class CrawlRuntime {
 	private readonly state: CrawlState;
 	private readonly queue: CrawlQueue;
 	private readonly dynamicRenderer: DynamicRenderer;
-	private readonly fetchService: FetchService;
-	private readonly robotsService: RobotsService;
 	private readonly pipeline: PagePipeline;
 	private readonly activeTasks = new Map<string, Promise<void>>();
 	private readonly activeControllers = new Map<string, AbortController>();
@@ -69,7 +74,6 @@ export class CrawlRuntime {
 	private inactiveNotified = false;
 	private terminalizing = false;
 	private activeTaskFailure: unknown = null;
-	private lastDurableCounters: CrawlCounters;
 
 	constructor(private readonly deps: CrawlRuntimeDependencies) {
 		this.state = new CrawlState(
@@ -81,20 +85,19 @@ export class CrawlRuntime {
 			deps.initialStartedAtMs,
 			deps.initialDomainStates,
 		);
-		this.lastDurableCounters = this.state.snapshotCounters();
 		this.dynamicRenderer = new DynamicRenderer(deps.options, deps.logger, deps.httpClient);
-		this.fetchService = new FetchService(
+		const fetchService = new FetchService(
 			deps.httpClient,
 			this.dynamicRenderer,
 			deps.logger,
 			deps.allowLocalhostSeed ? deps.options.target : undefined,
+			deps.acquirePdfWork,
 		);
-		this.robotsService = deps.robotsService;
 		const toPersistedQueueItem = (item: QueueItem): QueueItem & { availableAt: number } => ({
 			...item,
 			availableAt: item.availableAt ?? 0,
 		});
-		this.queue = new CrawlQueue(deps.options, this.state, deps.logger, {
+		this.queue = new CrawlQueue(deps.options, this.state, {
 			enqueueMany: (items) =>
 				deps.repos.crawlQueue.enqueueMany(deps.crawlId, items.map(toPersistedQueueItem)),
 			reschedule: (item) =>
@@ -111,17 +114,19 @@ export class CrawlRuntime {
 			deps.options,
 			this.state,
 			this.queue,
-			this.fetchService,
-			this.robotsService,
+			fetchService,
+			deps.robotsService,
 			eventSink,
 			deps.logger,
+			deps.allowLocalhostSeed ? deps.options.target : undefined,
 		);
-		if (deps.initialSequence) {
-			deps.eventStream.initialize(deps.crawlId, deps.initialSequence);
-		}
 	}
 
 	private publish<TType extends CrawlEventType>(type: TType, payload: CrawlEventMap[TType]) {
+		this.deps.repos.crawlRuns.advanceEventSequence(
+			this.deps.crawlId,
+			this.getCurrentSequence() + 1,
+		);
 		return this.deps.eventStream.publish(this.deps.crawlId, type, payload);
 	}
 
@@ -165,22 +170,21 @@ export class CrawlRuntime {
 		});
 	}
 
-	private persistProgress(status?: "starting" | "running" | "pausing" | "stopping") {
+	private persistProgress(status?: Exclude<ActiveCrawlStatus, "pending">) {
 		const eventSequence = this.getCurrentSequence();
 		if (status === "starting") {
-			this.deps.repos.crawlRuns.markStarting(this.deps.crawlId, this.state.counters, eventSequence);
+			this.deps.repos.crawlRuns.markStarting(this.deps.crawlId, eventSequence);
 			return;
 		}
 
 		if (status === "running") {
-			this.deps.repos.crawlRuns.markRunning(this.deps.crawlId, this.state.counters, eventSequence);
+			this.deps.repos.crawlRuns.markRunning(this.deps.crawlId, eventSequence);
 			return;
 		}
 
 		if (status === "stopping") {
 			this.deps.repos.crawlRuns.markStopping(
 				this.deps.crawlId,
-				this.state.counters,
 				this.state.stopReason,
 				eventSequence,
 			);
@@ -190,20 +194,17 @@ export class CrawlRuntime {
 		if (status === "pausing") {
 			this.deps.repos.crawlRuns.markPausing(
 				this.deps.crawlId,
-				this.state.counters,
 				this.state.stopReason,
 				eventSequence,
 			);
 			return;
 		}
 
-		this.deps.repos.crawlRuns.updateProgress(this.deps.crawlId, this.state.counters, eventSequence);
+		this.deps.repos.crawlRuns.updateProgress(this.deps.crawlId, eventSequence);
 	}
 
 	private emitProgress() {
 		const counters = this.state.snapshotCounters();
-		const eventSequence = this.getCurrentSequence() + 1;
-		this.deps.repos.crawlRuns.updateProgress(this.deps.crawlId, counters, eventSequence);
 		this.publish(
 			"crawl.progress",
 			this.state.buildProgress(
@@ -265,7 +266,6 @@ export class CrawlRuntime {
 		this.pauseRequested = false;
 		this.state.requestStop(reason, { overrideReason: true });
 		this.lifecycleController.abort(this.stopSignalReason);
-		this.queue.clearRetryTimers();
 		this.queue.clearPending();
 		this.queue.clearPersisted();
 		for (const controller of this.activeControllers.values()) {
@@ -283,7 +283,6 @@ export class CrawlRuntime {
 		this.state.requestStop(reason);
 		this.lifecycleController.abort(this.stopSignalReason);
 		this.deferPendingToDelayWatermarks();
-		this.queue.clearRetryTimers();
 		for (const controller of this.activeControllers.values()) {
 			controller.abort(new Error(reason));
 		}
@@ -295,12 +294,7 @@ export class CrawlRuntime {
 			return;
 		}
 
-		this.deps.repos.crawlRuns.markInterrupted(
-			this.deps.crawlId,
-			this.lastDurableCounters,
-			reason,
-			this.getCurrentSequence(),
-		);
+		this.deps.repos.crawlRuns.markInterrupted(this.deps.crawlId, reason, this.getCurrentSequence());
 		this.interruptionPersisted = true;
 	}
 
@@ -314,7 +308,6 @@ export class CrawlRuntime {
 					return;
 				}
 				this.finalizeItem(item, processResult);
-				this.lastDurableCounters = this.state.snapshotCounters();
 				finalized = true;
 			})
 			.catch((error) => {
@@ -335,21 +328,9 @@ export class CrawlRuntime {
 		item: QueueItem,
 		externalSignal?: AbortSignal,
 	): Promise<PageProcessResult> {
-		let processPromise: Promise<PageProcessResult> | undefined;
 		try {
-			return await runWithTimeout({
-				timeoutMs: CRAWL_QUEUE_CONSTANTS.ITEM_PROCESSING_TIMEOUT_MS,
-				operationName: `Processing ${item.url}`,
-				...(externalSignal ? { signal: externalSignal } : {}),
-				run: (signal) => {
-					processPromise = this.pipeline.process(item, signal);
-					return processPromise;
-				},
-			});
+			return await this.pipeline.process(item, externalSignal);
 		} catch (error) {
-			if (processPromise !== undefined) {
-				await Promise.allSettled([processPromise]);
-			}
 			if (externalSignal?.aborted) {
 				return { aborted: true };
 			}
@@ -360,18 +341,25 @@ export class CrawlRuntime {
 			this.publish("crawl.log", { message: `[Crawler] Failure: ${item.url}` });
 			return {
 				terminalOutcome: "failure",
-				terminalEffects: { chargeDomainBudget: true },
+				terminalEffects: {
+					chargeDomainBudget: true,
+					...(error instanceof PagePipelineError && error.chargedDomain
+						? { chargedDomain: error.chargedDomain }
+						: {}),
+				},
 			};
 		}
 	}
 
 	private finalizeItem(item: QueueItem, processResult: PageProcessResult): void {
 		if (processResult.aborted) {
+			this.state.releaseRedirectReservation(item.url);
 			this.queue.markDone(item);
 			return;
 		}
 
 		if (processResult.rescheduled) {
+			this.state.releaseRedirectReservation(item.url);
 			this.queue.markDone(item);
 			return;
 		}
@@ -381,25 +369,14 @@ export class CrawlRuntime {
 			throw new Error(`Cannot complete already-terminal URL: ${item.url}`);
 		}
 		const domainBudgetCharged = terminalEffects.chargeDomainBudget;
-		const nextCounters = this.state.previewTerminalCounters(
-			item.url,
-			processResult.terminalOutcome,
-			{
-				...(terminalEffects.dataKb !== undefined ? { dataKb: terminalEffects.dataKb } : {}),
-				...(terminalEffects.mediaFiles !== undefined
-					? { mediaFiles: terminalEffects.mediaFiles }
-					: {}),
-				...(terminalEffects.discoveredLinks !== undefined
-					? { discoveredLinks: terminalEffects.discoveredLinks }
-					: {}),
-			},
-		);
 		const pendingPageEvent = processResult.page ? 1 : 0;
 		const commitBase = {
 			crawlId: this.deps.crawlId,
 			url: item.url,
 			domainBudgetCharged,
-			counters: nextCounters,
+			...(domainBudgetCharged
+				? { chargedDomain: terminalEffects.chargedDomain ?? item.domain }
+				: {}),
 			eventSequence: this.getCurrentSequence() + pendingPageEvent,
 		};
 		const itemCommit = (() => {
@@ -416,19 +393,26 @@ export class CrawlRuntime {
 				outcome: processResult.terminalOutcome,
 			});
 		})();
-
-		this.state.recordTerminal(item.url, processResult.terminalOutcome, {
-			...(terminalEffects.dataKb !== undefined ? { dataKb: terminalEffects.dataKb } : {}),
-			...(terminalEffects.mediaFiles !== undefined
-				? { mediaFiles: terminalEffects.mediaFiles }
-				: {}),
-			...(terminalEffects.discoveredLinks !== undefined
-				? { discoveredLinks: terminalEffects.discoveredLinks }
-				: {}),
+		const reservation = this.deps.storageBudget.reserve(this.deps.crawlId, {
+			maxPages: this.deps.options.maxPages,
+			pagesScanned: itemCommit.counters.pagesScanned,
 		});
+		for (const reclaimedCrawlId of reservation.reclaimedCrawlIds) {
+			this.deps.eventStream.delete(reclaimedCrawlId);
+		}
+
+		this.state.recordTerminal(item.url, processResult.terminalOutcome, itemCommit.effects);
+		if (!Bun.deepEquals(this.state.snapshotCounters(), itemCommit.counters, true)) {
+			throw new Error("Runtime counters diverged from the committed crawl aggregate");
+		}
 		if (domainBudgetCharged) {
-			this.state.recordDomainPage(item.domain);
+			if (itemCommit.chargedDomain === null) {
+				throw new Error("Charged item completion omitted its durable domain identity");
+			}
+			this.state.settleDomainAdmission(item.url, item.domain, itemCommit.chargedDomain);
+			this.state.recordDomainPage(itemCommit.chargedDomain);
 		} else {
+			this.state.releaseRedirectReservation(item.url);
 			this.state.releaseDomainAdmission(item.domain);
 		}
 
@@ -448,43 +432,18 @@ export class CrawlRuntime {
 
 	private async initializeRuntime(): Promise<void> {
 		this.persistProgress("starting");
-		await this.awaitStartupStep(
-			this.deps.resolver
-				.resolveHost(new URL(this.deps.options.target).hostname, {
-					allowLocalhost: this.deps.allowLocalhostSeed ?? false,
-				})
-				.then(() => undefined),
-		);
-		this.throwIfForceStopped();
-		const initResult = await this.awaitStartupStep(
-			this.dynamicRenderer.initialize(this.lifecycleController.signal),
-		);
-		this.throwIfForceStopped();
-		if (!initResult.dynamicEnabled && initResult.fallbackLog) {
-			this.publish("crawl.log", { message: initResult.fallbackLog });
-		}
-
-		if (this.deps.options.respectRobots) {
-			const targetPolicy = await this.awaitStartupStep(
-				this.robotsService.evaluate(this.deps.options.target, this.lifecycleController.signal),
-			);
-			this.throwIfForceStopped();
-			if (targetPolicy.type === "disallowed") {
-				throw new Error("Target URL is disallowed by robots.txt");
-			}
-			if (targetPolicy.type === "unavailable") {
-				this.publish("crawl.log", {
-					message: `[Robots] Continuing because target robots.txt is unavailable: ${targetPolicy.reason}`,
-				});
-			}
-
-			if (targetPolicy.type !== "unavailable" && targetPolicy.crawlDelayMs !== undefined) {
-				this.state.setDomainDelay(targetPolicy.delayKey, targetPolicy.crawlDelayMs);
-			}
-		}
-
 		if (!this.forceStopRequested) {
 			await this.seedInitialQueue();
+		}
+		this.throwIfForceStopped();
+		if (this.queue.pendingCount > 0) {
+			const initResult = await this.awaitStartupStep(
+				this.dynamicRenderer.initialize(this.lifecycleController.signal),
+			);
+			this.throwIfForceStopped();
+			if (!initResult.dynamicEnabled && initResult.fallbackLog) {
+				this.publish("crawl.log", { message: initResult.fallbackLog });
+			}
 		}
 		this.started = true;
 		if (this.state.isStopRequested) {
@@ -501,16 +460,18 @@ export class CrawlRuntime {
 
 	private finishStopped(): void {
 		const stopReason = this.state.stopReason ?? "Crawl stopped";
-		this.deps.repos.crawlRuns.markStopped(
+		const stopped = this.deps.repos.crawlRuns.markStopped(
 			this.deps.crawlId,
-			this.state.counters,
 			stopReason,
 			this.getCurrentSequence() + 1,
 		);
+		if (!stopped) {
+			throw new Error(`Stopped crawl disappeared during terminal transition: ${this.deps.crawlId}`);
+		}
 		this.markInactive();
 		this.publish("crawl.stopped", {
 			stopReason,
-			counters: this.state.counters,
+			counters: stopped.counters,
 		});
 	}
 
@@ -561,7 +522,6 @@ export class CrawlRuntime {
 			}
 
 			await Promise.allSettled(this.activeTasks.values());
-			this.queue.clearRetryTimers();
 
 			if (this.interrupted) {
 				this.deferPendingToDelayWatermarks();
@@ -577,16 +537,18 @@ export class CrawlRuntime {
 					message: this.state.stopReason ?? "Crawl paused",
 				});
 				this.emitProgress();
-				this.deps.repos.crawlRuns.markPaused(
+				const paused = this.deps.repos.crawlRuns.markPaused(
 					this.deps.crawlId,
-					this.state.counters,
 					this.state.stopReason,
 					this.getCurrentSequence() + 1,
 				);
+				if (!paused) {
+					throw new Error(`Paused crawl disappeared during transition: ${this.deps.crawlId}`);
+				}
 				this.markInactive();
 				this.publish("crawl.paused", {
 					stopReason: this.state.stopReason,
-					counters: this.state.counters,
+					counters: paused.counters,
 				});
 				return;
 			}
@@ -600,15 +562,19 @@ export class CrawlRuntime {
 				return;
 			}
 
-			this.deps.repos.crawlRuns.markCompleted(
+			const completed = this.deps.repos.crawlRuns.markCompleted(
 				this.deps.crawlId,
-				this.state.counters,
 				null,
 				this.getCurrentSequence() + 1,
 			);
+			if (!completed) {
+				throw new Error(
+					`Completed crawl disappeared during terminal transition: ${this.deps.crawlId}`,
+				);
+			}
 			this.markInactive();
 			this.publish("crawl.completed", {
-				counters: this.state.counters,
+				counters: completed.counters,
 			});
 		} catch (error) {
 			this.terminalizing = true;
@@ -616,7 +582,6 @@ export class CrawlRuntime {
 				controller.abort(error instanceof Error ? error : new Error("Runtime failed"));
 			}
 			await Promise.allSettled(this.activeTasks.values());
-			this.queue.clearRetryTimers();
 			await this.dynamicRenderer.close();
 			if (
 				this.forceStopRequested &&
@@ -636,23 +601,31 @@ export class CrawlRuntime {
 				this.markInactive();
 				return;
 			}
-			this.queue.clearPending();
-			this.queue.clearPersisted();
 			const message = error instanceof Error ? error.message : String(error);
-			this.deps.repos.crawlRuns.markFailed(
+			const failed = this.deps.repos.crawlRuns.markFailed(
 				this.deps.crawlId,
-				this.lastDurableCounters,
 				message,
 				this.getCurrentSequence() + 1,
 			);
+			if (!failed) {
+				throw new Error(
+					`Failed crawl disappeared during terminal transition: ${this.deps.crawlId}`,
+					{ cause: error },
+				);
+			}
+			this.queue.clearPending();
+			this.queue.clearPersisted();
 			this.markInactive();
 			this.publish("crawl.failed", {
 				error: message,
-				counters: this.lastDurableCounters,
+				counters: failed.counters,
 			});
 		} finally {
-			this.markInactive();
-			this.deps.onSettled();
+			const persisted = this.deps.repos.crawlRuns.getById(this.deps.crawlId);
+			if (!persisted || !isActiveCrawlStatus(persisted.status)) {
+				this.markInactive();
+				this.deps.onSettled();
+			}
 		}
 	}
 }

@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { OperationTimeoutError, runWithTimeout, runWithTimeoutFallback } from "../timeout.js";
+import { OperationTimeoutError, runWithTimeout } from "../timeout.js";
 
 describe("runWithTimeout", () => {
 	test("aborts the operation signal when the timeout expires", async () => {
 		let observedSignal: AbortSignal | undefined;
+		let settled = false;
 
 		await expect(
 			runWithTimeout({
@@ -11,12 +12,22 @@ describe("runWithTimeout", () => {
 				operationName: "Observed operation",
 				run: (signal) => {
 					observedSignal = signal;
-					return new Promise(() => undefined);
+					return new Promise<void>((resolve) => {
+						signal.addEventListener(
+							"abort",
+							() => {
+								settled = true;
+								resolve();
+							},
+							{ once: true },
+						);
+					});
 				},
 			}),
 		).rejects.toThrow("Timeout: Observed operation exceeded 5ms");
 
 		expect(observedSignal?.aborted).toBe(true);
+		expect(settled).toBe(true);
 	});
 
 	test("external abort rejects with the external abort reason", async () => {
@@ -25,7 +36,10 @@ describe("runWithTimeout", () => {
 			timeoutMs: 1000,
 			operationName: "External operation",
 			signal: controller.signal,
-			run: () => new Promise(() => undefined),
+			run: (signal) =>
+				new Promise<void>((resolve) => {
+					signal.addEventListener("abort", () => resolve(), { once: true });
+				}),
 		});
 
 		controller.abort(new Error("external stop"));
@@ -38,34 +52,11 @@ describe("runWithTimeout", () => {
 			runWithTimeout({
 				timeoutMs: 5,
 				operationName: "Typed operation",
-				run: () => new Promise(() => undefined),
+				run: (signal) =>
+					new Promise<void>((resolve) => {
+						signal.addEventListener("abort", () => resolve(), { once: true });
+					}),
 			}),
 		).rejects.toBeInstanceOf(OperationTimeoutError);
-	});
-});
-
-describe("runWithTimeoutFallback", () => {
-	test("returns fallback only when the timeout expires", async () => {
-		await expect(
-			runWithTimeoutFallback({
-				timeoutMs: 5,
-				operationName: "Fallback operation",
-				fallback: "fallback",
-				run: () => new Promise<string>(() => undefined),
-			}),
-		).resolves.toBe("fallback");
-	});
-
-	test("does not hide operation failures", async () => {
-		await expect(
-			runWithTimeoutFallback({
-				timeoutMs: 1000,
-				operationName: "Failing operation",
-				fallback: "fallback",
-				run: async () => {
-					throw new Error("operation failed");
-				},
-			}),
-		).rejects.toThrow("operation failed");
 	});
 });

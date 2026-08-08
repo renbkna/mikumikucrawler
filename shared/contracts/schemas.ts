@@ -2,21 +2,20 @@ import { t } from "elysia/type-system";
 import { CRAWL_METHODS, CRAWL_OPTION_BOUNDS } from "../crawl.js";
 import { MAX_URL_LENGTH } from "../url.js";
 import { CRAWL_EXPORT_FORMAT_VALUES } from "./api.js";
-import { CrawlStatusValues, StopCrawlModeValues } from "./crawl.js";
+import { CrawlStatusValues, RESUMABLE_CRAWL_STATUS_VALUES, StopCrawlModeValues } from "./crawl.js";
+import { CRAWL_EVENT_TYPES } from "./events.js";
 import {
-	CrawlEventTypeValues,
-	LIVE_CRAWL_EVENT_TYPE_VALUES,
-	SETTLED_CRAWL_EVENT_TYPE_VALUES,
-	TERMINAL_CRAWL_EVENT_TYPE_VALUES,
-} from "./events.js";
-import { MediaTypeValues } from "./pageData.js";
+	CRAWL_PAGE_SNAPSHOT_LIMIT,
+	maxUtf16LengthForCodePoints,
+	PAGE_TEXT_LIMITS,
+} from "./pageData.js";
 
-export const CrawlStatusSchema = t.UnionEnum([...CrawlStatusValues]);
+export const CrawlStatusSchema = t.Enum(CrawlStatusValues);
 
 export const CrawlMethodValues = CRAWL_METHODS;
-export const CrawlMethodSchema = t.UnionEnum([...CrawlMethodValues]);
+export const CrawlMethodSchema = t.Enum(CrawlMethodValues);
 
-export const StopCrawlModeSchema = t.UnionEnum([...StopCrawlModeValues]);
+export const StopCrawlModeSchema = t.Enum(StopCrawlModeValues);
 
 export const CrawlOptionsSchema = t.Object({
 	target: t.String({ minLength: 1, maxLength: MAX_URL_LENGTH }),
@@ -64,11 +63,12 @@ export const CrawlCountersSchema = t.Object({
 	skippedCount: t.Number({ minimum: 0, multipleOf: 1 }),
 	linksFound: t.Number({ minimum: 0, multipleOf: 1 }),
 	mediaFiles: t.Number({ minimum: 0, multipleOf: 1 }),
-	totalDataKb: t.Number({ minimum: 0, multipleOf: 1 }),
+	totalDataKb: t.Number({ minimum: 0 }),
 });
 
 export const CrawlSummarySchema = t.Object({
 	id: t.String(),
+	eventSequence: t.Integer({ minimum: 0 }),
 	target: t.String(),
 	status: CrawlStatusSchema,
 	options: CrawlOptionsSchema,
@@ -85,13 +85,30 @@ export const CrawlListResponseSchema = t.Object({
 	crawls: t.Array(CrawlSummarySchema),
 });
 
-export const ResumableCrawlListResponseSchema = CrawlListResponseSchema;
+export const ResumableCrawlSummarySchema = t.Object({
+	...CrawlSummarySchema.properties,
+	status: t.Enum(RESUMABLE_CRAWL_STATUS_VALUES),
+	resumable: t.Literal(true),
+});
+
+export const ResumableCrawlListResponseSchema = t.Object({
+	crawls: t.Array(ResumableCrawlSummarySchema),
+});
 
 export const CreateCrawlResponseSchema = CrawlSummarySchema;
 export const StopCrawlResponseSchema = CrawlSummarySchema;
 export const GetCrawlResponseSchema = CrawlSummarySchema;
 
-export const CreateCrawlBodySchema = CrawlOptionsSchema;
+export const ClientCrawlIdSchema = t.String({
+	minLength: 36,
+	maxLength: 36,
+	pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+});
+
+export const CreateCrawlBodySchema = t.Object({
+	id: ClientCrawlIdSchema,
+	options: CrawlOptionsSchema,
+});
 
 export const StopCrawlBodySchema = t.Optional(
 	t.Object({
@@ -112,64 +129,26 @@ export const PageContentResponseSchema = t.Object({
 	content: t.Nullable(t.String()),
 });
 
-export const PageMetadataSchema = t.Record(t.String(), t.String());
-
-export const QualityAnalysisSchema = t.Object({
-	score: t.Number(),
-	factors: t.Record(t.String(), t.Union([t.Number(), t.Boolean()])),
-	issues: t.Array(t.String()),
+export const PageMetadataSchema = t.Object({
+	title: t.Optional(t.String({ maxLength: PAGE_TEXT_LIMITS.metadataValueBytes })),
+	description: t.Optional(t.String({ maxLength: PAGE_TEXT_LIMITS.metadataValueBytes })),
+	robots: t.Optional(t.String({ maxLength: PAGE_TEXT_LIMITS.metadataValueBytes })),
 });
 
 export const ContentAnalysisSchema = t.Object({
 	wordCount: t.Optional(t.Number({ minimum: 0 })),
 	readingTime: t.Optional(t.Number({ minimum: 0 })),
 	language: t.Optional(t.String()),
-	keywords: t.Optional(
-		t.Array(
-			t.Object({
-				word: t.String(),
-				count: t.Number({ minimum: 0 }),
-			}),
-		),
-	),
-	sentiment: t.Optional(t.String()),
-	readabilityScore: t.Optional(t.Number()),
-	quality: t.Optional(QualityAnalysisSchema),
 });
 
 export const ExtractedDataSchema = t.Object({
 	mainContent: t.Optional(t.String()),
-	jsonLd: t.Optional(t.Array(t.Record(t.String(), t.Unknown()))),
-	microdata: t.Optional(t.Record(t.String(), t.Unknown())),
-	openGraph: t.Optional(t.Record(t.String(), t.String())),
-	twitterCards: t.Optional(t.Record(t.String(), t.String())),
-	schema: t.Optional(t.Record(t.String(), t.Unknown())),
 });
 
-export const MediaInfoSchema = t.Object({
-	type: t.Union(MediaTypeValues.map((type) => t.Literal(type))),
-	url: t.String(),
-	alt: t.Optional(t.String()),
-	title: t.Optional(t.String()),
-	width: t.Optional(t.String()),
-	height: t.Optional(t.String()),
-	poster: t.Optional(t.String()),
-});
-
-export const ProcessingErrorSchema = t.Object({
-	type: t.String(),
-	message: t.String(),
-	timestamp: t.Optional(t.String()),
-});
-
-export const ProcessedPageDataSchema = t.Object({
-	extractedData: ExtractedDataSchema,
-	metadata: PageMetadataSchema,
-	analysis: ContentAnalysisSchema,
-	media: t.Array(MediaInfoSchema),
-	errors: t.Optional(t.Array(ProcessingErrorSchema)),
-	qualityScore: t.Number(),
-	language: t.String(),
+export const CrawlPageDetailsSchema = t.Object({
+	wordCount: t.Optional(t.Number({ minimum: 0 })),
+	readingTime: t.Optional(t.Number({ minimum: 0 })),
+	language: t.Optional(t.String({ maxLength: PAGE_TEXT_LIMITS.languageBytes })),
 });
 
 export const QueueStatsSchema = t.Object({
@@ -179,43 +158,58 @@ export const QueueStatsSchema = t.Object({
 	pagesPerSecond: t.Number({ minimum: 0 }),
 });
 
-export const CrawlPageDataSchema = t.Object({
-	url: t.String(),
-	content: t.Optional(t.String()),
-	title: t.Optional(t.String()),
-	description: t.Optional(t.String()),
-	contentType: t.Optional(t.String()),
-	domain: t.Optional(t.String()),
-	processedData: t.Optional(ProcessedPageDataSchema),
-});
+export const CrawlPageDataSchema = t.Object(
+	{
+		url: t.String(),
+		title: t.Optional(t.String({ maxLength: PAGE_TEXT_LIMITS.metadataValueBytes })),
+		description: t.Optional(t.String({ maxLength: PAGE_TEXT_LIMITS.metadataValueBytes })),
+		contentType: t.Optional(t.String()),
+		domain: t.Optional(t.String()),
+		details: CrawlPageDetailsSchema,
+	},
+	{ additionalProperties: false },
+);
 
-export const CrawlPagePayloadSchema = t.Object({
-	id: t.Number({ minimum: 1, multipleOf: 1 }),
-	...CrawlPageDataSchema.properties,
-});
+export const StoredPageIdSchema = t.Number({ minimum: 1, multipleOf: 1 });
 
-export const CrawlPageEventPayloadSchema = t.Object({
-	...CrawlPagePayloadSchema.properties,
-	pageCount: t.Number({ minimum: 1, multipleOf: 1 }),
-});
+export const CrawlPagePayloadSchema = t.Object(
+	{
+		id: StoredPageIdSchema,
+		...CrawlPageDataSchema.properties,
+	},
+	{ additionalProperties: false },
+);
+
+export const CrawlPageEventPayloadSchema = t.Object(
+	{
+		...CrawlPagePayloadSchema.properties,
+		pageCount: t.Number({ minimum: 1, multipleOf: 1 }),
+	},
+	{ additionalProperties: false },
+);
 
 export const CrawlPageSummarySchema = t.Object({
-	id: t.Number({ minimum: 1, multipleOf: 1 }),
+	id: StoredPageIdSchema,
 	url: t.String(),
-	title: t.Optional(t.String()),
-	description: t.Optional(t.String()),
+	title: t.Optional(
+		t.String({ maxLength: maxUtf16LengthForCodePoints(PAGE_TEXT_LIMITS.summaryTextCharacters) }),
+	),
+	description: t.Optional(
+		t.String({ maxLength: maxUtf16LengthForCodePoints(PAGE_TEXT_LIMITS.summaryTextCharacters) }),
+	),
 	contentType: t.Optional(t.String()),
 	domain: t.String(),
+	details: CrawlPageDetailsSchema,
 });
 
 export const CrawlPagesResponseSchema = t.Object({
-	pages: t.Array(CrawlPageSummarySchema),
+	pages: t.Array(CrawlPageSummarySchema, { maxItems: CRAWL_PAGE_SNAPSHOT_LIMIT }),
 	count: t.Number({ minimum: 0, multipleOf: 1 }),
 });
 
 export const CrawlRecoverySnapshotSchema = t.Object({
 	crawl: CrawlSummarySchema,
-	pages: t.Array(CrawlPageSummarySchema),
+	pages: t.Array(CrawlPageSummarySchema, { maxItems: CRAWL_PAGE_SNAPSHOT_LIMIT }),
 	pageCount: t.Number({ minimum: 0, multipleOf: 1 }),
 });
 
@@ -227,8 +221,6 @@ export const CrawlStartedPayloadSchema = t.Object({
 export const CrawlProgressPayloadSchema = t.Object({
 	counters: CrawlCountersSchema,
 	queue: QueueStatsSchema,
-	elapsedSeconds: t.Number({ minimum: 0 }),
-	pagesPerSecond: t.Number({ minimum: 0 }),
 	stopReason: t.Nullable(t.String()),
 });
 
@@ -255,8 +247,6 @@ export const CrawlPausedPayloadSchema = t.Object({
 	counters: CrawlCountersSchema,
 });
 
-export const CrawlEventTypeSchema = t.Union(CrawlEventTypeValues.map((value) => t.Literal(value)));
-
 const EventEnvelopeBaseSchema = {
 	crawlId: t.String(),
 	sequence: t.Number({ minimum: 1, multipleOf: 1 }),
@@ -265,49 +255,43 @@ const EventEnvelopeBaseSchema = {
 
 export const CrawlEventEnvelopeSchema = t.Union([
 	t.Object({
-		type: t.Literal("crawl.started"),
+		type: t.Literal(CRAWL_EVENT_TYPES.started),
 		...EventEnvelopeBaseSchema,
 		payload: CrawlStartedPayloadSchema,
 	}),
 	t.Object({
-		type: t.Literal("crawl.progress"),
+		type: t.Literal(CRAWL_EVENT_TYPES.progress),
 		...EventEnvelopeBaseSchema,
 		payload: CrawlProgressPayloadSchema,
 	}),
 	t.Object({
-		type: t.Literal("crawl.page"),
+		type: t.Literal(CRAWL_EVENT_TYPES.page),
 		...EventEnvelopeBaseSchema,
 		payload: CrawlPageEventPayloadSchema,
 	}),
 	t.Object({
-		type: t.Literal("crawl.log"),
+		type: t.Literal(CRAWL_EVENT_TYPES.log),
 		...EventEnvelopeBaseSchema,
 		payload: CrawlLogPayloadSchema,
 	}),
 	t.Object({
-		type: t.Literal("crawl.completed"),
+		type: t.Literal(CRAWL_EVENT_TYPES.completed),
 		...EventEnvelopeBaseSchema,
 		payload: CrawlCompletedPayloadSchema,
 	}),
 	t.Object({
-		type: t.Literal("crawl.failed"),
+		type: t.Literal(CRAWL_EVENT_TYPES.failed),
 		...EventEnvelopeBaseSchema,
 		payload: CrawlFailedPayloadSchema,
 	}),
 	t.Object({
-		type: t.Literal("crawl.stopped"),
+		type: t.Literal(CRAWL_EVENT_TYPES.stopped),
 		...EventEnvelopeBaseSchema,
 		payload: CrawlStoppedPayloadSchema,
 	}),
 	t.Object({
-		type: t.Literal("crawl.paused"),
+		type: t.Literal(CRAWL_EVENT_TYPES.paused),
 		...EventEnvelopeBaseSchema,
 		payload: CrawlPausedPayloadSchema,
 	}),
 ]);
-
-export {
-	LIVE_CRAWL_EVENT_TYPE_VALUES,
-	SETTLED_CRAWL_EVENT_TYPE_VALUES,
-	TERMINAL_CRAWL_EVENT_TYPE_VALUES,
-};

@@ -32,7 +32,10 @@ describe("CrawlAdmissionPolicy", () => {
 	test("normalizes crawl-visible links independently from depth-limited enqueue", () => {
 		const policy = new CrawlAdmissionPolicy(
 			makeOptions({ crawlDepth: 0 }),
-			{ setDomainDelay: mock(() => undefined) } as never,
+			{
+				setDomainDelay: mock(() => undefined),
+				remainingAdmissionCapacity: () => 10,
+			} as never,
 			{ enqueueNormalized: mock(() => true) } as never,
 			{
 				evaluateIdentity: mock(async () => ({ type: "allowed", delayKey: "" })),
@@ -44,7 +47,7 @@ describe("CrawlAdmissionPolicy", () => {
 			{ url: "https://example.com/app.css" },
 		]);
 
-		expect(normalized.map((link) => link.link.url)).toEqual(["https://example.com/page?a=1&b=2"]);
+		expect(normalized.map((link) => link.link.url)).toEqual(["https://example.com/page?b=2&a=1"]);
 	});
 
 	test("admits the canonical crawl-visible links through one policy boundary", async () => {
@@ -52,12 +55,12 @@ describe("CrawlAdmissionPolicy", () => {
 		const enqueueNormalized = mock(() => true);
 		const evaluateIdentity = mock(async (identity: { canonicalUrl: string }) => ({
 			type: identity.canonicalUrl.endsWith("/blocked") ? "disallowed" : "allowed",
-			delayKey: "https://example.com",
+			delayKey: "example.com",
 			crawlDelayMs: identity.canonicalUrl.endsWith("/allowed") ? 500 : undefined,
 		}));
 		const policy = new CrawlAdmissionPolicy(
 			makeOptions(),
-			{ setDomainDelay } as never,
+			{ setDomainDelay, remainingAdmissionCapacity: () => 10 } as never,
 			{ enqueueNormalized } as never,
 			{ evaluateIdentity } as never,
 		);
@@ -98,22 +101,22 @@ describe("CrawlAdmissionPolicy", () => {
 				url: "https://example.com/blocked",
 			},
 		]);
-		expect(setDomainDelay).toHaveBeenCalledWith("https://example.com", 500);
+		expect(setDomainDelay).toHaveBeenCalledWith("example.com", 500);
 		expect(enqueueNormalized).toHaveBeenCalledTimes(1);
 		expect(evaluateIdentity).toHaveBeenCalledTimes(2);
 	});
 
-	test("applies robots crawl-delay by origin while keeping budget domain on the queued item", async () => {
+	test("applies robots crawl-delay to the hostname politeness lane", async () => {
 		const setDomainDelay = mock(() => undefined);
 		const enqueueNormalized = mock(() => true);
 		const policy = new CrawlAdmissionPolicy(
 			makeOptions({ crawlMethod: "full" }),
-			{ setDomainDelay } as never,
+			{ setDomainDelay, remainingAdmissionCapacity: () => 10 } as never,
 			{ enqueueNormalized } as never,
 			{
-				evaluateIdentity: mock(async (identity: { originKey: string }) => ({
+				evaluateIdentity: mock(async (identity: { domainBudgetKey: string }) => ({
 					type: "allowed",
-					delayKey: identity.originKey,
+					delayKey: identity.domainBudgetKey,
 					crawlDelayMs: 1200,
 				})),
 			} as never,
@@ -124,12 +127,44 @@ describe("CrawlAdmissionPolicy", () => {
 		]);
 		await policy.admitNormalizedDiscoveredLinks(parent, normalized);
 
-		expect(setDomainDelay).toHaveBeenCalledWith("http://example.com:8080", 1200);
+		expect(setDomainDelay).toHaveBeenCalledWith("example.com", 1200);
 		expect(enqueueNormalized).toHaveBeenCalledWith(
 			expect.objectContaining({
 				url: "http://example.com:8080/slow",
 				domain: "example.com",
 			}),
 		);
+	});
+
+	test("stops robots work when the crawl-wide page admission budget is full", async () => {
+		let remaining = 1;
+		const evaluateIdentity = mock(async () => ({
+			type: "allowed" as const,
+			delayKey: "https://example.com",
+		}));
+		const policy = new CrawlAdmissionPolicy(
+			makeOptions({ maxPages: 2 }),
+			{
+				setDomainDelay: mock(() => undefined),
+				remainingAdmissionCapacity: () => remaining,
+			} as never,
+			{
+				enqueueNormalized: mock(() => {
+					remaining = 0;
+					return true;
+				}),
+			} as never,
+			{ evaluateIdentity } as never,
+		);
+		const normalized = policy.normalizeDiscoveredLinks(parent.url, [
+			{ url: "https://example.com/one" },
+			{ url: "https://example.com/two" },
+			{ url: "https://example.com/three" },
+		]);
+
+		const results = await policy.admitNormalizedDiscoveredLinks(parent, normalized);
+
+		expect(evaluateIdentity).toHaveBeenCalledTimes(1);
+		expect(results.map((result) => result.type)).toEqual(["admitted", "rejected", "rejected"]);
 	});
 });

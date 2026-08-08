@@ -1,5 +1,4 @@
 import { Download, ScrollText } from "lucide-react";
-import { HeartIcon, SparkleIcon } from "./KawaiiIcons";
 
 interface ActionButtonsProps {
 	storedPageCount: number;
@@ -28,7 +27,6 @@ export function ActionButtons({
 			>
 				<Download className="w-4 h-4 mr-1.5" />
 				<span>Export Data</span>
-				<HeartIcon className="hidden" size={12} />
 				{storedPageCount > 0 && (
 					<span className="ml-1.5 text-xs font-medium">{storedPageCount}</span>
 				)}
@@ -41,7 +39,6 @@ export function ActionButtons({
 			>
 				<ScrollText className="w-4 h-4 mr-1.5" />
 				<span>{showDetails ? "Hide Stats" : "Show Stats"}</span>
-				<SparkleIcon className="hidden" size={12} />
 			</button>
 		</div>
 	);

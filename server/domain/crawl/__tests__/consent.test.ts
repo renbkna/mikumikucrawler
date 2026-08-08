@@ -1,28 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { isConsentActionText, isConsentWallText, requiresStrictConsentBypass } from "../consent.js";
+import { isConsentWallText, requiresStrictConsentBypass } from "../consent.js";
 
 describe("consent heuristics contract", () => {
 	test("detects english and german consent walls", () => {
 		expect(isConsentWallText("Before you continue to YouTube")).toBe(true);
 		expect(isConsentWallText("Bevor Sie fortfahren, akzeptieren Sie Cookies")).toBe(true);
-	});
-
-	test("matches localized accept actions", () => {
-		expect(isConsentActionText("Accept all")).toBe(true);
-		expect(isConsentActionText("Alle akzeptieren")).toBe(true);
-		expect(isConsentActionText("Zustimmen und fortfahren")).toBe(true);
-	});
-
-	test("never treats negative actions containing affirmative words as consent", () => {
-		for (const label of [
-			"Do not accept",
-			"Don't agree",
-			"Reject and continue",
-			"Nicht akzeptieren",
-			"Nur notwendige Cookies akzeptieren",
-		]) {
-			expect(isConsentActionText(label)).toBe(false);
-		}
 	});
 
 	test("requires strict consent bypass for youtube domains only", () => {

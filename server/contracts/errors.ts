@@ -1,4 +1,5 @@
 import { t } from "elysia";
+import type { Static } from "typebox";
 import { ValidationErrorDetailSchema } from "./http.js";
 
 export const ApiErrorSchema = t.Object({
@@ -7,4 +8,4 @@ export const ApiErrorSchema = t.Object({
 	details: t.Optional(t.Array(ValidationErrorDetailSchema)),
 });
 
-export type ApiError = typeof ApiErrorSchema.static;
+export type ApiError = Static<typeof ApiErrorSchema>;

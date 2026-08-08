@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CrawlOptions } from "../../../../shared/contracts/index.js";
-import type { ExtractedLink } from "../../../../shared/types.js";
+import type { ExtractedLink } from "../../../types.js";
 import { getCrawlUrlIdentity, normalizeDiscoveredLink } from "../UrlPolicy.js";
 
 function makeOptions(overrides: Partial<CrawlOptions> = {}): CrawlOptions {
@@ -30,19 +30,26 @@ function normalize(
 }
 
 describe("crawl URL identity", () => {
-	test("derives canonical, robots, origin, and budget identities from one URL", () => {
+	test("derives canonical, origin, and budget identities from one URL", () => {
 		const identity = getCrawlUrlIdentity(
 			"HTTPS://Example.COM:443/path/?b=2&a=1&utm_source=x#section",
 		);
 
 		expect(identity).toEqual({
-			canonicalUrl: "https://example.com/path/?a=1&b=2",
-			robotsMatchUrl: "https://example.com/path/?b=2&a=1&utm_source=x",
+			canonicalUrl: "https://example.com/path/?b=2&a=1&utm_source=x",
 			hostname: "example.com",
 			originKey: "https://example.com",
-			robotsKey: "https://example.com",
 			domainBudgetKey: "example.com",
 			skippedByExtension: false,
+		});
+	});
+
+	test("collapses DNS trailing-dot aliases across every derived identity", () => {
+		expect(getCrawlUrlIdentity("https://Example.COM./path")).toMatchObject({
+			canonicalUrl: "https://example.com/path",
+			hostname: "example.com",
+			originKey: "https://example.com",
+			domainBudgetKey: "example.com",
 		});
 	});
 
@@ -52,7 +59,6 @@ describe("crawl URL identity", () => {
 		expect(identity).toMatchObject({
 			canonicalUrl: "http://blog.example.com:8080/page",
 			originKey: "http://blog.example.com:8080",
-			robotsKey: "http://blog.example.com:8080",
 			domainBudgetKey: "blog.example.com",
 		});
 	});
@@ -86,17 +92,6 @@ describe("discovered URL normalization", () => {
 		).toEqual(urls);
 	});
 
-	test("derives internal status from the document origin instead of extractor flags", () => {
-		const internal = normalize({ url: "https://example.com/about", isInternal: false });
-		const external = normalize(
-			{ url: "https://external.example/page", isInternal: true },
-			makeOptions({ crawlMethod: "full" }),
-		);
-
-		expect(internal).toMatchObject({ link: { isInternal: true } });
-		expect(external).toMatchObject({ link: { isInternal: false } });
-	});
-
 	test("treats scheme and port changes as external origin changes", () => {
 		for (const url of ["https://example.com/page", "http://example.com:8080/page"]) {
 			expect(normalize({ url }, makeOptions(), "http://example.com/start")).toMatchObject({
@@ -110,7 +105,7 @@ describe("discovered URL normalization", () => {
 
 		expect(normalize(link)).toMatchObject({ reason: "external-link" });
 		expect(normalize(link, makeOptions({ crawlMethod: "full" }))).toMatchObject({
-			link: { url: link.url, isInternal: false },
+			link: { url: link.url, nofollow: false },
 		});
 	});
 

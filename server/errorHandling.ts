@@ -1,17 +1,14 @@
-import { ValidationError } from "elysia";
+import { InvalidCookie, NotFound, ParseError, ValidationError } from "elysia";
 import type { ApiError } from "./contracts/errors.js";
 import type { ValidationErrorDetail } from "./contracts/http.js";
 import type { LoggerLike } from "./types.js";
 import { getErrorMessage } from "./utils/helpers.js";
 
-export function resolveErrorStatus(code: string | number): number {
-	if (typeof code === "number" && code >= 400 && code < 600) {
-		return code;
-	}
-
-	if (code === "NOT_FOUND") return 404;
-	if (code === "VALIDATION" || code === "INVALID_FILE_TYPE") return 422;
-	if (code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE") return 400;
+function resolveErrorStatus(error: unknown): number {
+	if (error instanceof NotFound) return 404;
+	if (error instanceof ValidationError) return 422;
+	if (error instanceof ParseError) return 400;
+	if (error instanceof InvalidCookie && error.status === 400) return 400;
 	return 500;
 }
 
@@ -20,18 +17,19 @@ function validationDetails(error: unknown): ValidationErrorDetail[] | undefined 
 		return undefined;
 	}
 
-	const details = error.all.flatMap(({ path, summary, message }) => {
-		const resolvedMessage = summary ?? message;
-		return typeof path === "string" && resolvedMessage ? [{ path, message: resolvedMessage }] : [];
+	const details = error.payload.errors?.flatMap(({ instancePath, message }) => {
+		return typeof instancePath === "string" && typeof message === "string"
+			? [{ path: instancePath, message }]
+			: [];
 	});
 
-	return details.length > 0 ? details : undefined;
+	return details && details.length > 0 ? details : undefined;
 }
 
-function publicErrorMessage(code: string | number, status: number, error: unknown): string {
+function publicErrorMessage(status: number, error: unknown): string {
 	if (status >= 500) return "Internal Server Error";
-	if (code === "NOT_FOUND") return "Not Found";
-	if (code === "PARSE") return "Bad Request";
+	if (error instanceof NotFound) return "Not Found";
+	if (error instanceof ParseError) return "Bad Request";
 
 	if (error instanceof ValidationError) {
 		return error.all[0]?.summary ?? error.all[0]?.message ?? "Validation failed";
@@ -40,16 +38,11 @@ function publicErrorMessage(code: string | number, status: number, error: unknow
 	return getErrorMessage(error);
 }
 
-export function handleAppError({
-	code,
-	error,
-	logger,
-}: {
-	code: string | number;
-	error: unknown;
-	logger: LoggerLike;
-}): { status: number; body: ApiError } {
-	const status = resolveErrorStatus(code);
+export function handleAppError({ error, logger }: { error: unknown; logger: LoggerLike }): {
+	status: number;
+	body: ApiError;
+} {
+	const status = resolveErrorStatus(error);
 	if (status >= 500) {
 		logger.error(`[App] ${getErrorMessage(error)}`);
 	}
@@ -57,7 +50,7 @@ export function handleAppError({
 	return {
 		status,
 		body: {
-			error: publicErrorMessage(code, status, error),
+			error: publicErrorMessage(status, error),
 			details: validationDetails(error),
 		},
 	};

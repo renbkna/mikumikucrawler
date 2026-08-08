@@ -73,19 +73,6 @@ export function isConsentWallText(text: string): boolean {
 	return CONSENT_WALL_MARKERS.some((marker) => normalized.includes(marker));
 }
 
-export function isConsentActionText(...values: Array<string | null | undefined>): boolean {
-	return values.some((value) => {
-		if (!value) return false;
-		const normalized = normalizeText(value);
-		if (CONSENT_NEGATIVE_ACTION_MARKERS.some((marker) => normalized.includes(marker))) {
-			return false;
-		}
-		return CONSENT_ACTION_MARKERS.some(
-			(marker) => normalized === marker || normalized.startsWith(`${marker} `),
-		);
-	});
-}
-
 export function requiresStrictConsentBypass(url: string): boolean {
 	try {
 		const parsed = new URL(url);

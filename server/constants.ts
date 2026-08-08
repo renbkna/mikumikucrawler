@@ -1,16 +1,14 @@
-import { MAX_URL_LENGTH } from "../shared/url.js";
 import { config } from "./config/env.js";
 
 export const CRAWL_QUEUE_CONSTANTS = {
 	DEFAULT_SLEEP_MS: 100,
-	ITEM_PROCESSING_TIMEOUT_MS: 60000,
+	ITEM_PROCESSING_TIMEOUT_MS: 180000,
+	MAX_ACTIVE_RUNTIMES: 8,
 } as const;
 
 export const TIMEOUT_CONSTANTS = {
-	STATIC_FETCH: 10000, // 10s for HTTP requests
-	DYNAMIC_RENDER: 30000, // 30s for browser-backed rendering
+	DOCUMENT_FETCH: 10000, // 10s for static and browser document acquisition
 	CONTENT_PROCESSING: 5000, // 5s for HTML parsing/analysis
-	DATABASE_OPERATION: 10000, // 10s for DB queries
 } as const;
 
 export const RETRY_CONSTANTS = {
@@ -45,12 +43,8 @@ export const REQUEST_CONSTANTS = {
 	ROBOTS_FETCH_TIMEOUT_MS: 5000,
 	/** Maximum robots.txt body size to buffer (512 KiB). */
 	MAX_ROBOTS_RESPONSE_BYTES: 512 * 1024,
-	/** Maximum URL length for validation (2000 characters) */
-	MAX_URL_LENGTH,
 	/** Maximum decoded HTML/JSON document size admitted to synchronous processing (1 MiB). */
 	MAX_TEXT_DOCUMENT_BYTES: 1 * 1024 * 1024,
-	/** Maximum response body size buffered for binary documents and browser subresources (50 MiB). */
-	MAX_RESPONSE_BYTES: 50 * 1024 * 1024,
 } as const;
 
 /** PDF processing limits to prevent resource exhaustion */
@@ -59,6 +53,10 @@ export const PDF_CONSTANTS = {
 	MAX_PAGES: 1000,
 	/** Maximum file size in MB */
 	MAX_FILE_SIZE_MB: 50,
+	/** Maximum UTF-8 bytes retained from decompressed PDF text. */
+	MAX_EXTRACTED_TEXT_BYTES: 1 * 1024 * 1024,
+	/** Maximum text objects traversed even when they contain little or no text. */
+	MAX_TEXT_ITEMS: 200_000,
 	/** Timeout for PDF processing in ms (30 seconds) */
 	PROCESSING_TIMEOUT_MS: 30000,
 } as const;
@@ -67,88 +65,17 @@ export const DYNAMIC_RENDERER_CONSTANTS = {
 	NETWORK_BUDGET: {
 		MAX_REQUESTS_PER_PAGE: 100,
 		MAX_RESPONSE_BYTES_PER_PAGE: 20 * 1024 * 1024,
+		MAX_CONCURRENT_SUBREQUESTS: 4,
+		MIN_SUBREQUEST_DELAY_MS: 50,
 	},
-	COMPLEX_JS_SITES: [
-		"youtube.com",
-		"google.com",
-		"facebook.com",
-		"meta.com",
-		"twitter.com",
-		"x.com",
-		"instagram.com",
-		"linkedin.com",
-		"discord.com",
-		"reddit.com",
-		"pinterest.com",
-		"tiktok.com",
-		"netflix.com",
-		"amazon.com",
-		"airbnb.com",
-		"uber.com",
-		"spotify.com",
-		"github.com",
-		"stackoverflow.com",
-		"medium.com",
-		"twitch.tv",
-		"salesforce.com",
-		"slack.com",
-		"notion.so",
-		"figma.com",
-		"canva.com",
-		"trello.com",
-		"asana.com",
-		"dropbox.com",
-		"zoom.us",
-	],
 	VIEWPORT: { width: 1280, height: 720 },
-	RECYCLE_THRESHOLD: {
-		DEFAULT: 200,
-		RENDER_ENV: 50,
-	},
 	TIMEOUTS: {
-		COMPLEX_NAVIGATION: 60000,
-		STANDARD_NAVIGATION: 30000,
-		SELECTOR_WAIT: 15000,
-		ADDITIONAL_WAIT: 2000,
 		/** Time to wait for a clicked consent wall to disappear */
 		CONSENT_CLEAR: 10000,
 		/** Time to wait for a detected consent wall to become actionable */
 		CONSENT_EVAL: 5000,
 	},
 } as const;
-
-/**
- * Site-specific CSS selectors for waiting on complex JS-rendered pages.
- * These selectors indicate that the main content has finished loading.
- * Key: URL pattern to match, Value: CSS selector to wait for
- */
-export const SITE_SELECTORS: Record<string, string> = {
-	"youtube.com/watch": "h1.ytd-video-primary-info-renderer",
-	"youtube.com/@": "ytd-rich-grid-media, #video-title",
-	"twitter.com": '[data-testid="tweet"]',
-	"x.com": '[data-testid="tweet"]',
-	"linkedin.com": ".feed-container-theme",
-	"instagram.com": '[role="main"]',
-	"reddit.com": 'shreddit-post, [data-testid="post-container"], article, [role="main"]',
-	"facebook.com": '[role="main"]',
-	"meta.com": '[role="main"]',
-	"github.com": ".js-repo-root, .repository-content",
-	"medium.com": "article",
-	"stackoverflow.com": ".question, .answer",
-};
-
-/**
- * Site-specific cookies to set before navigation.
- * Used to bypass consent dialogs, age verification, etc.
- */
-export const SITE_COOKIES: Record<string, Array<{ name: string; value: string }>> = {
-	"youtube.com": [
-		{ name: "CONSENT", value: "YES+" },
-		{ name: "SOCS", value: "CAI" },
-		{ name: "PREF", value: "tz=UTC" },
-	],
-	"reddit.com": [{ name: "over18", value: "1" }],
-};
 
 /**
  * Soft 404 detection thresholds.

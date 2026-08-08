@@ -1,14 +1,19 @@
 import type { CrawlOptions } from "../../../shared/contracts/index.js";
-import type { ExtractedLink } from "../../../shared/types.js";
+import type { ExtractedLink } from "../../types.js";
 import type { CrawlQueue, QueueItem } from "./CrawlQueue.js";
 import type { CrawlState } from "./CrawlState.js";
 import type { RobotsService } from "./RobotsService.js";
 import { type NormalizedDiscoveredLink, normalizeDiscoveredLink } from "./UrlPolicy.js";
 
+export type CrawlAdmissionState = Pick<CrawlState, "remainingAdmissionCapacity" | "setDomainDelay">;
+export type CrawlAdmissionQueue = Pick<CrawlQueue, "enqueueNormalized">;
+export type RobotsPolicyEvaluator = Pick<RobotsService, "evaluateIdentity">;
+
 export type AdmissionRejectionReason =
 	| "depth-limit"
 	| "nofollow"
 	| "robots-disallowed"
+	| "outbound-policy"
 	| "queue-rejected";
 
 export type LinkAdmissionResult =
@@ -23,18 +28,12 @@ export type LinkAdmissionResult =
 			url: string;
 	  };
 
-function throwIfAborted(signal?: AbortSignal): void {
-	if (!signal?.aborted) return;
-	if (signal.reason instanceof Error) throw signal.reason;
-	throw new Error("Link admission aborted");
-}
-
 export class CrawlAdmissionPolicy {
 	constructor(
 		private readonly options: CrawlOptions,
-		private readonly state: CrawlState,
-		private readonly queue: CrawlQueue,
-		private readonly robotsService: RobotsService,
+		private readonly state: CrawlAdmissionState,
+		private readonly queue: CrawlAdmissionQueue,
+		private readonly robotsService: RobotsPolicyEvaluator,
 	) {}
 
 	normalizeDiscoveredLinks(
@@ -62,7 +61,7 @@ export class CrawlAdmissionPolicy {
 
 		const results: LinkAdmissionResult[] = [];
 		for (const normalized of links) {
-			throwIfAborted(signal);
+			signal?.throwIfAborted();
 			if (normalized.link.nofollow) {
 				results.push({
 					type: "rejected",
@@ -71,9 +70,25 @@ export class CrawlAdmissionPolicy {
 				});
 				continue;
 			}
+			if (this.state.remainingAdmissionCapacity() === 0) {
+				results.push({
+					type: "rejected",
+					reason: "queue-rejected",
+					url: normalized.link.url,
+				});
+				continue;
+			}
 
 			if (this.options.respectRobots) {
 				const linkPolicy = await this.robotsService.evaluateIdentity(normalized.identity, signal);
+				if (linkPolicy.type === "blocked") {
+					results.push({
+						type: "rejected",
+						reason: "outbound-policy",
+						url: normalized.link.url,
+					});
+					continue;
+				}
 				if (linkPolicy.type === "disallowed") {
 					results.push({
 						type: "rejected",

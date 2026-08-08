@@ -8,7 +8,7 @@ export type CrawlMethod = (typeof CRAWL_METHODS)[number];
 
 export const CRAWL_OPTION_BOUNDS = {
 	crawlDepth: { min: 1, max: 5 },
-	crawlDelay: { min: 200, max: 10_000, step: 250 },
+	crawlDelay: { min: 200, max: 10_000, step: 100 },
 	maxPages: { min: 1, max: 200 },
 	maxPagesPerDomain: { min: 0, max: 1000 },
 	maxConcurrentRequests: { min: 1, max: 10 },

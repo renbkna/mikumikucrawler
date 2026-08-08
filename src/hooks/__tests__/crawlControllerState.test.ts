@@ -1,1814 +1,381 @@
 import { describe, expect, test } from "bun:test";
 import type {
+	CrawlCounters,
 	CrawlEventEnvelope,
+	CrawledPage,
+	CrawlOptions,
 	CrawlSummary,
-	ResumableSessionSummary,
 } from "../../../shared/contracts/index.js";
 import { UI_LIMITS } from "../../constants";
 import {
 	type CrawlControllerAction,
 	type CrawlControllerState,
+	canStartCommand,
 	crawlControllerReducer,
 	createInitialCrawlControllerState,
 	getCrawlCommandAvailability,
 } from "../crawlControllerState";
-import { getResumeHydrationActions, shouldSettleActiveSubscription } from "../useCrawlController";
+import { isStartOperationSettled } from "../useCrawlController";
 
-function reduce(
-	state: CrawlControllerState,
-	...actions: CrawlControllerAction[]
-): CrawlControllerState {
-	return actions.reduce(
-		(currentState, action) => crawlControllerReducer(currentState, action).state,
-		state,
-	);
-}
+const options: CrawlOptions = {
+	target: "https://example.com/",
+	crawlMethod: "full",
+	crawlDepth: 2,
+	crawlDelay: 100,
+	maxPages: 10,
+	maxPagesPerDomain: 0,
+	maxConcurrentRequests: 2,
+	retryLimit: 1,
+	dynamic: false,
+	respectRobots: true,
+	contentOnly: false,
+	saveMedia: false,
+};
 
-function applyEvent(state: CrawlControllerState, envelope: CrawlEventEnvelope) {
-	return crawlControllerReducer(state, {
-		type: "sseEventReceived",
-		envelope,
-	});
-}
-
-function createSummary(
-	overrides: Partial<CrawlSummary> & Pick<CrawlSummary, "id" | "status">,
-): CrawlSummary {
-	const { id, status, ...remainingOverrides } = overrides;
-	const options = {
-		...createInitialCrawlControllerState().crawlOptions,
-		target: "https://example.com/",
-	};
+function counters(pagesScanned = 0): CrawlCounters {
 	return {
-		id,
+		pagesScanned,
+		successCount: pagesScanned,
+		failureCount: 0,
+		skippedCount: 0,
+		linksFound: pagesScanned * 2,
+		mediaFiles: 0,
+		totalDataKb: pagesScanned * 4,
+	};
+}
+
+function summary(overrides: Partial<CrawlSummary> = {}): CrawlSummary {
+	return {
+		id: "crawl-1",
+		eventSequence: 0,
 		target: options.target,
-		status,
+		status: "running",
 		options,
-		counters: {
-			pagesScanned: 0,
-			successCount: 0,
-			failureCount: 0,
-			skippedCount: 0,
-			linksFound: 0,
-			mediaFiles: 0,
-			totalDataKb: 0,
-		},
-		createdAt: "2026-03-21T12:00:00.000Z",
-		startedAt: "2026-03-21T12:00:01.000Z",
-		updatedAt: "2026-03-21T12:00:02.000Z",
+		counters: counters(),
+		createdAt: "2026-01-01T00:00:00.000Z",
+		startedAt: "2026-01-01T00:00:00.000Z",
+		updatedAt: "2026-01-01T00:00:01.000Z",
 		completedAt: null,
 		stopReason: null,
-		resumable: status === "paused" || status === "interrupted",
-		...remainingOverrides,
+		resumable: false,
+		...overrides,
 	};
 }
 
-describe("crawlControllerReducer", () => {
-	test("terminal subscription teardown only settles the active crawl subscription", () => {
-		const oldTerminal: CrawlEventEnvelope = {
-			type: "crawl.completed",
-			crawlId: "old-crawl",
-			sequence: 3,
-			timestamp: "2026-03-21T12:01:00.000Z",
-			payload: {
-				counters: {
-					pagesScanned: 1,
-					successCount: 1,
-					failureCount: 0,
-					skippedCount: 0,
-					linksFound: 0,
-					mediaFiles: 0,
-					totalDataKb: 1,
-				},
-			},
+function page(id: number, title = `Page ${id}`): CrawledPage & { domain: string } {
+	return {
+		id,
+		url: `https://example.com/${id}`,
+		title,
+		domain: "example.com",
+		details: {},
+	};
+}
+
+function event<TType extends CrawlEventEnvelope["type"]>(
+	type: TType,
+	payload: Extract<CrawlEventEnvelope, { type: TType }>["payload"],
+	sequence = 1,
+	crawlId = "crawl-1",
+): Extract<CrawlEventEnvelope, { type: TType }> {
+	return {
+		type,
+		crawlId,
+		sequence,
+		timestamp: "2026-01-01T00:00:02.000Z",
+		payload,
+	} as Extract<CrawlEventEnvelope, { type: TType }>;
+}
+
+function active(overrides: Partial<CrawlControllerState> = {}): CrawlControllerState {
+	return {
+		...createInitialCrawlControllerState(),
+		crawlOptions: options,
+		activeCrawlOptions: options,
+		activeCrawlId: "crawl-1",
+		runPhase: "running",
+		...overrides,
+	};
+}
+
+function reduce(state: CrawlControllerState, action: CrawlControllerAction) {
+	return crawlControllerReducer(state, action);
+}
+
+describe("crawl controller state", () => {
+	test("releases a start operation only after a definitive create outcome", () => {
+		for (const status of [503, 507]) {
+			expect(
+				isStartOperationSettled(
+					{ ok: false, error: "admission rejected", status },
+					{ ok: false, error: "Crawl not found", status: 404 },
+				),
+			).toBe(true);
+		}
+		expect(
+			isStartOperationSettled(
+				{ ok: false, error: "invalid", status: 422 },
+				{ ok: false, error: "recovery unavailable" },
+			),
+		).toBe(true);
+		expect(
+			isStartOperationSettled(
+				{ ok: false, error: "network unavailable" },
+				{ ok: false, error: "recovery unavailable" },
+			),
+		).toBe(false);
+	});
+
+	test("keeps editable options as the only target authority", () => {
+		const resumed = {
+			...options,
+			target: "https://resume.example/",
+			crawlMethod: "links" as const,
 		};
-
-		expect(shouldSettleActiveSubscription("new-crawl", oldTerminal)).toBe(false);
-		expect(shouldSettleActiveSubscription("old-crawl", oldTerminal)).toBe(true);
-	});
-
-	test("ignores stale SSE events for the same crawl", () => {
-		const initial = reduce(
-			createInitialCrawlControllerState(),
-			{ type: "crawlAccepted", crawlId: "crawl-1", kind: "start" },
-			{ type: "connectionChanged", connectionState: "connected" },
-		);
-
-		const progressEnvelope: CrawlEventEnvelope = {
-			type: "crawl.progress",
-			crawlId: "crawl-1",
-			sequence: 2,
-			timestamp: "2026-03-21T12:00:00.000Z",
-			payload: {
-				counters: {
-					pagesScanned: 3,
-					successCount: 2,
-					failureCount: 1,
-					skippedCount: 0,
-					linksFound: 8,
-					mediaFiles: 0,
-					totalDataKb: 12,
-				},
-				queue: {
-					activeRequests: 1,
-					queueLength: 4,
-					elapsedTime: 4,
-					pagesPerSecond: 0.75,
-				},
-				elapsedSeconds: 4,
-				pagesPerSecond: 0.75,
-				stopReason: null,
-			},
-		};
-		const staleLogEnvelope: CrawlEventEnvelope = {
-			type: "crawl.log",
-			crawlId: "crawl-1",
-			sequence: 1,
-			timestamp: "2026-03-21T12:00:01.000Z",
-			payload: {
-				message: "[Runtime] stale",
-			},
-		};
-
-		const afterProgress = applyEvent(initial, progressEnvelope).state;
-		const afterStaleLog = applyEvent(afterProgress, staleLogEnvelope).state;
-
-		expect(afterStaleLog).toEqual(afterProgress);
-		expect(afterStaleLog.lastSequenceByCrawlId["crawl-1"]).toBe(2);
-		expect(afterStaleLog.logs).toHaveLength(0);
-	});
-
-	test("ignores late non-terminal SSE events after terminal state", () => {
-		const completed = applyEvent(
-			reduce(createInitialCrawlControllerState(), {
-				type: "crawlAccepted",
-				crawlId: "crawl-1",
-				kind: "start",
-			}),
-			{
-				type: "crawl.completed",
-				crawlId: "crawl-1",
-				sequence: 5,
-				timestamp: "2026-03-21T12:01:00.000Z",
-				payload: {
-					counters: {
-						pagesScanned: 1,
-						successCount: 1,
-						failureCount: 0,
-						skippedCount: 0,
-						linksFound: 0,
-						mediaFiles: 0,
-						totalDataKb: 1,
-					},
-				},
-			},
-		).state;
-
-		const lateLog = applyEvent(completed, {
-			type: "crawl.log",
-			crawlId: "crawl-1",
-			sequence: 6,
-			timestamp: "2026-03-21T12:01:01.000Z",
-			payload: { message: "[Runtime] late" },
+		const next = reduce(createInitialCrawlControllerState(), {
+			type: "crawlOptionsChanged",
+			crawlOptions: resumed,
 		}).state;
-
-		expect(lateLog).toEqual(completed);
+		expect(next.crawlOptions).toEqual({ ...resumed, saveMedia: false });
+		expect(next).not.toHaveProperty("target");
 	});
 
-	test("ignores events from a previous crawl after a new crawl is accepted", () => {
-		const nextCrawl = reduce(
-			createInitialCrawlControllerState(),
-			{ type: "crawlAccepted", crawlId: "crawl-1", kind: "start" },
-			{ type: "liveStateReset" },
-			{ type: "crawlAccepted", crawlId: "crawl-2", kind: "start" },
-		);
+	test("allows only one command, except force-stop escalation", () => {
+		expect(canStartCommand(active({ pendingCommand: "stop" }), "forceStop")).toBe(true);
+		expect(canStartCommand(active({ pendingCommand: "start" }), "forceStop")).toBe(false);
 
-		const afterOldEvent = applyEvent(nextCrawl, {
-			type: "crawl.log",
-			crawlId: "crawl-1",
-			sequence: 10,
-			timestamp: "2026-03-21T12:01:01.000Z",
-			payload: { message: "[Runtime] old crawl" },
-		}).state;
-
-		expect(afterOldEvent).toEqual(nextCrawl);
+		const started = reduce(active(), { type: "commandStarted", kind: "stop" }).state;
+		expect(started).toMatchObject({ pendingCommand: "stop", runPhase: "pausing" });
+		const escalated = reduce(started, { type: "commandStarted", kind: "forceStop" }).state;
+		expect(escalated).toMatchObject({ pendingCommand: "forceStop", runPhase: "stopping" });
+		expect(getCrawlCommandAvailability(escalated).canForceStop).toBe(false);
 	});
 
-	test("durable active snapshots repair missing pages without regressing newer live state", () => {
-		const progressed = applyEvent(
-			reduce(createInitialCrawlControllerState(), {
-				type: "crawlAccepted",
-				crawlId: "crawl-gap",
-				kind: "start",
-			}),
-			{
-				type: "crawl.progress",
-				crawlId: "crawl-gap",
-				sequence: 10,
-				timestamp: "2026-03-21T12:00:10.000Z",
-				payload: {
-					counters: {
-						pagesScanned: 10,
-						successCount: 10,
-						failureCount: 0,
-						skippedCount: 0,
-						linksFound: 20,
-						mediaFiles: 0,
-						totalDataKb: 50,
-					},
-					queue: { activeRequests: 1, queueLength: 1, elapsedTime: 10, pagesPerSecond: 1 },
-					elapsedSeconds: 10,
-					pagesPerSecond: 1,
-					stopReason: null,
-				},
-			},
-		).state;
-		const live = applyEvent(progressed, {
-			type: "crawl.page",
-			crawlId: "crawl-gap",
-			sequence: 11,
-			timestamp: "2026-03-21T12:00:11.000Z",
-			payload: {
-				id: 7,
-				pageCount: 10,
-				url: "https://example.com/live",
-				title: "Rich live title",
-				content: "<main>rich live content</main>",
-				domain: "example.com",
-			},
-		}).state;
+	test("clears command identity on matching completion and reports matching failures", () => {
+		const pending = active({ pendingCommand: "stop", runPhase: "pausing" });
+		expect(reduce(pending, { type: "commandSucceeded", kind: "start" }).state).toBe(pending);
 
-		const synchronized = reduce(live, {
-			type: "crawlRecoverySnapshotSynchronized",
-			snapshot: {
-				crawl: createSummary({
-					id: "crawl-gap",
-					status: "running",
-					counters: {
-						pagesScanned: 5,
-						successCount: 5,
-						failureCount: 0,
-						skippedCount: 0,
-						linksFound: 8,
-						mediaFiles: 0,
-						totalDataKb: 20,
-					},
-				}),
-				pages: [
-					{ id: 8, url: "https://example.com/missed-newer", domain: "example.com" },
-					{
-						id: 7,
-						url: "https://example.com/live",
-						title: "Lower-fidelity durable summary",
-						domain: "example.com",
-					},
-					{ id: 1, url: "https://example.com/missed", domain: "example.com" },
-				],
-				pageCount: 5,
-			},
-		});
-
-		expect(synchronized.stats.pagesScanned).toBe(10);
-		expect(synchronized.storedPageCount).toBe(10);
-		expect(synchronized.runPhase).toBe("running");
-		expect(synchronized.crawledPages.map((page) => page.id)).toEqual([8, 7, 1]);
-		expect(synchronized.crawledPages[1]).toMatchObject({
-			title: "Rich live title",
-			content: "<main>rich live content</main>",
-		});
-	});
-
-	test("durable active snapshots repair a missed counter tuple atomically", () => {
-		const active = reduce(createInitialCrawlControllerState(), {
-			type: "crawlAccepted",
-			crawlId: "crawl-counter-gap",
-			kind: "start",
-		});
-
-		const synchronized = reduce(active, {
-			type: "crawlRecoverySnapshotSynchronized",
-			snapshot: {
-				crawl: createSummary({
-					id: "crawl-counter-gap",
-					status: "running",
-					counters: {
-						pagesScanned: 3,
-						successCount: 2,
-						failureCount: 1,
-						skippedCount: 0,
-						linksFound: 7,
-						mediaFiles: 1,
-						totalDataKb: 12,
-					},
-				}),
-				pages: [],
-				pageCount: 0,
-			},
-		});
-
-		expect(synchronized.stats).toMatchObject({
-			pagesScanned: 3,
-			successCount: 2,
-			failureCount: 1,
-			skippedCount: 0,
-			linksFound: 7,
-			mediaFiles: 1,
-			totalData: 12,
-		});
-
-		const replayedProgress = applyEvent(synchronized, {
-			type: "crawl.progress",
-			crawlId: "crawl-counter-gap",
-			sequence: 1,
-			timestamp: "2026-03-21T12:00:03.000Z",
-			payload: {
-				counters: {
-					pagesScanned: 1,
-					successCount: 1,
-					failureCount: 0,
-					skippedCount: 0,
-					linksFound: 2,
-					mediaFiles: 0,
-					totalDataKb: 4,
-				},
-				queue: { activeRequests: 1, queueLength: 2, elapsedTime: 3, pagesPerSecond: 2 },
-				elapsedSeconds: 3,
-				pagesPerSecond: 2,
-				stopReason: null,
-			},
-		}).state;
-
-		expect(replayedProgress.stats.pagesScanned).toBe(3);
-		expect(replayedProgress.stats.linksFound).toBe(7);
-		expect(replayedProgress.stats.pagesPerSecond).toBe("2.00");
-		expect(replayedProgress.queueStats?.queueLength).toBe(2);
-	});
-
-	test("durable settled snapshots recover terminal state when SSE history is unavailable", () => {
-		const active = reduce(createInitialCrawlControllerState(), {
-			type: "crawlAccepted",
-			crawlId: "crawl-cleaned-stream",
-			kind: "start",
-		});
-		const synchronized = reduce(active, {
-			type: "crawlRecoverySnapshotSynchronized",
-			snapshot: {
-				crawl: createSummary({
-					id: "crawl-cleaned-stream",
-					status: "completed",
-					completedAt: "2026-03-21T12:01:00.000Z",
-					counters: {
-						pagesScanned: 2,
-						successCount: 2,
-						failureCount: 0,
-						skippedCount: 0,
-						linksFound: 3,
-						mediaFiles: 0,
-						totalDataKb: 4,
-					},
-				}),
-				pages: [
-					{ id: 2, url: "https://example.com/two", domain: "example.com" },
-					{ id: 1, url: "https://example.com/one", domain: "example.com" },
-				],
-				pageCount: 2,
-			},
-		});
-
-		expect(synchronized.runPhase).toBe("completed");
-		expect(synchronized.connectionState).toBe("disconnected");
-		expect(synchronized.progress).toBe(100);
-		expect(synchronized.stats.pagesScanned).toBe(2);
-		expect(synchronized.crawledPages).toHaveLength(2);
-		expect(synchronized.storedPageCount).toBe(2);
-	});
-
-	test("durable page count remains authoritative beyond the bounded display buffer", () => {
-		const active = reduce(createInitialCrawlControllerState(), {
-			type: "crawlAccepted",
-			crawlId: "crawl-large",
-			kind: "start",
-		});
-		const snapshotPages = Array.from({ length: UI_LIMITS.MAX_PAGE_BUFFER }, (_, index) => ({
-			id: index + 1,
-			url: `https://example.com/${index + 1}`,
-			domain: "example.com",
-		}));
-		let state = reduce(active, {
-			type: "crawlRecoverySnapshotSynchronized",
-			snapshot: {
-				crawl: createSummary({ id: "crawl-large", status: "running" }),
-				pages: snapshotPages,
-				pageCount: 350,
-			},
-		});
-
-		expect(state.crawledPages).toHaveLength(UI_LIMITS.MAX_PAGE_BUFFER);
-		expect(state.storedPageCount).toBe(350);
-
-		state = applyEvent(state, {
-			type: "crawl.page",
-			crawlId: "crawl-large",
-			sequence: 1,
-			timestamp: "2026-03-21T12:01:01.000Z",
-			payload: {
-				id: 351,
-				pageCount: 351,
-				url: "https://example.com/351",
-				domain: "example.com",
-			},
-		}).state;
-
-		expect(state.crawledPages).toHaveLength(UI_LIMITS.MAX_PAGE_BUFFER);
-		expect(state.storedPageCount).toBe(351);
-
-		state = applyEvent(state, {
-			type: "crawl.progress",
-			crawlId: "crawl-large",
-			sequence: 2,
-			timestamp: "2026-03-21T12:01:02.000Z",
-			payload: {
-				counters: {
-					pagesScanned: 400,
-					successCount: 400,
-					failureCount: 0,
-					skippedCount: 0,
-					linksFound: 700,
-					mediaFiles: 0,
-					totalDataKb: 1_024,
-				},
-				queue: { activeRequests: 1, queueLength: 1, elapsedTime: 20, pagesPerSecond: 5 },
-				elapsedSeconds: 20,
-				pagesPerSecond: 5,
-				stopReason: null,
-			},
-		}).state;
-
-		expect(state.storedPageCount).toBe(351);
-	});
-
-	test("late active snapshots cannot regress terminal reducer state", () => {
-		const completed = applyEvent(
-			reduce(createInitialCrawlControllerState(), {
-				type: "crawlAccepted",
-				crawlId: "crawl-terminal-race",
-				kind: "start",
-			}),
-			{
-				type: "crawl.completed",
-				crawlId: "crawl-terminal-race",
-				sequence: 4,
-				timestamp: "2026-03-21T12:01:00.000Z",
-				payload: {
-					counters: {
-						pagesScanned: 1,
-						successCount: 1,
-						failureCount: 0,
-						skippedCount: 0,
-						linksFound: 2,
-						mediaFiles: 0,
-						totalDataKb: 3,
-					},
-				},
-			},
-		).state;
-
-		const synchronized = reduce(completed, {
-			type: "crawlRecoverySnapshotSynchronized",
-			snapshot: {
-				crawl: createSummary({
-					id: "crawl-terminal-race",
-					status: "running",
-					counters: {
-						pagesScanned: 2,
-						successCount: 2,
-						failureCount: 0,
-						skippedCount: 0,
-						linksFound: 4,
-						mediaFiles: 0,
-						totalDataKb: 6,
-					},
-				}),
-				pages: [{ id: 1, url: "https://example.com/one", domain: "example.com" }],
-				pageCount: 1,
-			},
-		});
-
-		expect(synchronized.runPhase).toBe("completed");
-		expect(synchronized.progress).toBe(100);
-		expect(synchronized.stats.pagesScanned).toBe(1);
-		expect(synchronized.crawledPages).toHaveLength(1);
-	});
-
-	test("marks terminal events as complete and clears pending command state", () => {
-		const initial = reduce(
-			createInitialCrawlControllerState(),
-			{ type: "crawlAccepted", crawlId: "crawl-1", kind: "start" },
-			{ type: "commandStarted", kind: "stop" },
-		);
-
-		const completedEnvelope: CrawlEventEnvelope = {
-			type: "crawl.completed",
-			crawlId: "crawl-1",
-			sequence: 3,
-			timestamp: "2026-03-21T12:01:00.000Z",
-			payload: {
-				counters: {
-					pagesScanned: 6,
-					successCount: 5,
-					failureCount: 1,
-					skippedCount: 0,
-					linksFound: 11,
-					mediaFiles: 2,
-					totalDataKb: 42,
-				},
-			},
-		};
-
-		const transition = applyEvent(initial, completedEnvelope);
-
-		expect(transition.state.runPhase).toBe("completed");
-		expect(transition.state.connectionState).toBe("disconnected");
-		expect(transition.state.progress).toBe(100);
-		expect(transition.state.lastCommand).toEqual({
-			kind: "none",
-			status: "idle",
-			error: null,
-		});
-		expect(transition.effects).toEqual([
-			{
-				type: "toast",
-				level: "success",
-				message: "Crawl completed! Scanned 6 pages",
-				timeout: 5000,
-			},
-		]);
-	});
-
-	test("represents stop failures explicitly and returns to running", () => {
-		const initial = reduce(
-			createInitialCrawlControllerState(),
-			{ type: "crawlAccepted", crawlId: "crawl-1", kind: "start" },
-			{ type: "commandStarted", kind: "stop" },
-		);
-
-		const transition = crawlControllerReducer(initial, {
+		const failed = reduce(pending, {
 			type: "commandFailed",
 			kind: "stop",
-			error: "Stop failed",
+			error: "pause rejected",
 		});
-
-		expect(transition.state.runPhase).toBe("running");
-		expect(transition.state.lastCommand).toEqual({
-			kind: "stop",
-			status: "error",
-			error: "Stop failed",
-		});
-		expect(transition.effects).toEqual([
-			{
-				type: "toast",
-				level: "error",
-				message: "Stop failed",
-			},
-		]);
+		expect(failed.state).toMatchObject({ pendingCommand: null, runPhase: "running" });
+		expect(failed.effects).toEqual([{ type: "toast", level: "error", message: "pause rejected" }]);
 	});
 
-	test("resume failures keep paused crawl state attached", () => {
-		const paused = applyEvent(
-			reduce(createInitialCrawlControllerState(), {
-				type: "crawlAccepted",
-				crawlId: "crawl-1",
-				kind: "start",
-			}),
-			{
-				type: "crawl.paused",
-				crawlId: "crawl-1",
-				sequence: 3,
-				timestamp: "2026-03-21T12:01:00.000Z",
-				payload: {
-					stopReason: "Pause requested",
-					counters: {
-						pagesScanned: 2,
-						successCount: 2,
-						failureCount: 0,
-						skippedCount: 0,
-						linksFound: 4,
-						mediaFiles: 0,
-						totalDataKb: 12,
-					},
-				},
-			},
-		).state;
+	test("uses durable state after an ambiguous force-stop failure", () => {
+		const stopping = active({ pendingCommand: "forceStop", runPhase: "stopping" });
+		const recovered = reduce(stopping, {
+			type: "commandFailed",
+			kind: "forceStop",
+			error: "Only active crawls can be stopped",
+			recoveredCrawl: summary({ status: "paused", resumable: true }),
+		});
 
-		const failed = reduce(
-			paused,
-			{ type: "commandStarted", kind: "resume" },
-			{ type: "commandFailed", kind: "resume", error: "No longer resumable" },
-		);
+		expect(recovered.state).toMatchObject({ pendingCommand: null, runPhase: "paused" });
+	});
 
-		expect(failed.activeCrawlId).toBe("crawl-1");
-		expect(failed.runPhase).toBe("paused");
-		expect(failed.stats.pagesScanned).toBe(2);
-		expect(failed.lastCommand).toEqual({
+	test("binds a newly accepted crawl and handles resume sequence separately", () => {
+		const prior = active({ lastSequence: 9 });
+		const started = reduce(prior, {
+			type: "crawlAccepted",
+			crawlId: "crawl-2",
+			kind: "start",
+		}).state;
+		const resumed = reduce(prior, {
+			type: "crawlAccepted",
+			crawlId: "crawl-2",
 			kind: "resume",
-			status: "error",
-			error: "No longer resumable",
-		});
-	});
-
-	test("start failures keep the previously visible crawl state attached", () => {
-		const completed = applyEvent(
-			reduce(createInitialCrawlControllerState(), {
-				type: "crawlAccepted",
-				crawlId: "crawl-1",
-				kind: "start",
-			}),
-			{
-				type: "crawl.completed",
-				crawlId: "crawl-1",
-				sequence: 3,
-				timestamp: "2026-03-21T12:01:00.000Z",
-				payload: {
-					counters: {
-						pagesScanned: 2,
-						successCount: 2,
-						failureCount: 0,
-						skippedCount: 0,
-						linksFound: 4,
-						mediaFiles: 0,
-						totalDataKb: 12,
-					},
-				},
-			},
-		).state;
-
-		const failed = reduce(
-			completed,
-			{ type: "commandStarted", kind: "start" },
-			{ type: "commandFailed", kind: "start", error: "Create failed" },
-		);
-
-		expect(failed.activeCrawlId).toBe("crawl-1");
-		expect(failed.runPhase).toBe("completed");
-		expect(failed.stats.pagesScanned).toBe(2);
-		expect(failed.lastCommand).toEqual({
-			kind: "start",
-			status: "error",
-			error: "Create failed",
-		});
-	});
-
-	test("records successful non-terminal commands without leaving them pending", () => {
-		const initial = reduce(createInitialCrawlControllerState(), {
-			type: "crawlAccepted",
-			crawlId: "crawl-1",
-			kind: "start",
-		});
-
-		const pending = crawlControllerReducer(initial, {
-			type: "commandStarted",
-			kind: "stop",
-		}).state;
-		const transition = crawlControllerReducer(pending, {
-			type: "commandSucceeded",
-			kind: "stop",
-		});
-
-		expect(transition.state.runPhase).toBe("pausing");
-		expect(transition.state.lastCommand).toEqual({
-			kind: "stop",
-			status: "success",
-			error: null,
-		});
-		expect(transition.effects).toEqual([]);
-	});
-
-	test("force stop command enters stopping instead of pause state", () => {
-		const initial = reduce(createInitialCrawlControllerState(), {
-			type: "crawlAccepted",
-			crawlId: "crawl-1",
-			kind: "start",
-		});
-
-		const pending = crawlControllerReducer(initial, {
-			type: "commandStarted",
-			kind: "forceStop",
-		}).state;
-		const succeeded = crawlControllerReducer(pending, {
-			type: "commandSucceeded",
-			kind: "forceStop",
+			crawlOptions: options,
 		}).state;
 
-		expect(pending.runPhase).toBe("stopping");
-		expect(pending.lastCommand).toEqual({
-			kind: "forceStop",
-			status: "pending",
-			error: null,
-		});
-		expect(succeeded.runPhase).toBe("stopping");
-		expect(succeeded.lastCommand).toEqual({
-			kind: "forceStop",
-			status: "success",
-			error: null,
-		});
+		expect(started).toMatchObject({ activeCrawlId: "crawl-2", lastSequence: 0 });
+		expect(resumed).toMatchObject({ activeCrawlId: "crawl-2", lastSequence: 9 });
 	});
 
-	test("stop success does not move terminal stopped state back to pausing", () => {
-		const stopped = applyEvent(
+	test("accepts only newer events for the active, non-terminal crawl", () => {
+		const state = active({ lastSequence: 2 });
+		const wrongCrawl = reduce(state, {
+			type: "sseEventReceived",
+			envelope: event("crawl.log", { message: "wrong" }, 3, "crawl-2"),
+		}).state;
+		const duplicate = reduce(state, {
+			type: "sseEventReceived",
+			envelope: event("crawl.log", { message: "duplicate" }, 2),
+		}).state;
+		const accepted = reduce(state, {
+			type: "sseEventReceived",
+			envelope: event("crawl.log", { message: "accepted" }, 3),
+		}).state;
+
+		expect(wrongCrawl).toBe(state);
+		expect(duplicate).toBe(state);
+		expect(accepted).toMatchObject({
+			lastSequence: 3,
+			logs: [{ id: 1, message: "accepted" }],
+		});
+		expect(
 			reduce(
-				createInitialCrawlControllerState(),
-				{ type: "crawlAccepted", crawlId: "crawl-1", kind: "start" },
-				{ type: "commandStarted", kind: "stop" },
-			),
-			{
-				type: "crawl.stopped",
-				crawlId: "crawl-1",
-				sequence: 5,
-				timestamp: "2026-03-21T12:01:00.000Z",
-				payload: {
-					stopReason: "Force stop requested",
-					counters: {
-						pagesScanned: 2,
-						successCount: 1,
-						failureCount: 0,
-						skippedCount: 1,
-						linksFound: 3,
-						mediaFiles: 0,
-						totalDataKb: 10,
-					},
+				{ ...accepted, runPhase: "completed" },
+				{
+					type: "sseEventReceived",
+					envelope: event("crawl.log", { message: "late" }, 4),
 				},
-			},
-		).state;
-
-		const transition = crawlControllerReducer(stopped, {
-			type: "commandSucceeded",
-			kind: "stop",
-		});
-
-		expect(transition.state.runPhase).toBe("stopped");
-		expect(transition.effects).toEqual([]);
+			).state,
+		).toEqual({ ...accepted, runPhase: "completed" });
 	});
 
-	test("crawl.paused SSE settles live state without completing progress", () => {
-		const initial = reduce(
-			createInitialCrawlControllerState(),
-			{ type: "crawlAccepted", crawlId: "crawl-1", kind: "start" },
-			{ type: "commandStarted", kind: "stop" },
-		);
-
-		const transition = applyEvent(initial, {
-			type: "crawl.paused",
-			crawlId: "crawl-1",
-			sequence: 4,
-			timestamp: "2026-03-21T12:01:00.000Z",
-			payload: {
-				stopReason: "Pause requested",
-				counters: {
-					pagesScanned: 4,
-					successCount: 3,
-					failureCount: 0,
-					skippedCount: 1,
-					linksFound: 9,
-					mediaFiles: 0,
-					totalDataKb: 24,
-				},
-			},
-		});
-
-		expect(transition.state.runPhase).toBe("paused");
-		expect(transition.state.connectionState).toBe("disconnected");
-		expect(transition.state.progress).toBe(8);
-		expect(transition.state.stats.pagesScanned).toBe(4);
-		expect(transition.state.lastCommand).toEqual({
-			kind: "none",
-			status: "idle",
-			error: null,
-		});
-		expect(transition.effects).toEqual([
-			{
-				type: "toast",
-				level: "info",
-				message: "Pause requested",
-			},
-		]);
-	});
-
-	test("command availability exposes startup pause and preserves force-stop escalation", () => {
-		const starting = reduce(createInitialCrawlControllerState(), {
-			type: "crawlAccepted",
-			crawlId: "crawl-1",
-			kind: "start",
-		});
-		expect(getCrawlCommandAvailability(starting)).toEqual({
-			canStart: false,
-			isAttacking: true,
-			canPause: true,
-			canForceStop: true,
-		});
-
-		const pausing = reduce(starting, { type: "commandStarted", kind: "stop" });
-		expect(getCrawlCommandAvailability(pausing)).toEqual({
-			canStart: false,
-			isAttacking: true,
-			canPause: false,
-			canForceStop: true,
-		});
-
-		const forceStopping = reduce(pausing, {
-			type: "commandStarted",
-			kind: "forceStop",
-		});
-		expect(getCrawlCommandAvailability(forceStopping)).toEqual({
-			canStart: false,
-			isAttacking: true,
-			canPause: false,
-			canForceStop: false,
-		});
-
-		const resumePending = reduce(
-			applyEvent(starting, {
-				type: "crawl.paused",
-				crawlId: "crawl-1",
-				sequence: 2,
-				timestamp: "2026-03-21T12:01:00.000Z",
-				payload: {
-					stopReason: "Pause requested",
-					counters: {
-						pagesScanned: 1,
-						successCount: 1,
-						failureCount: 0,
-						skippedCount: 0,
-						linksFound: 0,
-						mediaFiles: 0,
-						totalDataKb: 1,
-					},
-				},
-			}).state,
-			{ type: "commandStarted", kind: "resume" },
-		);
-		expect(getCrawlCommandAvailability(resumePending)).toEqual({
-			canStart: false,
-			isAttacking: false,
-			canPause: false,
-			canForceStop: false,
-		});
-	});
-
-	test("new commands cannot replace an existing pending command", () => {
-		const refreshPending = reduce(createInitialCrawlControllerState(), {
-			type: "commandStarted",
-			kind: "refresh",
-		});
-
-		const attemptedResume = crawlControllerReducer(refreshPending, {
-			type: "commandStarted",
-			kind: "resume",
-		});
-
-		expect(attemptedResume.state.lastCommand).toEqual({
-			kind: "refresh",
-			status: "pending",
-			error: null,
-		});
-		expect(getCrawlCommandAvailability(attemptedResume.state)).toEqual({
-			canStart: false,
-			isAttacking: false,
-			canPause: false,
-			canForceStop: false,
-		});
-	});
-
-	test("terminal crawls remain startable even after the SSE stream is closed", () => {
-		const completed = applyEvent(
-			reduce(createInitialCrawlControllerState(), {
-				type: "crawlAccepted",
-				crawlId: "crawl-1",
-				kind: "start",
+	test("reconciles validated counter tuples monotonically and derives progress from queue telemetry", () => {
+		const state = active({ stats: counters(5) });
+		const older = reduce(state, {
+			type: "sseEventReceived",
+			envelope: event("crawl.progress", {
+				counters: counters(4),
+				queue: { activeRequests: 1, queueLength: 2, elapsedTime: 8, pagesPerSecond: 0.5 },
+				stopReason: null,
 			}),
-			{
-				type: "crawl.completed",
-				crawlId: "crawl-1",
-				sequence: 2,
-				timestamp: "2026-03-21T12:01:00.000Z",
-				payload: {
-					counters: {
-						pagesScanned: 1,
-						successCount: 1,
-						failureCount: 0,
-						skippedCount: 0,
-						linksFound: 0,
-						mediaFiles: 0,
-						totalDataKb: 1,
-					},
-				},
-			},
-		).state;
+		}).state;
+		expect(older.stats).toEqual(counters(5));
+		expect(older.queueStats?.elapsedTime).toBe(8);
+		expect(older.progress).toBe(50);
 
-		expect(completed.connectionState).toBe("disconnected");
-		expect(getCrawlCommandAvailability(completed).canStart).toBe(true);
+		const newer = reduce(older, {
+			type: "sseEventReceived",
+			envelope: event(
+				"crawl.progress",
+				{
+					counters: counters(6),
+					queue: { activeRequests: 0, queueLength: 0, elapsedTime: 9, pagesPerSecond: 1 },
+					stopReason: null,
+				},
+				2,
+			),
+		}).state;
+		expect(newer.stats).toEqual(counters(6));
+		expect(newer.progress).toBe(60);
 	});
 
-	test("caps logs and emits the static fallback warning only once", () => {
-		let state = createInitialCrawlControllerState();
-		let warningCount = 0;
+	test("merges durable recovery by page identity without downgrading live data", () => {
+		const state = active({
+			lastSequence: 2,
+			crawledPages: [page(2, "Live title")],
+			storedPageCount: 2,
+		});
+		const next = reduce(state, {
+			type: "crawlRecoverySnapshotSynchronized",
+			snapshot: {
+				crawl: summary({ eventSequence: 3, counters: counters(2) }),
+				pages: [page(2, "Durable summary"), page(1)],
+				pageCount: 3,
+			},
+		}).state;
 
-		for (let index = 0; index < UI_LIMITS.MAX_LOGS + 10; index += 1) {
-			const transition = crawlControllerReducer(state, {
+		expect(next.crawledPages.map(({ id, title }) => ({ id, title }))).toEqual([
+			{ id: 2, title: "Live title" },
+			{ id: 1, title: "Page 1" },
+		]);
+		expect(next.storedPageCount).toBe(3);
+		expect(next.lastSequence).toBe(3);
+	});
+
+	test("accepts a newer durable terminal state after a local pause", () => {
+		const next = reduce(active({ runPhase: "paused", lastSequence: 2 }), {
+			type: "crawlSummarySynchronized",
+			crawl: summary({
+				status: "completed",
+				eventSequence: 3,
+				counters: counters(3),
+				completedAt: "2026-01-01T00:00:03.000Z",
+			}),
+		}).state;
+
+		expect(next).toMatchObject({
+			runPhase: "completed",
+			connectionState: "disconnected",
+			lastSequence: 3,
+			progress: 100,
+			stats: counters(3),
+		});
+	});
+
+	test.each([
+		["crawl.completed", "completed", { counters: counters(3) }],
+		["crawl.stopped", "stopped", { stopReason: "forced", counters: counters(3) }],
+		["crawl.failed", "failed", { error: "broken", counters: counters(3) }],
+	] as const)("settles %s authoritatively", (type, phase, payload) => {
+		const transition = reduce(active({ pendingCommand: "stop" }), {
+			type: "sseEventReceived",
+			envelope: event(type, payload),
+		});
+		expect(transition.state).toMatchObject({
+			runPhase: phase,
+			connectionState: "disconnected",
+			pendingCommand: null,
+			progress: 100,
+			stats: counters(3),
+		});
+		expect(transition.effects[0]?.type).toBe("toast");
+	});
+
+	test("settles pauses without forcing terminal progress", () => {
+		const transition = reduce(active({ pendingCommand: "stop" }), {
+			type: "sseEventReceived",
+			envelope: event("crawl.paused", { stopReason: null, counters: counters(2) }),
+		});
+		expect(transition.state).toMatchObject({
+			runPhase: "paused",
+			connectionState: "disconnected",
+			pendingCommand: null,
+			stats: counters(2),
+		});
+	});
+
+	test("bounds logs and emits the static-fallback hint once", () => {
+		let state = active();
+		let warningCount = 0;
+		for (let index = 0; index <= UI_LIMITS.MAX_LOGS; index += 1) {
+			const transition = reduce(state, {
 				type: "logAppended",
-				message:
-					index === 1
-						? "[Fetch] Falling back to static crawling for https://example.com"
-						: `[Runtime] log ${index}`,
+				message: index < 2 ? `Falling back to static crawling ${index}` : `ordinary log ${index}`,
 			});
 			state = transition.state;
 			warningCount += transition.effects.filter(
 				(effect) => effect.type === "toast" && effect.level === "warning",
 			).length;
 		}
-
-		const repeatedFallback = crawlControllerReducer(state, {
-			type: "logAppended",
-			message: "[Fetch] Falling back to static crawling for https://example.com",
-		});
-
 		expect(state.logs).toHaveLength(UI_LIMITS.MAX_LOGS);
 		expect(warningCount).toBe(1);
-		expect(repeatedFallback.effects).toEqual([]);
 	});
 
-	test("crawl.started transitions runPhase to running and appends log", () => {
-		const initial = reduce(
-			createInitialCrawlControllerState(),
-			{ type: "crawlAccepted", crawlId: "crawl-1", kind: "start" },
-			{ type: "connectionChanged", connectionState: "connected" },
-		);
-
-		const transition = applyEvent(initial, {
-			type: "crawl.started",
-			crawlId: "crawl-1",
-			sequence: 1,
-			timestamp: "2026-03-21T12:00:00.000Z",
-			payload: { target: "https://example.com", resume: false },
-		});
-
-		expect(transition.state.runPhase).toBe("running");
-		expect(transition.state.logs).toHaveLength(1);
-		expect(transition.state.logs[0]).toContain("Crawl started for https://example.com");
-	});
-
-	test("crawl.started preserves a pause requested during startup", () => {
-		const initial = reduce(
-			createInitialCrawlControllerState(),
-			{ type: "crawlAccepted", crawlId: "crawl-1", kind: "start" },
-			{ type: "commandStarted", kind: "stop" },
-		);
-
-		const transition = applyEvent(initial, {
-			type: "crawl.started",
-			crawlId: "crawl-1",
-			sequence: 1,
-			timestamp: "2026-03-21T12:00:00.000Z",
-			payload: { target: "https://example.com", resume: false },
-		});
-
-		expect(transition.state.runPhase).toBe("pausing");
-		expect(transition.state.logs[0]).toContain("Crawl started for https://example.com");
-	});
-
-	test("crawl.started with resume flag produces resume-specific log", () => {
-		const initial = reduce(createInitialCrawlControllerState(), {
-			type: "crawlAccepted",
-			crawlId: "crawl-1",
-			kind: "resume",
-		});
-
-		const transition = applyEvent(initial, {
-			type: "crawl.started",
-			crawlId: "crawl-1",
-			sequence: 1,
-			timestamp: "2026-03-21T12:00:00.000Z",
-			payload: { target: "https://example.com", resume: true },
-		});
-
-		expect(transition.state.logs[0]).toContain("[Resume]");
-	});
-
-	test("crawl.page prepends page to crawledPages", () => {
-		const initial = reduce(createInitialCrawlControllerState(), {
-			type: "crawlAccepted",
-			crawlId: "crawl-1",
-			kind: "start",
-		});
-
-		const t1 = applyEvent(initial, {
-			type: "crawl.page",
-			crawlId: "crawl-1",
-			sequence: 1,
-			timestamp: "2026-03-21T12:00:00.000Z",
-			payload: { id: 1, pageCount: 1, url: "https://example.com/a" },
-		});
-		const t2 = applyEvent(t1.state, {
-			type: "crawl.page",
-			crawlId: "crawl-1",
-			sequence: 2,
-			timestamp: "2026-03-21T12:00:01.000Z",
-			payload: { id: 2, pageCount: 2, url: "https://example.com/b", title: "Page B" },
-		});
-
-		expect(t2.state.crawledPages).toHaveLength(2);
-		// Most recent page is first (prepended)
-		const [firstPage, secondPage] = t2.state.crawledPages;
-		expect(firstPage?.url).toBe("https://example.com/b");
-		expect(secondPage?.url).toBe("https://example.com/a");
-		expect(firstPage).not.toHaveProperty("pageCount");
-		expect(t2.state.storedPageCount).toBe(2);
-	});
-
-	test("crawl.progress updates stats, queue, and progress", () => {
-		const initial = reduce(createInitialCrawlControllerState(), {
-			type: "crawlAccepted",
-			crawlId: "crawl-1",
-			kind: "start",
-		});
-
-		const transition = applyEvent(initial, {
-			type: "crawl.progress",
-			crawlId: "crawl-1",
-			sequence: 1,
-			timestamp: "2026-03-21T12:00:05.000Z",
-			payload: {
-				counters: {
-					pagesScanned: 10,
-					successCount: 8,
-					failureCount: 1,
-					skippedCount: 1,
-					linksFound: 25,
-					mediaFiles: 3,
-					totalDataKb: 64,
-				},
-				queue: {
-					activeRequests: 2,
-					queueLength: 5,
-					elapsedTime: 5,
-					pagesPerSecond: 2,
-				},
-				elapsedSeconds: 5,
-				pagesPerSecond: 2,
-				stopReason: null,
-			},
-		});
-
-		expect(transition.state.stats.pagesScanned).toBe(10);
-		expect(transition.state.stats.linksFound).toBe(25);
-		expect(transition.state.stats.mediaFiles).toBe(3);
-		expect(transition.state.queueStats).toEqual({
-			activeRequests: 2,
-			queueLength: 5,
-			elapsedTime: 5,
-			pagesPerSecond: 2,
-		});
-		expect(transition.state.progress).toBeGreaterThan(0);
-		expect(transition.state.runPhase).toBe("running");
-	});
-
-	test("crawl.progress uses the accepted run options instead of mutable form options", () => {
-		const initial = reduce(
-			createInitialCrawlControllerState(),
-			{
-				type: "crawlOptionsChanged",
-				crawlOptions: {
-					...createInitialCrawlControllerState().crawlOptions,
-					maxPages: 10,
-				},
-			},
-			{
-				type: "crawlAccepted",
-				crawlId: "crawl-1",
-				kind: "start",
-				crawlOptions: {
-					...createInitialCrawlControllerState().crawlOptions,
-					maxPages: 10,
-				},
-			},
-			{
-				type: "crawlOptionsChanged",
-				crawlOptions: {
-					...createInitialCrawlControllerState().crawlOptions,
-					maxPages: 100,
-				},
-			},
-		);
-
-		const transition = applyEvent(initial, {
-			type: "crawl.progress",
-			crawlId: "crawl-1",
-			sequence: 1,
-			timestamp: "2026-03-21T12:00:05.000Z",
-			payload: {
-				counters: {
-					pagesScanned: 5,
-					successCount: 5,
-					failureCount: 0,
-					skippedCount: 0,
-					linksFound: 10,
-					mediaFiles: 0,
-					totalDataKb: 20,
-				},
-				queue: {
-					activeRequests: 0,
-					queueLength: 0,
-					elapsedTime: 5,
-					pagesPerSecond: 1,
-				},
-				elapsedSeconds: 5,
-				pagesPerSecond: 1,
-				stopReason: null,
-			},
-		});
-
-		expect(transition.state.progress).toBe(50);
-		expect(transition.state.crawlOptions.maxPages).toBe(100);
-	});
-
-	test("crawl.failed sets failed phase with error toast", () => {
-		const initial = reduce(createInitialCrawlControllerState(), {
-			type: "crawlAccepted",
-			crawlId: "crawl-1",
-			kind: "start",
-		});
-
-		const transition = applyEvent(initial, {
-			type: "crawl.failed",
-			crawlId: "crawl-1",
-			sequence: 5,
-			timestamp: "2026-03-21T12:01:00.000Z",
-			payload: {
-				error: "Circuit breaker tripped",
-				counters: {
-					pagesScanned: 20,
-					successCount: 0,
-					failureCount: 20,
-					skippedCount: 0,
-					linksFound: 0,
-					mediaFiles: 0,
-					totalDataKb: 0,
-				},
-			},
-		});
-
-		expect(transition.state.runPhase).toBe("failed");
-		expect(transition.state.connectionState).toBe("disconnected");
-		expect(transition.state.progress).toBe(100);
-		expect(transition.effects).toEqual([
-			{
-				type: "toast",
-				level: "error",
-				message: "Circuit breaker tripped",
-			},
-		]);
-	});
-
-	test("crawl.stopped sets stopped phase with info toast", () => {
-		const initial = reduce(
-			createInitialCrawlControllerState(),
-			{ type: "crawlAccepted", crawlId: "crawl-1", kind: "start" },
-			{ type: "commandStarted", kind: "stop" },
-		);
-
-		const transition = applyEvent(initial, {
-			type: "crawl.stopped",
-			crawlId: "crawl-1",
-			sequence: 5,
-			timestamp: "2026-03-21T12:01:00.000Z",
-			payload: {
-				stopReason: "User requested stop",
-				counters: {
-					pagesScanned: 15,
-					successCount: 12,
-					failureCount: 2,
-					skippedCount: 1,
-					linksFound: 30,
-					mediaFiles: 1,
-					totalDataKb: 90,
-				},
-			},
-		});
-
-		expect(transition.state.runPhase).toBe("stopped");
-		expect(transition.state.connectionState).toBe("disconnected");
-		expect(transition.effects).toEqual([
-			{
-				type: "toast",
-				level: "info",
-				message: "User requested stop",
-			},
-		]);
-	});
-
-	test("resumable sessions state machine: loading -> loaded -> delete -> deleted", () => {
-		let state = createInitialCrawlControllerState();
-
-		// Loading
-		state = crawlControllerReducer(state, {
-			type: "resumableSessionsLoading",
-			requestId: 1,
-		}).state;
-		expect(state.resumableSessions.isLoading).toBe(true);
-		expect(state.resumableSessions.error).toBeNull();
-
-		// Loaded
-		const sessions: ResumableSessionSummary[] = [
-			{
-				id: "s-1",
-				target: "https://a.com",
-				status: "interrupted",
-				pagesScanned: 5,
-				createdAt: "2026-03-21T12:00:00.000Z",
-				updatedAt: "2026-03-21T12:01:00.000Z",
-			},
-			{
-				id: "s-2",
-				target: "https://b.com",
-				status: "interrupted",
-				pagesScanned: 10,
-				createdAt: "2026-03-20T12:00:00.000Z",
-				updatedAt: "2026-03-20T12:01:00.000Z",
-			},
-		];
-		state = crawlControllerReducer(state, {
+	test("serializes resumable-session mutation and removes deleted state", () => {
+		const session = {
+			id: "paused-1",
+			target: options.target,
+			status: "paused" as const,
+			pagesScanned: 2,
+			createdAt: "2026-01-01T00:00:00.000Z",
+			updatedAt: "2026-01-01T00:00:01.000Z",
+		};
+		let state = reduce(createInitialCrawlControllerState(), {
 			type: "resumableSessionsLoaded",
-			requestId: 1,
-			sessions,
+			sessions: [session],
 		}).state;
-		expect(state.resumableSessions.items).toHaveLength(2);
-		expect(state.resumableSessions.isLoading).toBe(false);
-
-		// Deleting
-		state = crawlControllerReducer(state, {
-			type: "resumableSessionDeleting",
-			sessionId: "s-1",
-		}).state;
-		expect(state.resumableSessions.deletingId).toBe("s-1");
-
-		// Deleted
-		state = crawlControllerReducer(state, {
-			type: "resumableSessionDeleted",
-			sessionId: "s-1",
-		}).state;
-		expect(state.resumableSessions.items).toHaveLength(1);
-		expect(state.resumableSessions.items[0]?.id).toBe("s-2");
-		expect(state.resumableSessions.deletingId).toBeNull();
-	});
-
-	test("resumable deletes are single-flight and stale completions cannot clear the active row", () => {
-		const sessions: ResumableSessionSummary[] = [
-			{
-				id: "s-1",
-				target: "https://a.com",
-				status: "paused",
-				pagesScanned: 5,
-				createdAt: "2026-03-21T12:00:00.000Z",
-				updatedAt: "2026-03-21T12:01:00.000Z",
-			},
-			{
-				id: "s-2",
-				target: "https://b.com",
-				status: "interrupted",
-				pagesScanned: 10,
-				createdAt: "2026-03-20T12:00:00.000Z",
-				updatedAt: "2026-03-20T12:01:00.000Z",
-			},
-		];
-		let state = reduce(
-			createInitialCrawlControllerState(),
-			{ type: "resumableSessionsLoading", requestId: 1 },
-			{ type: "resumableSessionsLoaded", requestId: 1, sessions },
-		);
-
-		state = crawlControllerReducer(state, {
-			type: "resumableSessionDeleting",
-			sessionId: "s-1",
-		}).state;
-		const afterFirstDelete = state;
-
-		state = crawlControllerReducer(state, {
-			type: "resumableSessionDeleting",
-			sessionId: "s-2",
-		}).state;
-		expect(state).toEqual(afterFirstDelete);
-
-		state = crawlControllerReducer(state, {
-			type: "resumableSessionDeleteFailed",
-			sessionId: "s-2",
-			error: "Delete failed late",
-		}).state;
-		expect(state.resumableSessions.deletingId).toBe("s-1");
-		expect(state.resumableSessions.error).toBeNull();
-
-		state = crawlControllerReducer(state, {
-			type: "resumableSessionDeleted",
-			sessionId: "s-1",
-		}).state;
-		expect(state.resumableSessions.deletingId).toBeNull();
-		expect(state.resumableSessions.items.map((session) => session.id)).toEqual(["s-2"]);
-	});
-
-	test("deleting the active paused resumable session clears selected crawl state", () => {
-		const sessions: ResumableSessionSummary[] = [
-			{
-				id: "active-crawl",
-				target: "https://active.example",
-				status: "paused",
-				pagesScanned: 1,
-				createdAt: "2026-03-21T12:00:00.000Z",
-				updatedAt: "2026-03-21T12:01:00.000Z",
-			},
-		];
-		let state = reduce(
-			createInitialCrawlControllerState(),
-			{ type: "crawlAccepted", crawlId: "active-crawl", kind: "start" },
-			{ type: "resumableSessionsLoading", requestId: 1 },
-			{ type: "resumableSessionsLoaded", requestId: 1, sessions },
-		);
-
-		state = applyEvent(state, {
-			type: "crawl.page",
-			crawlId: "active-crawl",
-			sequence: 1,
-			timestamp: "2026-03-21T12:00:01.000Z",
-			payload: {
-				id: 1,
-				pageCount: 1,
-				url: "https://active.example/page",
-				title: "active",
-			},
-		}).state;
-		state = applyEvent(state, {
-			type: "crawl.paused",
-			crawlId: "active-crawl",
-			sequence: 2,
-			timestamp: "2026-03-21T12:00:02.000Z",
-			payload: {
-				stopReason: "Pause requested",
-				counters: {
-					pagesScanned: 1,
-					successCount: 1,
-					failureCount: 0,
-					skippedCount: 0,
-					linksFound: 0,
-					mediaFiles: 0,
-					totalDataKb: 1,
-				},
-			},
-		}).state;
-
-		expect(state.activeCrawlId).toBe("active-crawl");
-		expect(state.runPhase).toBe("paused");
-		expect(state.crawledPages).toHaveLength(1);
-
-		state = reduce(state, {
-			type: "resumableSessionDeleted",
-			sessionId: "active-crawl",
-		});
-
-		expect(state.activeCrawlId).toBeNull();
-		expect(state.runPhase).toBe("idle");
-		expect(state.crawledPages).toHaveLength(0);
-		expect(state.resumableSessions.items).toHaveLength(0);
-	});
-
-	test("resume success removes the resumable row without clearing active crawl state", () => {
-		const sessions: ResumableSessionSummary[] = [
-			{
-				id: "active-crawl",
-				target: "https://active.example",
-				status: "paused",
-				pagesScanned: 1,
-				createdAt: "2026-03-21T12:00:00.000Z",
-				updatedAt: "2026-03-21T12:01:00.000Z",
-			},
-		];
-
-		const state = reduce(
-			createInitialCrawlControllerState(),
-			{ type: "resumableSessionsLoading", requestId: 1 },
-			{ type: "resumableSessionsLoaded", requestId: 1, sessions },
-			{ type: "resumableSessionResuming", sessionId: "active-crawl" },
-			{ type: "liveStateReset" },
-			{ type: "targetChanged", target: "https://active.example" },
-			{ type: "crawlAccepted", crawlId: "active-crawl", kind: "resume" },
-			{ type: "resumableSessionRemoved", sessionId: "active-crawl" },
-		);
-
-		expect(state.activeCrawlId).toBe("active-crawl");
-		expect(state.runPhase).toBe("starting");
-		expect(state.resumableSessions.items).toHaveLength(0);
-		expect(state.resumableSessions.resumingId).toBeNull();
-	});
-
-	test("resumable resume locks block refresh and unrelated delete release", () => {
-		let state = createInitialCrawlControllerState();
-		state = crawlControllerReducer(state, {
+		const loading = {
+			...state,
+			resumableSessions: { ...state.resumableSessions, isLoading: true },
+		};
+		const resuming = reduce(loading, {
 			type: "resumableSessionResuming",
-			sessionId: "s-2",
+			sessionId: session.id,
 		}).state;
-		const locked = state;
-
-		state = crawlControllerReducer(state, {
-			type: "resumableSessionDeleting",
-			sessionId: "s-1",
-		}).state;
-		expect(state).toEqual(locked);
-
-		state = crawlControllerReducer(state, {
-			type: "resumableSessionDeleted",
-			sessionId: "s-1",
-		}).state;
-		expect(state.resumableSessions.resumingId).toBe("s-2");
-
-		state = crawlControllerReducer(state, {
-			type: "resumableSessionResumeFinished",
-			sessionId: "s-2",
-		}).state;
-		expect(state.resumableSessions.resumingId).toBeNull();
-	});
-
-	test("resumable refreshes preserve an in-flight delete lock", () => {
-		const sessions: ResumableSessionSummary[] = [
-			{
-				id: "s-1",
-				target: "https://a.com",
-				status: "paused",
-				pagesScanned: 5,
-				createdAt: "2026-03-21T12:00:00.000Z",
-				updatedAt: "2026-03-21T12:01:00.000Z",
-			},
-			{
-				id: "s-2",
-				target: "https://b.com",
-				status: "interrupted",
-				pagesScanned: 10,
-				createdAt: "2026-03-20T12:00:00.000Z",
-				updatedAt: "2026-03-20T12:01:00.000Z",
-			},
-		];
-		let state = reduce(
-			createInitialCrawlControllerState(),
-			{ type: "resumableSessionsLoading", requestId: 1 },
-			{ type: "resumableSessionsLoaded", requestId: 1, sessions },
-			{ type: "resumableSessionDeleting", sessionId: "s-1" },
-			{ type: "resumableSessionsLoading", requestId: 2 },
-			{ type: "resumableSessionsLoaded", requestId: 2, sessions },
-		);
-
-		expect(state.resumableSessions.deletingId).toBe("s-1");
-
-		state = crawlControllerReducer(state, {
-			type: "resumableSessionDeleteFailed",
-			sessionId: "s-1",
-			error: "Delete failed",
-		}).state;
-
-		expect(state.resumableSessions.deletingId).toBeNull();
-		expect(state.resumableSessions.error).toBe("Delete failed");
-	});
-
-	test("resumable sessions failure preserves existing items", () => {
-		const sessions: ResumableSessionSummary[] = [
-			{
-				id: "s-1",
-				target: "https://a.com",
-				status: "interrupted",
-				pagesScanned: 5,
-				createdAt: "2026-03-21T12:00:00.000Z",
-				updatedAt: "2026-03-21T12:01:00.000Z",
-			},
-		];
-		let state = reduce(
-			createInitialCrawlControllerState(),
-			{ type: "resumableSessionsLoading", requestId: 1 },
-			{ type: "resumableSessionsLoaded", requestId: 1, sessions },
-		);
-
-		state = crawlControllerReducer(state, {
-			type: "resumableSessionsFailed",
-			requestId: 2,
-			error: "Network error",
-		}).state;
-
-		expect(state.resumableSessions.error).toBeNull();
-
-		state = reduce(
+		expect(resuming.resumableSessions.isLoading).toBe(false);
+		state = reduce(loading, { type: "resumableSessionDeleting", sessionId: session.id }).state;
+		expect(state.resumableSessions.isLoading).toBe(false);
+		expect(reduce(state, { type: "resumableSessionResuming", sessionId: session.id }).state).toBe(
 			state,
-			{ type: "resumableSessionsLoading", requestId: 3 },
-			{
-				type: "resumableSessionsFailed",
-				requestId: 3,
-				error: "Network error",
-			},
 		);
-
-		expect(state.resumableSessions.items).toHaveLength(1);
-		expect(state.resumableSessions.error).toBe("Network error");
-		expect(state.resumableSessions.isLoading).toBe(false);
-	});
-
-	test("resumable session loading ignores stale completions", () => {
-		const first: ResumableSessionSummary[] = [
-			{
-				id: "old",
-				target: "https://old.example",
-				status: "interrupted",
-				pagesScanned: 1,
-				createdAt: "2026-03-21T12:00:00.000Z",
-				updatedAt: "2026-03-21T12:01:00.000Z",
-			},
-		];
-		const latest: ResumableSessionSummary[] = [
-			{
-				id: "latest",
-				target: "https://latest.example",
-				status: "paused",
-				pagesScanned: 2,
-				createdAt: "2026-03-21T12:02:00.000Z",
-				updatedAt: "2026-03-21T12:03:00.000Z",
-			},
-		];
-		const state = reduce(
-			createInitialCrawlControllerState(),
-			{ type: "resumableSessionsLoading", requestId: 1 },
-			{ type: "resumableSessionsLoading", requestId: 2 },
-			{ type: "resumableSessionsLoaded", requestId: 1, sessions: first },
-			{ type: "resumableSessionsLoaded", requestId: 2, sessions: latest },
-		);
-
-		expect(state.resumableSessions.items.map((session) => session.id)).toEqual(["latest"]);
-		expect(state.resumableSessions.isLoading).toBe(false);
-	});
-
-	test("local resumable session removal invalidates active refreshes", () => {
-		const oldResponse: ResumableSessionSummary[] = [
-			{
-				id: "deleted",
-				target: "https://deleted.example",
-				status: "paused",
-				pagesScanned: 1,
-				createdAt: "2026-03-21T12:00:00.000Z",
-				updatedAt: "2026-03-21T12:01:00.000Z",
-			},
-		];
-		const state = reduce(
-			createInitialCrawlControllerState(),
-			{ type: "resumableSessionsLoading", requestId: 7 },
-			{ type: "resumableSessionDeleted", sessionId: "deleted" },
-			{ type: "resumableSessionsLoaded", requestId: 7, sessions: oldResponse },
-		);
-
-		expect(state.resumableSessions.items).toEqual([]);
-		expect(state.resumableSessions.isLoading).toBe(false);
-		expect(state.resumableSessions.requestId).toBeNull();
-	});
-
-	test("liveStateReset clears crawl state but preserves target and options", () => {
-		let state = reduce(
-			createInitialCrawlControllerState(),
-			{ type: "targetChanged", target: "https://example.com" },
-			{ type: "crawlAccepted", crawlId: "crawl-1", kind: "start" },
-		);
-
-		// Add some live state
-		state = applyEvent(state, {
-			type: "crawl.page",
-			crawlId: "crawl-1",
-			sequence: 1,
-			timestamp: "2026-03-21T12:00:00.000Z",
-			payload: { id: 1, pageCount: 1, url: "https://example.com" },
-		}).state;
-
-		state = crawlControllerReducer(state, { type: "liveStateReset" }).state;
-
-		expect(state.activeCrawlId).toBeNull();
-		expect(state.crawledPages).toHaveLength(0);
-		expect(state.logs).toHaveLength(0);
-		expect(state.progress).toBe(0);
-		expect(state.runPhase).toBe("idle");
-	});
-
-	test("full lifecycle: start → progress → pages → completed", () => {
-		let state = reduce(
-			createInitialCrawlControllerState(),
-			{ type: "crawlAccepted", crawlId: "lifecycle-1", kind: "start" },
-			{ type: "connectionChanged", connectionState: "connected" },
-		);
-
-		// Started
-		state = applyEvent(state, {
-			type: "crawl.started",
-			crawlId: "lifecycle-1",
-			sequence: 1,
-			timestamp: "2026-03-21T12:00:00.000Z",
-			payload: { target: "https://example.com", resume: false },
-		}).state;
-		expect(state.runPhase).toBe("running");
-
-		// Progress
-		state = applyEvent(state, {
-			type: "crawl.progress",
-			crawlId: "lifecycle-1",
-			sequence: 2,
-			timestamp: "2026-03-21T12:00:01.000Z",
-			payload: {
-				counters: {
-					pagesScanned: 1,
-					successCount: 1,
-					failureCount: 0,
-					skippedCount: 0,
-					linksFound: 3,
-					mediaFiles: 0,
-					totalDataKb: 8,
-				},
-				queue: {
-					activeRequests: 1,
-					queueLength: 2,
-					elapsedTime: 1,
-					pagesPerSecond: 1,
-				},
-				elapsedSeconds: 1,
-				pagesPerSecond: 1,
-				stopReason: null,
-			},
-		}).state;
-		expect(state.stats.pagesScanned).toBe(1);
-
-		// Page
-		state = applyEvent(state, {
-			type: "crawl.page",
-			crawlId: "lifecycle-1",
-			sequence: 3,
-			timestamp: "2026-03-21T12:00:02.000Z",
-			payload: { id: 1, pageCount: 1, url: "https://example.com" },
-		}).state;
-		expect(state.crawledPages).toHaveLength(1);
-
-		// Completed
-		const completed = applyEvent(state, {
-			type: "crawl.completed",
-			crawlId: "lifecycle-1",
-			sequence: 4,
-			timestamp: "2026-03-21T12:00:03.000Z",
-			payload: {
-				counters: {
-					pagesScanned: 3,
-					successCount: 3,
-					failureCount: 0,
-					skippedCount: 0,
-					linksFound: 5,
-					mediaFiles: 1,
-					totalDataKb: 24,
-				},
-			},
-		});
-
-		expect(completed.state.runPhase).toBe("completed");
-		expect(completed.state.progress).toBe(100);
-		expect(completed.state.connectionState).toBe("disconnected");
-		expect(completed.state.crawledPages).toHaveLength(1); // pages preserved
-		expect(completed.effects.some((e) => e.type === "toast" && e.level === "success")).toBe(true);
-	});
-
-	test("resume hydration replaces local form state with persisted crawl settings", () => {
-		const summary: CrawlSummary = {
-			id: "crawl-1",
-			target: "https://resume.example/path",
-			status: "running",
-			options: {
-				target: "https://resume.example/path",
-				crawlMethod: "media",
-				crawlDepth: 4,
-				crawlDelay: 750,
-				maxPages: 42,
-				maxPagesPerDomain: 7,
-				maxConcurrentRequests: 3,
-				retryLimit: 2,
-				dynamic: true,
-				respectRobots: false,
-				contentOnly: true,
-				saveMedia: true,
-			},
-			counters: {
-				pagesScanned: 5,
-				successCount: 4,
-				failureCount: 1,
-				skippedCount: 0,
-				linksFound: 12,
-				mediaFiles: 3,
-				totalDataKb: 99,
-			},
-			createdAt: "2026-03-21T12:00:00.000Z",
-			startedAt: "2026-03-21T12:00:10.000Z",
-			updatedAt: "2026-03-21T12:01:00.000Z",
-			completedAt: null,
-			stopReason: null,
-			resumable: true,
-		};
-		const initial = reduce(
-			createInitialCrawlControllerState(),
-			{ type: "targetChanged", target: "https://draft.example" },
-			{
-				type: "crawlOptionsChanged",
-				crawlOptions: {
-					target: "https://draft.example",
-					crawlMethod: "links",
-					crawlDepth: 1,
-					crawlDelay: 0,
-					maxPages: 10,
-					maxPagesPerDomain: 0,
-					maxConcurrentRequests: 1,
-					retryLimit: 0,
-					dynamic: false,
-					respectRobots: true,
-					contentOnly: false,
-					saveMedia: false,
-				},
-			},
-		);
-
-		const resumed = reduce(initial, ...getResumeHydrationActions(summary));
-
-		expect(resumed.target).toBe(summary.target);
-		expect(resumed.crawlOptions).toEqual(summary.options);
-	});
-
-	test("resume hydrates durable pages, resets the SSE generation cursor, and deduplicates replay", () => {
-		const initial = {
-			...createInitialCrawlControllerState(),
-			lastSequenceByCrawlId: { "crawl-resume": 99 },
-		};
-		let state = reduce(
-			initial,
-			{
-				type: "crawlAccepted",
-				crawlId: "crawl-resume",
-				kind: "resume",
-			},
-			{
-				type: "crawlRecoverySnapshotSynchronized",
-				snapshot: {
-					crawl: createSummary({
-						id: "crawl-resume",
-						status: "starting",
-						counters: {
-							pagesScanned: 2,
-							successCount: 2,
-							failureCount: 0,
-							skippedCount: 0,
-							linksFound: 4,
-							mediaFiles: 0,
-							totalDataKb: 8,
-						},
-					}),
-					pages: [
-						{ id: 2, url: "https://resume.example/two", domain: "resume.example" },
-						{ id: 1, url: "https://resume.example/one", domain: "resume.example" },
-					],
-					pageCount: 2,
-				},
-			},
-		);
-
-		expect(state.stats.pagesScanned).toBe(2);
-		expect(state.crawledPages).toHaveLength(2);
-		expect(state.lastSequenceByCrawlId["crawl-resume"]).toBeUndefined();
-
-		state = applyEvent(state, {
-			type: "crawl.page",
-			crawlId: "crawl-resume",
-			sequence: 100,
-			timestamp: "2026-03-21T12:02:00.000Z",
-			payload: {
-				id: 2,
-				pageCount: 2,
-				url: "https://resume.example/two",
-				title: "Replayed",
-			},
-		}).state;
-
-		expect(state.crawledPages).toHaveLength(2);
-		expect(state.crawledPages[0]?.title).toBe("Replayed");
-	});
-
-	test("normalizes impossible links plus saveMedia option state", () => {
-		const initial = createInitialCrawlControllerState();
-		const next = reduce(initial, {
-			type: "crawlOptionsChanged",
-			crawlOptions: {
-				...initial.crawlOptions,
-				crawlMethod: "links",
-				saveMedia: true,
-			},
-		});
-
-		expect(next.crawlOptions.crawlMethod).toBe("links");
-		expect(next.crawlOptions.saveMedia).toBe(false);
+		state = reduce(state, { type: "resumableSessionDeleted", sessionId: session.id }).state;
+		expect(state.resumableSessions).toMatchObject({ items: [], deletingId: null });
 	});
 });

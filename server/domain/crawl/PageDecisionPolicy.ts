@@ -43,12 +43,12 @@ export function isSoft404(title: string, mainContent: string, contentLength: num
 		return true;
 	}
 
-	const titleLower = title.toLowerCase();
-	if (SOFT_404_CONSTANTS.KEYWORDS.some((keyword) => titleLower.includes(keyword))) {
-		return true;
-	}
-
 	if (contentLength < SOFT_404_CONSTANTS.SHORT_CONTENT_BYTES) {
+		const titleLower = title.toLowerCase();
+		if (SOFT_404_CONSTANTS.KEYWORDS.some((keyword) => titleLower.includes(keyword))) {
+			return true;
+		}
+
 		const contentLower = trimmedMainContent.toLowerCase().slice(0, 1000);
 		if (SOFT_404_CONSTANTS.KEYWORDS.some((keyword) => contentLower.includes(keyword))) {
 			return true;

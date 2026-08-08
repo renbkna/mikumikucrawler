@@ -1,5 +1,4 @@
-import { openapi } from "@elysiajs/openapi";
-import { Elysia } from "elysia";
+import { openapi } from "@elysia/openapi";
 import {
 	API_PATHS,
 	CRAWL_EXPORT_FORMAT_VALUES,
@@ -15,125 +14,124 @@ const apiErrorContent = {
 	},
 } as const;
 
-export function openapiPlugin() {
-	return new Elysia({ name: "openapi-plugin" }).use(
-		openapi({
-			path: API_PATHS.openapi,
-			scalar: { version: "1.62.9" },
-			documentation: {
-				info: {
-					title: "MikuMikuCrawler API",
-					version: "3.0.0",
-					description: "HTTP + SSE backend for crawl execution, persistence, and search.",
-				},
-				tags: [
-					{ name: "Crawls", description: "Crawl lifecycle control and state" },
-					{ name: "Pages", description: "Stored page content access" },
-					{ name: "Search", description: "Run-scoped search across stored pages" },
-					{ name: "Health", description: "Runtime health endpoints" },
-				],
-				paths: {
-					[OPENAPI_CRAWL_EVENTS_PATH]: {
-						get: {
-							tags: ["Crawls"],
-							summary: "Subscribe to crawl events",
-							parameters: [
-								{
-									name: "id",
-									in: "path",
-									required: true,
-									schema: { type: "string" },
+export function openapiPlugin(options: { interactive: boolean } = { interactive: true }) {
+	return openapi({
+		path: API_PATHS.openapi,
+		provider: options.interactive ? "scalar" : null,
+		scalar: { version: "1.62.9" },
+		documentation: {
+			info: {
+				title: "MikuMikuCrawler API",
+				version: "3.0.0",
+				description: "HTTP + SSE backend for crawl execution, persistence, and search.",
+			},
+			tags: [
+				{ name: "Crawls", description: "Crawl lifecycle control and state" },
+				{ name: "Pages", description: "Stored page content access" },
+				{ name: "Search", description: "Run-scoped search across stored pages" },
+				{ name: "Health", description: "Runtime health endpoints" },
+			],
+			paths: {
+				[OPENAPI_CRAWL_EVENTS_PATH]: {
+					get: {
+						tags: ["Crawls"],
+						summary: "Subscribe to crawl events",
+						parameters: [
+							{
+								name: "id",
+								in: "path",
+								required: true,
+								schema: { type: "string" },
+							},
+							{
+								name: "Last-Event-ID",
+								in: "header",
+								required: false,
+								description:
+									"Bounded live replay cursor. Older events may be unavailable after process restart or stream cleanup; recover durable state from crawl and page endpoints.",
+								schema: {
+									type: "integer",
+									minimum: 0,
+									maximum: SSE_LAST_EVENT_ID_MAX,
 								},
-								{
-									name: "Last-Event-ID",
-									in: "header",
-									required: false,
-									description:
-										"Bounded live replay cursor. Older events may be unavailable after process restart or stream cleanup; recover durable state from crawl and page endpoints.",
-									schema: {
-										type: "integer",
-										minimum: 0,
-										maximum: SSE_LAST_EVENT_ID_MAX,
+							},
+						],
+						responses: {
+							"200": {
+								description: "Server-sent crawl event stream",
+								content: {
+									"text/event-stream": {
+										schema: { type: "string" },
 									},
 								},
-							],
-							responses: {
-								"200": {
-									description: "Server-sent crawl event stream",
-									content: {
-										"text/event-stream": {
-											schema: { type: "string" },
-										},
-									},
-								},
-								"404": {
-									description: "Crawl not found",
-									content: apiErrorContent,
-								},
-								"422": {
-									description: "Validation error",
-									content: apiErrorContent,
-								},
-								"429": {
-									description: "SSE subscriber capacity reached",
-									content: apiErrorContent,
-								},
+							},
+							"404": {
+								description: "Crawl not found",
+								content: apiErrorContent,
+							},
+							"422": {
+								description: "Validation error",
+								content: apiErrorContent,
+							},
+							"429": {
+								description: "SSE subscriber capacity reached",
+								content: apiErrorContent,
 							},
 						},
 					},
-					[OPENAPI_CRAWL_EXPORT_PATH]: {
-						get: {
-							tags: ["Crawls"],
-							summary: "Export crawl pages",
-							parameters: [
-								{
-									name: "id",
-									in: "path",
-									required: true,
-									schema: { type: "string" },
+				},
+				[OPENAPI_CRAWL_EXPORT_PATH]: {
+					get: {
+						tags: ["Crawls"],
+						summary: "Export crawl pages",
+						parameters: [
+							{
+								name: "id",
+								in: "path",
+								required: true,
+								schema: { type: "string" },
+							},
+							{
+								name: "format",
+								in: "query",
+								required: false,
+								schema: {
+									type: "string",
+									enum: [...CRAWL_EXPORT_FORMAT_VALUES],
+									default: "json",
 								},
-								{
-									name: "format",
-									in: "query",
-									required: false,
-									schema: {
-										type: "string",
-										enum: [...CRAWL_EXPORT_FORMAT_VALUES],
-										default: "json",
-									},
-								},
-							],
-							responses: {
-								"200": {
-									description: "Exported crawl pages",
-									content: {
-										"application/json": {
-											schema: {
-												type: "array",
-												items: {
-													type: "object",
-													additionalProperties: true,
-												},
+							},
+						],
+						responses: {
+							"200": {
+								description: "Exported crawl pages",
+								content: {
+									"application/json": {
+										schema: {
+											type: "array",
+											items: {
+												type: "object",
+												additionalProperties: true,
 											},
 										},
-										"text/csv": {
-											schema: { type: "string" },
-										},
+									},
+									"text/csv": {
+										schema: { type: "string" },
 									},
 								},
-								"404": {
-									description: "Crawl not found",
-									content: apiErrorContent,
-								},
-								"422": {
-									description: "Validation error",
-									content: apiErrorContent,
-								},
+							},
+							"404": {
+								description: "Crawl not found",
+								content: apiErrorContent,
+							},
+							"422": {
+								description: "Validation error",
+								content: apiErrorContent,
 							},
 						},
 					},
 				},
 			},
-		}),
-	);
+		},
+	});
 }

@@ -1,6 +1,7 @@
-import type { CrawledPage } from "../../shared/contracts/index.js";
+import { type CrawledPage, isSearchResponse } from "../../shared/contracts/index.js";
 import { api } from "./client";
 import { getApiErrorMessage } from "./errors";
+import { createRequestSignal } from "./requestLifetime";
 import type { ApiResult } from "./result";
 
 export const DURABLE_SEARCH_RESULT_LIMIT = 100;
@@ -15,9 +16,10 @@ export async function searchStoredPages(
 	query: string,
 	signal?: AbortSignal,
 ): Promise<ApiResult<DurablePageSearchResult>> {
+	const requestSignal = createRequestSignal(signal);
 	const response = await api.api.search.get({
 		query: { crawlId, q: query, limit: DURABLE_SEARCH_RESULT_LIMIT },
-		...(signal ? { fetch: { signal } } : {}),
+		fetch: { signal: requestSignal },
 	});
 
 	if (response.error || !response.data) {
@@ -25,6 +27,12 @@ export async function searchStoredPages(
 			ok: false,
 			error: getApiErrorMessage(response.error?.value, "Search failed"),
 		};
+	}
+	if (!isSearchResponse(response.data)) {
+		return { ok: false, error: "Unexpected search response" };
+	}
+	if (response.data.crawlId !== crawlId || response.data.query !== query) {
+		return { ok: false, error: "Unexpected search response" };
 	}
 
 	return {
@@ -37,6 +45,7 @@ export async function searchStoredPages(
 				title: result.title || undefined,
 				description: result.snippet || result.description || undefined,
 				domain: result.domain,
+				details: {},
 			})),
 		},
 	};

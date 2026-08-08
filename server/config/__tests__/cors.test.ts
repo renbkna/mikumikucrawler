@@ -4,7 +4,7 @@ import { isCorsOriginAllowed } from "../cors.js";
 describe("CORS origin policy", () => {
 	test("development admits browser origins on exact loopback hosts without fixing the Vite port", () => {
 		const policy = {
-			frontendUrl: "https://configured.example",
+			frontendOrigin: "https://configured.example",
 			isDevelopment: true,
 		};
 
@@ -31,7 +31,7 @@ describe("CORS origin policy", () => {
 
 	test("configured origin is admitted in every environment without widening production", () => {
 		const policy = {
-			frontendUrl: "https://crawler.example",
+			frontendOrigin: "https://crawler.example",
 			isDevelopment: false,
 		};
 
@@ -39,5 +39,15 @@ describe("CORS origin policy", () => {
 		expect(isCorsOriginAllowed("http://localhost:5176", policy)).toBe(false);
 		expect(isCorsOriginAllowed("https://other.example", policy)).toBe(false);
 		expect(isCorsOriginAllowed(null, policy)).toBe(false);
+	});
+
+	test("configured canonical origin admits equivalent startup spellings", () => {
+		const policy = {
+			frontendOrigin: "https://crawler.example",
+			isDevelopment: false,
+		};
+
+		expect(isCorsOriginAllowed("https://crawler.example", policy)).toBe(true);
+		expect(isCorsOriginAllowed("https://crawler.example/", policy)).toBe(false);
 	});
 });

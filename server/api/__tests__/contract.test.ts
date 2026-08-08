@@ -1,40 +1,19 @@
-import { describe, expect, mock, test } from "bun:test";
-import type { CrawlOptions } from "../../../shared/contracts/index.js";
+import { describe, expect, test } from "bun:test";
+import { type CrawlOptions, isActiveCrawlStatus } from "../../../shared/contracts/index.js";
 import { persistPageFixture } from "../../__tests__/pageFixture.js";
+import {
+	htmlDocumentResponse,
+	htmlResponse,
+	silentLogger,
+	successfulHtmlHttpClient,
+	waitFor,
+} from "../../__tests__/runtimeFixture.js";
+import { createInMemoryStorage } from "../../__tests__/storageFixture.js";
 import { createApp } from "../../app.js";
-import type { AppLogger } from "../../config/logging.js";
-import type { HttpClient, Resolver } from "../../plugins/security.js";
+import { CRAWL_QUEUE_CONSTANTS } from "../../constants.js";
+import type { HttpClient } from "../../outbound/HttpClient.js";
 import { CrawlManager } from "../../runtime/CrawlManager.js";
-import type { CrawlRuntime } from "../../runtime/CrawlRuntime.js";
 import { EventStream } from "../../runtime/EventStream.js";
-import { createInMemoryStorage } from "../../storage/db.js";
-
-function createLogger(): AppLogger {
-	return {
-		level: "info",
-		info: mock(() => undefined),
-		warn: mock(() => undefined),
-		error: mock(() => undefined),
-		debug: mock(() => undefined),
-		fatal: mock(() => undefined),
-		trace: mock(() => undefined),
-		silent: mock(() => undefined),
-		child: mock(() => createLogger()),
-	} as unknown as AppLogger;
-}
-
-async function waitFor<T>(read: () => T, predicate: (value: T) => boolean) {
-	const timeoutAt = Date.now() + 5000;
-	while (Date.now() < timeoutAt) {
-		const value = read();
-		if (predicate(value)) {
-			return value;
-		}
-		await Bun.sleep(25);
-	}
-
-	throw new Error("Timed out waiting for condition");
-}
 
 function decodeSseChunk(value: unknown): string {
 	if (typeof value === "string") return value;
@@ -42,36 +21,29 @@ function decodeSseChunk(value: unknown): string {
 	throw new Error("Expected an SSE string or byte chunk");
 }
 
-function buildApp(httpClient: HttpClient) {
-	const storage = createInMemoryStorage();
+function buildApp(
+	httpClient: HttpClient = successfulHtmlHttpClient,
+	storage = createInMemoryStorage(),
+) {
 	const eventStream = new EventStream();
-	const registry = new Map<string, CrawlRuntime>();
-	const logger = createLogger();
-	const resolver: Resolver = {
-		assertPublicHostname: async () => {},
-		resolveHost: async () => ["93.184.216.34"],
-	};
+	const logger = silentLogger;
 	const crawlManager = new CrawlManager({
 		logger,
 		repos: storage.repos,
 		eventStream,
-		registry,
-		resolver,
 		httpClient,
+		storageBudget: storage.budget,
 	});
 
 	const app = createApp({
 		logger,
 		storage,
-		resolver,
-		httpClient,
 		eventStream,
-		runtimeRegistry: registry,
 		crawlManager,
 		rateLimitGenerator: () => "api-contract-client",
 	});
 
-	return { app, crawlManager, registry, storage };
+	return { app, crawlManager, storage };
 }
 
 const crawlBody: CrawlOptions = {
@@ -89,15 +61,13 @@ const crawlBody: CrawlOptions = {
 	saveMedia: false,
 };
 
+function createCrawlRequestBody(options: unknown = crawlBody, id = crypto.randomUUID()) {
+	return { id, options };
+}
+
 describe("api contract", () => {
 	test("app factory uses injected storage", async () => {
-		const { app, storage } = buildApp({
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
-		});
+		const { app, storage } = buildApp();
 
 		storage.repos.crawlRuns.createRun("injected-storage-crawl", {
 			...crawlBody,
@@ -106,25 +76,9 @@ describe("api contract", () => {
 		persistPageFixture(storage, {
 			crawlId: "injected-storage-crawl",
 			url: "https://injected.example/page",
-			domain: "injected.example",
-			contentType: "text/html",
-			statusCode: 200,
-			contentLength: 128,
 			title: "Injected storage needle",
-			description: "",
 			content: "<main>Injected storage needle</main>",
-			isDynamic: false,
-			lastModified: null,
-			etag: null,
-			processedContent: {
-				extractedData: { mainContent: "Injected storage needle" },
-				metadata: {},
-				analysis: {},
-				media: [],
-				links: [],
-				errors: [],
-			},
-			links: [],
+			mainContent: "Injected storage needle",
 		});
 
 		const response = await app.handle(
@@ -140,22 +94,18 @@ describe("api contract", () => {
 	});
 
 	test("rejects crawl methods and status filters outside the declared contract", async () => {
-		const { app } = buildApp({
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
-		});
+		const { app } = buildApp();
 
 		const invalidCreateResponse = await app.handle(
 			new Request("http://localhost/api/crawls", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({
-					...crawlBody,
-					crawlMethod: "archive",
-				}),
+				body: JSON.stringify(
+					createCrawlRequestBody({
+						...crawlBody,
+						crawlMethod: "archive",
+					}),
+				),
 			}),
 		);
 		expect(invalidCreateResponse.status).toBe(422);
@@ -167,13 +117,7 @@ describe("api contract", () => {
 	});
 
 	test("rejects fractional numeric query and path parameters at the API boundary", async () => {
-		const { app } = buildApp({
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
-		});
+		const { app } = buildApp();
 
 		const crawlListResponse = await app.handle(
 			new Request("http://localhost/api/crawls?limit=1.5"),
@@ -192,13 +136,7 @@ describe("api contract", () => {
 	});
 
 	test("Elysia owns bounded numeric SSE replay cursor validation", async () => {
-		const { app } = buildApp({
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
-		});
+		const { app } = buildApp();
 
 		for (const value of ["not-a-sequence", "-1", "1.5", String(Number.MAX_SAFE_INTEGER + 1)]) {
 			const response = await app.handle(
@@ -219,14 +157,8 @@ describe("api contract", () => {
 		}
 	});
 
-	test("rate-limit exemptions are exact route paths, not query-string substrings", async () => {
-		const { app } = buildApp({
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
-		});
+	test("rate limits failed SSE handshakes and ordinary query-string lookalikes", async () => {
+		const { app } = buildApp();
 
 		let response = new Response();
 		for (let index = 0; index < 101; index += 1) {
@@ -234,10 +166,11 @@ describe("api contract", () => {
 				new Request(`http://localhost/api/crawls/missing/events?n=${index}`),
 			);
 		}
-		expect(response.status).toBe(404);
+		expect(response.status).toBe(429);
 
+		const { app: queryApp } = buildApp();
 		for (let index = 0; index < 101; index += 1) {
-			response = await app.handle(
+			response = await queryApp.handle(
 				new Request(`http://localhost/api/search?crawlId=missing&q=/events&n=${index}`),
 			);
 		}
@@ -245,28 +178,41 @@ describe("api contract", () => {
 		expect(response.status).toBe(429);
 	});
 
-	test("rejects non-integer crawl option fields", async () => {
-		const { app } = buildApp({
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
+	test("rate limits schema-invalid request bodies before route parsing", async () => {
+		const { app } = buildApp();
+
+		let response = new Response();
+		for (let index = 0; index < 101; index += 1) {
+			response = await app.handle(
+				new Request("http://localhost/api/crawls", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ invalid: index }),
 				}),
-		});
+			);
+		}
+
+		expect(response.status).toBe(429);
+	});
+
+	test("rejects non-integer crawl option fields", async () => {
+		const { app } = buildApp();
 
 		const response = await app.handle(
 			new Request("http://localhost/api/crawls", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({
-					...crawlBody,
-					crawlDepth: 1.5,
-					crawlDelay: 200.2,
-					maxPages: 1.1,
-					maxPagesPerDomain: 0.5,
-					maxConcurrentRequests: 1.5,
-					retryLimit: 0.5,
-				}),
+				body: JSON.stringify(
+					createCrawlRequestBody({
+						...crawlBody,
+						crawlDepth: 1.5,
+						crawlDelay: 200.2,
+						maxPages: 1.1,
+						maxPagesPerDomain: 0.5,
+						maxConcurrentRequests: 1.5,
+						retryLimit: 0.5,
+					}),
+				),
 			}),
 		);
 
@@ -274,22 +220,18 @@ describe("api contract", () => {
 	});
 
 	test("rejects invalid crawl targets at create time", async () => {
-		const { app, storage } = buildApp({
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
-		});
+		const { app, storage } = buildApp();
 
 		const response = await app.handle(
 			new Request("http://localhost/api/crawls", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({
-					...crawlBody,
-					target: "mailto:test@example.com",
-				}),
+				body: JSON.stringify(
+					createCrawlRequestBody({
+						...crawlBody,
+						target: "mailto:test@example.com",
+					}),
+				),
 			}),
 		);
 
@@ -302,46 +244,40 @@ describe("api contract", () => {
 	});
 
 	test("normalizes accepted crawl targets before persisting the crawl", async () => {
-		const { app } = buildApp({
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
-		});
+		const { app } = buildApp();
 
 		const response = await app.handle(
 			new Request("http://localhost/api/crawls", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({
-					...crawlBody,
-					target: "example.com/path?b=2&a=1#fragment",
-				}),
+				body: JSON.stringify(
+					createCrawlRequestBody({
+						...crawlBody,
+						target: "example.com/path?b=2&a=1#fragment",
+					}),
+				),
 			}),
 		);
 
 		expect(response.status).toBe(200);
 		const created = await response.json();
-		expect(created.target).toBe("http://example.com/path?a=1&b=2");
-		expect(created.options.target).toBe("http://example.com/path?a=1&b=2");
+		expect(created.target).toBe("http://example.com/path?b=2&a=1");
+		expect(created.options.target).toBe("http://example.com/path?b=2&a=1");
 	});
 
 	test("rejects create admission after shutdown begins", async () => {
-		const { app, crawlManager, registry, storage } = buildApp({
-			fetch: async () => new Response("unused"),
-		});
+		const { app, crawlManager, storage } = buildApp();
 		const paused = storage.repos.crawlRuns.createRun("shutdown-resume", {
 			...crawlBody,
 			target: "https://shutdown-resume.example",
 		});
-		storage.repos.crawlRuns.markPaused(paused.id, paused.counters, "Paused", 0);
+		storage.repos.crawlRuns.markPaused(paused.id, "Paused", 0);
 		const shutdown = crawlManager.shutdownAll();
 		const createResponse = await app.handle(
 			new Request("http://localhost/api/crawls", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify(crawlBody),
+				body: JSON.stringify(createCrawlRequestBody()),
 			}),
 		);
 		const resumeResponse = await app.handle(
@@ -362,21 +298,86 @@ describe("api contract", () => {
 			code: "SERVICE_CLOSING",
 		});
 		expect(storage.repos.crawlRuns.getById(paused.id)?.status).toBe("paused");
-		expect(registry.size).toBe(0);
+		expect(crawlManager.activeRuntimeCount).toBe(0);
 	});
 
-	test("create response matches the persisted startup snapshot", async () => {
+	test("rejects crawl admission before the durable capacity safety reservation is exhausted", async () => {
+		const storage = createInMemoryStorage({ maxBytes: 8 * 1024 * 1024 });
+		const { app } = buildApp(
+			{
+				fetch: async () => new Response("unused"),
+			},
+			storage,
+		);
+		const crawlId = crypto.randomUUID();
+		const response = await app.handle(
+			new Request("http://localhost/api/crawls", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(createCrawlRequestBody(crawlBody, crawlId)),
+			}),
+		);
+
+		expect(response.status).toBe(507);
+		expect(await response.json()).toEqual(
+			expect.objectContaining({ code: "STORAGE_CAPACITY_EXHAUSTED" }),
+		);
+		expect(storage.repos.crawlRuns.getById(crawlId)).toBeNull();
+	});
+
+	test("projects active runtime exhaustion as an explicit service-capacity response", async () => {
+		const { app, crawlManager, storage } = buildApp({
+			fetch: ({ signal }) =>
+				new Promise<Response>((_resolve, reject) => {
+					signal?.addEventListener("abort", () => reject(signal.reason ?? new Error("aborted")), {
+						once: true,
+					});
+				}),
+		});
+		for (let index = 0; index < CRAWL_QUEUE_CONSTANTS.MAX_ACTIVE_RUNTIMES; index += 1) {
+			const response = await app.handle(
+				new Request("http://localhost/api/crawls", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify(
+						createCrawlRequestBody({
+							...crawlBody,
+							target: `https://capacity-${index}.example`,
+						}),
+					),
+				}),
+			);
+			expect(response.status).toBe(200);
+		}
+		const rejectedId = crypto.randomUUID();
+		const rejected = await app.handle(
+			new Request("http://localhost/api/crawls", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(
+					createCrawlRequestBody(
+						{ ...crawlBody, target: "https://capacity-rejected.example" },
+						rejectedId,
+					),
+				),
+			}),
+		);
+
+		expect(rejected.status).toBe(503);
+		expect(await rejected.json()).toEqual({
+			error: `Active crawl capacity reached (${CRAWL_QUEUE_CONSTANTS.MAX_ACTIVE_RUNTIMES})`,
+			code: "RUNTIME_CAPACITY_REACHED",
+		});
+		expect(storage.repos.crawlRuns.getById(rejectedId)).toBeNull();
+		await crawlManager.shutdownAll();
+	});
+
+	test("create acknowledges a persisted active crawl before fetch completion", async () => {
 		let releaseFetch!: () => void;
 		const { app, storage } = buildApp({
 			fetch: () =>
 				new Promise<Response>((resolve) => {
-					releaseFetch = () =>
-						resolve(
-							new Response("<html><body><main>held</main></body></html>", {
-								status: 200,
-								headers: { "content-type": "text/html" },
-							}),
-						);
+					releaseFetch = () => resolve(htmlResponse("held"));
 				}),
 		});
 
@@ -384,14 +385,16 @@ describe("api contract", () => {
 			new Request("http://localhost/api/crawls", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify(crawlBody),
+				body: JSON.stringify(createCrawlRequestBody()),
 			}),
 		);
 
 		expect(response.status).toBe(200);
 		const created = await response.json();
 		const persisted = storage.repos.crawlRuns.getById(created.id);
-		expect(created.status).toBe(persisted?.status);
+		expect(isActiveCrawlStatus(created.status)).toBe(true);
+		expect(persisted?.id).toBe(created.id);
+		expect(persisted && isActiveCrawlStatus(persisted.status)).toBe(true);
 		expect(created.status).not.toBe("pending");
 		await waitFor(
 			() => typeof releaseFetch,
@@ -408,18 +411,14 @@ describe("api contract", () => {
 		const html =
 			"<html><body><main>Hello api contract</main><title>API Contract</title></body></html>";
 		const { app, storage } = buildApp({
-			fetch: async () =>
-				new Response(html, {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+			fetch: async () => htmlDocumentResponse(html),
 		});
 
 		const createResponse = await app.handle(
 			new Request("http://localhost/api/crawls", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify(crawlBody),
+				body: JSON.stringify(createCrawlRequestBody()),
 			}),
 		);
 		expect(createResponse.status).toBe(200);
@@ -486,35 +485,9 @@ describe("api contract", () => {
 	});
 
 	test("page content response preserves null and empty body semantics", async () => {
-		const { app, storage } = buildApp({
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
-		});
+		const { app, storage } = buildApp();
 		const crawl = storage.repos.crawlRuns.createRun("crawl-page-content-contract", crawlBody);
-		const basePage = {
-			crawlId: crawl.id,
-			domain: "example.com",
-			contentType: "text/html",
-			statusCode: 200,
-			contentLength: 0,
-			title: "",
-			description: "",
-			isDynamic: false,
-			lastModified: null,
-			etag: null,
-			processedContent: {
-				extractedData: { mainContent: "" },
-				metadata: {},
-				analysis: {},
-				media: [],
-				links: [],
-				errors: [],
-			},
-			links: [],
-		};
+		const basePage = { crawlId: crawl.id };
 		const emptyId = persistPageFixture(storage, {
 			...basePage,
 			url: "https://example.com/empty",
@@ -538,38 +511,17 @@ describe("api contract", () => {
 	});
 
 	test("export includes stored content and search count reports total matches", async () => {
-		const { app, storage } = buildApp({
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
-		});
+		const { app, storage } = buildApp();
 		const crawl = storage.repos.crawlRuns.createRun("crawl-search-export", crawlBody);
 
 		for (const index of [1, 2, 3]) {
 			persistPageFixture(storage, {
 				crawlId: crawl.id,
 				url: `https://example.com/page-${index}`,
-				domain: "example.com",
-				contentType: "text/html",
-				statusCode: 200,
-				contentLength: 128,
 				title: `Needle page ${index}`,
 				description: "Search count contract",
 				content: `<main>needle export body ${index}</main>`,
-				isDynamic: false,
-				lastModified: null,
-				etag: null,
-				processedContent: {
-					extractedData: { mainContent: `needle export body ${index}` },
-					metadata: {},
-					analysis: {},
-					media: [],
-					links: [],
-					errors: [],
-				},
-				links: [],
+				mainContent: `needle export body ${index}`,
 			});
 		}
 
@@ -590,13 +542,7 @@ describe("api contract", () => {
 	});
 
 	test("openapi documents streaming and export media types truthfully", async () => {
-		const { app } = buildApp({
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
-		});
+		const { app } = buildApp();
 
 		const response = await app.handle(new Request("http://localhost/openapi/json"));
 
@@ -639,24 +585,50 @@ describe("api contract", () => {
 		}
 
 		const uiResponse = await app.handle(new Request("http://localhost/openapi"));
-		expect(uiResponse.status).toBe(200);
-		const ui = await uiResponse.text();
-		expect(ui).toContain("@scalar/api-reference@1.62.9/");
-		expect(ui).not.toContain("@scalar/api-reference@latest/");
+		expect(uiResponse.status).toBe(404);
 		expect(exportContent["application/json"].schema.type).toBe("array");
 		expect(exportContent).toHaveProperty("application/json");
 		expect(exportContent).toHaveProperty("text/csv");
 		expect(exportContent).not.toHaveProperty("text/plain");
 	});
 
-	test("multi-term search matches pages containing all terms without requiring an exact phrase", async () => {
+	test("caller-owned crawl identities make create retries idempotent", async () => {
 		const { app, storage } = buildApp({
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+			fetch: async () => htmlResponse("idempotent"),
 		});
+		const crawlId = crypto.randomUUID();
+		const requestBody = createCrawlRequestBody(crawlBody, crawlId);
+		const createRequest = () =>
+			app.handle(
+				new Request("http://localhost/api/crawls", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify(requestBody),
+				}),
+			);
+
+		const first = await createRequest();
+		const retry = await createRequest();
+		expect(first.status).toBe(200);
+		expect(retry.status).toBe(200);
+		expect((await first.json()).id).toBe(crawlId);
+		expect((await retry.json()).id).toBe(crawlId);
+		expect(storage.repos.crawlRuns.list()).toHaveLength(1);
+
+		const conflict = await app.handle(
+			new Request("http://localhost/api/crawls", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(
+					createCrawlRequestBody({ ...crawlBody, maxPages: crawlBody.maxPages + 1 }, crawlId),
+				),
+			}),
+		);
+		expect(conflict.status).toBe(409);
+	});
+
+	test("multi-term search matches pages containing all terms without requiring an exact phrase", async () => {
+		const { app, storage } = buildApp();
 		const crawl = storage.repos.crawlRuns.createRun("crawl-search-terms", crawlBody);
 
 		for (const [slug, mainContent] of [
@@ -667,25 +639,10 @@ describe("api contract", () => {
 			persistPageFixture(storage, {
 				crawlId: crawl.id,
 				url: `https://example.com/${slug}`,
-				domain: "example.com",
-				contentType: "text/html",
-				statusCode: 200,
-				contentLength: 128,
 				title: slug,
 				description: "Search term contract",
 				content: `<main>${mainContent}</main>`,
-				isDynamic: false,
-				lastModified: null,
-				etag: null,
-				processedContent: {
-					extractedData: { mainContent },
-					metadata: {},
-					analysis: {},
-					media: [],
-					links: [],
-					errors: [],
-				},
-				links: [],
+				mainContent,
 			});
 		}
 
@@ -703,13 +660,7 @@ describe("api contract", () => {
 	});
 
 	test("search returns string snippets for content-only pages", async () => {
-		const { app, storage } = buildApp({
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
-		});
+		const { app, storage } = buildApp();
 		const crawl = storage.repos.crawlRuns.createRun("crawl-content-only-api-search", {
 			...crawlBody,
 			target: "https://content-only.example",
@@ -718,25 +669,9 @@ describe("api contract", () => {
 		persistPageFixture(storage, {
 			crawlId: crawl.id,
 			url: "https://content-only.example/page",
-			domain: "content-only.example",
-			contentType: "text/html",
-			statusCode: 200,
-			contentLength: 128,
 			title: "Stored without source",
-			description: "",
 			content: null,
-			isDynamic: false,
-			lastModified: null,
-			etag: null,
-			processedContent: {
-				extractedData: { mainContent: "uniquecontentonlyneedle body" },
-				metadata: {},
-				analysis: {},
-				media: [],
-				links: [],
-				errors: [],
-			},
-			links: [],
+			mainContent: "uniquecontentonlyneedle body",
 		});
 
 		const response = await app.handle(
@@ -750,37 +685,18 @@ describe("api contract", () => {
 
 	test("resume returns the backend-owned recovery snapshot before the new SSE generation", async () => {
 		const { app, storage } = buildApp({
-			fetch: async () =>
-				new Response("<html><body><main>resumed target</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+			fetch: async () => htmlResponse("resumed target"),
 		});
 		const crawl = storage.repos.crawlRuns.createRun("crawl-resume-snapshot", crawlBody);
 		persistPageFixture(storage, {
 			crawlId: crawl.id,
 			url: "https://example.com/prior",
-			domain: "example.com",
-			contentType: "text/html",
-			statusCode: 200,
-			contentLength: 128,
 			title: "Prior durable page",
 			description: "Stored before pause",
 			content: "<main>prior</main>",
-			isDynamic: false,
-			lastModified: null,
-			etag: null,
-			processedContent: {
-				extractedData: { mainContent: "prior" },
-				metadata: {},
-				analysis: {},
-				media: [],
-				links: [],
-				errors: [],
-			},
-			links: [],
+			mainContent: "prior",
 		});
-		storage.repos.crawlRuns.markPaused(crawl.id, crawl.counters, "Paused", 7);
+		storage.repos.crawlRuns.markPaused(crawl.id, "Paused", 7);
 
 		const response = await app.handle(
 			new Request(`http://localhost/api/crawls/${crawl.id}/resume`, { method: "POST" }),
@@ -799,18 +715,14 @@ describe("api contract", () => {
 
 	test("resume rejects terminal crawls", async () => {
 		const { app, storage } = buildApp({
-			fetch: async () =>
-				new Response("<html><body><main>done</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+			fetch: async () => htmlResponse("done"),
 		});
 
 		const createResponse = await app.handle(
 			new Request("http://localhost/api/crawls", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify(crawlBody),
+				body: JSON.stringify(createCrawlRequestBody()),
 			}),
 		);
 		const created = await createResponse.json();
@@ -831,18 +743,14 @@ describe("api contract", () => {
 
 	test("stop returns the current snapshot for terminal crawls", async () => {
 		const { app, storage } = buildApp({
-			fetch: async () =>
-				new Response("<html><body><main>done</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+			fetch: async () => htmlResponse("done"),
 		});
 
 		const createResponse = await app.handle(
 			new Request("http://localhost/api/crawls", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify(crawlBody),
+				body: JSON.stringify(createCrawlRequestBody()),
 			}),
 		);
 		const created = await createResponse.json();
@@ -867,48 +775,40 @@ describe("api contract", () => {
 		});
 	});
 
-	test("resume rejects already-active crawl records", async () => {
-		const { app, registry, storage } = buildApp({
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
+	test("resume rejects an active runtime", async () => {
+		const { app, crawlManager } = buildApp({
+			fetch: ({ signal }) =>
+				new Promise<Response>((_resolve, reject) => {
+					signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
 				}),
 		});
-
-		const paused = storage.repos.crawlRuns.createRun("active-paused-crawl", {
-			...crawlBody,
-			target: "https://paused.example",
-		});
-		storage.repos.crawlRuns.markPaused(paused.id, paused.counters, "Paused", 0);
-		registry.set(paused.id, {} as CrawlRuntime);
-
-		const resumeResponse = await app.handle(
-			new Request(`http://localhost/api/crawls/${paused.id}/resume`, {
+		const crawlId = crypto.randomUUID();
+		const createResponse = await app.handle(
+			new Request("http://localhost/api/crawls", {
 				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(createCrawlRequestBody(crawlBody, crawlId)),
 			}),
 		);
+		expect(createResponse.status).toBe(200);
 
-		expect(resumeResponse.status).toBe(409);
-		expect(await resumeResponse.json()).toEqual({
-			error: "Crawl is already running",
-		});
+		const response = await app.handle(
+			new Request(`http://localhost/api/crawls/${crawlId}/resume`, { method: "POST" }),
+		);
+
+		expect(response.status).toBe(409);
+		expect(await response.json()).toEqual({ error: "Crawl is already running" });
+		await crawlManager.shutdownAll();
 	});
 
-	test("delete rejects persisted active crawl records without relying on the runtime registry", async () => {
-		const { app, storage } = buildApp({
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
-		});
+	test("delete rejects persisted active crawl records without a live runtime", async () => {
+		const { app, storage } = buildApp();
 
 		const active = storage.repos.crawlRuns.createRun("orphan-running-crawl", {
 			...crawlBody,
 			target: "https://running.example",
 		});
-		storage.repos.crawlRuns.markRunning(active.id, active.counters, 0);
+		storage.repos.crawlRuns.markRunning(active.id, 0);
 
 		const deleteResponse = await app.handle(
 			new Request(`http://localhost/api/crawls/${active.id}`, {
@@ -923,14 +823,31 @@ describe("api contract", () => {
 		expect(storage.repos.crawlRuns.getById(active.id)?.status).toBe("running");
 	});
 
-	test("resumable crawl endpoint returns only settled paused and interrupted runs from one snapshot", async () => {
-		const { app, registry, storage } = buildApp({
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+	test("delete retries report the already-absent outcome as success", async () => {
+		const { app, storage } = buildApp();
+		const paused = storage.repos.crawlRuns.createRun("delete-idempotent", {
+			...crawlBody,
+			target: "https://delete.example",
 		});
+		storage.repos.crawlRuns.markPaused(paused.id, "Paused", 0);
+
+		const remove = () =>
+			app.handle(
+				new Request(`http://localhost/api/crawls/${paused.id}`, {
+					method: "DELETE",
+				}),
+			);
+		const first = await remove();
+		const retry = await remove();
+
+		expect(first.status).toBe(200);
+		expect(await first.json()).toEqual({ status: "ok", outcome: "deleted" });
+		expect(retry.status).toBe(200);
+		expect(await retry.json()).toEqual({ status: "ok", outcome: "already-absent" });
+	});
+
+	test("resumable crawl endpoint returns only paused and interrupted runs", async () => {
+		const { app, storage } = buildApp();
 
 		const paused = storage.repos.crawlRuns.createRun("paused-crawl", {
 			...crawlBody,
@@ -948,21 +865,10 @@ describe("api contract", () => {
 			...crawlBody,
 			target: "https://completed.example",
 		});
-		const activePaused = storage.repos.crawlRuns.createRun("active-paused-crawl", {
-			...crawlBody,
-			target: "https://active-paused.example",
-		});
-		storage.repos.crawlRuns.markPaused(paused.id, paused.counters, "Paused", 0);
-		storage.repos.crawlRuns.markPaused(
-			activePaused.id,
-			activePaused.counters,
-			"Shutdown still settling",
-			0,
-		);
-		storage.repos.crawlRuns.markPausing(pausing.id, pausing.counters, "Pause requested", 0);
-		storage.repos.crawlRuns.markInterrupted(interrupted.id, interrupted.counters, "Shutdown", 0);
-		storage.repos.crawlRuns.markCompleted(completed.id, completed.counters, null, 0);
-		registry.set(activePaused.id, {} as CrawlRuntime);
+		storage.repos.crawlRuns.markPaused(paused.id, "Paused", 0);
+		storage.repos.crawlRuns.markPausing(pausing.id, "Pause requested", 0);
+		storage.repos.crawlRuns.markInterrupted(interrupted.id, "Shutdown", 0);
+		storage.repos.crawlRuns.markCompleted(completed.id, null, 0);
 
 		const response = await app.handle(new Request("http://localhost/api/crawls/resumable"));
 
@@ -979,13 +885,7 @@ describe("api contract", () => {
 		const { app, storage } = buildApp({
 			fetch: () =>
 				new Promise<Response>((resolve) => {
-					releaseFetch = () =>
-						resolve(
-							new Response("<html><body><main>stream</main></body></html>", {
-								status: 200,
-								headers: { "content-type": "text/html" },
-							}),
-						);
+					releaseFetch = () => resolve(htmlResponse("stream"));
 				}),
 		});
 
@@ -993,7 +893,7 @@ describe("api contract", () => {
 			new Request("http://localhost/api/crawls", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ ...crawlBody, maxPages: 1 }),
+				body: JSON.stringify(createCrawlRequestBody({ ...crawlBody, maxPages: 1 })),
 			}),
 		);
 		const created = await createResponse.json();
@@ -1020,5 +920,44 @@ describe("api contract", () => {
 			(run) => run?.status === "completed",
 		);
 		expect(completed?.status).toBe("completed");
+	});
+
+	test("one client cannot occupy every SSE slot for a crawl", async () => {
+		let releaseFetch!: () => void;
+		const { app, storage } = buildApp({
+			fetch: () =>
+				new Promise<Response>((resolve) => {
+					releaseFetch = () =>
+						resolve(htmlDocumentResponse("<html><body><main>stream</main></body></html>"));
+				}),
+		});
+		const createdResponse = await app.handle(
+			new Request("http://localhost/api/crawls", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(createCrawlRequestBody({ ...crawlBody, maxPages: 1 })),
+			}),
+		);
+		const created = await createdResponse.json();
+		const url = `http://localhost/api/crawls/${created.id}/events`;
+		const first = await app.handle(new Request(url));
+		const second = await app.handle(new Request(url));
+		const rejected = await app.handle(new Request(url));
+
+		expect(first.status).toBe(200);
+		expect(second.status).toBe(200);
+		expect(rejected.status).toBe(429);
+		expect(await rejected.json()).toEqual({
+			error: "SSE subscriber capacity reached",
+			code: "SSE_CAPACITY_REACHED",
+		});
+
+		await first.body?.cancel();
+		await second.body?.cancel();
+		releaseFetch();
+		await waitFor(
+			() => storage.repos.crawlRuns.getById(created.id),
+			(crawl) => crawl?.status === "completed",
+		);
 	});
 });

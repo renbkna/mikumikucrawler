@@ -6,6 +6,7 @@ export interface ApiSuccess<T> {
 export interface ApiFailure {
 	ok: false;
 	error: string;
+	status?: number;
 }
 
 export type ApiResult<T> = ApiSuccess<T> | ApiFailure;

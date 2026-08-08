@@ -1,5 +1,4 @@
 import type { CrawlOptions } from "../../../shared/contracts/index.js";
-import type { Logger } from "../../config/logging.js";
 import type { CrawlState } from "./CrawlState.js";
 import { getCrawlUrlIdentity } from "./UrlPolicy.js";
 
@@ -26,7 +25,6 @@ export class CrawlQueue {
 	constructor(
 		private readonly options: CrawlOptions,
 		private readonly state: CrawlState,
-		private readonly logger: Logger,
 		private readonly persistence: QueuePersistence,
 	) {}
 
@@ -39,38 +37,48 @@ export class CrawlQueue {
 	}
 
 	restore(items: QueueItem[]): void {
+		const targetIdentity = getCrawlUrlIdentity(this.options.target);
+		if ("error" in targetIdentity) {
+			throw new Error(`Cannot restore queue for invalid crawl target: ${this.options.target}`);
+		}
+		const restoredUrls = new Set<string>();
 		for (const item of items) {
-			if (this.queuedUrls.has(item.url)) {
+			const identity = getCrawlUrlIdentity(item.url);
+			if (
+				"error" in identity ||
+				identity.canonicalUrl !== item.url ||
+				identity.domainBudgetKey !== item.domain
+			) {
+				throw new Error(`Cannot restore invalid queued URL identity: ${item.url}`);
+			}
+			if (this.options.crawlMethod !== "full" && identity.originKey !== targetIdentity.originKey) {
+				throw new Error(`Cannot restore external URL outside full crawl mode: ${item.url}`);
+			}
+			if (
+				!Number.isSafeInteger(item.depth) ||
+				item.depth < 0 ||
+				item.depth > this.options.crawlDepth
+			) {
+				throw new Error(`Cannot restore queued depth outside crawl policy: ${item.depth}`);
+			}
+			if (
+				!Number.isSafeInteger(item.retries) ||
+				item.retries < 0 ||
+				item.retries > this.options.retryLimit
+			) {
+				throw new Error(`Cannot restore queued retries outside crawl policy: ${item.retries}`);
+			}
+			if (this.queuedUrls.has(item.url) || restoredUrls.has(item.url)) {
 				throw new Error(`Cannot restore duplicate queued URL: ${item.url}`);
 			}
-			this.state.restoreAdmission(item.url);
-			this.state.restoreDomainAdmission(item.domain);
+			restoredUrls.add(item.url);
+		}
+
+		this.state.restoreQueueAdmissions(items);
+		for (const item of items) {
 			this.pending.push(item);
 			this.queuedUrls.add(item.url);
 		}
-	}
-
-	enqueue(
-		item: Omit<QueueItem, "domain" | "availableAt"> & {
-			url: string;
-			domain?: string;
-			availableAt?: number;
-		},
-	): boolean {
-		const identity = getCrawlUrlIdentity(item.url);
-		if ("error" in identity) {
-			return false;
-		}
-
-		const domain = item.domain ?? identity.domainBudgetKey;
-		return this.enqueueNormalized({
-			url: identity.canonicalUrl,
-			domain,
-			depth: item.depth,
-			retries: item.retries,
-			availableAt: item.availableAt ?? Date.now(),
-			parentUrl: item.parentUrl,
-		});
 	}
 
 	enqueueNormalized(item: QueueItem): boolean {
@@ -110,11 +118,6 @@ export class CrawlQueue {
 		this.queuedUrls.add(retryItem.url);
 	}
 
-	clearRetryTimers(): void {
-		// Retries are modeled as delayed persisted queue items instead of
-		// process-local timers, so interruption does not discard future work.
-	}
-
 	nextReady(now = Date.now()): { item: QueueItem | null; waitMs: number } {
 		if (this.pending.length === 0) {
 			return { item: null, waitMs: 0 };
@@ -129,7 +132,7 @@ export class CrawlQueue {
 				break;
 			}
 			this.queuedUrls.delete(candidate.url);
-			const delayKey = this.getDelayKey(candidate);
+			const delayKey = candidate.domain;
 
 			if (this.activeUrls.has(candidate.url)) {
 				this.pending.push(candidate);
@@ -171,19 +174,9 @@ export class CrawlQueue {
 		this.activeUrls.delete(item.url);
 	}
 
-	markInterrupted(item: QueueItem): void {
-		this.activeUrls.delete(item.url);
-		this.logger.debug(`[Queue] Preserving active item for resume: ${item.url}`);
-	}
-
-	private getDelayKey(item: QueueItem): string {
-		const identity = getCrawlUrlIdentity(item.url);
-		return "error" in identity ? item.domain : identity.originKey;
-	}
-
 	deferPendingByDelayKey(getNextAllowedAt: (delayKey: string) => number): void {
 		for (const item of this.pending) {
-			const nextAllowedAt = getNextAllowedAt(this.getDelayKey(item));
+			const nextAllowedAt = getNextAllowedAt(item.domain);
 			if (nextAllowedAt <= (item.availableAt ?? 0)) {
 				continue;
 			}

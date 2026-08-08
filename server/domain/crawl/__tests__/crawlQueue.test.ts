@@ -1,6 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { CrawlOptions } from "../../../../shared/contracts/index.js";
-import type { Logger } from "../../../config/logging.js";
 import { CrawlQueue } from "../CrawlQueue.js";
 import { CrawlState } from "../CrawlState.js";
 
@@ -19,24 +18,57 @@ const options: CrawlOptions = {
 	saveMedia: false,
 };
 
-function createLogger(): Logger {
-	return {
-		level: "info",
-		info: mock(() => undefined),
-		warn: mock(() => undefined),
-		error: mock(() => undefined),
-		debug: mock(() => undefined),
-		fatal: mock(() => undefined),
-		trace: mock(() => undefined),
-		silent: mock(() => undefined),
-		child: mock(() => createLogger()),
-	} as unknown as Logger;
-}
-
 describe("CrawlQueue", () => {
+	test("rejects restored depth and retry policy before exposing queued work", () => {
+		for (const invalid of [
+			{ depth: 3, retries: 0, message: "queued depth" },
+			{ depth: 1, retries: 1, message: "queued retries" },
+		]) {
+			const state = new CrawlState({ ...options, crawlDepth: 2, retryLimit: 0 });
+			const queue = new CrawlQueue(options, state, {
+				enqueueMany: mock(() => undefined),
+				reschedule: mock(() => undefined),
+				clear: mock(() => undefined),
+			});
+
+			expect(() =>
+				queue.restore([
+					{
+						url: "https://example.com/restored",
+						domain: "example.com",
+						depth: invalid.depth,
+						retries: invalid.retries,
+					},
+				]),
+			).toThrow(invalid.message);
+			expect(queue.pendingCount).toBe(0);
+		}
+	});
+
+	test("rejects restored external work outside full crawl mode", () => {
+		const state = new CrawlState(options);
+		const queue = new CrawlQueue(options, state, {
+			enqueueMany: mock(() => undefined),
+			reschedule: mock(() => undefined),
+			clear: mock(() => undefined),
+		});
+
+		expect(() =>
+			queue.restore([
+				{
+					url: "https://external.example/page",
+					domain: "external.example",
+					depth: 1,
+					retries: 0,
+				},
+			]),
+		).toThrow("outside full crawl mode");
+		expect(queue.pendingCount).toBe(0);
+	});
+
 	test("durable enqueue succeeds before queue and admission state become visible", () => {
 		const state = new CrawlState({ ...options, maxPagesPerDomain: 1 });
-		const queue = new CrawlQueue(options, state, createLogger(), {
+		const queue = new CrawlQueue(options, state, {
 			enqueueMany: () => {
 				throw new Error("queue persistence failed");
 			},
@@ -45,7 +77,7 @@ describe("CrawlQueue", () => {
 		});
 
 		expect(() =>
-			queue.enqueue({
+			queue.enqueueNormalized({
 				url: "https://example.com/persistence-failure",
 				domain: "example.com",
 				depth: 1,
@@ -65,7 +97,6 @@ describe("CrawlQueue", () => {
 				canAdmit: () => true,
 				recordAdmission: () => undefined,
 			} as never,
-			createLogger(),
 			{
 				enqueueMany: mock(() => undefined),
 				reschedule,
@@ -73,14 +104,14 @@ describe("CrawlQueue", () => {
 			},
 		);
 
-		queue.enqueue({
+		queue.enqueueNormalized({
 			url: "https://example.com/a",
 			domain: "example.com",
 			depth: 1,
 			retries: 0,
 			availableAt: 100,
 		});
-		queue.enqueue({
+		queue.enqueueNormalized({
 			url: "https://other.example/b",
 			domain: "other.example",
 			depth: 1,
@@ -88,7 +119,7 @@ describe("CrawlQueue", () => {
 			availableAt: 100,
 		});
 
-		queue.deferPendingByDelayKey((delayKey) => (delayKey === "https://example.com" ? 500 : 50));
+		queue.deferPendingByDelayKey((delayKey) => (delayKey === "example.com" ? 500 : 50));
 
 		expect(reschedule).toHaveBeenCalledTimes(1);
 		expect(reschedule).toHaveBeenCalledWith(
@@ -110,10 +141,8 @@ describe("CrawlQueue", () => {
 		const queue = new CrawlQueue(
 			options,
 			{
-				restoreAdmission: () => undefined,
-				restoreDomainAdmission: () => undefined,
+				restoreQueueAdmissions: () => undefined,
 			} as never,
-			createLogger(),
 			{
 				enqueueMany: mock(() => undefined),
 				reschedule: () => {
@@ -128,10 +157,8 @@ describe("CrawlQueue", () => {
 		expect(item.availableAt).toBe(100);
 	});
 
-	test("uses origin delay keys for scheduling while preserving host budget domains", () => {
-		const timeUntilDomainReady = mock((delayKey: string) =>
-			delayKey === "http://example.com:8080" ? 300 : 0,
-		);
+	test("uses one hostname delay lane across schemes and ports", () => {
+		const timeUntilDomainReady = mock((delayKey: string) => (delayKey === "example.com" ? 300 : 0));
 		const reserveDomain = mock(() => undefined);
 		const queue = new CrawlQueue(
 			options,
@@ -143,7 +170,6 @@ describe("CrawlQueue", () => {
 				reserveDomain,
 				nextAllowedAtForDomain: () => 300,
 			} as never,
-			createLogger(),
 			{
 				enqueueMany: mock(() => undefined),
 				reschedule: mock(() => undefined),
@@ -151,14 +177,14 @@ describe("CrawlQueue", () => {
 			},
 		);
 
-		queue.enqueue({
+		queue.enqueueNormalized({
 			url: "http://example.com:8080/slow",
 			domain: "example.com",
 			depth: 1,
 			retries: 0,
 			availableAt: 100,
 		});
-		queue.enqueue({
+		queue.enqueueNormalized({
 			url: "https://example.com/ready",
 			domain: "example.com",
 			depth: 1,
@@ -168,9 +194,9 @@ describe("CrawlQueue", () => {
 
 		const ready = queue.nextReady(100);
 
-		expect(ready.item?.url).toBe("https://example.com/ready");
-		expect(timeUntilDomainReady).toHaveBeenCalledWith("http://example.com:8080", 100);
-		expect(reserveDomain).toHaveBeenCalledWith("https://example.com", 100);
+		expect(ready.item).toBeNull();
+		expect(timeUntilDomainReady).toHaveBeenCalledWith("example.com", 100);
+		expect(reserveDomain).not.toHaveBeenCalled();
 	});
 
 	test("keeps a rescheduled item pending for the completion owner", () => {
@@ -185,7 +211,6 @@ describe("CrawlQueue", () => {
 				reserveDomain: mock(() => undefined),
 				nextAllowedAtForDomain: () => 0,
 			} as never,
-			createLogger(),
 			{
 				enqueueMany: mock(() => undefined),
 				reschedule,
@@ -225,7 +250,6 @@ describe("CrawlQueue", () => {
 				reserveDomain: mock(() => undefined),
 				nextAllowedAtForDomain: () => 0,
 			} as never,
-			createLogger(),
 			{
 				enqueueMany: mock(() => undefined),
 				reschedule: () => {
@@ -234,7 +258,7 @@ describe("CrawlQueue", () => {
 				clear: mock(() => undefined),
 			},
 		);
-		queue.enqueue({
+		queue.enqueueNormalized({
 			url: "https://example.com/retry-write-failure",
 			domain: "example.com",
 			depth: 1,
@@ -263,7 +287,6 @@ describe("CrawlQueue", () => {
 				reserveDomain: mock(() => undefined),
 				nextAllowedAtForDomain: () => 0,
 			} as never,
-			createLogger(),
 			{
 				enqueueMany: mock(() => undefined),
 				reschedule: mock(() => undefined),
@@ -271,7 +294,7 @@ describe("CrawlQueue", () => {
 			},
 		);
 
-		queue.enqueue({
+		queue.enqueueNormalized({
 			url: "https://example.com/rate",
 			domain: "example.com",
 			depth: 1,
@@ -312,7 +335,6 @@ describe("CrawlQueue", () => {
 				}),
 				nextAllowedAtForDomain: () => nextAllowedAt,
 			} as never,
-			createLogger(),
 			{
 				enqueueMany: mock(() => undefined),
 				reschedule,
@@ -320,14 +342,14 @@ describe("CrawlQueue", () => {
 			},
 		);
 
-		queue.enqueue({
+		queue.enqueueNormalized({
 			url: "https://example.com/a",
 			domain: "example.com",
 			depth: 1,
 			retries: 0,
 			availableAt: 100,
 		});
-		queue.enqueue({
+		queue.enqueueNormalized({
 			url: "https://example.com/b",
 			domain: "example.com",
 			depth: 1,

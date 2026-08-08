@@ -1,13 +1,18 @@
 import { describe, expect, expectTypeOf, test } from "bun:test";
-import type { CrawlOptions, CrawlPageData } from "../../../../shared/contracts/index.js";
+import {
+	type CrawlOptions,
+	type CrawlPageData,
+	PAGE_TEXT_LIMITS,
+} from "../../../../shared/contracts/index.js";
+import { utf8ByteLength } from "../../../../shared/text.js";
 import type { CompletedPageData } from "../../../storage/repos/crawlItemPersistence.js";
 import type { ProcessedContent } from "../../../types.js";
 import type { QueueItem } from "../CrawlQueue.js";
 import type { FetchResult } from "../FetchService.js";
 import { buildPageResult } from "../PageResultBuilder.js";
 
-const baseOptions: CrawlOptions = {
-	target: "https://example.com",
+const options: CrawlOptions = {
+	target: "https://example.com/",
 	crawlMethod: "full",
 	crawlDepth: 1,
 	crawlDelay: 0,
@@ -30,178 +35,75 @@ const item: QueueItem = {
 
 const fetchResult: Extract<FetchResult, { type: "success" }> = {
 	type: "success",
-	content: "<html><main>Body</main></html>",
-	effectiveUrl: "https://example.com/post",
+	content: "<main>Body</main>",
+	effectiveUrl: item.url,
 	statusCode: 200,
 	contentType: "text/html",
 	contentLength: 4096,
 	title: "",
 	description: "",
-	lastModified: null,
-	etag: null,
 	xRobotsTag: null,
-	isDynamic: false,
 };
 
-function createProcessedContent(): ProcessedContent {
+function processed(overrides: Partial<ProcessedContent> = {}): ProcessedContent {
 	return {
-		extractedData: {
-			mainContent: "Processed body",
-			jsonLd: [{ "@type": "Article" }],
-		},
-		metadata: {
-			title: "Metadata title",
-			description: "Metadata description",
-			robots: "index,follow",
-		},
-		analysis: {
-			language: "en",
-			quality: {
-				score: 91,
-				factors: {},
-				issues: [],
-			},
-		},
-		media: [
-			{
-				type: "image",
-				url: "https://example.com/image.png",
-				alt: "cover",
-			},
-		],
+		extractedData: { mainContent: "Processed body" },
+		metadata: { title: "Metadata title", description: "Metadata description" },
+		analysis: { wordCount: 2, readingTime: 1, language: "en" },
+		mediaCount: 1,
 		links: [],
 		errors: [],
+		...overrides,
 	};
 }
 
-describe("page result builder contract", () => {
-	test("contentOnly=true stores null content", () => {
-		const result = buildPageResult(
-			{ ...baseOptions, contentOnly: true },
-			item,
-			fetchResult,
-			createProcessedContent(),
-			[],
-		);
-
-		expect(result.pageData.content).toBeNull();
+describe("page result projection", () => {
+	test.each([
+		[{ contentOnly: true }, null, 1],
+		[{ saveMedia: false }, "<main>Body</main>", 0],
+	] as const)("applies storage options %o", (override, expectedContent, expectedMedia) => {
+		const result = buildPageResult({ ...options, ...override }, item, fetchResult, processed());
+		expect(result.pageData.content).toBe(expectedContent);
+		expect(result.pageData.mediaCount).toBe(expectedMedia);
 	});
 
-	test("saveMedia=false strips media from storage and event projections and reports zero media", () => {
+	test("publishes the bounded consumer-backed page projection", () => {
 		const result = buildPageResult(
-			{ ...baseOptions, saveMedia: false },
+			options,
 			item,
-			fetchResult,
-			createProcessedContent(),
-			[],
+			{ ...fetchResult, title: "Fetched title" },
+			processed({
+				analysis: { wordCount: 2, readingTime: 1, language: "x".repeat(100) },
+			}),
 		);
 
-		expect(result.pageData.processedContent.media).toEqual([]);
-		expect(result.eventPayload.processedData?.media).toEqual([]);
-		expect(result.mediaCount).toBe(0);
-	});
-
-	test("saveMedia=true with media or full crawl retains media", () => {
-		const result = buildPageResult(
-			{ ...baseOptions, crawlMethod: "media", saveMedia: true },
-			item,
-			fetchResult,
-			createProcessedContent(),
-			[],
-		);
-
-		expect(result.pageData.processedContent.media).toHaveLength(1);
-		expect(result.eventPayload.processedData?.media).toHaveLength(1);
-		expect(result.mediaCount).toBe(1);
-	});
-
-	test("fetch title and description override processed metadata fallback", () => {
-		const result = buildPageResult(
-			baseOptions,
-			item,
-			{
-				...fetchResult,
-				title: "Fetched title",
-				description: "Fetched description",
-			},
-			createProcessedContent(),
-			[],
-		);
-
-		expect(result.resolvedTitle).toBe("Fetched title");
-		expect(result.resolvedDescription).toBe("Fetched description");
-		expect(result.pageData.title).toBe("Fetched title");
-		expect(result.eventPayload.title).toBe("Fetched title");
-	});
-
-	test("pre-persistence contracts exclude storage-owned identity and event sequence data", () => {
-		const result = buildPageResult(baseOptions, item, fetchResult, createProcessedContent(), []);
-
-		expect(result.eventPayload).toEqual({
-			url: "https://example.com/post",
-			title: "Metadata title",
+		expect(result.eventPayload).toMatchObject({
+			url: item.url,
+			title: "Fetched title",
 			description: "Metadata description",
-			contentType: "text/html",
-			domain: "example.com",
-			processedData: {
-				extractedData: {
-					mainContent: "Processed body",
-					jsonLd: [{ "@type": "Article" }],
-				},
-				metadata: {
-					title: "Metadata title",
-					description: "Metadata description",
-					robots: "index,follow",
-				},
-				analysis: {
-					language: "en",
-					quality: {
-						score: 91,
-						factors: {},
-						issues: [],
-					},
-				},
-				media: [
-					{
-						type: "image",
-						url: "https://example.com/image.png",
-						alt: "cover",
-					},
-				],
-				errors: [],
-				qualityScore: 91,
-				language: "en",
-			},
+			details: { wordCount: 2, readingTime: 1 },
 		});
+		expect(utf8ByteLength(result.eventPayload.details.language ?? "")).toBeLessThanOrEqual(
+			PAGE_TEXT_LIMITS.languageBytes,
+		);
 		expectTypeOf(result.eventPayload).toEqualTypeOf<CrawlPageData>();
-		expect(result.eventPayload).not.toHaveProperty("id");
-		expect(result.eventPayload).not.toHaveProperty("pageCount");
 		expectTypeOf(result.pageData).toEqualTypeOf<CompletedPageData>();
+		expect(result.eventPayload).not.toHaveProperty("id");
 		expect(result.pageData).not.toHaveProperty("crawlId");
-		expect(result.pageData).not.toHaveProperty("url");
-		expect(result.pageData).not.toHaveProperty("domain");
 	});
 
-	test("page-level nofollow strips replayable stored links", () => {
+	test("preserves page-level nofollow for link admission", () => {
 		const result = buildPageResult(
-			baseOptions,
+			options,
 			item,
 			fetchResult,
-			{
-				...createProcessedContent(),
-				metadata: {
-					robots: "nofollow",
-				},
-			},
-			[
-				{
-					url: "https://example.com/blocked",
-					nofollow: false,
-				},
-			],
+			processed({
+				metadata: { robots: "nofollow" },
+				links: [{ url: "https://example.com/blocked", nofollow: false }],
+			}),
 		);
 
 		expect(result.robotsDirectives.nofollow).toBe(true);
-		expect(result.pageData.links).toEqual([]);
+		expect(result.pageData.discoveredLinkCount).toBe(1);
 	});
 });

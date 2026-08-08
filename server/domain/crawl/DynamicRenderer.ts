@@ -1,16 +1,16 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { BrowserPool, PlaywrightPlugin } from "@crawlee/browser-pool";
-import { type Session, SessionPool } from "@crawlee/core";
 import {
+	type Browser,
 	type BrowserContext,
 	type BrowserContextOptions,
 	chromium,
+	type Frame,
 	type Page,
 	type Route,
 	type WebSocketRoute,
 } from "playwright";
 import type { CrawlOptions } from "../../../shared/contracts/index.js";
-import { normalizeRobotsMatchHttpUrl } from "../../../shared/url.js";
+import { normalizeCanonicalHttpUrl } from "../../../shared/url.js";
 import { resolveChromiumExecutable } from "../../config/browser.js";
 import { config } from "../../config/env.js";
 import type { Logger } from "../../config/logging.js";
@@ -18,10 +18,9 @@ import {
 	DYNAMIC_RENDERER_CONSTANTS,
 	FETCH_HEADERS,
 	REQUEST_CONSTANTS,
-	SITE_COOKIES,
-	SITE_SELECTORS,
+	TIMEOUT_CONSTANTS,
 } from "../../constants.js";
-import type { HttpClient } from "../../plugins/security.js";
+import { type HttpClient, isOutboundPolicyError } from "../../outbound/HttpClient.js";
 import {
 	isJsonContentType,
 	isPdfContentType,
@@ -29,9 +28,9 @@ import {
 	maxProcessableDocumentBytes,
 } from "../../processors/contentTypes.js";
 import { getErrorMessage } from "../../utils/helpers.js";
-import { logMemoryStatus } from "../../utils/memoryMonitor.js";
 import { disposeResponseBody, readLimitedResponseBody } from "../../utils/responseBody.js";
-import { runWithTimeout, runWithTimeoutFallback } from "../../utils/timeout.js";
+import { OperationTimeoutError, runWithTimeout } from "../../utils/timeout.js";
+import { type WorkLease, WorkPermitPool } from "../../utils/WorkPermitPool.js";
 import type { QueueItem } from "./CrawlQueue.js";
 import {
 	CONSENT_ACTION_MARKERS,
@@ -40,10 +39,11 @@ import {
 	isConsentWallText,
 	requiresStrictConsentBypass,
 } from "./consent.js";
+import type { DestinationAuthorizer } from "./FetchService.js";
 
 /**
  * Dynamic renderer contract:
- * - owns one crawl-scoped browser/session pool
+ * - owns one crawl-scoped browser and one isolated context per rendered page
  * - classifies dynamic fetches as success, consentBlocked, or static fallback
  * - never uses Playwright's native HTTP(S) network path; browser requests are
  *   fulfilled through the same pinned HTTP client used by static crawling
@@ -54,7 +54,6 @@ interface InitializeResult {
 }
 
 interface DynamicRenderResult {
-	isDynamic: true;
 	content: string;
 	effectiveUrl: string;
 	statusCode: number;
@@ -62,10 +61,33 @@ interface DynamicRenderResult {
 	contentLength: number;
 	title: string;
 	description: string;
-	lastModified?: string;
-	etag?: string | null;
 	xRobotsTag?: string | null;
 	retryAfter?: string | null;
+}
+
+type BrowserLauncher = (options: Parameters<typeof chromium.launch>[0]) => Promise<Browser>;
+
+function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+	if (!signal) return promise;
+	if (signal.aborted) return Promise.reject(signal.reason);
+
+	return new Promise((resolve, reject) => {
+		const onAbort = () => {
+			signal.removeEventListener("abort", onAbort);
+			reject(signal.reason);
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+		promise.then(
+			(value) => {
+				signal.removeEventListener("abort", onAbort);
+				resolve(value);
+			},
+			(error) => {
+				signal.removeEventListener("abort", onAbort);
+				reject(error);
+			},
+		);
+	});
 }
 
 interface DynamicRenderConsentBlocked {
@@ -82,10 +104,16 @@ interface DynamicRenderSuccess {
 interface DynamicStaticFallback {
 	type: "staticFallback";
 	reason: "non-html" | "renderer-unavailable" | "content-unavailable";
+	targetUrl?: string;
 }
 
 interface DynamicTransportFailure {
 	type: "transportFailure";
+	message: string;
+}
+
+interface DynamicPolicyBlocked {
+	type: "policyBlocked";
 	message: string;
 }
 
@@ -104,6 +132,7 @@ type DynamicRenderAttempt =
 	| DynamicRenderConsentBlocked
 	| DynamicStaticFallback
 	| DynamicTransportFailure
+	| DynamicPolicyBlocked
 	| DynamicTooLarge
 	| DynamicUnsupported;
 
@@ -121,15 +150,19 @@ interface RenderedSnapshot {
 }
 
 const CONSENT_POLL_INTERVAL_MS = 100;
+const MAX_CONSENT_CONTROLS = 500;
+const MAX_CONSENT_CONTROL_TEXT_CHARS = 512;
+const MAX_CONSENT_CONTROL_TEXT_NODES = 100;
+const MAX_CONSENT_TEXT_CHARS = 256 * 1024;
+const MAX_RENDERED_DOM_NODES = 50_000;
+const BROWSER_REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
-export function renderedContentByteLength(content: string): number {
-	return new TextEncoder().encode(content).byteLength;
-}
-
-export interface DynamicRouteBudget {
+interface DynamicRouteBudget {
 	remainingRequests: number;
 	remainingBytes: number;
 }
+
+class DynamicRouteBudgetError extends Error {}
 
 export function createDynamicRouteBudget(
 	maxRequests: number = DYNAMIC_RENDERER_CONSTANTS.NETWORK_BUDGET.MAX_REQUESTS_PER_PAGE,
@@ -138,10 +171,53 @@ export function createDynamicRouteBudget(
 	return { remainingRequests: maxRequests, remainingBytes: maxBytes };
 }
 
-export type DynamicRouteResult =
-	| { type: "fulfilled" }
+type DynamicSubrequestAdmission = {
+	acquire(url: string, signal?: AbortSignal): Promise<WorkLease>;
+	waitForDispatch(url: string, signal?: AbortSignal): Promise<void>;
+};
+
+export function createDynamicSubrequestAdmission(
+	maxConcurrent: number = DYNAMIC_RENDERER_CONSTANTS.NETWORK_BUDGET.MAX_CONCURRENT_SUBREQUESTS,
+	minimumDelayMs: number = DYNAMIC_RENDERER_CONSTANTS.NETWORK_BUDGET.MIN_SUBREQUEST_DELAY_MS,
+): DynamicSubrequestAdmission {
+	const permits = new WorkPermitPool(maxConcurrent);
+	const nextAllowedAt = new Map<string, number>();
+	const waitForDispatch = async (url: string, signal?: AbortSignal) => {
+		const hostname = new URL(url).hostname.toLowerCase().replace(/\.$/, "");
+		const now = Date.now();
+		const dispatchAt = Math.max(now, nextAllowedAt.get(hostname) ?? 0);
+		nextAllowedAt.set(hostname, dispatchAt + minimumDelayMs);
+		if (dispatchAt > now) {
+			await sleep(dispatchAt - now, undefined, signal ? { signal } : undefined);
+		}
+	};
+	return {
+		waitForDispatch,
+		async acquire(url, signal) {
+			const release = await permits.acquire(signal);
+			try {
+				await waitForDispatch(url, signal);
+				return release;
+			} catch (error) {
+				release();
+				throw error;
+			}
+		},
+	};
+}
+
+interface DynamicDocumentResponse {
+	url: string;
+	statusCode: number;
+	contentType: string;
+	xRobotsTag: string | null;
+	retryAfter: string | null;
+}
+
+type DynamicRouteResult =
+	| { type: "fulfilled"; documentResponse?: DynamicDocumentResponse }
 	| { type: "continued" }
-	| { type: "aborted"; reason: "static-representation" }
+	| { type: "aborted"; reason: "static-representation"; url: string }
 	| {
 			type: "aborted";
 			reason: "unsupported-content";
@@ -160,48 +236,59 @@ export type DynamicRouteResult =
 			message?: string;
 	  };
 
+interface DynamicRouteRequestOptions {
+	signal?: AbortSignal;
+	allowLocalhostOnInitialRequest?: boolean;
+	budget?: DynamicRouteBudget;
+	authorizeDocumentRequest?: DestinationAuthorizer;
+	authorizeDocumentRedirect?: DestinationAuthorizer;
+	admitSubrequest?: DynamicSubrequestAdmission;
+	isMainDocument?: boolean;
+}
+
+function classifyDocumentRouteFailure(
+	result: DynamicRouteResult,
+	itemUrl: string,
+): DynamicRenderAttempt | undefined {
+	if (result.type !== "aborted") return undefined;
+	if (result.reason === "policy" || result.reason === "unsupported-method") {
+		return {
+			type: "policyBlocked",
+			message: result.message ?? `Dynamic document navigation denied for ${itemUrl}`,
+		};
+	}
+	if (result.reason === "static-representation") {
+		return { type: "staticFallback", reason: "non-html", targetUrl: result.url };
+	}
+	if (result.reason === "unsupported-content") {
+		return {
+			type: "unsupported",
+			contentType: result.contentType,
+			statusCode: result.statusCode,
+		};
+	}
+	if (result.reason === "request-budget") {
+		return {
+			type: "policyBlocked",
+			message: result.message ?? `Dynamic document request budget exhausted for ${itemUrl}`,
+		};
+	}
+	if (result.reason === "response-budget" || result.reason === "response-too-large") {
+		return { type: "tooLarge" };
+	}
+	return {
+		type: "transportFailure",
+		message: result.message ?? `Dynamic document transport failed for ${itemUrl}`,
+	};
+}
+
 export function requiresStaticRepresentationFetch(contentType: string): boolean {
 	return isJsonContentType(contentType) || isPdfContentType(contentType);
 }
 
-export function matchesOwnedSitePattern(url: string, pattern: string): boolean {
-	try {
-		const parsed = new URL(url);
-		const separator = pattern.indexOf("/");
-		const patternHostname = (
-			separator === -1 ? pattern : pattern.slice(0, separator)
-		).toLowerCase();
-		const patternPath = separator === -1 ? "" : `/${pattern.slice(separator + 1)}`;
-		const hostname = parsed.hostname.toLowerCase();
-		return (
-			(hostname === patternHostname || hostname.endsWith(`.${patternHostname}`)) &&
-			(patternPath === "" || parsed.pathname.startsWith(patternPath))
-		);
-	} catch {
-		return false;
-	}
-}
-
-interface ReadinessSnapshot {
-	bodyLength: number;
-	hasPrimaryCandidate: boolean;
-	title: string;
-}
-
-interface BrowserCookie {
-	name: string;
-	value: string;
-	domain?: string;
-	path?: string;
-	expires?: number;
-	httpOnly?: boolean;
-	secure?: boolean;
-	sameSite?: "Lax" | "None" | "Strict";
-}
-
 function isRecoverableBrowserError(err: unknown): boolean {
 	if (!(err instanceof Error)) return false;
-	if (err.name === "TimeoutError") return true;
+	if (err instanceof OperationTimeoutError || err.name === "TimeoutError") return true;
 
 	const message = err.message;
 	return (
@@ -213,10 +300,48 @@ function isRecoverableBrowserError(err: unknown): boolean {
 	);
 }
 
-async function readVisibleBodyText(page: Page, signal: AbortSignal): Promise<string> {
+export function readBoundedDocumentText(options: {
+	maxChars: number;
+	maxNodes: number;
+	visibleOnly: boolean;
+}): string {
+	const body = document.body;
+	if (!body) return "";
+
+	const walker = document.createTreeWalker(body, NodeFilter.SHOW_ALL);
+	let text = "";
+	let visitedNodes = 0;
+	while (walker.nextNode()) {
+		visitedNodes += 1;
+		if (visitedNodes > options.maxNodes || text.length >= options.maxChars) break;
+		const node = walker.currentNode;
+		if (node.nodeType !== Node.TEXT_NODE || !node.nodeValue) continue;
+		if (options.visibleOnly) {
+			const parent = node.parentElement;
+			if (!parent || parent.hidden || parent.getClientRects().length === 0) continue;
+			const style = getComputedStyle(parent);
+			if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+				continue;
+			}
+		}
+		if (text.length > 0) text += " ";
+		text += node.nodeValue.slice(0, options.maxChars - text.length);
+	}
+	return text;
+}
+
+async function readConsentBodyText(
+	page: Page,
+	signal: AbortSignal,
+	visibleOnly: boolean,
+): Promise<string> {
 	while (true) {
 		try {
-			return await page.evaluate(() => document.body?.innerText ?? "");
+			return await page.evaluate(readBoundedDocumentText, {
+				maxChars: MAX_CONSENT_TEXT_CHARS,
+				maxNodes: MAX_RENDERED_DOM_NODES,
+				visibleOnly,
+			});
 		} catch (error) {
 			if (!isRecoverableBrowserError(error)) throw error;
 			await sleep(CONSENT_POLL_INTERVAL_MS, undefined, { signal });
@@ -224,80 +349,188 @@ async function readVisibleBodyText(page: Page, signal: AbortSignal): Promise<str
 	}
 }
 
-function normalizeCookieSameSite(value: string | undefined): BrowserCookie["sameSite"] {
-	if (value === "Lax" || value === "None" || value === "Strict") {
-		return value;
-	}
-	return "Lax";
-}
-
 function shouldSkipSecurityValidation(url: string): boolean {
 	return url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("about:");
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-	if (!signal?.aborted) return;
-	if (signal.reason instanceof Error) throw signal.reason;
-	throw new Error("Dynamic renderer startup aborted");
 }
 
 export async function openBrowserPageWithRetry(
 	createPage: () => Promise<Page>,
 	onRetry: (error: unknown) => void,
 	signal?: AbortSignal,
+	ownership?: { isCurrent(): boolean; close(page: Page): Promise<void> },
 ): Promise<Page> {
+	const accept = async (page: Page): Promise<Page> => {
+		if (!signal?.aborted && (ownership?.isCurrent() ?? true)) return page;
+		await ownership?.close(page);
+		signal?.throwIfAborted();
+		throw new Error("Browser page acquisition completed after renderer ownership ended");
+	};
+	const acquire = () => waitForAbort(createPage().then(accept), signal);
 	try {
-		return await createPage();
+		return await acquire();
 	} catch (error) {
-		throwIfAborted(signal);
+		signal?.throwIfAborted();
 		if (!isRecoverableBrowserError(error)) throw error;
 		onRetry(error);
-		return createPage();
+		return acquire();
 	}
+}
+
+async function runPageOperationWithDeadline<T>(options: {
+	page: Page;
+	timeoutMs: number;
+	operationName: string;
+	signal?: AbortSignal;
+	run: (signal: AbortSignal) => Promise<T>;
+}): Promise<T> {
+	let closePromise: Promise<void> | undefined;
+	const closePage = () => {
+		closePromise ??= options.page.close({ runBeforeUnload: false }).catch(() => undefined);
+	};
+
+	return runWithTimeout({
+		timeoutMs: options.timeoutMs,
+		operationName: options.operationName,
+		...(options.signal ? { signal: options.signal } : {}),
+		run: async (operationSignal) => {
+			const closeOnAbort = () => closePage();
+			if (operationSignal.aborted) {
+				closePage();
+			} else {
+				operationSignal.addEventListener("abort", closeOnAbort, { once: true });
+			}
+			try {
+				operationSignal.throwIfAborted();
+				return await options.run(operationSignal);
+			} finally {
+				operationSignal.removeEventListener("abort", closeOnAbort);
+				await closePromise;
+			}
+		},
+	});
 }
 
 export async function extractRenderedSnapshot(
 	page: Page,
 	signal?: AbortSignal,
 ): Promise<RenderedSnapshot | "tooLarge"> {
-	return runWithTimeout({
+	return runPageOperationWithDeadline({
+		page,
 		timeoutMs: 10_000,
 		operationName: "Rendered document snapshot",
 		...(signal ? { signal } : {}),
 		run: () =>
-			page.evaluate((maxBytes) => {
-				const content = document.documentElement?.outerHTML ?? "";
-				let contentLength = 0;
-				for (let index = 0; index < content.length; index++) {
-					const codeUnit = content.charCodeAt(index);
-					if (codeUnit <= 0x7f) {
-						contentLength += 1;
-					} else if (codeUnit <= 0x7ff) {
-						contentLength += 2;
-					} else if (
-						codeUnit >= 0xd800 &&
-						codeUnit <= 0xdbff &&
-						index + 1 < content.length &&
-						content.charCodeAt(index + 1) >= 0xdc00 &&
-						content.charCodeAt(index + 1) <= 0xdfff
-					) {
-						contentLength += 4;
-						index += 1;
-					} else {
-						contentLength += 3;
+			page.evaluate(
+				({ maxBytes, maxNodes }) => {
+					const root = document.documentElement;
+					if (!root) {
+						return {
+							content: "",
+							contentLength: 0,
+							description: "",
+							effectiveUrl: window.location.href,
+							title: document.title || "",
+						};
 					}
-					if (contentLength > maxBytes) return "tooLarge" as const;
-				}
+					let upperBound = 0;
+					let visitedNodes = 0;
+					const addSerializedText = (value: string, attribute = false) => {
+						for (let index = 0; index < value.length; index++) {
+							const codeUnit = value.charCodeAt(index);
+							if (codeUnit <= 0x7f) {
+								upperBound +=
+									codeUnit === 0x26
+										? 5
+										: codeUnit === 0x3c || codeUnit === 0x3e
+											? 4
+											: attribute && codeUnit === 0x22
+												? 6
+												: 1;
+							} else if (codeUnit <= 0x7ff) {
+								upperBound += 2;
+							} else if (
+								codeUnit >= 0xd800 &&
+								codeUnit <= 0xdbff &&
+								index + 1 < value.length &&
+								value.charCodeAt(index + 1) >= 0xdc00 &&
+								value.charCodeAt(index + 1) <= 0xdfff
+							) {
+								upperBound += 4;
+								index += 1;
+							} else {
+								upperBound += 3;
+							}
+							if (upperBound > maxBytes) return false;
+						}
+						return true;
+					};
+					const stack: Node[] = [root];
+					while (stack.length > 0) {
+						const node = stack.pop();
+						if (!node) break;
+						visitedNodes += 1;
+						if (visitedNodes > maxNodes) return "tooLarge" as const;
+						if (node.nodeType === Node.ELEMENT_NODE) {
+							const element = node as Element;
+							upperBound += 5;
+							if (!addSerializedText(element.tagName) || !addSerializedText(element.tagName)) {
+								return "tooLarge" as const;
+							}
+							for (const attribute of element.attributes) {
+								upperBound += 4;
+								if (!addSerializedText(attribute.name)) return "tooLarge" as const;
+								if (!addSerializedText(attribute.value, true)) return "tooLarge" as const;
+							}
+						} else if (node.nodeType === Node.COMMENT_NODE) {
+							upperBound += 7;
+							if (!addSerializedText(node.nodeValue ?? "")) return "tooLarge" as const;
+						} else if (!addSerializedText(node.nodeValue ?? "")) {
+							return "tooLarge" as const;
+						}
+						if (upperBound > maxBytes) return "tooLarge" as const;
+						for (let index = node.childNodes.length - 1; index >= 0; index--) {
+							const child = node.childNodes[index];
+							if (child) stack.push(child);
+						}
+					}
 
-				return {
-					content,
-					contentLength,
-					description:
-						document.querySelector('meta[name="description"]')?.getAttribute("content") || "",
-					effectiveUrl: window.location.href,
-					title: document.title || "",
-				};
-			}, REQUEST_CONSTANTS.MAX_TEXT_DOCUMENT_BYTES),
+					const content = root.outerHTML;
+					let contentLength = 0;
+					for (let index = 0; index < content.length; index++) {
+						const codeUnit = content.charCodeAt(index);
+						if (codeUnit <= 0x7f) {
+							contentLength += 1;
+						} else if (codeUnit <= 0x7ff) {
+							contentLength += 2;
+						} else if (
+							codeUnit >= 0xd800 &&
+							codeUnit <= 0xdbff &&
+							index + 1 < content.length &&
+							content.charCodeAt(index + 1) >= 0xdc00 &&
+							content.charCodeAt(index + 1) <= 0xdfff
+						) {
+							contentLength += 4;
+							index += 1;
+						} else {
+							contentLength += 3;
+						}
+						if (contentLength > maxBytes) return "tooLarge" as const;
+					}
+
+					return {
+						content,
+						contentLength,
+						description:
+							document.querySelector('meta[name="description"]')?.getAttribute("content") || "",
+						effectiveUrl: window.location.href,
+						title: document.title || "",
+					};
+				},
+				{
+					maxBytes: REQUEST_CONSTANTS.MAX_TEXT_DOCUMENT_BYTES,
+					maxNodes: MAX_RENDERED_DOM_NODES,
+				},
+			),
 	});
 }
 
@@ -311,12 +544,13 @@ function createRouteFulfillHeaders(headers: Headers): Record<string, string> {
 export async function fulfillRouteWithPinnedHttpClient(
 	route: Route,
 	httpClient: HttpClient,
-	signal?: AbortSignal,
-	allowLocalhostOnInitialRequest = false,
-	budget = createDynamicRouteBudget(),
+	options: DynamicRouteRequestOptions = {},
 ): Promise<DynamicRouteResult> {
 	const request = route.request();
 	const requestUrl = request.url();
+	const isDocument = request.resourceType() === "document";
+	const isMainDocument = isDocument && (options.isMainDocument ?? true);
+	const budget = options.budget ?? createDynamicRouteBudget();
 	if (shouldSkipSecurityValidation(requestUrl)) {
 		await route.continue();
 		return { type: "continued" };
@@ -345,20 +579,40 @@ export async function fulfillRouteWithPinnedHttpClient(
 	}
 	budget.remainingRequests -= 1;
 
+	let releaseSubrequest: WorkLease | undefined;
 	try {
+		if (!isMainDocument && options.admitSubrequest) {
+			releaseSubrequest = await options.admitSubrequest.acquire(requestUrl, options.signal);
+		}
+		await options.authorizeDocumentRequest?.(requestUrl, options.signal);
 		const response = await httpClient.fetch({
 			url: requestUrl,
 			headers: request.headers(),
 			method,
-			signal,
-			...(allowLocalhostOnInitialRequest ? { allowLocalhostOnInitialRequest: true } : {}),
+			signal: options.signal,
+			...(isDocument ? { redirect: "manual" as const } : {}),
+			...(options.allowLocalhostOnInitialRequest ? { allowLocalhostOnInitialRequest: true } : {}),
+			authorizeRedirect: async (hop, redirectSignal) => {
+				if (!isDocument) {
+					if (budget.remainingRequests <= 0) {
+						throw new DynamicRouteBudgetError("Dynamic redirect request budget exhausted");
+					}
+					budget.remainingRequests -= 1;
+					await options.admitSubrequest?.waitForDispatch(hop.toUrl, redirectSignal);
+				}
+				await options.authorizeDocumentRedirect?.(hop.toUrl, redirectSignal);
+			},
 		});
 		const contentType = response.headers.get("content-type") ?? "";
-		if (request.resourceType() === "document") {
+		const isBrowserRedirect =
+			isDocument &&
+			BROWSER_REDIRECT_STATUSES.has(response.status) &&
+			response.headers.has("location");
+		if (isDocument && !isBrowserRedirect) {
 			if (requiresStaticRepresentationFetch(contentType)) {
 				await disposeResponseBody(response);
 				await route.abort();
-				return { type: "aborted", reason: "static-representation" };
+				return { type: "aborted", reason: "static-representation", url: requestUrl };
 			}
 			if (response.ok && contentType && !isSupportedDocumentContentType(contentType)) {
 				await disposeResponseBody(response);
@@ -371,46 +625,82 @@ export async function fulfillRouteWithPinnedHttpClient(
 				};
 			}
 		}
-		let responseBudgetExceeded = false;
-		const responseLimit =
-			request.resourceType() === "document"
-				? maxProcessableDocumentBytes(contentType)
-				: REQUEST_CONSTANTS.MAX_RESPONSE_BYTES;
-		const body = await readLimitedResponseBody(response, responseLimit, {
-			tryConsume(bytes) {
-				if (bytes > budget.remainingBytes) {
-					responseBudgetExceeded = true;
-					return false;
-				}
-				budget.remainingBytes -= bytes;
-				return true;
-			},
-		});
+		if (isBrowserRedirect) {
+			await disposeResponseBody(response);
+			await route.fulfill({
+				status: response.status,
+				headers: createRouteFulfillHeaders(response.headers),
+			});
+			return { type: "fulfilled" };
+		}
+		const contentLimit = isDocument
+			? maxProcessableDocumentBytes(contentType)
+			: Number.POSITIVE_INFINITY;
+		const responseBudgetOwnsLimit = budget.remainingBytes < contentLimit;
+		const body = await readLimitedResponseBody(
+			response,
+			Math.min(contentLimit, budget.remainingBytes),
+			options.signal,
+		);
 		if (body.type === "tooLarge") {
+			if (responseBudgetOwnsLimit) budget.remainingBytes = 0;
 			await route.abort();
 			return {
 				type: "aborted",
-				reason: responseBudgetExceeded ? "response-budget" : "response-too-large",
+				reason: responseBudgetOwnsLimit ? "response-budget" : "response-too-large",
 			};
 		}
+		budget.remainingBytes -= body.contentLength;
 		await route.fulfill({
 			status: response.status,
 			headers: createRouteFulfillHeaders(response.headers),
 			body: Buffer.from(body.bytes),
 		});
-		return { type: "fulfilled" };
+		return {
+			type: "fulfilled",
+			...(isMainDocument
+				? {
+						documentResponse: {
+							url: requestUrl,
+							statusCode: response.status,
+							contentType,
+							xRobotsTag: response.headers.get("x-robots-tag"),
+							retryAfter: response.headers.get("retry-after"),
+						},
+					}
+				: {}),
+		};
 	} catch (error) {
 		await route.abort();
+		if (error instanceof DynamicRouteBudgetError) {
+			return { type: "aborted", reason: "request-budget", message: error.message };
+		}
+		if (isOutboundPolicyError(error)) {
+			return { type: "aborted", reason: "policy", message: error.message };
+		}
 		return {
 			type: "aborted",
 			reason: "transport-failure",
 			message: getErrorMessage(error),
 		};
+	} finally {
+		releaseSubrequest?.();
 	}
 }
 
 export function createDynamicBrowserContextOptions(): BrowserContextOptions {
 	return { serviceWorkers: "block" };
+}
+
+export function createDynamicBrowserLaunchArgs(): string[] {
+	return [
+		"--disable-dev-shm-usage",
+		"--disable-gpu",
+		"--disable-blink-features=AutomationControlled",
+		"--disable-extensions",
+		"--disable-background-networking",
+		"--disable-quic",
+	];
 }
 
 async function abortWebSocketRoute(route: WebSocketRoute): Promise<void> {
@@ -425,26 +715,65 @@ export async function configurePinnedBrowserContext(
 	httpClient: HttpClient,
 	signal?: AbortSignal,
 	seedUrl?: string,
-	onDocumentResult?: (result: DynamicRouteResult) => void,
+	onDocumentResult?: (result: DynamicRouteResult, url: string) => void,
+	authorizeDocumentDestination?: DestinationAuthorizer,
+	mainFrame?: Frame,
 ): Promise<void> {
+	await context.addInitScript(() => {
+		Object.defineProperties(globalThis, {
+			RTCPeerConnection: { value: undefined, writable: false, configurable: false },
+			webkitRTCPeerConnection: { value: undefined, writable: false, configurable: false },
+			WebTransport: { value: undefined, writable: false, configurable: false },
+		});
+	});
 	let seedCapabilityAvailable = seedUrl !== undefined;
+	let initialMainDocumentAvailable = true;
+	let preauthorizedDocumentUrl: string | undefined;
 	const budget = createDynamicRouteBudget();
+	const admitSubrequest = createDynamicSubrequestAdmission();
 	await context.route("**/*", async (route) => {
 		const request = route.request();
+		let isMainDocument = request.resourceType() === "document";
+		if (isMainDocument && mainFrame) {
+			try {
+				isMainDocument = request.frame() === mainFrame;
+			} catch {
+				isMainDocument = false;
+			}
+		}
+		const isInitialMainDocument = isMainDocument && initialMainDocumentAvailable;
+		if (isInitialMainDocument) {
+			initialMainDocumentAvailable = false;
+		}
+		const isPreauthorizedDocument = isMainDocument && preauthorizedDocumentUrl === request.url();
+		if (isMainDocument) {
+			preauthorizedDocumentUrl = undefined;
+		}
 		const useSeedCapability =
-			seedCapabilityAvailable && request.resourceType() === "document" && request.url() === seedUrl;
+			seedCapabilityAvailable && isMainDocument && request.url() === seedUrl;
 		if (useSeedCapability) {
 			seedCapabilityAvailable = false;
 		}
-		const result = await fulfillRouteWithPinnedHttpClient(
-			route,
-			httpClient,
+		const result = await fulfillRouteWithPinnedHttpClient(route, httpClient, {
 			signal,
-			useSeedCapability,
+			allowLocalhostOnInitialRequest: useSeedCapability,
 			budget,
-		);
-		if (request.resourceType() === "document") {
-			onDocumentResult?.(result);
+			authorizeDocumentRequest:
+				isMainDocument && !isInitialMainDocument && !isPreauthorizedDocument
+					? authorizeDocumentDestination
+					: undefined,
+			authorizeDocumentRedirect:
+				isMainDocument && authorizeDocumentDestination
+					? async (url, redirectSignal) => {
+							await authorizeDocumentDestination(url, redirectSignal);
+							preauthorizedDocumentUrl = url;
+						}
+					: undefined,
+			admitSubrequest,
+			isMainDocument,
+		});
+		if (isMainDocument) {
+			onDocumentResult?.(result, request.url());
 		}
 	});
 	await context.routeWebSocket("**/*", abortWebSocketRoute);
@@ -454,18 +783,24 @@ export class DynamicRenderer {
 	private readonly options: CrawlOptions;
 	private readonly logger: Logger;
 	private readonly httpClient: HttpClient;
-	private browserPool: BrowserPool | null;
-	private sessionPool: SessionPool | null;
+	private browser: Browser | null;
 	private enabled: boolean;
+	private launchPromise: Promise<void> | null;
 	private closePromise: Promise<void> | null;
+	private closed = false;
 
-	constructor(options: CrawlOptions, logger: Logger, httpClient: HttpClient) {
+	constructor(
+		options: CrawlOptions,
+		logger: Logger,
+		httpClient: HttpClient,
+		private readonly launch: BrowserLauncher = (launchOptions) => chromium.launch(launchOptions),
+	) {
 		this.options = options;
 		this.logger = logger;
 		this.httpClient = httpClient;
-		this.browserPool = null;
-		this.sessionPool = null;
+		this.browser = null;
 		this.enabled = options.dynamic;
+		this.launchPromise = null;
 		this.closePromise = null;
 	}
 
@@ -481,14 +816,21 @@ export class DynamicRenderer {
 	}
 
 	async initialize(signal?: AbortSignal): Promise<InitializeResult> {
-		throwIfAborted(signal);
+		if (this.closed) return { dynamicEnabled: false };
+		signal?.throwIfAborted();
 		if (!this.isEnabled()) {
 			return { dynamicEnabled: false };
 		}
 
-		const memoryStatus = logMemoryStatus(this.logger);
+		const memoryUsage = process.memoryUsage();
+		const rssMb = Math.round(memoryUsage.rss / 1024 / 1024);
+		const heapUsedMb = Math.round(memoryUsage.heapUsed / 1024 / 1024);
+		const isLowMemory = rssMb > config.memoryThreshold;
+		this.logger.info(
+			`${isLowMemory ? "⚠️" : "✅"} Memory: ${rssMb}MB RSS | Heap: ${heapUsedMb}MB | ${isLowMemory ? `RSS exceeds the configured ${config.memoryThreshold}MB browser threshold` : "Memory levels OK for dynamic crawling"}`,
+		);
 
-		if (memoryStatus.isLowMemory) {
+		if (isLowMemory) {
 			this.disableDynamic("Skipping Playwright due to constrained memory");
 			return {
 				dynamicEnabled: false,
@@ -503,10 +845,11 @@ export class DynamicRenderer {
 		signal?.addEventListener("abort", closeOnAbort, { once: true });
 		try {
 			await this.launchBrowser(signal);
-			throwIfAborted(signal);
+			signal?.throwIfAborted();
 			return { dynamicEnabled: this.isEnabled() };
 		} catch (err) {
-			throwIfAborted(signal);
+			signal?.throwIfAborted();
+			await this.closeResources();
 			this.disableDynamic(`Failed to launch Playwright: ${getErrorMessage(err)}`);
 			return {
 				dynamicEnabled: false,
@@ -517,140 +860,123 @@ export class DynamicRenderer {
 		}
 	}
 
-	private async createSessionPool(signal?: AbortSignal): Promise<SessionPool> {
-		throwIfAborted(signal);
-		if (this.sessionPool) {
-			return this.sessionPool;
+	async launchBrowser(signal?: AbortSignal): Promise<void> {
+		signal?.throwIfAborted();
+		if (!this.isEnabled() || this.closed) {
+			return;
 		}
 
-		this.sessionPool = await SessionPool.open({
-			maxPoolSize: Math.max(this.options.maxConcurrentRequests * 4, 8),
-			sessionOptions: {
-				maxAgeSecs: 30 * 60,
-				maxUsageCount: 20,
-			},
-			persistenceOptions: { enable: false },
+		if (this.browser?.isConnected()) {
+			return;
+		}
+
+		this.launchPromise ??= this.acquireBrowser(signal).finally(() => {
+			this.launchPromise = null;
 		});
-		throwIfAborted(signal);
-		return this.sessionPool;
+		await waitForAbort(this.launchPromise, signal);
+		signal?.throwIfAborted();
 	}
 
-	async launchBrowser(signal?: AbortSignal): Promise<void> {
-		throwIfAborted(signal);
-		if (!this.isEnabled()) {
-			return;
-		}
+	private async acquireBrowser(signal?: AbortSignal): Promise<void> {
+		if (!this.isEnabled() || this.closed || this.browser?.isConnected()) return;
+		this.browser = null;
 
-		if (this.browserPool) {
-			return;
-		}
-
-		const closeOnAbort = () => {
-			void this.close();
-		};
-		signal?.addEventListener("abort", closeOnAbort, { once: true });
-		try {
-			this.logger.info("Launching Playwright (Chromium)...");
-			const browserExecutable = resolveChromiumExecutable(
-				config.browser.executablePath,
-				chromium.executablePath(),
+		this.logger.info("Launching Playwright (Chromium)...");
+		const browserExecutable = resolveChromiumExecutable(
+			config.browser.executablePath,
+			chromium.executablePath(),
+		);
+		if (browserExecutable.source === "invalid-configured") {
+			throw new Error(
+				`Configured Chromium executable does not exist: ${browserExecutable.executablePath}`,
 			);
-			if (browserExecutable.source === "invalid-configured") {
-				throw new Error(
-					`Configured Chromium executable does not exist: ${browserExecutable.executablePath}`,
-				);
-			}
-			if (browserExecutable.source === "missing") {
-				throw new Error(
-					"No Chromium executable found. Run `bunx playwright install chromium` or set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH.",
-				);
-			}
-			if (browserExecutable.source === "system") {
-				this.logger.info(`Using system Chromium executable: ${browserExecutable.executablePath}`);
-			}
-			await this.createSessionPool(signal);
-			throwIfAborted(signal);
-
-			const executablePath =
-				browserExecutable.source === "configured" || browserExecutable.source === "system"
-					? browserExecutable.executablePath
-					: undefined;
-
-			this.browserPool = new BrowserPool({
-				browserPlugins: [
-					new PlaywrightPlugin(chromium, {
-						useIncognitoPages: true,
-						launchOptions: {
-							headless: true,
-							args: [
-								"--no-sandbox",
-								"--disable-setuid-sandbox",
-								"--disable-dev-shm-usage",
-								"--disable-gpu",
-								"--disable-blink-features=AutomationControlled",
-								"--disable-extensions",
-								"--disable-background-networking",
-							],
-							...(executablePath !== undefined ? { executablePath } : {}),
-						},
-					}),
-				],
-				maxOpenPagesPerBrowser: Math.max(this.options.maxConcurrentRequests, 1),
-				retireBrowserAfterPageCount: config.isRender
-					? DYNAMIC_RENDERER_CONSTANTS.RECYCLE_THRESHOLD.RENDER_ENV
-					: DYNAMIC_RENDERER_CONSTANTS.RECYCLE_THRESHOLD.DEFAULT,
-				closeInactiveBrowserAfterSecs: 30,
-				operationTimeoutSecs: Math.ceil(
-					DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.COMPLEX_NAVIGATION / 1000,
-				),
-			});
-			throwIfAborted(signal);
-
-			const warmupPage = await this.openPage(signal);
-			try {
-				throwIfAborted(signal);
-			} finally {
-				await this.closePageSafely(warmupPage);
-			}
-			throwIfAborted(signal);
-			this.logger.info("Playwright launched successfully");
-		} finally {
-			signal?.removeEventListener("abort", closeOnAbort);
 		}
+		if (browserExecutable.source === "missing") {
+			throw new Error(
+				"No Chromium executable found. Run `bunx playwright install chromium` or set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH.",
+			);
+		}
+		if (browserExecutable.source === "system") {
+			this.logger.info(`Using system Chromium executable: ${browserExecutable.executablePath}`);
+		}
+		const executablePath =
+			browserExecutable.source === "configured" || browserExecutable.source === "system"
+				? browserExecutable.executablePath
+				: undefined;
+
+		const browser = await this.launch({
+			chromiumSandbox: true,
+			headless: true,
+			timeout: TIMEOUT_CONSTANTS.DOCUMENT_FETCH,
+			args: createDynamicBrowserLaunchArgs(),
+			...(executablePath !== undefined ? { executablePath } : {}),
+		});
+		if (this.closed || signal?.aborted) {
+			await browser.close().catch(() => undefined);
+			signal?.throwIfAborted();
+			throw new Error("Dynamic renderer closed during browser acquisition");
+		}
+		this.browser = browser;
+
+		const warmupPage = await this.openPage(signal);
+		try {
+			if (this.closed) throw new Error("Dynamic renderer closed during browser warmup");
+		} finally {
+			await this.closePageSafely(warmupPage);
+		}
+		this.logger.info("Playwright launched successfully");
 	}
 
 	private async openPage(signal?: AbortSignal): Promise<Page> {
-		const browserPool = this.browserPool;
-		if (!browserPool) {
-			throw new Error("Cannot open a page before the browser pool is initialized");
+		const browser = this.browser;
+		if (!browser) {
+			throw new Error("Cannot open a page before the browser is initialized");
 		}
 
-		const createPage = () =>
-			browserPool.newPage({
-				pageOptions: createDynamicBrowserContextOptions(),
-			} as never) as Promise<Page>;
+		const createPage = async () => {
+			const context = await browser.newContext(createDynamicBrowserContextOptions());
+			let closePromise: Promise<void> | undefined;
+			const closeContext = () => (closePromise ??= context.close().catch(() => undefined));
+			const closeOnAbort = () => {
+				void closeContext();
+			};
+			signal?.addEventListener("abort", closeOnAbort, { once: true });
+			try {
+				signal?.throwIfAborted();
+				const page = await context.newPage();
+				signal?.throwIfAborted();
+				return page;
+			} catch (error) {
+				await closeContext();
+				throw error;
+			} finally {
+				signal?.removeEventListener("abort", closeOnAbort);
+			}
+		};
 
 		return openBrowserPageWithRetry(
 			createPage,
 			(error) => {
 				this.logger.debug(
-					`Browser page acquisition failed; retrying with a fresh controller: ${getErrorMessage(error)}`,
+					`Browser page acquisition failed; retrying with a fresh context: ${getErrorMessage(error)}`,
 				);
 			},
 			signal,
+			{
+				isCurrent: () => !this.closed && this.browser === browser,
+				close: (page) => this.closePageSafely(page),
+			},
 		);
 	}
 
 	private async configurePage(
 		page: Page,
 		item: QueueItem,
-		session: Session,
 		signal?: AbortSignal,
-		onDocumentResult?: (result: DynamicRouteResult) => void,
+		onDocumentResult?: (result: DynamicRouteResult, url: string) => void,
+		authorizeDocumentDestination?: DestinationAuthorizer,
 	): Promise<void> {
 		await page.setViewportSize(DYNAMIC_RENDERER_CONSTANTS.VIEWPORT);
-		page.setDefaultTimeout(DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.STANDARD_NAVIGATION);
-		page.setDefaultNavigationTimeout(DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.STANDARD_NAVIGATION);
 		await page.setExtraHTTPHeaders({
 			Accept: FETCH_HEADERS.Accept,
 			"Accept-Language": FETCH_HEADERS["Accept-Language"],
@@ -665,6 +991,8 @@ export class DynamicRenderer {
 			signal,
 			item.url === this.options.target ? item.url : undefined,
 			onDocumentResult,
+			authorizeDocumentDestination,
+			page.mainFrame(),
 		);
 
 		page.on("dialog", (dialog) => {
@@ -672,8 +1000,6 @@ export class DynamicRenderer {
 				this.logger.debug(`Failed to dismiss dialog: ${getErrorMessage(err)}`);
 			});
 		});
-
-		await this.setCookiesForPage(page, item.url, session);
 	}
 
 	private async safeExtractContent(
@@ -695,86 +1021,79 @@ export class DynamicRenderer {
 		}
 	}
 
-	async render(item: QueueItem, signal?: AbortSignal): Promise<DynamicRenderAttempt> {
-		throwIfAborted(signal);
+	async render(
+		item: QueueItem,
+		signal?: AbortSignal,
+		authorizeDestination?: DestinationAuthorizer,
+	): Promise<DynamicRenderAttempt> {
+		signal?.throwIfAborted();
 		if (!this.isEnabled()) {
 			return { type: "staticFallback", reason: "renderer-unavailable" };
 		}
 
-		if (!this.browserPool) {
+		if (!this.browser?.isConnected()) {
 			try {
 				await this.launchBrowser(signal);
 			} catch (err) {
-				throwIfAborted(signal);
+				signal?.throwIfAborted();
+				await this.closeResources();
 				this.disableDynamic(`Failed to relaunch Playwright: ${getErrorMessage(err)}`);
 				return { type: "staticFallback", reason: "renderer-unavailable" };
 			}
 		}
 
-		if (!this.browserPool || !this.sessionPool) {
+		if (!this.browser) {
 			return { type: "staticFallback", reason: "renderer-unavailable" };
 		}
 
-		const session = await this.sessionPool.getSession();
 		const page = await this.openPage(signal);
 		let abortCleanup: Promise<void> | undefined;
-		let documentRouteResult: DynamicRouteResult | undefined;
+		let documentRouteFailure: DynamicRenderAttempt | undefined;
+		const documentState: { response: DynamicDocumentResponse | null; url: string } = {
+			response: null,
+			url: item.url,
+		};
 		const closeOnAbort = () => {
 			abortCleanup ??= this.closePageSafely(page);
 		};
 		signal?.addEventListener("abort", closeOnAbort, { once: true });
 
 		try {
-			throwIfAborted(signal);
-			await this.configurePage(page, item, session, signal, (result) => {
-				documentRouteResult = result;
-			});
-			throwIfAborted(signal);
-
-			const isComplex = DYNAMIC_RENDERER_CONSTANTS.COMPLEX_JS_SITES.some((site) =>
-				matchesOwnedSitePattern(item.url, site),
+			signal?.throwIfAborted();
+			await this.configurePage(
+				page,
+				item,
+				signal,
+				(result, url) => {
+					documentState.response =
+						result.type === "fulfilled" ? (result.documentResponse ?? null) : null;
+					documentState.url = documentState.response?.url ?? url;
+					documentRouteFailure ??= classifyDocumentRouteFailure(result, item.url);
+				},
+				authorizeDestination,
 			);
-			const navigationTimeout = isComplex
-				? DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.COMPLEX_NAVIGATION
-				: DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.STANDARD_NAVIGATION;
+			signal?.throwIfAborted();
 
-			const response = await runWithTimeout({
-				timeoutMs: navigationTimeout,
-				operationName: `Dynamic navigation for ${item.url}`,
-				...(signal ? { signal } : {}),
-				run: () =>
-					page.goto(item.url, {
-						waitUntil: "domcontentloaded",
-						timeout: navigationTimeout,
-					}),
+			await page.goto(item.url, {
+				waitUntil: "domcontentloaded",
+				timeout: TIMEOUT_CONSTANTS.DOCUMENT_FETCH,
 			});
-			throwIfAborted(signal);
-
-			const statusCode = response?.status() ?? 0;
-			const headers = response?.headers() ?? {};
-			const contentType = headers["content-type"] || "";
-			const lastModified = headers["last-modified"];
-			const etag = headers.etag;
-			const xRobotsTag = headers["x-robots-tag"] ?? null;
-			const retryAfter = headers["retry-after"] ?? null;
-			if (requiresStaticRepresentationFetch(contentType)) {
-				this.logger.debug(`Non-HTML response for ${item.url}; using bounded static acquisition`);
-				session.markGood();
-				return { type: "staticFallback", reason: "non-html" };
-			}
-
-			if (statusCode >= 400) {
-				session.retireOnBlockedStatusCodes(statusCode);
+			signal?.throwIfAborted();
+			if (documentRouteFailure) {
+				return documentRouteFailure;
 			}
 
 			const consentBypass = await this.handleConsentModals(page, item.url, signal);
-			throwIfAborted(signal);
+			signal?.throwIfAborted();
+			if (documentRouteFailure) {
+				return documentRouteFailure;
+			}
 			if (
 				consentBypass.detected &&
 				!consentBypass.bypassed &&
 				requiresStrictConsentBypass(item.url)
 			) {
-				session.retire();
+				const statusCode = documentState.response?.statusCode ?? 200;
 				return {
 					type: "consentBlocked",
 					message: `Consent wall could not be bypassed for ${item.url}`,
@@ -782,89 +1101,85 @@ export class DynamicRenderer {
 				};
 			}
 
-			if (isComplex) {
-				await this.waitForComplexContent(page, item.url, signal);
+			signal?.throwIfAborted();
+			if (documentRouteFailure) {
+				return documentRouteFailure;
 			}
-			throwIfAborted(signal);
 
+			const finalDocumentResponse = documentState.response;
 			const extracted = await this.safeExtractContent(page, signal);
-			throwIfAborted(signal);
+			signal?.throwIfAborted();
+			if (documentRouteFailure) {
+				return documentRouteFailure;
+			}
+			if (finalDocumentResponse !== documentState.response) {
+				return {
+					type: "staticFallback",
+					reason: "content-unavailable",
+					targetUrl: documentState.url,
+				};
+			}
 			if (!extracted || extracted === "tooLarge") {
-				session.markBad();
 				return extracted === "tooLarge"
 					? { type: "tooLarge" }
-					: { type: "staticFallback", reason: "content-unavailable" };
+					: {
+							type: "staticFallback",
+							reason: "content-unavailable",
+							targetUrl: documentState.url,
+						};
 			}
 
-			const normalizedEffectiveUrl = normalizeRobotsMatchHttpUrl(extracted.effectiveUrl);
+			const normalizedEffectiveUrl = normalizeCanonicalHttpUrl(extracted.effectiveUrl);
 			if ("error" in normalizedEffectiveUrl) {
-				session.markBad();
-				return { type: "staticFallback", reason: "content-unavailable" };
+				return {
+					type: "staticFallback",
+					reason: "content-unavailable",
+					targetUrl: documentState.url,
+				};
 			}
 
-			await this.persistSessionCookies(session, page, item.url);
-			throwIfAborted(signal);
-			session.markGood();
-
+			if (documentRouteFailure) {
+				return documentRouteFailure;
+			}
+			const statusCode = finalDocumentResponse?.statusCode ?? 200;
 			return {
 				type: "success",
 				result: {
-					isDynamic: true,
 					content: extracted.content,
 					effectiveUrl: normalizedEffectiveUrl.url,
 					statusCode,
-					contentType,
+					contentType: finalDocumentResponse?.contentType ?? "text/html",
 					contentLength: extracted.contentLength,
 					title: extracted.title,
 					description: extracted.description || "",
-					...(lastModified !== undefined ? { lastModified } : {}),
-					...(etag !== undefined ? { etag } : {}),
-					xRobotsTag,
-					retryAfter,
+					xRobotsTag: finalDocumentResponse?.xRobotsTag ?? null,
+					retryAfter: finalDocumentResponse?.retryAfter ?? null,
 				},
 			};
 		} catch (err) {
-			session.markBad();
-			if (signal?.aborted) {
-				throw signal.reason instanceof Error ? signal.reason : new Error("Dynamic render aborted");
-			}
+			signal?.throwIfAborted();
 
-			if (documentRouteResult?.type === "aborted") {
-				if (documentRouteResult.reason === "static-representation") {
-					return { type: "staticFallback", reason: "non-html" };
-				}
-				if (documentRouteResult.reason === "unsupported-content") {
-					return {
-						type: "unsupported",
-						contentType: documentRouteResult.contentType,
-						statusCode: documentRouteResult.statusCode,
-					};
-				}
-				if (
-					documentRouteResult.reason === "response-budget" ||
-					documentRouteResult.reason === "response-too-large"
-				) {
-					return { type: "tooLarge" };
-				}
-				if (documentRouteResult.reason === "transport-failure") {
-					return {
-						type: "transportFailure",
-						message: documentRouteResult.message ?? getErrorMessage(err),
-					};
-				}
-			}
+			if (documentRouteFailure) return documentRouteFailure;
 
 			if (isRecoverableBrowserError(err)) {
 				this.logger.debug(
 					`Recoverable browser error for ${item.url}, falling back to static crawling: ${getErrorMessage(err)}`,
 				);
-				return { type: "staticFallback", reason: "content-unavailable" };
+				return {
+					type: "staticFallback",
+					reason: "content-unavailable",
+					targetUrl: documentState.url,
+				};
 			}
 
 			this.logger.warn(
 				`Unexpected error during dynamic rendering of ${item.url}: ${getErrorMessage(err)}`,
 			);
-			return { type: "staticFallback", reason: "content-unavailable" };
+			return {
+				type: "staticFallback",
+				reason: "content-unavailable",
+				targetUrl: documentState.url,
+			};
 		} finally {
 			signal?.removeEventListener("abort", closeOnAbort);
 			await (abortCleanup ?? this.closePageSafely(page));
@@ -880,12 +1195,12 @@ export class DynamicRenderer {
 		const CLEAR_TIMEOUT_MS = DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.CONSENT_CLEAR;
 
 		try {
-			const bodyText = await runWithTimeoutFallback({
+			const bodyText = await runPageOperationWithDeadline({
+				page,
 				timeoutMs: EVAL_TIMEOUT_MS,
 				operationName: "Consent body text extraction",
-				fallback: "",
 				...(signal ? { signal } : {}),
-				run: () => page.evaluate(() => document.body?.textContent ?? ""),
+				run: (operationSignal) => readConsentBodyText(page, operationSignal, false),
 			});
 
 			if (!isConsentWallText(bodyText)) {
@@ -899,10 +1214,10 @@ export class DynamicRenderer {
 			while (!clicked && Date.now() < actionDeadline) {
 				for (const frame of page.frames()) {
 					try {
-						clicked = await runWithTimeoutFallback({
+						clicked = await runPageOperationWithDeadline({
+							page,
 							timeoutMs: Math.max(1, actionDeadline - Date.now()),
 							operationName: "Consent button evaluation",
-							fallback: false,
 							...(signal ? { signal } : {}),
 							run: () =>
 								frame.evaluate(
@@ -910,30 +1225,67 @@ export class DynamicRenderer {
 										selectors,
 										actionMarkers,
 										negativeActionMarkers,
+										maxControls,
+										maxControlTextChars,
+										maxControlTextNodes,
+										maxNodes,
 									}: {
 										selectors: string[];
 										actionMarkers: string[];
 										negativeActionMarkers: string[];
+										maxControls: number;
+										maxControlTextChars: number;
+										maxControlTextNodes: number;
+										maxNodes: number;
 									}) => {
 										const interactiveSelector =
 											"button, input[type='submit'], a[role='button'], [role='button']";
 
 										function collectInteractiveElements(root: ParentNode): HTMLElement[] {
-											const elements = Array.from(
-												root.querySelectorAll(interactiveSelector),
-											) as HTMLElement[];
-											const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
-											const shadowElements: HTMLElement[] = [];
-
-											while (walker.nextNode()) {
-												const node = walker.currentNode;
-												if (!(node instanceof Element)) continue;
-												if (node.shadowRoot) {
-													shadowElements.push(...collectInteractiveElements(node.shadowRoot));
+											const elements: HTMLElement[] = [];
+											const roots: ParentNode[] = [root];
+											let visitedNodes = 0;
+											while (roots.length > 0) {
+												const currentRoot = roots.pop();
+												if (!currentRoot) break;
+												const walker = document.createTreeWalker(
+													currentRoot,
+													NodeFilter.SHOW_ELEMENT,
+												);
+												while (walker.nextNode()) {
+													visitedNodes += 1;
+													if (visitedNodes > maxNodes) return elements;
+													const node = walker.currentNode;
+													if (!(node instanceof HTMLElement)) continue;
+													if (node.matches(interactiveSelector)) {
+														elements.push(node);
+														if (elements.length >= maxControls) return elements;
+													}
+													if (node.shadowRoot) roots.push(node.shadowRoot);
 												}
 											}
 
-											return [...elements, ...shadowElements];
+											return elements;
+										}
+
+										function readControlText(control: HTMLElement): string {
+											const walker = document.createTreeWalker(control, NodeFilter.SHOW_ALL);
+											let text = "";
+											let visitedNodes = 0;
+											while (walker.nextNode()) {
+												visitedNodes += 1;
+												if (
+													visitedNodes > maxControlTextNodes ||
+													text.length >= maxControlTextChars
+												) {
+													break;
+												}
+												const node = walker.currentNode;
+												if (node.nodeType !== Node.TEXT_NODE || !node.nodeValue) continue;
+												if (text.length > 0) text += " ";
+												text += node.nodeValue.slice(0, maxControlTextChars - text.length);
+											}
+											return text;
 										}
 
 										function isVisible(element: HTMLElement): boolean {
@@ -959,7 +1311,11 @@ export class DynamicRenderer {
 										}
 
 										const normalize = (value: string | null | undefined) =>
-											(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+											(value ?? "")
+												.slice(0, maxControlTextChars)
+												.trim()
+												.toLowerCase()
+												.replace(/\s+/g, " ");
 										const matchesAction = (...values: Array<string | null | undefined>) =>
 											values.some((value) => {
 												const normalized = normalize(value);
@@ -979,7 +1335,7 @@ export class DynamicRenderer {
 										const textMatch = buttons.find((button) => {
 											if (!isVisible(button)) return false;
 											return matchesAction(
-												button.textContent,
+												readControlText(button),
 												button.getAttribute("aria-label"),
 												button.getAttribute("title"),
 												button.getAttribute("value"),
@@ -996,6 +1352,10 @@ export class DynamicRenderer {
 										selectors: [...CONSENT_BUTTON_SELECTORS],
 										actionMarkers: [...CONSENT_ACTION_MARKERS],
 										negativeActionMarkers: [...CONSENT_NEGATIVE_ACTION_MARKERS],
+										maxControls: MAX_CONSENT_CONTROLS,
+										maxControlTextChars: MAX_CONSENT_CONTROL_TEXT_CHARS,
+										maxControlTextNodes: MAX_CONSENT_CONTROL_TEXT_NODES,
+										maxNodes: MAX_RENDERED_DOM_NODES,
 									},
 								),
 						});
@@ -1012,14 +1372,14 @@ export class DynamicRenderer {
 			}
 
 			if (!clicked) {
-				const visibleBodyText = await runWithTimeoutFallback({
+				const visibleBodyText = await runPageOperationWithDeadline({
+					page,
 					timeoutMs: EVAL_TIMEOUT_MS,
 					operationName: "Visible consent wall verification",
-					fallback: null,
 					...(signal ? { signal } : {}),
-					run: (operationSignal) => readVisibleBodyText(page, operationSignal),
+					run: (operationSignal) => readConsentBodyText(page, operationSignal, true),
 				});
-				if (visibleBodyText !== null && !isConsentWallText(visibleBodyText)) {
+				if (!isConsentWallText(visibleBodyText)) {
 					this.logger.debug(`Consent template found without a visible wall on ${url}`);
 					return { detected: false, bypassed: false };
 				}
@@ -1028,14 +1388,14 @@ export class DynamicRenderer {
 			}
 
 			this.logger.info(`Consent action clicked on ${url}, verifying dismissal...`);
-			const cleared = await runWithTimeoutFallback({
+			const cleared = await runPageOperationWithDeadline({
+				page,
 				timeoutMs: CLEAR_TIMEOUT_MS,
 				operationName: "Consent wall dismissal",
-				fallback: false,
 				...(signal ? { signal } : {}),
 				run: async (operationSignal) => {
 					while (true) {
-						const visibleBodyText = await readVisibleBodyText(page, operationSignal);
+						const visibleBodyText = await readConsentBodyText(page, operationSignal, true);
 						if (!isConsentWallText(visibleBodyText)) return true;
 						await sleep(CONSENT_POLL_INTERVAL_MS, undefined, {
 							signal: operationSignal,
@@ -1048,148 +1408,15 @@ export class DynamicRenderer {
 			}
 			return { detected: true, bypassed: cleared };
 		} catch (error) {
-			throwIfAborted(signal);
+			signal?.throwIfAborted();
 			this.logger.info(`Consent bypass attempt failed: ${getErrorMessage(error)}`);
 			return { detected: true, bypassed: false };
 		}
 	}
 
-	async waitForComplexContent(page: Page, url: string, signal?: AbortSignal): Promise<void> {
-		const additionalWaitTime = DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.ADDITIONAL_WAIT;
-		const selectorToWait = Object.entries(SITE_SELECTORS).find(([pattern]) =>
-			matchesOwnedSitePattern(url, pattern),
-		)?.[1];
-
-		let selectorMatched = false;
-		if (selectorToWait) {
-			try {
-				await runWithTimeout({
-					timeoutMs: DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.SELECTOR_WAIT,
-					operationName: `Dynamic selector wait for ${url}`,
-					...(signal ? { signal } : {}),
-					run: () =>
-						page.waitForSelector(selectorToWait, {
-							timeout: DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.SELECTOR_WAIT,
-						}),
-				});
-				selectorMatched = true;
-				this.logger.debug(`Waited for selector: ${selectorToWait} on ${url}`);
-			} catch (error_) {
-				throwIfAborted(signal);
-				this.logger.debug(`Preferred selector not found for ${url}: ${getErrorMessage(error_)}`);
-			}
-		}
-
-		await sleep(additionalWaitTime, undefined, signal ? { signal } : undefined);
-
-		const readiness = await runWithTimeoutFallback<ReadinessSnapshot>({
-			timeoutMs: DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.SELECTOR_WAIT,
-			operationName: "Complex content readiness evaluation",
-			fallback: {
-				bodyLength: 0,
-				hasPrimaryCandidate: false,
-				title: "",
-			},
-			...(signal ? { signal } : {}),
-			run: () =>
-				page.evaluate(() => {
-					const bodyText = (document.body?.innerText ?? "").replace(/\s+/g, " ").trim();
-					const hasPrimaryCandidate = Boolean(
-						document.querySelector(
-							"main, article, [role='main'], shreddit-post, [data-testid='post-container'], ytd-watch-flexy, ytd-page-manager",
-						),
-					);
-					return {
-						bodyLength: bodyText.length,
-						hasPrimaryCandidate,
-						title: document.title || "",
-					};
-				}),
-		});
-
-		if (
-			!selectorMatched &&
-			!readiness.hasPrimaryCandidate &&
-			readiness.bodyLength < 300 &&
-			readiness.title.trim().length === 0
-		) {
-			this.logger.warn(
-				`Complex site readiness weak for ${url}: selector missing and content not yet meaningful`,
-			);
-		}
-	}
-
-	private async setCookiesForPage(page: Page, url: string, session: Session): Promise<void> {
-		try {
-			const sessionCookies = session.getCookies(url).map((cookie) => ({
-				name: cookie.name,
-				value: cookie.value,
-				domain: cookie.domain,
-				path: cookie.path ?? "/",
-				expires: cookie.expires,
-				httpOnly: cookie.httpOnly,
-				secure: cookie.secure,
-				sameSite: normalizeCookieSameSite(cookie.sameSite),
-			}));
-
-			const siteCookies = Object.entries(SITE_COOKIES).find(([pattern]) =>
-				matchesOwnedSitePattern(url, pattern),
-			)?.[1];
-
-			let configuredCookies: BrowserCookie[] = [];
-			if (siteCookies?.length) {
-				const { parse } = await import("tldts");
-				const parsed = parse(url);
-				if (parsed.domain) {
-					configuredCookies = siteCookies.map((cookie) => ({
-						name: cookie.name,
-						value: cookie.value,
-						domain: `.${parsed.domain}`,
-						path: "/",
-						httpOnly: false,
-						secure: true,
-						sameSite: "Lax",
-					}));
-				}
-			}
-
-			const cookiesToSet = [...configuredCookies, ...sessionCookies];
-			if (cookiesToSet.length === 0) {
-				return;
-			}
-
-			await page.context().addCookies(cookiesToSet);
-		} catch (error_) {
-			this.logger.debug(`Cookie setting failed: ${getErrorMessage(error_)}`);
-		}
-	}
-
-	private async persistSessionCookies(session: Session, page: Page, url: string): Promise<void> {
-		try {
-			const cookies = await page.context().cookies([url]);
-			session.setCookies(
-				cookies.map((cookie) => ({
-					name: cookie.name,
-					value: cookie.value,
-					domain: cookie.domain,
-					path: cookie.path,
-					expires: cookie.expires,
-					httpOnly: cookie.httpOnly,
-					secure: cookie.secure,
-					sameSite: cookie.sameSite,
-				})),
-				url,
-			);
-		} catch (error_) {
-			this.logger.debug(`Session cookie persistence failed: ${getErrorMessage(error_)}`);
-		}
-	}
-
 	async closePageSafely(page: Page): Promise<void> {
 		try {
-			if (!page.isClosed()) {
-				await page.close();
-			}
+			await page.context().close();
 		} catch (error_) {
 			const message = getErrorMessage(error_);
 			if (
@@ -1202,25 +1429,22 @@ export class DynamicRenderer {
 	}
 
 	async close(): Promise<void> {
+		this.closed = true;
+		this.enabled = false;
 		this.closePromise ??= this.closeResources();
 		return this.closePromise;
 	}
 
 	private async closeResources(): Promise<void> {
+		const browser = this.browser;
+		this.browser = null;
 		try {
-			if (this.browserPool) {
-				await this.browserPool.closeAllBrowsers();
+			if (browser) {
+				await browser.close();
 				this.logger.info("Playwright closed.");
 			}
 		} catch (err) {
 			this.logger.warn(`Browser close failed: ${getErrorMessage(err)}`);
-		} finally {
-			this.browserPool = null;
-		}
-
-		if (this.sessionPool) {
-			await this.sessionPool.teardown().catch(() => {});
-			this.sessionPool = null;
 		}
 	}
 }

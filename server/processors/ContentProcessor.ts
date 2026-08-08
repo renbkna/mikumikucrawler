@@ -1,22 +1,20 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { CheerioAPI } from "cheerio";
 import * as cheerio from "cheerio";
-import type { ContentAnalysis, ExtractedData } from "../../shared/contracts/pageData.js";
 import type { Logger } from "../config/logging.js";
 import { TIMEOUT_CONSTANTS } from "../constants.js";
 import type { ProcessedContent } from "../types.js";
 import { getErrorMessage } from "../utils/helpers.js";
 import { runWithTimeout } from "../utils/timeout.js";
-import { analyzeContent, assessContentQuality, processJSON } from "./analysisUtils.js";
+import { analyzeContent } from "./analysisUtils.js";
 import { isHtmlLikeContentType, isJsonContentType, isPdfContentType } from "./contentTypes.js";
 import {
 	extractMainContent,
-	extractMediaInfo,
+	extractMediaCount,
 	extractMetadata,
-	extractStructuredData,
 	processLinks,
 } from "./extractionUtils.js";
-import { PdfContentHandler } from "./PdfContentHandler.js";
+import { processPdfContent } from "./PdfContentHandler.js";
 import { applyProcessingErrorDefaults } from "./processingDefaults.js";
 
 /**
@@ -36,15 +34,10 @@ function serializeJsonMainContent(value: unknown): string {
 	return typeof value === "string" ? value : JSON.stringify(value);
 }
 
-function throwIfAborted(signal?: AbortSignal): void {
-	if (!signal?.aborted) return;
-	throw signal.reason instanceof Error ? signal.reason : new Error("Content processing aborted");
-}
-
 async function processingCheckpoint(signal?: AbortSignal): Promise<void> {
-	throwIfAborted(signal);
+	signal?.throwIfAborted();
 	await sleep(0, undefined, signal ? { signal } : undefined);
-	throwIfAborted(signal);
+	signal?.throwIfAborted();
 }
 
 export async function processContent(
@@ -55,18 +48,16 @@ export async function processContent(
 	signal?: AbortSignal,
 ): Promise<ProcessedContent> {
 	const result: ProcessedContent = {
-		url,
-		contentType,
 		extractedData: {},
 		metadata: {},
 		analysis: {},
-		media: [],
+		mediaCount: 0,
 		links: [],
 		errors: [],
 	};
 
 	try {
-		throwIfAborted(signal);
+		signal?.throwIfAborted();
 		if (isHtmlLikeContentType(contentType)) {
 			await runWithTimeout({
 				timeoutMs: TIMEOUT_CONSTANTS.CONTENT_PROCESSING,
@@ -80,17 +71,17 @@ export async function processContent(
 				operationName: `JSON processing for ${url}`,
 				...(signal ? { signal } : {}),
 				run: async (operationSignal) => {
-					throwIfAborted(operationSignal);
+					operationSignal.throwIfAborted();
 					processJson(content, result);
-					throwIfAborted(operationSignal);
+					operationSignal.throwIfAborted();
 				},
 			});
 		} else if (isPdfContentType(contentType)) {
-			await new PdfContentHandler(logger).process(content, result, signal);
+			await processPdfContent(content, result, logger, signal);
 		}
-		throwIfAborted(signal);
+		signal?.throwIfAborted();
 	} catch (error) {
-		throwIfAborted(signal);
+		signal?.throwIfAborted();
 		logger.error(`Content processing error for ${url}: ${getErrorMessage(error)}`);
 		result.errors.push({
 			type: "processing_error",
@@ -110,63 +101,40 @@ async function processHtml(
 	logger: Logger,
 	signal?: AbortSignal,
 ): Promise<void> {
-	throwIfAborted(signal);
+	signal?.throwIfAborted();
 	const htmlContent = typeof content === "string" ? content : String(content);
 	const $: CheerioAPI = cheerio.load(htmlContent);
 	await processingCheckpoint(signal);
 
-	if (typeof $ !== "function") {
-		throw new TypeError("Cheerio failed to load content");
-	}
-
 	// Extract main content first (needed for analysis)
-	const mainContent = safeExtract(() => extractMainContent($), "", logger, "extract main content");
+	const mainContent = extractMainContent($);
 	await processingCheckpoint(signal);
 
-	// Analyze content (word count, language, keywords, sentiment)
+	// Analysis fields are the resume-visible metrics consumed by the page list.
 	result.analysis = analyzeContent(mainContent);
 	await processingCheckpoint(signal);
 
 	const extractionResults = {
-		structuredData: safeExtract(
-			() => extractStructuredData($, logger),
-			{
-				jsonLd: [],
-				microdata: {},
-				openGraph: {},
-				twitterCards: {},
-				schema: {},
-			},
-			logger,
-			"extract structured data",
-		),
-		media: safeExtract(() => extractMediaInfo($, url, logger), [], logger, "extract media info"),
+		mediaCount: safeExtract(() => extractMediaCount($, url, logger), 0, logger, "count media"),
 		links: safeExtract(() => processLinks($, url, logger), [], logger, "process links"),
 		metadata: safeExtract(() => extractMetadata($), {}, logger, "extract metadata"),
-		quality: safeExtract(
-			() => assessContentQuality($, mainContent),
-			{ score: 0, factors: {}, issues: ["Quality assessment failed"] },
-			logger,
-			"assess content quality",
-		),
 	};
 	await processingCheckpoint(signal);
 
-	result.extractedData = {
-		...extractionResults.structuredData,
-		mainContent,
-	} as ExtractedData;
-
-	result.media = extractionResults.media;
+	result.extractedData = { mainContent };
+	result.mediaCount = extractionResults.mediaCount;
 	result.links = extractionResults.links;
 	result.metadata = extractionResults.metadata;
-	(result.analysis as ContentAnalysis).quality = extractionResults.quality;
 }
 
 function processJson(content: string | Buffer, result: ProcessedContent): void {
 	const jsonString = typeof content === "string" ? content : content.toString();
-	const jsonResult = processJSON(jsonString);
-	const mainContent = jsonResult.data !== undefined ? jsonResult.data : (jsonResult.raw ?? "");
+	let mainContent: unknown;
+	try {
+		mainContent = JSON.parse(jsonString);
+	} catch {
+		mainContent = jsonString.slice(0, 500);
+	}
 	const serializedContent = serializeJsonMainContent(mainContent);
 	result.extractedData = {
 		mainContent: serializedContent,

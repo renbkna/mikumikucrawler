@@ -4,7 +4,23 @@ import {
 	developmentBackendUrl,
 	resolveBackendPort,
 } from "../../../shared/deploymentDefaults.js";
-import { allowsLocalhostTargets, resolveRobotsProductToken } from "../env.js";
+import {
+	allowsLocalhostTargets,
+	MAX_MEMORY_THRESHOLD_MB,
+	MAX_STORAGE_BUDGET_MB,
+	parseFrontendOrigin,
+	resolveRobotsProductToken,
+} from "../env.js";
+
+function importEnvironment(overrides: Record<string, string>) {
+	return Bun.spawnSync({
+		cmd: [process.execPath, "-e", 'await import("./server/config/env.ts")'],
+		cwd: process.cwd(),
+		env: { ...process.env, ...overrides },
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+}
 
 describe("environment policy", () => {
 	test("one validated PORT value owns the local backend endpoint", () => {
@@ -15,19 +31,38 @@ describe("environment policy", () => {
 		}
 	});
 
-	test("rejects a non-positive memory threshold at the configuration boundary", () => {
-		const result = Bun.spawnSync({
-			cmd: [process.execPath, "-e", 'await import("./server/config/env.ts")'],
-			cwd: process.cwd(),
-			env: { ...process.env, MEMORY_THRESHOLD_MB: "0" },
-			stdout: "pipe",
-			stderr: "pipe",
-		});
+	test("rejects invalid deployment settings at the configuration boundary", () => {
+		const cases: Array<{ overrides: Record<string, string>; message?: string }> = [
+			{
+				overrides: { MEMORY_THRESHOLD_MB: "0" },
+				message: `Invalid MEMORY_THRESHOLD_MB=0 — must be between 1 and ${MAX_MEMORY_THRESHOLD_MB}.`,
+			},
+			{ overrides: { MEMORY_THRESHOLD_MB: String(MAX_MEMORY_THRESHOLD_MB + 1) } },
+			{ overrides: { MEMORY_THRESHOLD_MB: "9".repeat(400) } },
+			{ overrides: { MAX_STORAGE_MB: "0" } },
+			{ overrides: { MAX_STORAGE_MB: String(MAX_STORAGE_BUDGET_MB + 1) } },
+			{ overrides: { MAX_STORAGE_MB: "not-a-number" } },
+			{ overrides: { RENDER: "TRUE" }, message: 'expected "true" or "false"' },
+		];
 
-		expect(result.exitCode).not.toBe(0);
-		expect(result.stderr.toString()).toContain(
-			"Invalid MEMORY_THRESHOLD_MB=0 — must be at least 1.",
-		);
+		for (const { overrides, message } of cases) {
+			const result = importEnvironment(overrides);
+			expect(result.exitCode).not.toBe(0);
+			if (message) expect(result.stderr.toString()).toContain(message);
+		}
+	});
+
+	test("FRONTEND_URL is one canonical HTTP origin", () => {
+		expect(parseFrontendOrigin("https://crawler.example/")).toBe("https://crawler.example");
+		expect(parseFrontendOrigin("https://crawler.example:443")).toBe("https://crawler.example");
+		for (const raw of [
+			"https://user@crawler.example",
+			"https://crawler.example/app",
+			"https://crawler.example?mode=prod",
+			"file:///tmp/app",
+		]) {
+			expect(() => parseFrontendOrigin(raw)).toThrow("Invalid FRONTEND_URL");
+		}
 	});
 
 	test("localhost targets are an explicit development-only capability", () => {
@@ -52,6 +87,9 @@ describe("environment policy", () => {
 		).toThrow("ROBOTS_PRODUCT_TOKEN is required");
 		expect(() => resolveRobotsProductToken("MikuCrawler/3.0.0", "Miku Crawler")).toThrow(
 			"Invalid ROBOTS_PRODUCT_TOKEN",
+		);
+		expect(() => resolveRobotsProductToken("OtherCrawler/1.0", "MikuCrawler")).toThrow(
+			"must identify a product token present in USER_AGENT",
 		);
 	});
 });

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { parseCrawlEventEnvelope } from "../../../shared/contracts/validation.js";
+import { parseCrawlEventEnvelope } from "../contracts/validation.js";
 
-describe("crawl event parser", () => {
+describe("crawl event parser contract", () => {
 	test("parses valid progress envelopes against the shared contract", () => {
 		const event = parseCrawlEventEnvelope(
 			JSON.stringify({
@@ -25,8 +25,6 @@ describe("crawl event parser", () => {
 						elapsedTime: 1,
 						pagesPerSecond: 1,
 					},
-					elapsedSeconds: 1,
-					pagesPerSecond: 1,
 					stopReason: null,
 				},
 			}),
@@ -101,8 +99,6 @@ describe("crawl event parser", () => {
 						elapsedTime: 0,
 						pagesPerSecond: -1,
 					},
-					elapsedSeconds: -1,
-					pagesPerSecond: -1,
 					stopReason: null,
 				},
 			}),
@@ -170,7 +166,7 @@ describe("crawl event parser", () => {
 		}
 	});
 
-	test("rejects malformed nested processed page data", () => {
+	test("rejects the obsolete full processed-page event projection", () => {
 		const event = parseCrawlEventEnvelope(
 			JSON.stringify({
 				type: "crawl.page",
@@ -181,6 +177,7 @@ describe("crawl event parser", () => {
 					id: 1,
 					pageCount: 1,
 					url: "https://example.com/page",
+					details: {},
 					processedData: {
 						extractedData: {},
 						metadata: {},

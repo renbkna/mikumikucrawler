@@ -1,29 +1,26 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { CrawlCounters } from "../../../shared/contracts/index.js";
-import type { Logger } from "../../config/logging.js";
+import type { CrawlCounters, CrawlOptions } from "../../../shared/contracts/index.js";
+import {
+	htmlDocumentResponse,
+	htmlResponse,
+	silentLogger,
+	successfulHtmlHttpClient,
+	waitFor,
+} from "../../__tests__/runtimeFixture.js";
+import { createInMemoryStorage } from "../../__tests__/storageFixture.js";
+import { CRAWL_QUEUE_CONSTANTS } from "../../constants.js";
 import { RobotsService } from "../../domain/crawl/RobotsService.js";
-import type { HttpClient, Resolver } from "../../plugins/security.js";
-import { createInMemoryStorage } from "../../storage/db.js";
-import { CrawlManager, type ResumeCrawlResult } from "../CrawlManager.js";
+import type { HttpClient } from "../../outbound/HttpClient.js";
+import {
+	CrawlManager,
+	CrawlRuntimeCapacityError,
+	type ResumeCrawlResult,
+} from "../CrawlManager.js";
 import { CrawlRuntime } from "../CrawlRuntime.js";
 import { EventStream } from "../EventStream.js";
 
-function createLogger(): Logger {
-	return {
-		level: "info",
-		info: mock(() => undefined),
-		warn: mock(() => undefined),
-		error: mock(() => undefined),
-		debug: mock(() => undefined),
-		fatal: mock(() => undefined),
-		trace: mock(() => undefined),
-		silent: mock(() => undefined),
-		child: mock(() => createLogger()),
-	} as unknown as Logger;
-}
-
 function createRobotsService(httpClient: HttpClient): RobotsService {
-	return new RobotsService(httpClient, createLogger());
+	return new RobotsService(httpClient, silentLogger);
 }
 
 function createOptions(target = "https://example.com"): {
@@ -56,57 +53,33 @@ function createOptions(target = "https://example.com"): {
 	};
 }
 
-async function waitFor<T>(read: () => T, predicate: (value: T) => boolean) {
-	const timeoutAt = Date.now() + 5000;
-	while (Date.now() < timeoutAt) {
-		const value = read();
-		if (predicate(value)) {
-			return value;
-		}
-		await Bun.sleep(25);
-	}
-
-	throw new Error("Timed out waiting for condition");
-}
-
 function createManager(
-	httpClient: HttpClient,
-	resolverOverride?: Resolver,
+	httpClient: HttpClient = successfulHtmlHttpClient,
 	storage = createInMemoryStorage(),
 ) {
 	const eventStream = new EventStream();
-	const registry = new Map<string, CrawlRuntime>();
-	const resolver: Resolver = resolverOverride ?? {
-		assertPublicHostname: async () => {},
-		resolveHost: async () => ["93.184.216.34"],
-	};
 
 	return {
 		storage,
 		eventStream,
-		registry,
 		manager: new CrawlManager({
-			logger: createLogger(),
+			logger: silentLogger,
 			repos: storage.repos,
 			eventStream,
-			registry,
-			resolver,
 			httpClient,
+			storageBudget: storage.budget,
 		}),
 	};
 }
 
+function createCrawl(manager: CrawlManager, options: CrawlOptions) {
+	return manager.create(crypto.randomUUID(), options);
+}
+
 describe("crawl manager contract", () => {
 	test("create -> run -> complete", async () => {
-		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>Hello world</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
-		};
-		const { manager, storage, eventStream } = createManager(httpClient);
-		const created = manager.create(createOptions());
+		const { manager, storage, eventStream } = createManager();
+		const created = createCrawl(manager, createOptions());
 
 		const completed = await waitFor(
 			() => storage.repos.crawlRuns.getById(created.id),
@@ -141,18 +114,15 @@ describe("crawl manager contract", () => {
 					return new Response("User-agent: *\nAllow: /");
 				}
 
-				return new Response("<html><body><main>shared robots policy</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				});
+				return htmlResponse("shared robots policy");
 			},
 		};
 		const { manager, storage } = createManager(httpClient);
-		const first = manager.create({
+		const first = createCrawl(manager, {
 			...createOptions("https://shared-policy.example/one"),
 			respectRobots: true,
 		});
-		const second = manager.create({
+		const second = createCrawl(manager, {
 			...createOptions("https://shared-policy.example/two"),
 			respectRobots: true,
 		});
@@ -176,23 +146,61 @@ describe("crawl manager contract", () => {
 		expect(robotsFetches).toBe(1);
 	});
 
+	test("enforces robots for an explicitly permitted localhost seed", async () => {
+		const storage = createInMemoryStorage();
+		const eventStream = new EventStream();
+		const requests: Array<{ url: string; allowLocalhostOnInitialRequest?: boolean }> = [];
+		const httpClient: HttpClient = {
+			fetch: async (request) => {
+				requests.push(request);
+				if (request.url.endsWith("/robots.txt")) {
+					return new Response("User-agent: *\nDisallow: /");
+				}
+				return htmlDocumentResponse("<html><main>must not be fetched</main></html>");
+			},
+		};
+		const crawlId = "localhost-robots";
+		const options = {
+			...createOptions("http://localhost:3000/"),
+			respectRobots: true,
+		};
+		storage.repos.crawlRuns.createRun(crawlId, options);
+		const runtime = new CrawlRuntime({
+			crawlId,
+			options,
+			logger: silentLogger,
+			repos: storage.repos,
+			storageBudget: storage.budget,
+			eventStream,
+			httpClient,
+			robotsService: createRobotsService(httpClient),
+			allowLocalhostSeed: true,
+			resume: false,
+			onSettled: () => {},
+		});
+
+		await runtime.start();
+
+		expect(requests).toEqual([
+			expect.objectContaining({
+				url: "http://localhost:3000/robots.txt",
+				allowLocalhostOnInitialRequest: true,
+			}),
+		]);
+		expect(storage.repos.crawlRuns.getById(crawlId)?.counters.skippedCount).toBe(1);
+	});
+
 	test("create returns the current persisted startup snapshot", async () => {
 		let releaseFetch!: () => void;
 		const httpClient: HttpClient = {
 			fetch: () =>
 				new Promise<Response>((resolve) => {
-					releaseFetch = () =>
-						resolve(
-							new Response("<html><body><main>held</main></body></html>", {
-								status: 200,
-								headers: { "content-type": "text/html" },
-							}),
-						);
+					releaseFetch = () => resolve(htmlResponse("held"));
 				}),
 		};
 		const { manager, storage } = createManager(httpClient);
 
-		const created = manager.create(createOptions("https://startup.example"));
+		const created = createCrawl(manager, createOptions("https://startup.example"));
 		const persisted = storage.repos.crawlRuns.getById(created.id);
 		if (!persisted) {
 			throw new Error("Expected created crawl to be persisted");
@@ -212,31 +220,229 @@ describe("crawl manager contract", () => {
 		);
 	});
 
-	test("non-progress SSE events do not force an immediate event_sequence write", async () => {
+	test("event stream admission failure cannot create a client identity", async () => {
+		const { manager, storage, eventStream } = createManager();
+		const crawlId = "runtime-construction-retry";
+		const options = createOptions("https://runtime-construction.example");
+		const initialize = eventStream.initialize.bind(eventStream);
+		const deleteStream = mock(eventStream.delete.bind(eventStream));
+		eventStream.delete = deleteStream;
+		eventStream.initialize = (id, sequence) => {
+			initialize(id, sequence);
+			throw new Error("runtime construction failed");
+		};
+
+		expect(() => manager.create(crawlId, options)).toThrow("runtime construction failed");
+		expect(storage.repos.crawlRuns.getById(crawlId)).toBeNull();
+		expect(storage.budget.usage().reservedBytes).toBe(0);
+		expect(manager.activeRuntimeCount).toBe(0);
+		expect(deleteStream).toHaveBeenCalledWith(crawlId);
+
+		eventStream.initialize = initialize;
+		const retried = manager.create(crawlId, options);
+		expect(retried.id).toBe(crawlId);
+		await waitFor(
+			() => storage.repos.crawlRuns.getById(crawlId),
+			(crawl) => crawl?.status === "completed",
+		);
+	});
+
+	test("response read failure cannot roll back an established runtime", async () => {
+		const { manager, storage } = createManager();
+		const crawlId = "established-runtime-response-failure";
+		const options = createOptions("https://established-runtime.example");
+		const getById = storage.repos.crawlRuns.getById.bind(storage.repos.crawlRuns);
+		storage.repos.crawlRuns.getById = (id) => {
+			if (id === crawlId && manager.activeRuntimeCount > 0) throw new Error("response read failed");
+			return getById(id);
+		};
+
+		expect(() => manager.create(crawlId, options)).toThrow("response read failed");
+		storage.repos.crawlRuns.getById = getById;
+		expect(getById(crawlId)?.id).toBe(crawlId);
+		expect(manager.activeRuntimeCount).toBe(1);
+		expect(manager.create(crawlId, options).id).toBe(crawlId);
+
+		await waitFor(
+			() => getById(crawlId),
+			(crawl) => crawl?.status === "completed",
+		);
+	});
+
+	test("reserves and releases the process-wide active runtime capacity", async () => {
 		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>Hello world</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
+			fetch: ({ signal }) =>
+				new Promise<Response>((_resolve, reject) => {
+					signal?.addEventListener("abort", () => reject(signal.reason ?? new Error("aborted")), {
+						once: true,
+					});
 				}),
+		};
+		const { manager, storage } = createManager(httpClient);
+		const activeIds = Array.from(
+			{ length: CRAWL_QUEUE_CONSTANTS.MAX_ACTIVE_RUNTIMES },
+			(_, index) => createCrawl(manager, createOptions(`https://capacity-${index}.example`)).id,
+		);
+		const rejectedId = crypto.randomUUID();
+
+		expect(() =>
+			manager.create(rejectedId, createOptions("https://capacity-rejected.example")),
+		).toThrow(CrawlRuntimeCapacityError);
+		expect(storage.repos.crawlRuns.getById(rejectedId)).toBeNull();
+
+		await manager.stop(activeIds[0] ?? "", "force");
+		manager.create(crypto.randomUUID(), createOptions("https://capacity-replacement.example"));
+		expect(manager.activeRuntimeCount).toBe(CRAWL_QUEUE_CONSTANTS.MAX_ACTIVE_RUNTIMES);
+		await manager.shutdownAll();
+	});
+
+	test("shrinks durable capacity reservations as terminal pages commit", async () => {
+		const httpClient: HttpClient = {
+			fetch: ({ url, signal }) => {
+				if (url.endsWith("/next")) {
+					return new Promise<Response>((_resolve, reject) => {
+						signal?.addEventListener("abort", () => reject(signal.reason ?? new Error("aborted")), {
+							once: true,
+						});
+					});
+				}
+				return Promise.resolve(
+					htmlDocumentResponse('<html><main>first</main><a href="/next">next</a></html>'),
+				);
+			},
+		};
+		const { manager, storage } = createManager(httpClient);
+		const created = createCrawl(manager, {
+			...createOptions("https://reservation.example"),
+			crawlDepth: 1,
+			maxPages: 2,
+		});
+		const initialReservation = storage.budget.usage().reservedBytes;
+
+		await waitFor(
+			() => storage.budget.usage().reservedBytes,
+			(reservedBytes) => reservedBytes === initialReservation / 2,
+		);
+		expect(storage.repos.crawlRuns.getById(created.id)?.counters.pagesScanned).toBe(1);
+
+		await manager.stop(created.id, "force");
+		expect(storage.budget.usage().reservedBytes).toBe(0);
+	});
+
+	test("unexpected redirected processing failures retain the authorized destination domain", async () => {
+		const storage = createInMemoryStorage();
+		const httpClient: HttpClient = {
+			fetch: async (request) => {
+				await request.authorizeRedirect?.({
+					fromUrl: request.url,
+					toUrl: "https://final.example/page",
+					statusCode: 302,
+					hopNumber: 1,
+				});
+				storage.repos.crawlQueue.enqueueMany = () => {
+					throw new Error("queue write failed");
+				};
+				return htmlDocumentResponse(
+					'<html><main>redirected</main><a href="https://child.example/">child</a></html>',
+				);
+			},
+		};
+		const { eventStream, manager } = createManager(httpClient, storage);
+		const crawlId = crypto.randomUUID();
+		eventStream.initialize(crawlId);
+		let terminalAtProgress: ReturnType<typeof storage.repos.crawlItems.listTerminalUrls> = [];
+		const unsubscribe = eventStream.subscribe(crawlId, (event) => {
+			if (event.type === "crawl.progress" && event.payload.counters.pagesScanned === 1) {
+				terminalAtProgress = storage.repos.crawlItems.listTerminalUrls(crawlId);
+			}
+		});
+		const created = manager.create(crawlId, {
+			...createOptions("https://redirected.example"),
+			crawlMethod: "full",
+			maxPagesPerDomain: 1,
+		});
+
+		await waitFor(
+			() => storage.repos.crawlRuns.getById(created.id),
+			(crawl) => crawl?.status === "completed",
+		);
+		unsubscribe();
+		expect(terminalAtProgress).toEqual([
+			{
+				url: "https://redirected.example/",
+				outcome: "failure",
+				domainBudgetCharged: true,
+				chargedDomain: "final.example",
+			},
+		]);
+	});
+
+	test("create and accepted resume retries preserve one caller-owned identity", async () => {
+		let releaseFetch!: () => void;
+		const httpClient: HttpClient = {
+			fetch: () =>
+				new Promise<Response>((resolve) => {
+					releaseFetch = () => resolve(htmlResponse("held"));
+				}),
+		};
+		const { manager, storage } = createManager(httpClient);
+		const options = createOptions("https://idempotent.example");
+		const crawlId = crypto.randomUUID();
+		const created = manager.create(crawlId, options);
+		const repeated = manager.create(crawlId, { ...options });
+		expect(repeated.id).toBe(created.id);
+		expect(storage.repos.crawlRuns.list()).toHaveLength(1);
+		expect(() => manager.create(crawlId, { ...options, maxPages: options.maxPages + 1 })).toThrow(
+			"already bound to different options",
+		);
+
+		await waitFor(
+			() => typeof releaseFetch,
+			(value) => value === "function",
+		);
+		releaseFetch();
+		await waitFor(
+			() => storage.repos.crawlRuns.getById(crawlId),
+			(crawl) => crawl?.status === "completed",
+		);
+
+		const resumable = storage.repos.crawlRuns.createRun(
+			"idempotent-resume",
+			createOptions("https://resume-idempotent.example"),
+		);
+		storage.repos.crawlRuns.markPaused(resumable.id, "Paused", 0);
+		expect(manager.resume(resumable.id).type).toBe("resumed");
+		expect(manager.resume(resumable.id).type).toBe("already-active");
+		await waitFor(
+			() => storage.repos.crawlRuns.getById(resumable.id)?.status,
+			(status) => status === "running",
+		);
+		releaseFetch();
+		await waitFor(
+			() => storage.repos.crawlRuns.getById(resumable.id)?.status,
+			(status) => status === "completed",
+		);
+	});
+
+	test("non-progress SSE events reserve their durable sequence before delivery", async () => {
+		const httpClient: HttpClient = {
+			fetch: async () => htmlResponse("Hello world"),
 		};
 		const storage = createInMemoryStorage();
 		const eventStream = new EventStream();
-		const resolver: Resolver = {
-			assertPublicHostname: async () => {},
-			resolveHost: async () => ["93.184.216.34"],
-		};
 		const crawlId = "crawl-seq-check";
 		storage.repos.crawlRuns.createRun(crawlId, {
 			...createOptions(),
 			target: "https://sequence.example",
 		});
-		const observedPersistedSequence: number[] = [];
+		const observedSequences: Array<{ event: number; persisted: number }> = [];
+		eventStream.initialize(crawlId);
 		const unsubscribe = eventStream.subscribe(crawlId, (event) => {
 			if (event.type === "crawl.started") {
-				observedPersistedSequence.push(
-					storage.repos.crawlRuns.getById(event.crawlId)?.eventSequence ?? -1,
-				);
+				observedSequences.push({
+					event: event.sequence,
+					persisted: storage.repos.crawlRuns.getById(event.crawlId)?.eventSequence ?? -1,
+				});
 			}
 		});
 
@@ -246,10 +452,10 @@ describe("crawl manager contract", () => {
 				...createOptions(),
 				target: "https://sequence.example",
 			},
-			logger: createLogger(),
+			logger: silentLogger,
 			repos: storage.repos,
+			storageBudget: storage.budget,
 			eventStream,
-			resolver,
 			httpClient,
 			robotsService: createRobotsService(httpClient),
 			resume: false,
@@ -263,20 +469,19 @@ describe("crawl manager contract", () => {
 			(run) => run?.status === "completed",
 		);
 
-		expect(observedPersistedSequence).toEqual([0]);
+		expect(observedSequences).toHaveLength(1);
+		expect(observedSequences[0]?.persisted).toBeGreaterThanOrEqual(
+			observedSequences[0]?.event ?? Number.MAX_SAFE_INTEGER,
+		);
 		expect(completed?.eventSequence).toBe(eventStream.getCurrentSequence(crawlId));
 	});
 
 	test("progress event subscribers observe the persisted event sequence", async () => {
 		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>Hello world</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+			fetch: async () => htmlResponse("Hello world"),
 		};
 		const { manager, storage, eventStream } = createManager(httpClient);
-		const created = manager.create(createOptions("https://progress.example"));
+		const created = createCrawl(manager, createOptions("https://progress.example"));
 		const observedSequences: Array<{
 			eventSequence: number;
 			persistedSequence: number;
@@ -306,14 +511,10 @@ describe("crawl manager contract", () => {
 
 	test("page events expose the identity and exact count from the committed page transaction", async () => {
 		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>Hello world</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+			fetch: async () => htmlResponse("Hello world"),
 		};
 		const { manager, storage, eventStream } = createManager(httpClient);
-		const created = manager.create(createOptions("https://page-count.example"));
+		const created = createCrawl(manager, createOptions("https://page-count.example"));
 		const observedPages: Array<{
 			eventId: number;
 			durableId: number;
@@ -351,23 +552,16 @@ describe("crawl manager contract", () => {
 
 	test("completed event subscribers observe the terminal persisted status", async () => {
 		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>Hello world</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+			fetch: async () => htmlResponse("Hello world"),
 		};
 		const storage = createInMemoryStorage();
 		const eventStream = new EventStream();
-		const resolver: Resolver = {
-			assertPublicHostname: async () => {},
-			resolveHost: async () => ["93.184.216.34"],
-		};
 		const crawlId = "crawl-completed-order";
 		storage.repos.crawlRuns.createRun(crawlId, {
 			...createOptions(),
 			target: "https://complete.example",
 		});
+		eventStream.initialize(crawlId);
 		let rowAtCompletedEvent: { status: string; eventSequence: number } | null = null;
 		const unsubscribe = eventStream.subscribe(crawlId, (event) => {
 			if (event.type !== "crawl.completed") {
@@ -384,10 +578,10 @@ describe("crawl manager contract", () => {
 				...createOptions(),
 				target: "https://complete.example",
 			},
-			logger: createLogger(),
+			logger: silentLogger,
 			repos: storage.repos,
+			storageBudget: storage.budget,
 			eventStream,
-			resolver,
 			httpClient,
 			robotsService: createRobotsService(httpClient),
 			resume: false,
@@ -404,23 +598,16 @@ describe("crawl manager contract", () => {
 
 	test("throwing completed event subscribers cannot change terminal crawl status", async () => {
 		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>Hello world</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+			fetch: async () => htmlResponse("Hello world"),
 		};
 		const storage = createInMemoryStorage();
 		const eventStream = new EventStream();
-		const resolver: Resolver = {
-			assertPublicHostname: async () => {},
-			resolveHost: async () => ["93.184.216.34"],
-		};
 		const crawlId = "crawl-throwing-completed-subscriber";
 		storage.repos.crawlRuns.createRun(crawlId, {
 			...createOptions(),
 			target: "https://complete.example",
 		});
+		eventStream.initialize(crawlId);
 		const unsubscribe = eventStream.subscribe(crawlId, (event) => {
 			if (event.type === "crawl.completed") {
 				throw new Error("subscriber failed");
@@ -433,10 +620,10 @@ describe("crawl manager contract", () => {
 				...createOptions(),
 				target: "https://complete.example",
 			},
-			logger: createLogger(),
+			logger: silentLogger,
 			repos: storage.repos,
+			storageBudget: storage.budget,
 			eventStream,
-			resolver,
 			httpClient,
 			robotsService: createRobotsService(httpClient),
 			resume: false,
@@ -450,25 +637,19 @@ describe("crawl manager contract", () => {
 
 	test("failed event subscribers observe the terminal persisted status", async () => {
 		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+			fetch: async () => htmlResponse("unused"),
 		};
 		const storage = createInMemoryStorage();
-		const eventStream = new EventStream();
-		const resolver: Resolver = {
-			assertPublicHostname: async () => {},
-			resolveHost: async () => {
-				throw new Error("resolver failed");
-			},
+		storage.repos.crawlItems.commitCompletedItem = () => {
+			throw new Error("item commit failed");
 		};
+		const eventStream = new EventStream();
 		const crawlId = "crawl-failed-order";
 		storage.repos.crawlRuns.createRun(crawlId, {
 			...createOptions(),
 			target: "https://fail.example",
 		});
+		eventStream.initialize(crawlId);
 		let rowAtFailedEvent: { status: string; eventSequence: number } | null = null;
 		const unsubscribe = eventStream.subscribe(crawlId, (event) => {
 			if (event.type !== "crawl.failed") {
@@ -485,10 +666,10 @@ describe("crawl manager contract", () => {
 				...createOptions(),
 				target: "https://fail.example",
 			},
-			logger: createLogger(),
+			logger: silentLogger,
 			repos: storage.repos,
+			storageBudget: storage.budget,
 			eventStream,
-			resolver,
 			httpClient,
 			robotsService: createRobotsService(httpClient),
 			resume: false,
@@ -503,62 +684,80 @@ describe("crawl manager contract", () => {
 		});
 	});
 
-	test("terminal persistence failure cannot strand runtime registry ownership", async () => {
+	test("manager quarantines terminal persistence failures without losing pending work", async () => {
 		const storage = createInMemoryStorage();
-		const eventStream = new EventStream();
-		const crawlId = "terminal-writer-failure";
-		const options = createOptions("https://terminal-writer.example");
-		storage.repos.crawlRuns.createRun(crawlId, options);
+		const commitCompletedItem = storage.repos.crawlItems.commitCompletedItem;
+		const markFailed = storage.repos.crawlRuns.markFailed;
+		storage.repos.crawlItems.commitCompletedItem = () => {
+			throw new Error("item commit failed");
+		};
 		storage.repos.crawlRuns.markFailed = () => {
 			throw new Error("terminal writer failed");
 		};
-		const registry = new Map<string, CrawlRuntime>();
-		let settled = false;
-		const runtime = new CrawlRuntime({
-			crawlId,
-			options,
-			logger: createLogger(),
-			repos: storage.repos,
-			eventStream,
-			resolver: {
-				assertPublicHostname: async () => {},
-				resolveHost: async () => {
-					throw new Error("resolver failed");
-				},
+		const { manager } = createManager(
+			{
+				fetch: async () => htmlDocumentResponse("<html><body><main>retry me</main></body></html>"),
 			},
-			httpClient: {
-				fetch: async () => new Response("unused"),
-			},
-			robotsService: createRobotsService({
-				fetch: async () => new Response("unused"),
-			}),
-			resume: false,
-			onInactive: () => registry.delete(crawlId),
-			onSettled: () => {
-				settled = true;
-			},
-		});
-		registry.set(crawlId, runtime);
+			storage,
+		);
+		const created = createCrawl(manager, createOptions("https://terminal-writer.example"));
 
-		await expect(runtime.start()).rejects.toThrow("terminal writer failed");
-		expect(registry.has(crawlId)).toBe(false);
-		expect(settled).toBe(true);
+		const interrupted = await waitFor(
+			() => storage.repos.crawlRuns.getById(created.id),
+			(crawl) => crawl?.status === "interrupted",
+		);
+		expect(interrupted?.stopReason).toBe("Runtime settlement failed: terminal writer failed");
+		expect(manager.activeRuntimeCount).toBe(0);
+		expect(storage.repos.crawlQueue.listPending(created.id)).toHaveLength(1);
+
+		storage.repos.crawlItems.commitCompletedItem = commitCompletedItem;
+		storage.repos.crawlRuns.markFailed = markFailed;
+		expect(manager.resume(created.id).type).toBe("resumed");
+		await waitFor(
+			() => storage.repos.crawlRuns.getById(created.id),
+			(crawl) => crawl?.status === "completed",
+		);
+	});
+
+	test("manager retains ownership when settlement quarantine also fails", async () => {
+		const storage = createInMemoryStorage();
+		storage.repos.crawlItems.commitCompletedItem = () => {
+			throw new Error("item commit failed");
+		};
+		storage.repos.crawlRuns.markFailed = () => {
+			throw new Error("terminal writer failed");
+		};
+		const markInterrupted = mock(() => {
+			throw new Error("quarantine writer failed");
+		});
+		storage.repos.crawlRuns.markInterrupted = markInterrupted;
+		const { manager } = createManager(
+			{
+				fetch: async () => htmlDocumentResponse("<html><body><main>retry me</main></body></html>"),
+			},
+			storage,
+		);
+		const created = createCrawl(manager, createOptions("https://broken-quarantine.example"));
+
+		await waitFor(
+			() => markInterrupted.mock.calls.length,
+			(callCount) => callCount === 1,
+		);
+		expect(manager.activeRuntimeCount).toBe(1);
+		expect(storage.budget.usage().reservedBytes).toBeGreaterThan(0);
+		expect(storage.repos.crawlQueue.listPending(created.id)).toHaveLength(1);
 	});
 
 	test("item completion write failure does not persist uncommitted counters", async () => {
 		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>committed nowhere</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+			fetch: async () => htmlResponse("committed nowhere"),
 		};
 		const { manager, storage, eventStream } = createManager(httpClient);
 		storage.repos.crawlItems.commitCompletedItem = () => {
 			throw new Error("item commit failed");
 		};
 
-		const created = manager.create(createOptions("https://commit-fail.example"));
+		const created = createCrawl(manager, createOptions("https://commit-fail.example"));
 		let failedEventCounters: CrawlCounters | null = null;
 		const unsubscribe = eventStream.subscribe(created.id, (event) => {
 			if (event.type === "crawl.failed") {
@@ -588,12 +787,7 @@ describe("crawl manager contract", () => {
 		const httpClient: HttpClient = {
 			fetch: ({ url, signal }) => {
 				if (url.endsWith("/a")) {
-					return Promise.resolve(
-						new Response("<html><body><main>a</main></body></html>", {
-							status: 200,
-							headers: { "content-type": "text/html" },
-						}),
-					);
+					return Promise.resolve(htmlResponse("a"));
 				}
 				if (url.endsWith("/b")) {
 					secondWorkerStarted();
@@ -603,25 +797,12 @@ describe("crawl manager contract", () => {
 							() => reject(signal.reason instanceof Error ? signal.reason : new Error("aborted")),
 							{ once: true },
 						);
-						setTimeout(
-							() =>
-								resolve(
-									new Response("<html><body><main>b</main></body></html>", {
-										status: 200,
-										headers: { "content-type": "text/html" },
-									}),
-								),
-							100,
-						);
+						setTimeout(() => resolve(htmlResponse("b")), 100);
 					});
 				}
 				return Promise.resolve(
-					new Response(
+					htmlDocumentResponse(
 						'<html><body><main>root</main><a href="/a">a</a><a href="/b">b</a></body></html>',
-						{
-							status: 200,
-							headers: { "content-type": "text/html" },
-						},
 					),
 				);
 			},
@@ -637,7 +818,7 @@ describe("crawl manager contract", () => {
 			return originalCommit(input);
 		};
 
-		const created = manager.create({
+		const created = createCrawl(manager, {
 			...createOptions("https://parallel.example"),
 			crawlDepth: 1,
 			maxPages: 3,
@@ -660,8 +841,12 @@ describe("crawl manager contract", () => {
 		const durablePages = Array.from(storage.repos.pages.iterateForExport(created.id));
 		const durableTerminals = storage.repos.crawlItems.listTerminalUrls(created.id);
 		expect(durablePages.some((page) => page.url.endsWith("/a"))).toBe(false);
-		expect(durableTerminals.some((terminal) => terminal.url.endsWith("/a"))).toBe(false);
-		expect(failed?.counters.pagesScanned).toBe(durableTerminals.length);
+		expect(durableTerminals).toEqual([]);
+		expect(failed?.counters.pagesScanned).toBe(
+			(failed?.counters.successCount ?? 0) +
+				(failed?.counters.failureCount ?? 0) +
+				(failed?.counters.skippedCount ?? 0),
+		);
 		expect(failed?.counters.successCount).toBe(durablePages.length);
 	});
 
@@ -670,17 +855,11 @@ describe("crawl manager contract", () => {
 		const httpClient: HttpClient = {
 			fetch: () =>
 				new Promise<Response>((resolve) => {
-					releaseFetch = () =>
-						resolve(
-							new Response("<html><body><main>slow</main></body></html>", {
-								status: 200,
-								headers: { "content-type": "text/html" },
-							}),
-						);
+					releaseFetch = () => resolve(htmlResponse("slow"));
 				}),
 		};
 		const { manager, storage, eventStream } = createManager(httpClient);
-		const created = manager.create(createOptions("https://slow.example"));
+		const created = createCrawl(manager, createOptions("https://slow.example"));
 		const events: string[] = [];
 		type ObservedRunRow = {
 			status: string;
@@ -727,6 +906,49 @@ describe("crawl manager contract", () => {
 		unsubscribe();
 	});
 
+	test("pause keeps an active transient failure retryable on resume", async () => {
+		let attempts = 0;
+		let releaseFirstAttempt!: () => void;
+		const httpClient: HttpClient = {
+			fetch: async () => {
+				attempts += 1;
+				if (attempts === 1) {
+					return new Promise<Response>((resolve) => {
+						releaseFirstAttempt = () =>
+							resolve(new Response("retry", { status: 503, headers: { "retry-after": "0" } }));
+					});
+				}
+
+				return htmlResponse("resumed");
+			},
+		};
+		const { manager, storage } = createManager(httpClient);
+		const created = createCrawl(manager, {
+			...createOptions("https://pause-retry.example"),
+			maxPages: 1,
+			retryLimit: 1,
+		});
+
+		await waitFor(
+			() => typeof releaseFirstAttempt,
+			(value) => value === "function",
+		);
+		const pausePromise = manager.stop(created.id, "pause");
+		releaseFirstAttempt();
+		await pausePromise;
+
+		expect(storage.repos.crawlRuns.getById(created.id)?.status).toBe("paused");
+		expect(storage.repos.crawlQueue.listPending(created.id)).toMatchObject([{ retries: 1 }]);
+
+		expect(manager.resume(created.id).type).toBe("resumed");
+		const completed = await waitFor(
+			() => storage.repos.crawlRuns.getById(created.id),
+			(run) => run?.status === "completed",
+		);
+		expect(completed?.counters).toMatchObject({ successCount: 1, failureCount: 0 });
+		expect(attempts).toBe(2);
+	});
+
 	test("paused event subscribers can resume because the runtime is already inactive", async () => {
 		let releaseHome!: () => void;
 		const httpClient: HttpClient = {
@@ -735,25 +957,18 @@ describe("crawl manager contract", () => {
 					return new Promise<Response>((resolve) => {
 						releaseHome = () =>
 							resolve(
-								new Response(
+								htmlDocumentResponse(
 									"<html><body><a href='https://pause-resume.example/about'>About</a><main>home</main></body></html>",
-									{
-										status: 200,
-										headers: { "content-type": "text/html" },
-									},
 								),
 							);
 					});
 				}
 
-				return new Response("<html><body><main>about</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				});
+				return htmlResponse("about");
 			},
 		};
 		const { manager, storage, eventStream } = createManager(httpClient);
-		const created = manager.create({
+		const created = createCrawl(manager, {
 			...createOptions("https://pause-resume.example"),
 			maxPages: 2,
 		});
@@ -789,38 +1004,28 @@ describe("crawl manager contract", () => {
 		const httpClient: HttpClient = {
 			fetch: async ({ url }) => {
 				if (url.endsWith("/")) {
-					return new Response(
+					return htmlDocumentResponse(
 						"<html><body><a href='https://example.com/about'>About</a><main>home</main></body></html>",
-						{
-							status: 200,
-							headers: { "content-type": "text/html" },
-						},
 					);
 				}
 
 				if (aboutResolved) {
-					return new Response("<html><body><main>about</main></body></html>", {
-						status: 200,
-						headers: { "content-type": "text/html" },
-					});
+					return htmlResponse("about");
 				}
 
 				return new Promise<Response>((resolve) => {
 					releaseAbout = () => {
 						aboutResolved = true;
-						resolve(
-							new Response("<html><body><main>about</main></body></html>", {
-								status: 200,
-								headers: { "content-type": "text/html" },
-							}),
-						);
+						resolve(htmlResponse("about"));
 					};
 				});
 			},
 		};
 
-		const { manager, storage } = createManager(httpClient);
-		const created = manager.create(createOptions());
+		const { manager, storage, eventStream } = createManager(httpClient);
+		const created = createCrawl(manager, createOptions());
+		const deliveredBeforeRestart: number[] = [];
+		eventStream.subscribe(created.id, (event) => deliveredBeforeRestart.push(event.sequence));
 
 		await waitFor(
 			() => typeof releaseAbout,
@@ -835,9 +1040,19 @@ describe("crawl manager contract", () => {
 			() => storage.repos.crawlRuns.getById(created.id),
 			(run) => run?.status === "interrupted",
 		);
+		const durableSequenceBeforeRestart =
+			storage.repos.crawlRuns.getById(created.id)?.eventSequence ?? 0;
+		expect(deliveredBeforeRestart.length).toBeGreaterThan(0);
+		expect(durableSequenceBeforeRestart).toBeGreaterThanOrEqual(
+			Math.max(...deliveredBeforeRestart),
+		);
 
-		const restartedManager = createManager(httpClient, undefined, storage).manager;
-		const resumed = restartedManager.resume(created.id);
+		const restarted = createManager(httpClient, storage);
+		const resumed = restarted.manager.resume(created.id);
+		const deliveredAfterRestart: number[] = [];
+		restarted.eventStream.subscribe(created.id, (event) =>
+			deliveredAfterRestart.push(event.sequence),
+		);
 		expect(resumed.type).toBe("resumed");
 		expect(["interrupted", "starting", "running"]).toContain(
 			resumed.type === "resumed" ? resumed.crawl.status : "interrupted",
@@ -849,41 +1064,8 @@ describe("crawl manager contract", () => {
 		);
 
 		expect(completed?.counters.successCount).toBe(2);
-	});
-
-	test("shutdown cancels startup without waiting for hostname assertion", async () => {
-		let resolverEntered = false;
-		const resolver: Resolver = {
-			assertPublicHostname: async () => {},
-			resolveHost: () => {
-				resolverEntered = true;
-				return new Promise<string[]>(() => {});
-			},
-		};
-		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
-		};
-
-		const { manager, storage, registry } = createManager(httpClient, resolver);
-		const created = manager.create(createOptions("https://shutdown.example"));
-
-		await waitFor(
-			() => resolverEntered,
-			(entered) => entered,
-		);
-
-		const shutdown = await Promise.race([
-			manager.shutdownAll().then(() => "settled" as const),
-			new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 100)),
-		]);
-
-		expect(shutdown).toBe("settled");
-		expect(storage.repos.crawlRuns.getById(created.id)?.status).toBe("interrupted");
-		expect(registry.size).toBe(0);
+		expect(deliveredAfterRestart.length).toBeGreaterThan(0);
+		expect(Math.min(...deliveredAfterRestart)).toBeGreaterThan(durableSequenceBeforeRestart);
 	});
 
 	test("shutdown aborts the manager-owned robots policy load", async () => {
@@ -908,8 +1090,8 @@ describe("crawl manager contract", () => {
 				});
 			},
 		};
-		const { manager, storage, registry } = createManager(httpClient);
-		const created = manager.create({
+		const { manager, storage } = createManager(httpClient);
+		const created = createCrawl(manager, {
 			...createOptions("https://shutdown-robots.example"),
 			respectRobots: true,
 		});
@@ -926,7 +1108,7 @@ describe("crawl manager contract", () => {
 		expect(shutdown).toBe("settled");
 		expect(robotsAbortObserved).toBe(true);
 		expect(storage.repos.crawlRuns.getById(created.id)?.status).toBe("interrupted");
-		expect(registry.size).toBe(0);
+		expect(manager.activeRuntimeCount).toBe(0);
 	});
 
 	test("shutdown aborts active work and keeps the active URL resumable", async () => {
@@ -935,12 +1117,8 @@ describe("crawl manager contract", () => {
 		const httpClient: HttpClient = {
 			fetch: async ({ url, signal }) => {
 				if (url.endsWith("/")) {
-					return new Response(
+					return htmlDocumentResponse(
 						"<html><body><a href='https://example.com/hold'>Hold</a><main>home</main></body></html>",
-						{
-							status: 200,
-							headers: { "content-type": "text/html" },
-						},
 					);
 				}
 
@@ -954,15 +1132,12 @@ describe("crawl manager contract", () => {
 					});
 				}
 
-				return new Response("<html><body><main>hold</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				});
+				return htmlResponse("hold");
 			},
 		};
 
 		const { manager, storage } = createManager(httpClient);
-		const created = manager.create({ ...createOptions(), maxPages: 2 });
+		const created = createCrawl(manager, { ...createOptions(), maxPages: 2 });
 
 		await waitFor(
 			() => holdAttempts,
@@ -976,7 +1151,7 @@ describe("crawl manager contract", () => {
 			expect.objectContaining({ url: "https://example.com/hold" }),
 		]);
 
-		const restartedManager = createManager(httpClient, undefined, storage).manager;
+		const restartedManager = createManager(httpClient, storage).manager;
 		expect(restartedManager.resume(created.id).type).toBe("resumed");
 		const completed = await waitFor(
 			() => storage.repos.crawlRuns.getById(created.id),
@@ -989,15 +1164,11 @@ describe("crawl manager contract", () => {
 
 	test("resume rejects active pausing crawls", () => {
 		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+			fetch: async () => htmlResponse("unused"),
 		};
 		const { manager, storage } = createManager(httpClient);
 		const created = storage.repos.crawlRuns.createRun("pausing-crawl", createOptions());
-		storage.repos.crawlRuns.markPausing(created.id, created.counters, "Pause requested", 0);
+		storage.repos.crawlRuns.markPausing(created.id, "Pause requested", 0);
 
 		const resumed = manager.resume(created.id);
 
@@ -1007,15 +1178,11 @@ describe("crawl manager contract", () => {
 
 	test("resume rejects persisted rows with invalid crawl options before registering a runtime", () => {
 		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+			fetch: async () => htmlResponse("unused"),
 		};
-		const { manager, storage, registry } = createManager(httpClient);
+		const { manager, storage } = createManager(httpClient);
 		const created = storage.repos.crawlRuns.createRun("invalid-options-crawl", createOptions());
-		storage.repos.crawlRuns.markPaused(created.id, created.counters, "Paused", 0);
+		storage.repos.crawlRuns.markPaused(created.id, "Paused", 0);
 		const invalidOptions = { ...createOptions() };
 		delete (invalidOptions as Partial<typeof invalidOptions>).maxConcurrentRequests;
 		storage.db
@@ -1025,7 +1192,7 @@ describe("crawl manager contract", () => {
 		expect(() => manager.resume(created.id)).toThrow(
 			"contains options outside the current contract",
 		);
-		expect(registry.get(created.id)).toBeUndefined();
+		expect(manager.activeRuntimeCount).toBe(0);
 		expect(
 			(
 				storage.db.query("SELECT status FROM crawl_runs WHERE id = ?").get(created.id) as {
@@ -1035,46 +1202,12 @@ describe("crawl manager contract", () => {
 		).toBe("paused");
 	});
 
-	test("resumable list excludes paused rows that still have a live runtime", () => {
-		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
-		};
-		const { manager, storage, registry } = createManager(httpClient);
-		const settled = storage.repos.crawlRuns.createRun(
-			"settled-paused-crawl",
-			createOptions("https://settled.example"),
-		);
-		const active = storage.repos.crawlRuns.createRun(
-			"active-paused-crawl",
-			createOptions("https://active.example"),
-		);
-		storage.repos.crawlRuns.markPaused(settled.id, settled.counters, "Paused", 0);
-		storage.repos.crawlRuns.markPaused(
-			active.id,
-			active.counters,
-			"Interrupted during shutdown",
-			0,
-		);
-		registry.set(active.id, {} as CrawlRuntime);
-
-		expect(manager.resume(active.id).type).toBe("already-running");
-		expect(manager.listResumable().map((crawl) => crawl.id)).toEqual([settled.id]);
-	});
-
 	test("stop returns the current snapshot for terminal crawls", async () => {
 		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>done</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+			fetch: async () => htmlResponse("done"),
 		};
 		const { manager, storage } = createManager(httpClient);
-		const created = manager.create(createOptions());
+		const created = createCrawl(manager, createOptions());
 
 		await waitFor(
 			() => storage.repos.crawlRuns.getById(created.id),
@@ -1089,15 +1222,11 @@ describe("crawl manager contract", () => {
 
 	test("delete rejects persisted active rows even when no runtime is registered", () => {
 		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+			fetch: async () => htmlResponse("unused"),
 		};
 		const { manager, storage } = createManager(httpClient);
 		const created = storage.repos.crawlRuns.createRun("orphan-running-crawl", createOptions());
-		storage.repos.crawlRuns.markRunning(created.id, created.counters, 0);
+		storage.repos.crawlRuns.markRunning(created.id, 0);
 
 		const deleted = manager.delete(created.id);
 
@@ -1105,10 +1234,9 @@ describe("crawl manager contract", () => {
 		expect(storage.repos.crawlRuns.getById(created.id)?.status).toBe("running");
 	});
 
-	test("listener ownership gates recovery of registry-less active crawls", () => {
+	test("manager recovers persisted active crawls without live runtimes", () => {
 		const storage = createInMemoryStorage();
 		const eventStream = new EventStream();
-		const registry = new Map<string, CrawlRuntime>();
 		const activeStatuses = ["pending", "starting", "running", "pausing", "stopping"] as const;
 		const activeIds: string[] = [];
 		for (const status of activeStatuses) {
@@ -1120,32 +1248,24 @@ describe("crawl manager contract", () => {
 			if (status === "pending") {
 				// createRun owns the pending checkpoint and its initial queue seed.
 			} else if (status === "starting") {
-				storage.repos.crawlRuns.markStarting(active.id, active.counters, 12);
+				storage.repos.crawlRuns.markStarting(active.id, 12);
 			} else if (status === "running") {
-				storage.repos.crawlRuns.markRunning(active.id, active.counters, 12);
+				storage.repos.crawlRuns.markRunning(active.id, 12);
 			} else if (status === "pausing") {
-				storage.repos.crawlRuns.markPausing(active.id, active.counters, "Pause requested", 12);
+				storage.repos.crawlRuns.markPausing(active.id, "Pause requested", 12);
 			} else {
-				storage.repos.crawlRuns.markStopping(active.id, active.counters, "Stop requested", 12);
+				storage.repos.crawlRuns.markStopping(active.id, "Stop requested", 12);
 			}
 		}
 
 		const manager = new CrawlManager({
-			logger: createLogger(),
+			logger: silentLogger,
 			repos: storage.repos,
 			eventStream,
-			registry,
-			resolver: {
-				assertPublicHostname: async () => {},
-				resolveHost: async () => ["93.184.216.34"],
-			},
 			httpClient: {
-				fetch: async () =>
-					new Response("<html><body><main>unused</main></body></html>", {
-						status: 200,
-						headers: { "content-type": "text/html" },
-					}),
+				fetch: async () => htmlResponse("unused"),
 			},
+			storageBudget: storage.budget,
 		});
 
 		for (const activeId of activeIds) {
@@ -1156,7 +1276,7 @@ describe("crawl manager contract", () => {
 
 		for (const activeId of activeIds) {
 			const recovered = storage.repos.crawlRuns.getById(activeId);
-			expect(recovered?.status).toBe("interrupted");
+			expect(recovered?.status).toBe(activeId.includes("stopping") ? "stopped" : "interrupted");
 			expect(recovered?.eventSequence).toBe(activeId.includes("pending") ? 0 : 12);
 		}
 		expect(storage.repos.crawlRuns.getById("orphan-running-crawl")?.stopReason).toBe(
@@ -1165,29 +1285,26 @@ describe("crawl manager contract", () => {
 		expect(storage.repos.crawlRuns.getById("orphan-pausing-crawl")?.stopReason).toBe(
 			"Pause requested",
 		);
+		expect(storage.repos.crawlQueue.listPending("orphan-stopping-crawl")).toEqual([]);
 		expect(
 			manager
 				.listResumable()
 				.map((crawl) => crawl.id)
 				.sort(),
-		).toEqual(activeIds.sort());
+		).toEqual(activeIds.filter((id) => !id.includes("stopping")).sort());
 		expect(manager.delete("orphan-running-crawl").type).toBe("deleted");
 	});
 
-	test("resume constructor failure restores interrupted ownership and releases the registry", () => {
+	test("resume constructor failure preserves resumable ownership and releases resources", () => {
 		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+			fetch: async () => htmlResponse("unused"),
 		};
-		const { manager, storage, registry } = createManager(httpClient);
+		const { manager, storage } = createManager(httpClient);
 		const crawl = storage.repos.crawlRuns.createRun(
 			"resume-constructor-failure",
 			createOptions("https://resume-constructor.example"),
 		);
-		storage.repos.crawlRuns.markPaused(crawl.id, crawl.counters, "Paused", 3);
+		storage.repos.crawlRuns.markPaused(crawl.id, "Paused", 3);
 		storage.repos.crawlDomainState.listByCrawlId = () => [
 			{
 				delayKey: "https://resume-constructor.example",
@@ -1197,27 +1314,24 @@ describe("crawl manager contract", () => {
 		];
 
 		expect(() => manager.resume(crawl.id)).toThrow("Domain delay must be finite");
-		expect(registry.has(crawl.id)).toBe(false);
-		expect(storage.repos.crawlRuns.getById(crawl.id)?.status).toBe("interrupted");
+		expect(manager.activeRuntimeCount).toBe(0);
+		expect(storage.repos.crawlRuns.getById(crawl.id)?.status).toBe("paused");
+		expect(storage.budget.usage().reservedBytes).toBe(0);
 	});
 
 	test("shutdown closes admission before taking the runtime snapshot", async () => {
 		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+			fetch: async () => htmlResponse("unused"),
 		};
-		const { manager, storage, registry } = createManager(httpClient);
+		const { manager, storage } = createManager(httpClient);
 		const paused = storage.repos.crawlRuns.createRun(
 			"late-resume",
 			createOptions("https://late-resume.example"),
 		);
-		storage.repos.crawlRuns.markPaused(paused.id, paused.counters, "Paused", 0);
+		storage.repos.crawlRuns.markPaused(paused.id, "Paused", 0);
 
 		const shutdown = manager.shutdownAll();
-		expect(() => manager.create(createOptions("https://late.example"))).toThrow(
+		expect(() => createCrawl(manager, createOptions("https://late.example"))).toThrow(
 			"Crawl service is shutting down",
 		);
 		expect(() => manager.resume(paused.id)).toThrow("Crawl service is shutting down");
@@ -1226,7 +1340,7 @@ describe("crawl manager contract", () => {
 		expect(manager.list({})).toEqual([
 			expect.objectContaining({ id: paused.id, status: "paused" }),
 		]);
-		expect(registry.size).toBe(0);
+		expect(manager.activeRuntimeCount).toBe(0);
 		expect(
 			(storage.db.query("SELECT COUNT(*) AS count FROM crawl_runs").get() as { count: number })
 				.count,
@@ -1235,11 +1349,7 @@ describe("crawl manager contract", () => {
 
 	test("resume starts a fresh SSE replay window after the persisted event sequence", async () => {
 		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+			fetch: async () => htmlResponse("unused"),
 		};
 		const { manager, storage, eventStream } = createManager(httpClient);
 		const crawlId = "crawl-stale-sse-resume";
@@ -1260,12 +1370,7 @@ describe("crawl manager contract", () => {
 			stopReason: "Pause requested",
 			counters,
 		});
-		storage.repos.crawlRuns.markPaused(
-			crawlId,
-			counters,
-			"Pause requested",
-			staleTerminal.sequence,
-		);
+		storage.repos.crawlRuns.markPaused(crawlId, "Pause requested", staleTerminal.sequence);
 
 		const result = manager.resume(crawlId);
 		expect(result.type).toBe("resumed");
@@ -1287,19 +1392,12 @@ describe("crawl manager contract", () => {
 
 	test("resume progress continues from the persisted crawl start time", async () => {
 		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
+			fetch: async () => htmlResponse("unused"),
 		};
 		const { manager, storage, eventStream } = createManager(httpClient);
 		const crawlId = "crawl-resume-elapsed";
-		const created = storage.repos.crawlRuns.createRun(
-			crawlId,
-			createOptions("https://elapsed.example"),
-		);
-		storage.repos.crawlRuns.markPaused(crawlId, created.counters, "Pause requested", 0);
+		storage.repos.crawlRuns.createRun(crawlId, createOptions("https://elapsed.example"));
+		storage.repos.crawlRuns.markPaused(crawlId, "Pause requested", 0);
 		storage.db
 			.query("UPDATE crawl_runs SET started_at = datetime('now', '-60 seconds') WHERE id = ?")
 			.run(crawlId);
@@ -1308,7 +1406,7 @@ describe("crawl manager contract", () => {
 		expect(manager.resume(crawlId).type).toBe("resumed");
 		const unsubscribe = eventStream.subscribe(crawlId, (event) => {
 			if (event.type === "crawl.progress") {
-				elapsedSeconds.push(event.payload.elapsedSeconds);
+				elapsedSeconds.push(event.payload.queue.elapsedTime);
 			}
 		});
 
@@ -1327,12 +1425,8 @@ describe("crawl manager contract", () => {
 		const httpClient: HttpClient = {
 			fetch: async ({ url }) => {
 				if (url.endsWith("/")) {
-					return new Response(
+					return htmlDocumentResponse(
 						"<html><body><a href='https://example.com/bad'>Bad</a><a href='https://example.com/hold'>Hold</a><main>home</main></body></html>",
-						{
-							status: 200,
-							headers: { "content-type": "text/html" },
-						},
 					);
 				}
 
@@ -1342,12 +1436,8 @@ describe("crawl manager contract", () => {
 				}
 
 				if (holdResolved) {
-					return new Response(
+					return htmlDocumentResponse(
 						"<html><body><a href='https://example.com/bad'>Bad</a><main>hold</main></body></html>",
-						{
-							status: 200,
-							headers: { "content-type": "text/html" },
-						},
 					);
 				}
 
@@ -1355,12 +1445,8 @@ describe("crawl manager contract", () => {
 					releaseHold = () => {
 						holdResolved = true;
 						resolve(
-							new Response(
+							htmlDocumentResponse(
 								"<html><body><a href='https://example.com/bad'>Bad</a><main>hold</main></body></html>",
-								{
-									status: 200,
-									headers: { "content-type": "text/html" },
-								},
 							),
 						);
 					};
@@ -1369,7 +1455,7 @@ describe("crawl manager contract", () => {
 		};
 
 		const { manager, storage } = createManager(httpClient);
-		const created = manager.create({ ...createOptions(), maxPages: 5 });
+		const created = createCrawl(manager, { ...createOptions(), maxPages: 5 });
 
 		await waitFor(
 			() => badRequests,
@@ -1388,7 +1474,7 @@ describe("crawl manager contract", () => {
 			(run) => run?.status === "interrupted",
 		);
 
-		const restartedManager = createManager(httpClient, undefined, storage).manager;
+		const restartedManager = createManager(httpClient, storage).manager;
 		expect(restartedManager.resume(created.id).type).toBe("resumed");
 		const completed = await waitFor(
 			() => storage.repos.crawlRuns.getById(created.id),
@@ -1404,12 +1490,8 @@ describe("crawl manager contract", () => {
 		const httpClient: HttpClient = {
 			fetch: async ({ url }) => {
 				if (url.endsWith("/")) {
-					return new Response(
+					return htmlDocumentResponse(
 						"<html><body><a href='https://example.com/rate'>Rate</a><main>home</main></body></html>",
-						{
-							status: 200,
-							headers: { "content-type": "text/html" },
-						},
 					);
 				}
 
@@ -1421,15 +1503,12 @@ describe("crawl manager contract", () => {
 					});
 				}
 
-				return new Response("<html><body><main>rate</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				});
+				return htmlResponse("rate");
 			},
 		};
 
 		const { manager, storage } = createManager(httpClient);
-		const created = manager.create({
+		const created = createCrawl(manager, {
 			...createOptions(),
 			maxPages: 5,
 			retryLimit: 1,
@@ -1447,7 +1526,7 @@ describe("crawl manager contract", () => {
 		);
 
 		await Bun.sleep(1_050);
-		const restartedManager = createManager(httpClient, undefined, storage).manager;
+		const restartedManager = createManager(httpClient, storage).manager;
 		expect(restartedManager.resume(created.id).type).toBe("resumed");
 
 		const completed = await waitFor(
@@ -1467,12 +1546,8 @@ describe("crawl manager contract", () => {
 		const httpClient: HttpClient = {
 			fetch: async ({ url }) => {
 				if (url === "https://example.com/") {
-					return new Response(
+					return htmlDocumentResponse(
 						"<html><body><a href='https://a.example/page'>A</a><a href='https://b.example/page'>B</a><a href='https://c.example/page'>C</a><main>home</main></body></html>",
-						{
-							status: 200,
-							headers: { "content-type": "text/html" },
-						},
 					);
 				}
 
@@ -1482,19 +1557,14 @@ describe("crawl manager contract", () => {
 				return new Promise<Response>((resolve) => {
 					releaseChildren.push(() => {
 						activeChildren -= 1;
-						resolve(
-							new Response("<html><body><main>child</main></body></html>", {
-								status: 200,
-								headers: { "content-type": "text/html" },
-							}),
-						);
+						resolve(htmlResponse("child"));
 					});
 				});
 			},
 		};
 
 		const { manager, storage } = createManager(httpClient);
-		const created = manager.create({
+		const created = createCrawl(manager, {
 			...createOptions(),
 			crawlMethod: "full",
 			crawlDelay: 200,
@@ -1525,36 +1595,23 @@ describe("crawl manager contract", () => {
 			fetch: async ({ url }) => {
 				requests.set(url, (requests.get(url) ?? 0) + 1);
 				if (url.endsWith("/")) {
-					return new Response(
+					return htmlDocumentResponse(
 						"<html><body><a href='https://example.com/a'>A</a><a href='https://example.com/b'>B</a><a href='https://example.com/c'>C</a><main>home</main></body></html>",
-						{
-							status: 200,
-							headers: { "content-type": "text/html" },
-						},
 					);
 				}
 
 				if (url.endsWith("/a") && requests.get(url) === 1) {
 					return new Promise<Response>((resolve) => {
-						releaseA = () =>
-							resolve(
-								new Response("<html><body><main>a</main></body></html>", {
-									status: 200,
-									headers: { "content-type": "text/html" },
-								}),
-							);
+						releaseA = () => resolve(htmlResponse("a"));
 					});
 				}
 
-				return new Response("<html><body><main>child</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				});
+				return htmlResponse("child");
 			},
 		};
 
 		const { manager, storage } = createManager(httpClient);
-		const created = manager.create({
+		const created = createCrawl(manager, {
 			...createOptions(),
 			maxPages: 4,
 			maxConcurrentRequests: 1,
@@ -1597,26 +1654,19 @@ describe("crawl manager contract", () => {
 					return new Promise<Response>((resolve) => {
 						releaseHome = () =>
 							resolve(
-								new Response(
+								htmlDocumentResponse(
 									"<html><body><a href='https://example.com/child'>Child</a><main>home</main></body></html>",
-									{
-										status: 200,
-										headers: { "content-type": "text/html" },
-									},
 								),
 							);
 					});
 				}
 
-				return new Response("<html><body><main>child</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				});
+				return htmlResponse("child");
 			},
 		};
 
 		const { manager, storage } = createManager(httpClient);
-		const created = manager.create({
+		const created = createCrawl(manager, {
 			...createOptions(),
 			crawlDelay: 10_000,
 			crawlDepth: 1,
@@ -1647,12 +1697,8 @@ describe("crawl manager contract", () => {
 		const httpClient: HttpClient = {
 			fetch: async ({ url, signal }) => {
 				if (url.endsWith("/")) {
-					return new Response(
+					return htmlDocumentResponse(
 						"<html><body><a href='https://example.com/a'>A</a><a href='https://example.com/b'>B</a><main>home</main></body></html>",
-						{
-							status: 200,
-							headers: { "content-type": "text/html" },
-						},
 					);
 				}
 
@@ -1666,15 +1712,12 @@ describe("crawl manager contract", () => {
 					});
 				}
 
-				return new Response("<html><body><main>b</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				});
+				return htmlResponse("b");
 			},
 		};
 
 		const { manager, storage } = createManager(httpClient);
-		const created = manager.create({
+		const created = createCrawl(manager, {
 			...createOptions(),
 			maxPages: 3,
 			maxConcurrentRequests: 1,
@@ -1694,58 +1737,14 @@ describe("crawl manager contract", () => {
 		expect(Array.from(storage.repos.pages.iterateForExport(created.id))).toHaveLength(1);
 	});
 
-	test("force stop cancels startup without waiting for hostname assertion", async () => {
-		let resolverEntered = false;
-		const resolver: Resolver = {
-			assertPublicHostname: async () => {},
-			resolveHost: () => {
-				resolverEntered = true;
-				return new Promise<string[]>(() => {});
-			},
-		};
-		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>unused</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
-		};
-
-		const { manager, storage, registry } = createManager(httpClient, resolver);
-		const created = manager.create(createOptions("https://startup.example"));
-
-		await waitFor(
-			() => resolverEntered,
-			(entered) => entered,
-		);
-
-		const stopped = await Promise.race([
-			manager.stop(created.id, "force"),
-			new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 100)),
-		]);
-
-		expect(stopped).not.toBe("timeout");
-		expect(
-			stopped && typeof stopped === "object" && stopped.type === "stopped"
-				? stopped.crawl.status
-				: null,
-		).toBe("stopped");
-		expect(storage.repos.crawlRuns.getById(created.id)?.stopReason).toBe("Force stop requested");
-		expect(registry.size).toBe(0);
-	});
-
 	test("force stop after pause overrides the terminal stop reason", async () => {
 		let activeAbortObserved = false;
 		let activeStarted = false;
 		const httpClient: HttpClient = {
 			fetch: async ({ url, signal }) => {
 				if (url.endsWith("/")) {
-					return new Response(
+					return htmlDocumentResponse(
 						"<html><body><a href='https://example.com/a'>A</a><main>home</main></body></html>",
-						{
-							status: 200,
-							headers: { "content-type": "text/html" },
-						},
 					);
 				}
 
@@ -1760,7 +1759,7 @@ describe("crawl manager contract", () => {
 		};
 
 		const { manager, storage } = createManager(httpClient);
-		const created = manager.create({
+		const created = createCrawl(manager, {
 			...createOptions(),
 			maxPages: 2,
 			maxConcurrentRequests: 1,
@@ -1792,24 +1791,17 @@ describe("crawl manager contract", () => {
 		const httpClient: HttpClient = {
 			fetch: async ({ url }) => {
 				if (url.endsWith("/")) {
-					return new Response(
+					return htmlDocumentResponse(
 						"<html><body><a href='https://example.com/a'>A</a><a href='https://example.com/b'>B</a><main>home</main></body></html>",
-						{
-							status: 200,
-							headers: { "content-type": "text/html" },
-						},
 					);
 				}
 
-				return new Response("<html><body><main>child</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				});
+				return htmlResponse("child");
 			},
 		};
 
 		const { manager, storage } = createManager(httpClient);
-		const created = manager.create({
+		const created = createCrawl(manager, {
 			...createOptions(),
 			maxPages: 1,
 			maxConcurrentRequests: 3,
@@ -1824,62 +1816,5 @@ describe("crawl manager contract", () => {
 		expect(completed?.counters.successCount).toBe(1);
 		expect(completed?.counters.skippedCount).toBe(0);
 		expect(Array.from(storage.repos.pages.iterateForExport(created.id))).toHaveLength(1);
-	});
-
-	test("stop requested during startup does not expose running state before stop is applied", async () => {
-		const storage = createInMemoryStorage();
-		const eventStream = new EventStream();
-		const registry = new Map<string, CrawlRuntime>();
-		let releaseResolver!: () => void;
-		const resolver: Resolver = {
-			assertPublicHostname: async () => {},
-			resolveHost: async () => {
-				await new Promise<void>((resolve) => {
-					releaseResolver = resolve;
-				});
-				return ["93.184.216.34"];
-			},
-		};
-		const httpClient: HttpClient = {
-			fetch: async () =>
-				new Response("<html><body><main>Hello</main></body></html>", {
-					status: 200,
-					headers: { "content-type": "text/html" },
-				}),
-		};
-		const manager = new CrawlManager({
-			logger: createLogger(),
-			repos: storage.repos,
-			eventStream,
-			registry,
-			resolver,
-			httpClient,
-		});
-
-		const created = manager.create(createOptions());
-		const observedStartupStatuses: string[] = [];
-		const unsubscribe = eventStream.subscribe(created.id, (event) => {
-			if (event.type === "crawl.started") {
-				const row = storage.repos.crawlRuns.getById(created.id);
-				if (row) {
-					observedStartupStatuses.push(row.status);
-				}
-			}
-		});
-		await waitFor(
-			() => typeof releaseResolver,
-			(value) => value === "function",
-		);
-		const pausePromise = manager.stop(created.id, "pause");
-		releaseResolver();
-		await pausePromise;
-
-		const paused = await waitFor(
-			() => storage.repos.crawlRuns.getById(created.id),
-			(run) => run?.status === "paused",
-		);
-		expect(paused?.status).toBe("paused");
-		expect(observedStartupStatuses).not.toContain("running");
-		unsubscribe();
 	});
 });

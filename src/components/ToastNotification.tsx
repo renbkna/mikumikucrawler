@@ -69,6 +69,7 @@ export const ToastNotification = memo(function ToastNotification({
 
 	return (
 		<div
+			role="status"
 			className={`${
 				TOAST_STYLES[toast.type]
 			} px-4 py-3 rounded-xl shadow-[0_10px_30px_rgba(105,117,170,0.1)] flex items-center justify-between max-w-xs sm:max-w-md transition-all duration-300 transform ${
@@ -92,5 +93,3 @@ export const ToastNotification = memo(function ToastNotification({
 		</div>
 	);
 });
-
-ToastNotification.displayName = "ToastNotification";

@@ -255,10 +255,6 @@ body::after {
 	border-radius: 50px;
 }
 
-.app-atmosphere {
-	display: none;
-}
-
 .brand-shell {
 	background: transparent;
 	border: 0;

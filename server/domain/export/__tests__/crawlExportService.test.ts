@@ -26,6 +26,19 @@ describe("crawl export service contract", () => {
 		expect(result.headers.get("cache-control")).toBe("no-transform");
 	});
 
+	test("exports nullable stored metadata without inventing values", async () => {
+		const nullablePage = {
+			...pages[0],
+			title: null,
+			description: null,
+			contentType: null,
+		};
+
+		expect(await createCrawlExportResponse("crawl-1", [nullablePage], "json").json()).toEqual([
+			nullablePage,
+		]);
+	});
+
 	test("CSV export preserves header order and row mapping", async () => {
 		const result = createCrawlExportResponse("crawl-1", pages, "csv");
 		const body = await result.text();
@@ -48,18 +61,28 @@ describe("crawl export service contract", () => {
 	});
 
 	test("CSV prefixes dangerous cells", async () => {
-		const dangerousRows = ["=x", "+x", "-x", "@x", "|x", "\tx"].map((value, index) => ({
-			...pages[0],
-			id: index + 1,
-			description: value,
-		}));
+		const dangerousRows = ["=x", "+x", "-x", "@x", "|x", "\tx", "\r=x", "\n+x", " \t@x"].map(
+			(value, index) => ({
+				...pages[0],
+				id: index + 1,
+				description: value,
+			}),
+		);
 
 		const result = createCrawlExportResponse("crawl-1", dangerousRows, "csv");
 		const body = await result.text();
 
-		for (const value of ["'=x", "'+x", "'-x", "'@x", "'|x", "'\tx"]) {
+		for (const value of ["'=x", "'+x", "'-x", "'@x", "'|x", "'\tx", "'\r=x", "'\n+x", "' \t@x"]) {
 			expect(body).toContain(`"${value}"`);
 		}
+
+		const safeBody = await createCrawlExportResponse(
+			"crawl-1",
+			["", " "].map((description, index) => ({ ...pages[0], id: index + 1, description })),
+			"csv",
+		).text();
+		expect(safeBody).toContain(',"",');
+		expect(safeBody).toContain('," ",');
 	});
 
 	test("filename sanitization replaces unsafe characters", () => {

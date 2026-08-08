@@ -63,6 +63,14 @@ describe("web manifest", () => {
 		}
 	});
 
+	test("document favicon metadata matches the checked-in PNG asset", async () => {
+		const index = await readFile(new URL("../../../index.html", import.meta.url), "utf8");
+		expect(index).toContain(
+			'<link rel="icon" type="image/png" sizes="192x192" href="/icons/miku-192.png" />',
+		);
+		expect(readPngSize(await readPublicAsset("/icons/miku-192.png"))).toBe("192x192");
+	});
+
 	test("screenshot metadata matches the checked-in PNG asset", async () => {
 		const manifest = await readManifest();
 		const screenshot = manifest.screenshots?.find((entry) => entry.src === "/mikumikucrawler.png");

@@ -1,20 +1,5 @@
 import { CRAWL_PAGE_SNAPSHOT_LIMIT } from "../shared/contracts/index.js";
 
-export const CRAWLER_DEFAULTS = {
-	CRAWL_METHOD: "full" as const,
-	CRAWL_DEPTH: 2,
-	CRAWL_DELAY: 1000,
-	MAX_PAGES: 50,
-	/** 0 = unlimited per-domain */
-	MAX_PAGES_PER_DOMAIN: 0,
-	MAX_CONCURRENT_REQUESTS: 5,
-	RETRY_LIMIT: 3,
-	DYNAMIC: true,
-	RESPECT_ROBOTS: true,
-	CONTENT_ONLY: false,
-	SAVE_MEDIA: false,
-} as const;
-
 export const UI_LIMITS = {
 	MAX_PAGE_BUFFER: CRAWL_PAGE_SNAPSHOT_LIMIT,
 	MAX_LOGS: 100,

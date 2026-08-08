@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { DOMAIN_DELAY_CONSTANTS } from "../../constants.js";
+import type { OwnStatement } from "../db.js";
 
 export interface CrawlDomainStateRecord {
 	delayKey: string;
@@ -7,8 +8,9 @@ export interface CrawlDomainStateRecord {
 	nextAllowedAt: number;
 }
 
-export function createCrawlDomainStateRepo(db: Database) {
-	const upsert = db.prepare(`
+export function createCrawlDomainStateRepo(db: Database, own: OwnStatement) {
+	const upsert = own(
+		db.prepare(`
 		INSERT INTO crawl_domain_state (
 			crawl_id,
 			delay_key,
@@ -19,7 +21,8 @@ export function createCrawlDomainStateRepo(db: Database) {
 			delay_ms = excluded.delay_ms,
 			next_allowed_at = excluded.next_allowed_at,
 			updated_at = CURRENT_TIMESTAMP
-	`);
+	`),
+	);
 
 	return {
 		upsert(crawlId: string, record: CrawlDomainStateRecord): void {

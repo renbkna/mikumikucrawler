@@ -1,12 +1,16 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { buildCrawlEventsPath, buildCrawlExportPath } from "../../../shared/contracts/index.js";
+import { resolveBackendTransportPolicy, resolveBackendUrl } from "../backendUrl";
+import { backendUrl, getCrawlExportUrl } from "../client";
 import {
-	buildBackendApiUrl,
-	resolveBackendTransportPolicy,
-	resolveBackendUrl,
-} from "../backendUrl";
-import { downloadCrawlExport, getBackendUrl } from "../client";
-import { createCrawl, getCrawlRecoverySnapshot, subscribeToCrawlEvents } from "../crawls";
+	createCrawl,
+	deleteCrawl,
+	downloadCrawlExport,
+	getCrawlRecoverySnapshot,
+	resumeCrawl,
+	stopCrawl,
+	subscribeToCrawlEvents,
+} from "../crawls";
 
 const originalFetch = globalThis.fetch;
 const originalEventSource = globalThis.EventSource;
@@ -24,9 +28,9 @@ describe("API client backend URL resolution", () => {
 				"http://localhost:5173",
 			),
 		).toBe("https://api.example.test/base");
-		expect(
-			buildBackendApiUrl("https://api.example.test/base", buildCrawlEventsPath("crawl-1")),
-		).toBe("https://api.example.test/base/api/crawls/crawl-1/events");
+		expect(`https://api.example.test/base${buildCrawlEventsPath("crawl-1")}`).toBe(
+			"https://api.example.test/base/api/crawls/crawl-1/events",
+		);
 	});
 
 	test("uses the browser origin when no cross-origin backend is configured", () => {
@@ -40,9 +44,9 @@ describe("API client backend URL resolution", () => {
 	});
 
 	test("projects only the configured HTTP origin into the document CSP", () => {
-		expect(resolveBackendTransportPolicy("https://api.example.test/base/path")).toEqual({
+		expect(resolveBackendTransportPolicy("http://api.example.test/base/path")).toEqual({
 			type: "cross-origin",
-			connectSource: "https://api.example.test",
+			connectSource: "http://api.example.test",
 		});
 		expect(resolveBackendTransportPolicy(undefined).connectSource).toBe("");
 	});
@@ -82,23 +86,35 @@ describe("API client backend URL resolution", () => {
 		});
 	});
 
-	test("download export uses the resolved backend API URL", async () => {
-		const fetchMock = mock(async () => {
-			return new Response("{}", {
-				status: 200,
-				headers: {
-					"content-disposition": 'attachment; filename="crawl.json"',
-				},
-			});
-		});
-		globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-		const result = await downloadCrawlExport("crawl-1", "json");
-
-		expect(fetchMock).toHaveBeenCalledWith(
-			`${getBackendUrl()}${buildCrawlExportPath("crawl-1", "json")}`,
+	test("builds the export URL from the resolved backend API URL", () => {
+		expect(getCrawlExportUrl("crawl-1", "json")).toBe(
+			`${backendUrl}${buildCrawlExportPath("crawl-1", "json")}`,
 		);
-		expect(result.filename).toBe("crawl.json");
+	});
+
+	test("returns export errors instead of navigating the SPA to an API response", async () => {
+		globalThis.fetch = mock(async () =>
+			Response.json({ error: "Crawl not found" }, { status: 404 }),
+		) as unknown as typeof fetch;
+
+		await expect(downloadCrawlExport("missing-crawl", "json")).resolves.toEqual({
+			ok: false,
+			error: "Crawl not found",
+			status: 404,
+		});
+
+		globalThis.fetch = mock(
+			async () =>
+				new Response("crawl data", {
+					headers: { "Content-Disposition": 'attachment; filename="crawl_safe.json"' },
+				}),
+		) as unknown as typeof fetch;
+		const result = await downloadCrawlExport("crawl-1", "json");
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.data.filename).toBe("crawl_safe.json");
+			expect(await result.data.blob.text()).toBe("crawl data");
+		}
 	});
 
 	test("event subscription uses the resolved backend API URL", () => {
@@ -115,18 +131,96 @@ describe("API client backend URL resolution", () => {
 		const subscription = subscribeToCrawlEvents("crawl-2", {
 			onOpen: () => undefined,
 			onError: () => undefined,
+			onInvalidEvent: () => undefined,
 			onEvent: () => undefined,
 		});
 		subscription.close();
 
-		expect(constructedUrls).toEqual([`${getBackendUrl()}${buildCrawlEventsPath("crawl-2")}`]);
+		expect(constructedUrls).toEqual([`${backendUrl}${buildCrawlEventsPath("crawl-2")}`]);
+	});
+
+	test("invalid SSE payloads are observable to the durable-recovery owner", () => {
+		const listeners = new Map<string, EventListener>();
+		class FakeEventSource {
+			addEventListener(type: string, listener: EventListener) {
+				listeners.set(type, listener);
+			}
+			close() {}
+		}
+		globalThis.EventSource = FakeEventSource as unknown as typeof EventSource;
+		const onInvalidEvent = mock(() => undefined);
+
+		subscribeToCrawlEvents("crawl-invalid-event", {
+			onOpen: () => undefined,
+			onError: () => undefined,
+			onInvalidEvent,
+			onEvent: () => undefined,
+		});
+		listeners.get("crawl.page")?.(
+			new MessageEvent("crawl.page", { data: '{"type":"crawl.page"}' }),
+		);
+
+		expect(onInvalidEvent).toHaveBeenCalledTimes(1);
+	});
+
+	test("preserves recovery HTTP status for create reconciliation", async () => {
+		globalThis.fetch = mock(async () =>
+			Response.json({ error: "Crawl not found" }, { status: 404 }),
+		) as unknown as typeof fetch;
+
+		await expect(getCrawlRecoverySnapshot("missing-crawl")).resolves.toEqual({
+			ok: false,
+			error: "Crawl not found",
+			status: 404,
+		});
+	});
+
+	test("preserves stop failure status for durable reconciliation", async () => {
+		globalThis.fetch = mock(async () =>
+			Response.json({ error: "Only active crawls can be stopped" }, { status: 409 }),
+		) as unknown as typeof fetch;
+
+		await expect(stopCrawl("paused-crawl", "force")).resolves.toEqual({
+			ok: false,
+			error: "Only active crawls can be stopped",
+			status: 409,
+		});
+	});
+
+	test("preserves definite create rejection status", async () => {
+		globalThis.fetch = mock(async () =>
+			Response.json({ error: "Invalid crawl options" }, { status: 422 }),
+		) as unknown as typeof fetch;
+
+		const result = await createCrawl("166ea0f8-570c-4a71-8d7d-39b09734e99b", {
+			target: "https://example.com/",
+			crawlMethod: "links",
+			crawlDepth: 1,
+			crawlDelay: 200,
+			maxPages: 1,
+			maxPagesPerDomain: 0,
+			maxConcurrentRequests: 1,
+			retryLimit: 0,
+			dynamic: false,
+			respectRobots: false,
+			contentOnly: false,
+			saveMedia: false,
+		});
+
+		expect(result).toEqual({
+			ok: false,
+			error: "Invalid crawl options",
+			status: 422,
+		});
 	});
 
 	test("preserves API timestamp strings when Eden parses crawl responses", async () => {
 		const createdAt = "2026-07-13T10:15:24.000Z";
+		const crawlId = "166ea0f8-570c-4a71-8d7d-39b09734e99b";
 		globalThis.fetch = mock(async () =>
 			Response.json({
-				id: "crawl-date-contract",
+				id: crawlId,
+				eventSequence: 0,
 				target: "https://example.com/",
 				status: "starting",
 				options: {
@@ -161,7 +255,7 @@ describe("API client backend URL resolution", () => {
 			}),
 		) as unknown as typeof fetch;
 
-		const result = await createCrawl({
+		const result = await createCrawl(crawlId, {
 			target: "https://example.com/",
 			crawlMethod: "full",
 			crawlDepth: 2,
@@ -189,11 +283,33 @@ describe("API client backend URL resolution", () => {
 				pageCount: 0,
 			}),
 		) as unknown as typeof fetch;
-		const durableSnapshot = await getCrawlRecoverySnapshot("crawl-date-contract");
+		const durableSnapshot = await getCrawlRecoverySnapshot(crawlId);
 		expect(durableSnapshot.ok).toBe(true);
 		if (durableSnapshot.ok) {
 			expect(durableSnapshot.data.crawl.createdAt).toBe(createdAt);
 		}
+		await expect(getCrawlRecoverySnapshot("different-crawl")).resolves.toEqual({
+			ok: false,
+			error: "Crawl recovery response identity mismatch",
+		});
+		await expect(resumeCrawl("different-crawl")).resolves.toEqual({
+			ok: false,
+			error: "Crawl response identity mismatch",
+		});
+
+		globalThis.fetch = mock(async () =>
+			Response.json(result.ok ? result.data : null),
+		) as unknown as typeof fetch;
+		await expect(stopCrawl("different-crawl")).resolves.toEqual({
+			ok: false,
+			error: "Crawl response identity mismatch",
+		});
+
+		globalThis.fetch = mock(async () => Response.json({ status: "ok" })) as unknown as typeof fetch;
+		await expect(deleteCrawl(crawlId)).resolves.toEqual({
+			ok: false,
+			error: "Unexpected delete response",
+		});
 
 		globalThis.fetch = mock(async () =>
 			Response.json({
@@ -202,7 +318,7 @@ describe("API client backend URL resolution", () => {
 				pageCount: 0,
 			}),
 		) as unknown as typeof fetch;
-		await expect(getCrawlRecoverySnapshot("crawl-date-contract")).resolves.toEqual({
+		await expect(getCrawlRecoverySnapshot(crawlId)).resolves.toEqual({
 			ok: false,
 			error: "Unexpected crawl recovery response",
 		});

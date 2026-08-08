@@ -21,19 +21,22 @@ describe("app error handling", () => {
 	test("preserves validation errors as 422 responses", async () => {
 		const logger = createLogger();
 		const app = new Elysia()
-			.onError(({ code, error, status }) => {
+			.error(({ error, status }) => {
 				const response = handleAppError({
-					code,
 					error,
 					logger,
 				});
 				return status(response.status, response.body);
 			})
-			.post("/value", ({ body }) => body, {
-				body: t.Object({
-					value: t.Number(),
-				}),
-			});
+			.post(
+				"/value",
+				{
+					body: t.Object({
+						value: t.Number(),
+					}),
+				},
+				({ body }) => body,
+			);
 
 		const response = await app.handle(
 			new Request("http://localhost/value", {
@@ -45,8 +48,8 @@ describe("app error handling", () => {
 
 		expect(response.status).toBe(422);
 		expect(await response.json()).toEqual({
-			error: "Expected number",
-			details: [{ path: "/value", message: "Expected number" }],
+			error: "must be number",
+			details: [{ path: "/value", message: "must be number" }],
 		});
 		expect(logger.error).not.toHaveBeenCalled();
 	});
@@ -54,19 +57,22 @@ describe("app error handling", () => {
 	test("preserves parse errors as 400 responses", async () => {
 		const logger = createLogger();
 		const app = new Elysia()
-			.onError(({ code, error, status }) => {
+			.error(({ error, status }) => {
 				const response = handleAppError({
-					code,
 					error,
 					logger,
 				});
 				return status(response.status, response.body);
 			})
-			.post("/value", ({ body }) => body, {
-				body: t.Object({
-					value: t.Number(),
-				}),
-			});
+			.post(
+				"/value",
+				{
+					body: t.Object({
+						value: t.Number(),
+					}),
+				},
+				({ body }) => body,
+			);
 
 		const response = await app.handle(
 			new Request("http://localhost/value", {
@@ -86,8 +92,8 @@ describe("app error handling", () => {
 	test("does not expose raw internal error messages for 500 responses", async () => {
 		const logger = createLogger();
 		const app = new Elysia()
-			.onError(({ code, error, status }) => {
-				const response = handleAppError({ code, error, logger });
+			.error(({ error, status }) => {
+				const response = handleAppError({ error, logger });
 				return status(response.status, response.body);
 			})
 			.get("/failure", () => {
@@ -105,8 +111,8 @@ describe("app error handling", () => {
 	test("does not let status-shaped internal errors claim HTTP response authority", async () => {
 		const logger = createLogger();
 		const app = new Elysia()
-			.onError(({ code, error, status }) => {
-				const response = handleAppError({ code, error, logger });
+			.error(({ error, status }) => {
+				const response = handleAppError({ error, logger });
 				return status(response.status, response.body);
 			})
 			.get("/failure", () => {
@@ -119,7 +125,7 @@ describe("app error handling", () => {
 		expect(logger.error).toHaveBeenCalledWith("[App] private upstream rejection");
 	});
 
-	test("does not let status-shaped errors claim missing-route rate-limit semantics", async () => {
+	test("does not let status-shaped errors bypass the configured failed-request policy", async () => {
 		const logger = createLogger();
 		const app = new Elysia()
 			.use(
@@ -128,8 +134,8 @@ describe("app error handling", () => {
 					generator: () => "error-contract-client",
 				}),
 			)
-			.onError(({ code, error, status }) => {
-				const response = handleAppError({ code, error, logger });
+			.error(({ error, status }) => {
+				const response = handleAppError({ error, logger });
 				return status(response.status, response.body);
 			})
 			.get("/failure", () => {

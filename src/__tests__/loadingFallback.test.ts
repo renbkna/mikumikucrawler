@@ -8,9 +8,44 @@ const loadingFallbackSource = await readFile(
 );
 const indexSource = await readFile(new URL("../../index.html", import.meta.url), "utf8");
 
+function runLoadingFallback(applicationReady = false) {
+	const title = { textContent: "Miku Miku Crawler" };
+	const status = { textContent: "LOADING..." };
+	let retryClick: (() => void) | undefined;
+	const retry = {
+		hidden: true,
+		addEventListener: (_type: string, listener: () => void) => {
+			retryClick = listener;
+		},
+	};
+	const state = { lookups: 0, reloads: 0 };
+	const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
+	const elements: Record<string, object> = {
+		"loading-retry": retry,
+		"loading-screen": {},
+		"loading-status": status,
+		"loading-title": title,
+	};
+
+	runInNewContext(loadingFallbackSource, {
+		document: {
+			documentElement: { dataset: applicationReady ? { applicationReady: "true" } : {} },
+			getElementById: (id: string) => {
+				state.lookups += 1;
+				return elements[id] ?? null;
+			},
+		},
+		setTimeout: (callback: () => void, delayMs: number) => scheduled.push({ callback, delayMs }),
+		window: { location: { reload: () => (state.reloads += 1) } },
+	});
+
+	return { retry, retryClick: () => retryClick?.(), scheduled, state, status, title };
+}
+
 describe("loading fallback", () => {
 	test("the document loads the fallback as a CSP-safe independent script", () => {
 		expect(indexSource).toContain('<script src="/loading-fallback.js"></script>');
+		expect(indexSource).not.toContain("upgrade-insecure-requests");
 		const inlineScriptBodies = [
 			...indexSource.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g),
 		]
@@ -19,34 +54,23 @@ describe("loading fallback", () => {
 		expect(inlineScriptBodies).toEqual([]);
 	});
 
-	test("the independently shipped script hides the loading screen after a bounded delay", () => {
-		const style = { display: "flex", opacity: "1", transition: "" };
-		const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
-		runInNewContext(loadingFallbackSource, {
-			document: { getElementById: () => ({ style }) },
-			setTimeout: (callback: () => void, delayMs: number) => scheduled.push({ callback, delayMs }),
-		});
+	test("the independently shipped script exposes failure and retry without declaring readiness", () => {
+		const fallback = runLoadingFallback();
 
-		expect(scheduled.map(({ delayMs }) => delayMs)).toEqual([3000]);
-		scheduled[0].callback();
-		expect(style).toEqual({
-			display: "flex",
-			opacity: "0",
-			transition: "opacity 500ms ease-in-out",
-		});
-		expect(scheduled.map(({ delayMs }) => delayMs)).toEqual([3000, 500]);
-		scheduled[1].callback();
-		expect(style.display).toBe("none");
+		expect(fallback.scheduled.map(({ delayMs }) => delayMs)).toEqual([8000]);
+		fallback.scheduled[0].callback();
+		expect(fallback.title.textContent).toBe("Application failed to start");
+		expect(fallback.status.textContent).toBe("The application bundle did not load.");
+		expect(fallback.retry.hidden).toBe(false);
+		fallback.retryClick();
+		expect(fallback.state.reloads).toBe(1);
 	});
 
-	test("does nothing after React has removed the loading screen", () => {
-		const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
-		runInNewContext(loadingFallbackSource, {
-			document: { getElementById: () => null },
-			setTimeout: (callback: () => void, delayMs: number) => scheduled.push({ callback, delayMs }),
-		});
+	test("does nothing after React has declared the application ready", () => {
+		const fallback = runLoadingFallback(true);
 
-		scheduled[0].callback();
-		expect(scheduled).toHaveLength(1);
+		fallback.scheduled[0].callback();
+		expect(fallback.state.lookups).toBe(0);
+		expect(fallback.scheduled).toHaveLength(1);
 	});
 });

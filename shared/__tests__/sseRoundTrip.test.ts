@@ -1,325 +1,195 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { Elysia } from "elysia";
 import { createCrawlEventStream } from "../../server/plugins/sse.js";
 import { EventStream } from "../../server/runtime/EventStream.js";
-import type { CrawlEventEnvelope } from "../contracts/index.js";
+import type { CrawlEventEnvelope, CrawlEventType } from "../contracts/events.js";
 import { parseCrawlEventEnvelope } from "../contracts/validation.js";
 
-/**
- * Round-trip contract test: verifies that events published by EventStream pass
- * through the real SSE response framing and are correctly parsed from the
- * frontend EventSource payload.
- */
-describe("SSE round-trip: EventStream → SSE response → parseCrawlEventEnvelope", () => {
-	const decoder = new TextDecoder();
-	const decodeSseChunk = (value: unknown): string => {
-		if (typeof value === "string") return value;
-		if (value instanceof Uint8Array) return decoder.decode(value);
-		throw new Error("Expected an SSE string or byte chunk");
-	};
+describe("SSE boundary", () => {
+	function createResponse(stream: EventStream, crawlId: string, afterSequence = 0) {
+		const app = new Elysia().get("/events", () =>
+			createCrawlEventStream({ crawlId, eventStream: stream, afterSequence }),
+		);
+		return app.handle(new Request("http://localhost/events"));
+	}
 
-	async function readFirstSsePayload(response: Response): Promise<string> {
+	async function readFirstPayload(
+		response: Response,
+		expectedType: CrawlEventType,
+	): Promise<string> {
 		expect(response.headers.get("content-type")).toContain("text/event-stream");
-		if (response.body === null) {
-			throw new Error("Expected SSE response body");
-		}
-
-		const reader = response.body.getReader();
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("Expected SSE response body");
 		try {
 			const { value, done } = await reader.read();
 			expect(done).toBe(false);
-			expect(value).toBeDefined();
-
-			const wire = decodeSseChunk(value);
-			expect(wire).toContain("\n\n");
+			const wire =
+				typeof value === "string"
+					? value
+					: value instanceof Uint8Array
+						? new TextDecoder().decode(value)
+						: "";
 			expect(wire).toContain("id: ");
-			expect(wire).toContain("event: ");
-
-			const dataLine = wire.split("\n").find((line) => line.startsWith("data: "));
-			expect(dataLine).toBeDefined();
-			if (dataLine === undefined) {
-				throw new Error("Expected SSE data frame payload");
-			}
-			return dataLine.slice("data: ".length);
+			expect(wire).toContain(`event: ${expectedType}`);
+			const data = wire.split("\n").find((line) => line.startsWith("data: "));
+			if (!data) throw new Error("Expected SSE data frame payload");
+			return data.slice("data: ".length);
 		} finally {
 			await reader.cancel();
 		}
 	}
 
-	function roundTrip(stream: EventStream, crawlId: string) {
-		return async <TType extends Parameters<EventStream["publish"]>[1]>(
-			type: TType,
-			payload: Parameters<EventStream["publish"]>[2],
-		) => {
-			const published = stream.publish(crawlId, type, payload as never);
-			const app = new Elysia().get("/events", () =>
-				createCrawlEventStream({
-					crawlId,
-					eventStream: stream,
-					afterSequence: published.sequence - 1,
-				}),
-			);
-			const response = await app.handle(new Request("http://localhost/events"));
-			return parseCrawlEventEnvelope(await readFirstSsePayload(response));
-		};
-	}
-
-	/** Narrows the parsed envelope to a specific event type for type-safe assertions. */
-	function expectEnvelope<T extends CrawlEventEnvelope["type"]>(
-		envelope: CrawlEventEnvelope | null,
-		type: T,
-	): Extract<CrawlEventEnvelope, { type: T }> {
-		expect(envelope).not.toBeNull();
-		if (envelope === null) {
-			throw new Error(`Expected envelope of type: ${type}`);
-		}
-
-		expect(envelope.type).toBe(type);
-		return envelope as Extract<CrawlEventEnvelope, { type: T }>;
-	}
-
-	test("crawl.started survives round-trip", async () => {
-		const stream = new EventStream();
-		stream.initialize("rt-1");
-		const publish = roundTrip(stream, "rt-1");
-
-		const parsed = expectEnvelope(
-			await publish("crawl.started", {
-				target: "https://example.com",
-				resume: false,
-			}),
-			"crawl.started",
-		);
-
-		expect(parsed.crawlId).toBe("rt-1");
-		expect(parsed.sequence).toBe(1);
-		expect(parsed.payload).toEqual({
-			target: "https://example.com",
-			resume: false,
-		});
-	});
-
-	test("crawl.progress survives round-trip with full counters and queue", async () => {
-		const stream = new EventStream();
-		stream.initialize("rt-2");
-		const publish = roundTrip(stream, "rt-2");
-
+	test("round-trips every crawl event variant through real SSE framing", async () => {
 		const counters = {
-			pagesScanned: 12,
-			successCount: 10,
-			failureCount: 1,
-			skippedCount: 1,
-			linksFound: 40,
-			mediaFiles: 3,
-			totalDataKb: 128,
-		};
-		const queue = {
-			activeRequests: 3,
-			queueLength: 7,
-			elapsedTime: 15,
-			pagesPerSecond: 0.8,
-		};
-
-		const parsed = expectEnvelope(
-			await publish("crawl.progress", {
-				counters,
-				queue,
-				elapsedSeconds: 15,
-				pagesPerSecond: 0.8,
-				stopReason: null,
-			}),
-			"crawl.progress",
-		);
-
-		expect(parsed.payload.counters).toEqual(counters);
-		expect(parsed.payload.queue).toEqual(queue);
-		expect(parsed.payload.stopReason).toBeNull();
-	});
-
-	test("crawl.page survives round-trip", async () => {
-		const stream = new EventStream();
-		stream.initialize("rt-3");
-		const publish = roundTrip(stream, "rt-3");
-
-		const parsed = expectEnvelope(
-			await publish("crawl.page", {
-				id: 42,
-				pageCount: 1,
-				url: "https://example.com/page",
-				title: "Test Page",
-				description: "A test page",
-				domain: "example.com",
-			}),
-			"crawl.page",
-		);
-
-		expect(parsed.payload.id).toBe(42);
-		expect(parsed.payload.pageCount).toBe(1);
-		expect(parsed.payload.url).toBe("https://example.com/page");
-	});
-
-	test("crawl.log survives round-trip", async () => {
-		const stream = new EventStream();
-		stream.initialize("rt-4");
-		const publish = roundTrip(stream, "rt-4");
-
-		const parsed = expectEnvelope(
-			await publish("crawl.log", {
-				message: "[Fetch] GET https://example.com → 200 (1.2s)",
-			}),
-			"crawl.log",
-		);
-
-		expect(parsed.payload.message).toBe("[Fetch] GET https://example.com → 200 (1.2s)");
-	});
-
-	test("crawl.completed survives round-trip", async () => {
-		const stream = new EventStream();
-		stream.initialize("rt-5");
-		const publish = roundTrip(stream, "rt-5");
-
-		const counters = {
-			pagesScanned: 50,
-			successCount: 48,
-			failureCount: 2,
+			pagesScanned: 1,
+			successCount: 1,
+			failureCount: 0,
 			skippedCount: 0,
-			linksFound: 200,
-			mediaFiles: 15,
-			totalDataKb: 512,
+			linksFound: 2,
+			mediaFiles: 0,
+			totalDataKb: 4,
 		};
+		const events: Array<{
+			type: CrawlEventType;
+			publish(stream: EventStream, crawlId: string): CrawlEventEnvelope;
+		}> = [
+			{
+				type: "crawl.started",
+				publish: (stream, crawlId) =>
+					stream.publish(crawlId, "crawl.started", {
+						target: "https://example.com/",
+						resume: false,
+					}),
+			},
+			{
+				type: "crawl.progress",
+				publish: (stream, crawlId) =>
+					stream.publish(crawlId, "crawl.progress", {
+						counters,
+						queue: {
+							activeRequests: 1,
+							queueLength: 2,
+							elapsedTime: 1,
+							pagesPerSecond: 1,
+						},
+						stopReason: null,
+					}),
+			},
+			{
+				type: "crawl.page",
+				publish: (stream, crawlId) =>
+					stream.publish(crawlId, "crawl.page", {
+						id: 1,
+						pageCount: 1,
+						url: "https://example.com/",
+						details: {},
+					}),
+			},
+			{
+				type: "crawl.log",
+				publish: (stream, crawlId) => stream.publish(crawlId, "crawl.log", { message: "ready" }),
+			},
+			{
+				type: "crawl.completed",
+				publish: (stream, crawlId) => stream.publish(crawlId, "crawl.completed", { counters }),
+			},
+			{
+				type: "crawl.failed",
+				publish: (stream, crawlId) =>
+					stream.publish(crawlId, "crawl.failed", { error: "failed", counters }),
+			},
+			{
+				type: "crawl.stopped",
+				publish: (stream, crawlId) =>
+					stream.publish(crawlId, "crawl.stopped", {
+						stopReason: "stopped",
+						counters,
+					}),
+			},
+			{
+				type: "crawl.paused",
+				publish: (stream, crawlId) =>
+					stream.publish(crawlId, "crawl.paused", {
+						stopReason: "paused",
+						counters,
+					}),
+			},
+		];
 
-		const parsed = expectEnvelope(
-			await publish("crawl.completed", { counters }),
-			"crawl.completed",
-		);
-
-		expect(parsed.payload.counters).toEqual(counters);
-	});
-
-	test("crawl.failed survives round-trip", async () => {
+		const crawlId = "round-trip";
 		const stream = new EventStream();
-		stream.initialize("rt-6");
-		const publish = roundTrip(stream, "rt-6");
-
-		const parsed = expectEnvelope(
-			await publish("crawl.failed", {
-				error: "Circuit breaker tripped: 20 consecutive failures",
-				counters: {
-					pagesScanned: 20,
-					successCount: 0,
-					failureCount: 20,
-					skippedCount: 0,
-					linksFound: 0,
-					mediaFiles: 0,
-					totalDataKb: 0,
-				},
-			}),
-			"crawl.failed",
-		);
-
-		expect(parsed.payload.error).toBe("Circuit breaker tripped: 20 consecutive failures");
-	});
-
-	test("crawl.stopped survives round-trip", async () => {
-		const stream = new EventStream();
-		stream.initialize("rt-7");
-		const publish = roundTrip(stream, "rt-7");
-
-		const parsed = expectEnvelope(
-			await publish("crawl.stopped", {
-				stopReason: "User requested stop",
-				counters: {
-					pagesScanned: 10,
-					successCount: 8,
-					failureCount: 1,
-					skippedCount: 1,
-					linksFound: 30,
-					mediaFiles: 2,
-					totalDataKb: 64,
-				},
-			}),
-			"crawl.stopped",
-		);
-
-		expect(parsed.payload.stopReason).toBe("User requested stop");
-	});
-
-	test("crawl.paused survives round-trip", async () => {
-		const stream = new EventStream();
-		stream.initialize("rt-8");
-		const publish = roundTrip(stream, "rt-8");
-
-		const parsed = expectEnvelope(
-			await publish("crawl.paused", {
-				stopReason: "Pause requested",
-				counters: {
-					pagesScanned: 10,
-					successCount: 8,
-					failureCount: 1,
-					skippedCount: 1,
-					linksFound: 30,
-					mediaFiles: 2,
-					totalDataKb: 64,
-				},
-			}),
-			"crawl.paused",
-		);
-
-		expect(parsed.payload.stopReason).toBe("Pause requested");
-	});
-
-	test("sequence numbers are monotonic across event types", async () => {
-		const stream = new EventStream();
-		stream.initialize("rt-seq");
-		const publish = roundTrip(stream, "rt-seq");
-
-		const e1 = await publish("crawl.started", {
-			target: "https://example.com",
-			resume: false,
-		});
-		const e2 = await publish("crawl.log", { message: "fetching..." });
-		const e3 = await publish("crawl.page", {
-			id: 1,
-			pageCount: 1,
-			url: "https://example.com",
-		});
-
-		if (e1 === null || e2 === null || e3 === null) {
-			throw new Error("Expected crawl events for sequence test");
+		stream.initialize(crawlId);
+		for (const [index, event] of events.entries()) {
+			const published = event.publish(stream, crawlId);
+			const parsed = parseCrawlEventEnvelope(
+				await readFirstPayload(await createResponse(stream, crawlId, index), event.type),
+			);
+			expect(parsed).toEqual(published);
 		}
-
-		expect(e1.sequence).toBe(1);
-		expect(e2.sequence).toBe(2);
-		expect(e3.sequence).toBe(3);
 	});
 
 	test("Elysia stream cancellation releases EventStream subscriber ownership", async () => {
 		const stream = new EventStream();
-		stream.initialize("rt-cancel");
-		stream.publish("rt-cancel", "crawl.started", {
-			target: "https://example.com",
-			resume: false,
-		});
-		const app = new Elysia().get("/events", () =>
-			createCrawlEventStream({
-				crawlId: "rt-cancel",
-				eventStream: stream,
-				afterSequence: 0,
-			}),
-		);
-		const response = await app.handle(new Request("http://localhost/events"));
+		stream.initialize("cancel");
+		stream.publish("cancel", "crawl.log", { message: "ready" });
+		const response = await createResponse(stream, "cancel");
 		const reader = response.body?.getReader();
 		if (!reader) throw new Error("Expected SSE response body");
 		await reader.read();
 		await reader.cancel();
 
-		const unsubscribers: Array<() => void> = [];
+		const unsubscribers = Array.from({ length: 10 }, () => stream.subscribe("cancel", () => {}));
+		for (const unsubscribe of unsubscribers) unsubscribe();
+	});
+
+	test("evicts a subscriber whose unread delivery queue reaches its bound", async () => {
+		const stream = new EventStream();
+		stream.initialize("slow-client");
+		const response = await createResponse(stream, "slow-client");
+		for (let index = 0; index < 40; index += 1) {
+			stream.publish("slow-client", "crawl.log", { message: `event-${index}` });
+		}
+		await Promise.resolve();
+
+		const unsubscribers = Array.from({ length: 10 }, () =>
+			stream.subscribe("slow-client", () => {}),
+		);
+		for (const unsubscribe of unsubscribers) unsubscribe();
+		await response.body?.cancel();
+	});
+
+	test("evicts a subscriber before one oversized event enters its delivery queue", async () => {
+		const stream = new EventStream();
+		stream.initialize("oversized-event");
+		const response = await createResponse(stream, "oversized-event");
+		stream.publish("oversized-event", "crawl.log", { message: "x".repeat(300_000) });
+		await Promise.resolve();
+
+		const unsubscribers = Array.from({ length: 10 }, () =>
+			stream.subscribe("oversized-event", () => {}),
+		);
+		for (const unsubscribe of unsubscribers) unsubscribe();
+		await response.body?.cancel();
+	});
+
+	test("replay overflow releases subscriber ownership before stream startup returns", async () => {
+		const stream = new EventStream();
+		stream.initialize("replay-overflow");
+		for (let index = 0; index < 40; index += 1) {
+			stream.publish("replay-overflow", "crawl.log", { message: `event-${index}` });
+		}
+		const setIntervalSpy = spyOn(globalThis, "setInterval");
+		let response: Response | undefined;
 		try {
-			for (let index = 0; index < 10; index += 1) {
-				unsubscribers.push(stream.subscribe("rt-cancel", () => {}));
-			}
-		} finally {
+			response = await createResponse(stream, "replay-overflow");
+			expect(setIntervalSpy).not.toHaveBeenCalled();
+			const unsubscribers = Array.from({ length: 10 }, () =>
+				stream.subscribe("replay-overflow", () => {}),
+			);
 			for (const unsubscribe of unsubscribers) unsubscribe();
+		} finally {
+			await response?.body?.cancel();
+			setIntervalSpy.mockRestore();
 		}
 	});
 });

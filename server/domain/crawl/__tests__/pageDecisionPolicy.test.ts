@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { SOFT_404_CONSTANTS } from "../../../constants.js";
 import {
 	hasUsablePageContent,
 	isClientErrorShell,
@@ -34,6 +35,16 @@ describe("page decision policy", () => {
 
 	test("classifies short keyword content as soft 404", () => {
 		expect(isSoft404("Not found", "Page not found", 80)).toBe(true);
+	});
+
+	test("does not discard substantial content whose title discusses 404 errors", () => {
+		expect(
+			isSoft404(
+				"404 Error Handling Guide",
+				"A detailed engineering guide with substantial readable content.",
+				SOFT_404_CONSTANTS.SHORT_CONTENT_BYTES + 1,
+			),
+		).toBe(false);
 	});
 
 	test("classifies rendered frontend error shells", () => {

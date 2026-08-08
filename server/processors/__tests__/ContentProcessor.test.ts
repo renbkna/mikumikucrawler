@@ -1,15 +1,15 @@
-import { describe, expect, mock, test } from "bun:test";
-import type { Logger } from "../../config/logging.js";
+import { describe, expect, test } from "bun:test";
+import { silentLogger } from "../../__tests__/runtimeFixture.js";
 import { processContent } from "../ContentProcessor.js";
 
 /**
  * CONTRACT: ContentProcessor.processContent
  *
  * Input: (content: string | Buffer, url: string, contentType: string)
- * Output: ProcessedContent with extractedData, metadata, analysis, media, links, errors
+ * Output: ProcessedContent with extractedData, metadata, analysis, mediaCount, links, errors
  *
  * Dispatch rules:
- *   - text/html/application/xhtml+xml → HTML extraction pipeline (extractMainContent, metadata, links, media, analysis)
+ *   - text/html/application/xhtml+xml → HTML extraction pipeline (main content, metadata, links, media count, analysis)
  *   - application/json → JSON processing (mainContent from parsed JSON)
  *   - application/pdf → PDF extraction (text extraction, metadata)
  *   - other → empty result, no errors
@@ -20,16 +20,8 @@ import { processContent } from "../ContentProcessor.js";
  *   - caller aborts propagate after owned processing resources settle
  */
 
-const createMockLogger = (): Logger =>
-	({
-		info: mock(() => {}),
-		warn: mock(() => {}),
-		error: mock(() => {}),
-		debug: mock(() => {}),
-	}) as unknown as Logger;
-
 const processTestContent = (content: string | Buffer, url: string, contentType: string) =>
-	processContent(content, url, contentType, createMockLogger());
+	processContent(content, url, contentType, silentLogger);
 
 describe("ContentProcessor dispatch contract", () => {
 	test("propagates caller aborts instead of serializing a late processing result", async () => {
@@ -41,7 +33,7 @@ describe("ContentProcessor dispatch contract", () => {
 				"<html><main>late</main></html>",
 				"https://example.com/late",
 				"text/html",
-				createMockLogger(),
+				silentLogger,
 				controller.signal,
 			),
 		).rejects.toThrow("item deadline");
@@ -57,7 +49,17 @@ describe("ContentProcessor dispatch contract", () => {
 		expect(result.extractedData.mainContent).toContain("Hello World");
 		expect(result.analysis.wordCount).toBeGreaterThan(0);
 		expect(Array.isArray(result.links)).toBe(true);
-		expect(Array.isArray(result.media)).toBe(true);
+		expect(result.mediaCount).toBe(0);
+	});
+
+	test("rejects an over-depth DOM before any sibling extraction runs", async () => {
+		const html = `<body>${"<div>".repeat(129)}<a href="/hidden">hidden</a>${"</div>".repeat(129)}</body>`;
+
+		const result = await processTestContent(html, "https://example.com/deep", "text/html");
+
+		expect(result.errors[0]?.message).toContain("DOM exceeds depth 128");
+		expect(result.links).toEqual([]);
+		expect(result.mediaCount).toBe(0);
 	});
 
 	test("XHTML → uses the HTML extraction pipeline", async () => {
@@ -88,7 +90,6 @@ describe("ContentProcessor dispatch contract", () => {
 		expect(result.extractedData.mainContent).toContain("value");
 		expect(result.analysis.wordCount).toBeGreaterThan(0);
 		expect(result.analysis.language).toBeDefined();
-		expect(result.analysis.sentiment).toBeDefined();
 	});
 
 	test("JSON dispatch normalizes media type casing and parameters", async () => {
@@ -136,15 +137,12 @@ describe("ContentProcessor dispatch contract", () => {
 		expect(result.errors[0].type).toBe("pdf_processing_error");
 		expect(result.extractedData).toEqual({ mainContent: "" });
 		expect(result.metadata).toEqual({});
-		expect(result.media).toEqual([]);
+		expect(result.mediaCount).toBe(0);
 		expect(result.links).toEqual([]);
 		expect(result.analysis).toMatchObject({
 			wordCount: 0,
 			readingTime: 0,
 			language: "unknown",
-			sentiment: "neutral",
-			readabilityScore: 0,
-			quality: { score: 0, issues: ["PDF processing failed"] },
 		});
 	});
 
@@ -155,8 +153,14 @@ describe("ContentProcessor dispatch contract", () => {
 			"application/octet-stream",
 		);
 
-		expect(result.errors).toHaveLength(0);
-		expect(result.url).toBe("https://example.com/file.bin");
+		expect(result).toEqual({
+			extractedData: {},
+			metadata: {},
+			analysis: {},
+			mediaCount: 0,
+			links: [],
+			errors: [],
+		});
 	});
 
 	test("PDF with valid minimal structure → extracts without errors", async () => {
@@ -189,7 +193,6 @@ startxref
 			"application/pdf",
 		);
 
-		expect(result.contentType).toBe("application/pdf");
 		expect(result.extractedData.mainContent).toBeDefined();
 	}, 30_000);
 });

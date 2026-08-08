@@ -13,25 +13,28 @@ import type {
 	CrawlRecoverySnapshot,
 	CrawlSummary,
 	ResumableSessionSummary,
+	StopCrawlMode,
 } from "../../shared/contracts/index.js";
 import {
 	type CrawlEventEnvelope,
+	crawlOptionsEqual,
+	isActiveCrawlStatus,
 	isResumableCrawlStatus,
 	isSettledCrawlEventType,
 	isTerminalCrawlStatus,
 } from "../../shared/contracts/index.js";
-import { validatePublicHttpUrl } from "../../shared/url";
+import { normalizeCanonicalHttpUrl } from "../../shared/url";
 import {
 	createCrawl,
 	deleteCrawl,
-	exportCrawl,
+	downloadCrawlExport,
 	getCrawlRecoverySnapshot,
 	listResumableCrawls,
 	resumeCrawl as resumeCrawlRequest,
 	stopCrawl as stopCrawlRequest,
 	subscribeToCrawlEvents,
 } from "../api/crawls";
-import type { ApiResult } from "../api/result";
+import type { ApiFailure, ApiResult } from "../api/result";
 import { searchStoredPages } from "../api/search";
 import type { Toast } from "../types";
 import {
@@ -43,35 +46,28 @@ import {
 	crawlControllerReducer,
 	createInitialCrawlControllerState,
 	getCrawlCommandAvailability,
+	isTerminalRunPhase,
 } from "./crawlControllerState";
+
+const DURABLE_RECOVERY_RETRY_MS = 5_000;
 
 interface UseCrawlControllerOptions {
 	addToast: (type: Toast["type"], message: string, timeout?: number) => void;
-}
-
-/**
- * Resume returns the persisted crawl record from the backend.
- * The controller must hydrate both target and options from that record so the
- * visible form reflects the settings the runtime is actually using.
- */
-export function getResumeHydrationActions(
-	crawl: Pick<CrawlSummary, "options">,
-): CrawlControllerAction[] {
-	return [
-		{ type: "crawlOptionsChanged", crawlOptions: crawl.options },
-		{ type: "targetChanged", target: crawl.options.target },
-	];
 }
 
 function formatControllerError(error: unknown): string {
 	return error instanceof Error ? error.message : "Request failed";
 }
 
-export function shouldSettleActiveSubscription(
-	activeSubscriptionCrawlId: string | null,
-	envelope: CrawlEventEnvelope,
+export function isStartOperationSettled(
+	createFailure: ApiFailure,
+	recovery: ApiResult<unknown> | null,
 ): boolean {
-	return activeSubscriptionCrawlId === envelope.crawlId && isSettledCrawlEventType(envelope.type);
+	return (
+		createFailure.status === 422 ||
+		recovery?.ok === true ||
+		(typeof createFailure.status === "number" && recovery?.status === 404)
+	);
 }
 
 function useControllerState({ addToast }: UseCrawlControllerOptions) {
@@ -103,11 +99,28 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 	const { state, stateRef, dispatch } = useControllerState({ addToast });
 	const subscriptionRef = useRef<ReturnType<typeof subscribeToCrawlEvents> | null>(null);
 	const activeSubscriptionCrawlIdRef = useRef<string | null>(null);
-	const resumableRefreshRequestIdRef = useRef(0);
-	const pageSearchRequestIdRef = useRef(0);
-	const durableSyncRequestIdRef = useRef(0);
+	const resumableRefreshAbortRef = useRef<AbortController | null>(null);
 	const durableSyncAbortRef = useRef<AbortController | null>(null);
 	const durableSyncErrorCrawlIdRef = useRef<string | null>(null);
+	const startOperationRef = useRef<{
+		crawlId: string;
+		options: typeof state.crawlOptions;
+	} | null>(null);
+	const controllerLifetimeRef = useRef<AbortController | null>(null);
+	const commandAbortRef = useRef<AbortController | null>(null);
+	const getControllerLifetimeSignal = useCallback(() => {
+		return (
+			controllerLifetimeRef.current?.signal ??
+			AbortSignal.abort(new Error("Crawl controller is not active"))
+		);
+	}, []);
+	useEffect(() => {
+		const controller = new AbortController();
+		controllerLifetimeRef.current = controller;
+		return () => {
+			controller.abort();
+		};
+	}, []);
 	const [pageSearch, setPageSearch] = useState<{
 		pages: CrawledPage[];
 		count: number;
@@ -123,41 +136,76 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 	const executeCommand = useCallback(
 		async <T>(
 			kind: CommandKind,
-			request: () => Promise<ApiResult<T>>,
+			request: (signal: AbortSignal) => Promise<ApiResult<T>>,
 			onSuccess?: (data: T) => Promise<void> | void,
+			reconcileFailure?: (
+				failure: ApiFailure,
+				signal: AbortSignal,
+			) => Promise<CrawlSummary | undefined>,
 		) => {
 			if (!canStartCommand(stateRef.current, kind)) {
 				const message = "Another command is already running";
 				addToast("warning", message);
 				return { ok: false, error: message };
 			}
+			if (kind === "forceStop") {
+				commandAbortRef.current?.abort();
+			}
+			const commandController = new AbortController();
+			commandAbortRef.current = commandController;
+			const signal = AbortSignal.any([getControllerLifetimeSignal(), commandController.signal]);
+			const abortedResult = (): ApiResult<T> => ({
+				ok: false,
+				error: formatControllerError(signal.reason),
+			});
+			if (signal.aborted) return abortedResult();
 			dispatch({ type: "commandStarted", kind });
 			let result: ApiResult<T>;
 			try {
-				result = await request();
+				result = await request(signal);
 			} catch (error) {
+				if (signal.aborted) return abortedResult();
 				const message = formatControllerError(error);
 				dispatch({ type: "commandFailed", kind, error: message });
 				return { ok: false, error: message };
+			} finally {
+				if (commandAbortRef.current === commandController) {
+					commandAbortRef.current = null;
+				}
 			}
+			if (signal.aborted) return abortedResult();
 
 			if (!result.ok) {
-				dispatch({ type: "commandFailed", kind, error: result.error });
+				let recoveredCrawl: CrawlSummary | undefined;
+				try {
+					recoveredCrawl = await reconcileFailure?.(result, signal);
+				} catch {
+					// The original command failure remains authoritative when recovery also fails.
+				}
+				if (signal.aborted) return abortedResult();
+				dispatch({
+					type: "commandFailed",
+					kind,
+					error: result.error,
+					...(recoveredCrawl ? { recoveredCrawl } : {}),
+				});
 				return result;
 			}
 
 			try {
 				await onSuccess?.(result.data);
 			} catch (error) {
+				if (signal.aborted) return abortedResult();
 				const message = formatControllerError(error);
 				dispatch({ type: "commandFailed", kind, error: message });
 				return { ok: false, error: message };
 			}
+			if (signal.aborted) return abortedResult();
 
 			dispatch({ type: "commandSucceeded", kind });
 			return result;
 		},
-		[addToast, dispatch, stateRef],
+		[addToast, dispatch, getControllerLifetimeSignal, stateRef],
 	);
 
 	const closeSubscription = useEffectEvent((crawlId?: string) => {
@@ -171,14 +219,16 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 	});
 
 	const cancelDurableSync = useEffectEvent(() => {
-		durableSyncRequestIdRef.current += 1;
 		durableSyncAbortRef.current?.abort();
 		durableSyncAbortRef.current = null;
 	});
 
+	const cancelResumableRefresh = useEffectEvent(() => {
+		resumableRefreshAbortRef.current?.abort();
+		resumableRefreshAbortRef.current = null;
+	});
+
 	const synchronizeDurableSnapshot = useEffectEvent(async (crawlId: string) => {
-		const requestId = durableSyncRequestIdRef.current + 1;
-		durableSyncRequestIdRef.current = requestId;
 		durableSyncAbortRef.current?.abort();
 		const controller = new AbortController();
 		durableSyncAbortRef.current = controller;
@@ -190,7 +240,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 			}
 			if (
 				controller.signal.aborted ||
-				durableSyncRequestIdRef.current !== requestId ||
+				durableSyncAbortRef.current !== controller ||
 				stateRef.current.activeCrawlId !== crawlId
 			) {
 				return;
@@ -211,7 +261,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 		} catch (error) {
 			if (
 				controller.signal.aborted ||
-				durableSyncRequestIdRef.current !== requestId ||
+				durableSyncAbortRef.current !== controller ||
 				stateRef.current.activeCrawlId !== crawlId
 			) {
 				return;
@@ -225,24 +275,35 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				);
 			}
 		} finally {
-			if (durableSyncRequestIdRef.current === requestId) {
+			if (durableSyncAbortRef.current === controller) {
 				durableSyncAbortRef.current = null;
 			}
 		}
 	});
 
 	const applyEnvelope = useEffectEvent((envelope: CrawlEventEnvelope) => {
+		const hasSequenceGap = envelope.sequence > stateRef.current.lastSequence + 1;
 		startTransition(() => {
 			dispatch({ type: "sseEventReceived", envelope });
 		});
+		if (hasSequenceGap && stateRef.current.activeCrawlId === envelope.crawlId) {
+			void synchronizeDurableSnapshot(envelope.crawlId);
+		}
 
-		if (shouldSettleActiveSubscription(activeSubscriptionCrawlIdRef.current, envelope)) {
+		if (
+			activeSubscriptionCrawlIdRef.current === envelope.crawlId &&
+			isSettledCrawlEventType(envelope.type)
+		) {
 			closeSubscription(envelope.crawlId);
+		}
+		if (isSettledCrawlEventType(envelope.type)) {
 			void refreshResumableSessions(false);
 		}
 	});
 
 	const connectToEvents = useEffectEvent((crawlId: string) => {
+		const lifetimeSignal = getControllerLifetimeSignal();
+		if (lifetimeSignal.aborted) return;
 		closeSubscription();
 		cancelDurableSync();
 		durableSyncErrorCrawlIdRef.current = null;
@@ -250,47 +311,60 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 		activeSubscriptionCrawlIdRef.current = crawlId;
 		subscriptionRef.current = subscribeToCrawlEvents(crawlId, {
 			onOpen: () => {
-				if (activeSubscriptionCrawlIdRef.current !== crawlId) return;
+				if (lifetimeSignal.aborted || activeSubscriptionCrawlIdRef.current !== crawlId) return;
 				dispatch({ type: "connectionChanged", connectionState: "connected" });
-				void synchronizeDurableSnapshot(crawlId);
 			},
 			onError: () => {
-				if (activeSubscriptionCrawlIdRef.current !== crawlId) return;
+				if (lifetimeSignal.aborted || activeSubscriptionCrawlIdRef.current !== crawlId) return;
 				dispatch({
 					type: "connectionChanged",
 					connectionState: "disconnected",
 				});
+				void synchronizeDurableSnapshot(crawlId);
 			},
-			onEvent: applyEnvelope,
+			onInvalidEvent: () => {
+				if (lifetimeSignal.aborted || activeSubscriptionCrawlIdRef.current !== crawlId) return;
+				void synchronizeDurableSnapshot(crawlId);
+			},
+			onEvent: (event) => {
+				if (!lifetimeSignal.aborted) applyEnvelope(event);
+			},
 		});
+		void synchronizeDurableSnapshot(crawlId);
 	});
 
 	const refreshResumableSessions = useCallback(
 		async (trackCommand = true) => {
-			if (stateRef.current.resumableSessions.resumingId) {
+			if (
+				stateRef.current.resumableSessions.resumingId ||
+				stateRef.current.resumableSessions.isLoading
+			) {
 				return;
 			}
 			if (trackCommand && !canStartCommand(stateRef.current, "refresh")) {
 				addToast("warning", "Another command is already running");
 				return;
 			}
-			const requestId = resumableRefreshRequestIdRef.current + 1;
-			resumableRefreshRequestIdRef.current = requestId;
+			const controller = new AbortController();
+			resumableRefreshAbortRef.current = controller;
+			const signal = AbortSignal.any([getControllerLifetimeSignal(), controller.signal]);
 			if (trackCommand) {
 				dispatch({ type: "commandStarted", kind: "refresh" });
 			}
-			dispatch({ type: "resumableSessionsLoading", requestId });
+			dispatch({ type: "resumableSessionsLoading" });
 			let result: ApiResult<ResumableSessionSummary[]>;
 			try {
-				result = await listResumableCrawls();
+				result = await listResumableCrawls(signal);
 			} catch (error) {
 				result = { ok: false, error: formatControllerError(error) };
 			}
 
 			if (!result.ok) {
+				if (signal.aborted || resumableRefreshAbortRef.current !== controller) {
+					return;
+				}
 				dispatch({
 					type: "resumableSessionsFailed",
-					requestId,
 					error: result.error,
 				});
 				if (trackCommand) {
@@ -300,19 +374,25 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 						error: result.error,
 					});
 				}
+				if (resumableRefreshAbortRef.current === controller) {
+					resumableRefreshAbortRef.current = null;
+				}
 				return;
 			}
 
+			if (signal.aborted || resumableRefreshAbortRef.current !== controller) return;
 			dispatch({
 				type: "resumableSessionsLoaded",
-				requestId,
 				sessions: result.data,
 			});
 			if (trackCommand) {
 				dispatch({ type: "commandSucceeded", kind: "refresh" });
 			}
+			if (resumableRefreshAbortRef.current === controller) {
+				resumableRefreshAbortRef.current = null;
+			}
 		},
-		[addToast, dispatch, stateRef],
+		[addToast, dispatch, getControllerLifetimeSignal, stateRef],
 	);
 
 	const refreshResumableSessionsWithCommand = useCallback(
@@ -325,7 +405,43 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 	}, [refreshResumableSessions]);
 
 	useEffect(() => {
+		const crawlId = state.activeCrawlId;
+		if (
+			!crawlId ||
+			state.connectionState === "connected" ||
+			state.runPhase === "idle" ||
+			state.runPhase === "paused" ||
+			state.runPhase === "interrupted" ||
+			isTerminalRunPhase(state.runPhase)
+		) {
+			return;
+		}
+
+		let cancelled = false;
+		let retryTimer: ReturnType<typeof setTimeout> | null = null;
+		const poll = async () => {
+			await synchronizeDurableSnapshot(crawlId);
+			if (!cancelled) {
+				retryTimer = setTimeout(() => {
+					void poll();
+				}, DURABLE_RECOVERY_RETRY_MS);
+			}
+		};
+
+		retryTimer = setTimeout(() => {
+			void poll();
+		}, DURABLE_RECOVERY_RETRY_MS);
+
 		return () => {
+			cancelled = true;
+			if (retryTimer) clearTimeout(retryTimer);
+		};
+	}, [state.activeCrawlId, state.connectionState, state.runPhase]);
+
+	useEffect(() => {
+		return () => {
+			commandAbortRef.current?.abort();
+			cancelResumableRefresh();
 			closeSubscription();
 			cancelDurableSync();
 		};
@@ -333,9 +449,12 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 
 	const handleTargetChange = useCallback(
 		(nextTarget: string) => {
-			dispatch({ type: "targetChanged", target: nextTarget });
+			dispatch({
+				type: "crawlOptionsChanged",
+				crawlOptions: { ...stateRef.current.crawlOptions, target: nextTarget },
+			});
 		},
-		[dispatch],
+		[dispatch, stateRef],
 	);
 
 	const setCrawlOptions = useCallback(
@@ -352,7 +471,10 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 
 	const startCrawl = useCallback(
 		async (isQuick = false) => {
-			if (!state.target.trim()) {
+			const lifetimeSignal = getControllerLifetimeSignal();
+			if (lifetimeSignal.aborted) return false;
+			const pendingOperation = startOperationRef.current;
+			if (!pendingOperation && !state.crawlOptions.target.trim()) {
 				addToast("error", "Please enter a target URL!");
 				return false;
 			}
@@ -361,17 +483,28 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				return false;
 			}
 
-			const validationResult = validatePublicHttpUrl(state.target, {
-				allowLocalhost: import.meta.env.DEV,
-			});
-			if ("error" in validationResult) {
-				addToast("error", validationResult.error);
-				return false;
-			}
+			let operation = pendingOperation;
+			if (!operation) {
+				const validationResult = normalizeCanonicalHttpUrl(state.crawlOptions.target);
+				if ("error" in validationResult) {
+					addToast("error", validationResult.error);
+					return false;
+				}
 
-			const normalizedTarget = validationResult.url;
-			if (normalizedTarget !== state.target) {
-				dispatch({ type: "targetChanged", target: normalizedTarget });
+				const normalizedTarget = validationResult.url;
+				if (normalizedTarget !== state.crawlOptions.target) {
+					dispatch({
+						type: "crawlOptionsChanged",
+						crawlOptions: { ...state.crawlOptions, target: normalizedTarget },
+					});
+				}
+				operation = {
+					crawlId: crypto.randomUUID(),
+					options: { ...state.crawlOptions, target: normalizedTarget },
+				};
+				startOperationRef.current = operation;
+			} else if (!crawlOptionsEqual(operation.options, state.crawlOptions)) {
+				addToast("info", "Reconciling the previous unacknowledged crawl request");
 			}
 
 			dispatch({ type: "commandStarted", kind: "start" });
@@ -382,17 +515,43 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 
 			let result: ApiResult<CrawlSummary>;
 			try {
-				result = await createCrawl({
-					...state.crawlOptions,
-					target: normalizedTarget,
-				});
+				result = await createCrawl(operation.crawlId, operation.options, lifetimeSignal);
 			} catch (error) {
 				result = { ok: false, error: formatControllerError(error) };
 			}
+			if (lifetimeSignal.aborted) return false;
+
+			let recoveryResult: ApiResult<CrawlRecoverySnapshot> | null = null;
+			let recoveredSnapshot: CrawlRecoverySnapshot | null = null;
+			if (!result.ok) {
+				try {
+					const recovery = await getCrawlRecoverySnapshot(operation.crawlId, lifetimeSignal);
+					recoveryResult = recovery;
+					if (recovery.ok) {
+						if (crawlOptionsEqual(recovery.data.crawl.options, operation.options)) {
+							recoveredSnapshot = recovery.data;
+							result = { ok: true, data: recovery.data.crawl };
+						}
+					}
+				} catch {
+					// The stable operation ID remains owned by the controller so a
+					// later retry cannot create duplicate work.
+				}
+			}
+			if (lifetimeSignal.aborted) return false;
 
 			if (!result.ok) {
+				if (
+					isStartOperationSettled(result, recoveryResult) &&
+					startOperationRef.current?.crawlId === operation.crawlId
+				) {
+					startOperationRef.current = null;
+				}
 				dispatch({ type: "commandFailed", kind: "start", error: result.error });
 				return false;
+			}
+			if (startOperationRef.current?.crawlId === operation.crawlId) {
+				startOperationRef.current = null;
 			}
 
 			dispatch({ type: "liveStateReset" });
@@ -402,6 +561,20 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				kind: "start",
 				crawlOptions: result.data.options,
 			});
+			if (recoveredSnapshot) {
+				dispatch({
+					type: "crawlRecoverySnapshotSynchronized",
+					snapshot: recoveredSnapshot,
+				});
+			} else {
+				dispatch({ type: "crawlSummarySynchronized", crawl: result.data });
+			}
+			if (!isActiveCrawlStatus(result.data.status)) {
+				if (isResumableCrawlStatus(result.data.status)) {
+					void refreshResumableSessions(false);
+				}
+				return false;
+			}
 			dispatch({
 				type: "logAppended",
 				message: "Initiating Miku Beam Sequence...",
@@ -409,30 +582,50 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 			connectToEvents(result.data.id);
 			return true;
 		},
-		[addToast, dispatch, state.crawlOptions, state.target, stateRef],
+		[
+			addToast,
+			dispatch,
+			getControllerLifetimeSignal,
+			refreshResumableSessions,
+			state.crawlOptions,
+			stateRef,
+		],
+	);
+
+	const executeStopCommand = useCallback(
+		(crawlId: string, kind: "stop" | "forceStop", mode: StopCrawlMode) =>
+			executeCommand(
+				kind,
+				(signal) => stopCrawlRequest(crawlId, mode, signal),
+				(crawl) => dispatch({ type: "crawlSummarySynchronized", crawl }),
+				async (_failure, signal) => {
+					const recovery = await getCrawlRecoverySnapshot(crawlId, signal);
+					return recovery.ok ? recovery.data.crawl : undefined;
+				},
+			),
+		[dispatch, executeCommand],
 	);
 
 	const pauseCrawl = useCallback(async () => {
 		if (!state.activeCrawlId || !canRequestPause(state.runPhase)) return;
 		const crawlId = state.activeCrawlId;
 
-		await executeCommand("stop", () => stopCrawlRequest(crawlId, "pause"));
-	}, [executeCommand, state.activeCrawlId, state.runPhase]);
+		await executeStopCommand(crawlId, "stop", "pause");
+	}, [executeStopCommand, state.activeCrawlId, state.runPhase]);
 
 	const forceStopCrawl = useCallback(async () => {
-		if (
-			!state.activeCrawlId ||
-			(state.lastCommand.kind === "forceStop" && state.lastCommand.status === "pending")
-		) {
+		if (!state.activeCrawlId || state.pendingCommand === "forceStop") {
 			return;
 		}
 		const crawlId = state.activeCrawlId;
 
-		await executeCommand("forceStop", () => stopCrawlRequest(crawlId, "force"));
-	}, [executeCommand, state.activeCrawlId, state.lastCommand.kind, state.lastCommand.status]);
+		await executeStopCommand(crawlId, "forceStop", "force");
+	}, [executeStopCommand, state.activeCrawlId, state.pendingCommand]);
 
 	const resumeCrawl = useCallback(
 		async (sessionId: string) => {
+			const lifetimeSignal = getControllerLifetimeSignal();
+			if (lifetimeSignal.aborted) return false;
 			if (
 				stateRef.current.resumableSessions.deletingId ||
 				stateRef.current.resumableSessions.resumingId ||
@@ -443,15 +636,29 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				}
 				return false;
 			}
+			cancelResumableRefresh();
 			dispatch({ type: "resumableSessionResuming", sessionId });
 			dispatch({ type: "commandStarted", kind: "resume" });
 
 			let result: ApiResult<CrawlRecoverySnapshot>;
 			try {
-				result = await resumeCrawlRequest(sessionId);
+				result = await resumeCrawlRequest(sessionId, lifetimeSignal);
 			} catch (error) {
 				result = { ok: false, error: formatControllerError(error) };
 			}
+			if (lifetimeSignal.aborted) return false;
+
+			if (!result.ok) {
+				try {
+					const recovery = await getCrawlRecoverySnapshot(sessionId, lifetimeSignal);
+					if (recovery.ok && !isResumableCrawlStatus(recovery.data.crawl.status)) {
+						result = recovery;
+					}
+				} catch {
+					// A retry addresses the same crawl ID and is idempotent at the server.
+				}
+			}
+			if (lifetimeSignal.aborted) return false;
 
 			if (!result.ok) {
 				dispatch({
@@ -464,9 +671,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 			}
 
 			dispatch({ type: "liveStateReset" });
-			for (const action of getResumeHydrationActions(result.data.crawl)) {
-				dispatch(action);
-			}
+			dispatch({ type: "crawlOptionsChanged", crawlOptions: result.data.crawl.options });
 			dispatch({
 				type: "crawlAccepted",
 				crawlId: result.data.crawl.id,
@@ -481,45 +686,49 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				type: "resumableSessionRemoved",
 				sessionId,
 			});
+			if (!isActiveCrawlStatus(result.data.crawl.status)) {
+				return false;
+			}
 			addToast("info", "Resuming saved crawl...");
 			connectToEvents(result.data.crawl.id);
 			return true;
 		},
-		[addToast, dispatch, stateRef],
+		[addToast, dispatch, getControllerLifetimeSignal, stateRef],
 	);
 
 	const exportCurrentCrawl = useCallback(
-		async (format: string) => {
+		async (format: CrawlExportFormat) => {
 			if (!state.activeCrawlId) {
 				addToast("warning", "No crawl selected for export");
 				return;
 			}
-			if (format !== "json" && format !== "csv") {
-				addToast("error", "Unsupported export format");
-				return;
-			}
 			const crawlId = state.activeCrawlId;
+			const signal = getControllerLifetimeSignal();
 
-			await executeCommand(
-				"export",
-				() => exportCrawl(crawlId, format as CrawlExportFormat),
-				({ blob, filename }) => {
-					const url = URL.createObjectURL(blob);
-					const anchor = document.createElement("a");
-					anchor.href = url;
-					anchor.download = filename;
-					document.body.appendChild(anchor);
-					anchor.click();
-					setTimeout(() => {
-						anchor.remove();
-						URL.revokeObjectURL(url);
-					}, 100);
+			try {
+				const result = await downloadCrawlExport(crawlId, format, signal);
+				if (signal.aborted) return;
+				if (!result.ok) {
+					addToast("error", result.error);
+					return;
+				}
 
-					addToast("success", `Data exported successfully as ${format.toUpperCase()}`);
-				},
-			);
+				const url = URL.createObjectURL(result.data.blob);
+				const anchor = document.createElement("a");
+				anchor.href = url;
+				anchor.download = result.data.filename;
+				document.body.appendChild(anchor);
+				anchor.click();
+				setTimeout(() => {
+					anchor.remove();
+					URL.revokeObjectURL(url);
+				}, 100);
+				addToast("success", `${format.toUpperCase()} download ready`);
+			} catch (error) {
+				if (!signal.aborted) addToast("error", formatControllerError(error));
+			}
 		},
-		[addToast, executeCommand, state.activeCrawlId],
+		[addToast, getControllerLifetimeSignal, state.activeCrawlId],
 	);
 
 	const deleteResumableSession = useCallback(
@@ -535,8 +744,9 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				return false;
 			}
 
+			cancelResumableRefresh();
 			dispatch({ type: "resumableSessionDeleting", sessionId });
-			const result = await executeCommand("delete", () => deleteCrawl(sessionId));
+			const result = await executeCommand("delete", (signal) => deleteCrawl(sessionId, signal));
 			if (!result.ok) {
 				dispatch({
 					type: "resumableSessionDeleteFailed",
@@ -555,8 +765,6 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 	useEffect(() => {
 		const query = state.searchQuery.trim();
 		const crawlId = state.activeCrawlId;
-		const requestId = pageSearchRequestIdRef.current + 1;
-		pageSearchRequestIdRef.current = requestId;
 
 		if (!query || !crawlId) {
 			setPageSearch({ pages: [], count: 0, isLoading: false, error: null });
@@ -568,7 +776,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 
 		void searchStoredPages(crawlId, query, controller.signal)
 			.then((result) => {
-				if (controller.signal.aborted || pageSearchRequestIdRef.current !== requestId) {
+				if (controller.signal.aborted) {
 					return;
 				}
 
@@ -585,7 +793,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				});
 			})
 			.catch((error: unknown) => {
-				if (controller.signal.aborted || pageSearchRequestIdRef.current !== requestId) {
+				if (controller.signal.aborted) {
 					return;
 				}
 
@@ -617,8 +825,9 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 	const availability = getCrawlCommandAvailability(state);
 
 	return {
-		target: state.target,
+		target: state.crawlOptions.target,
 		crawlOptions: state.crawlOptions,
+		activeCrawlOptions: state.activeCrawlOptions,
 		setCrawlOptions,
 		handleTargetChange,
 		stats: state.stats,
@@ -626,6 +835,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 		crawledPages: state.crawledPages,
 		storedPageCount: state.storedPageCount,
 		progress: state.progress,
+		runPhase: state.runPhase,
 		logs: state.logs,
 		clearLogs,
 		searchQuery: state.searchQuery,
@@ -654,5 +864,3 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 		exportCrawl: exportCurrentCrawl,
 	};
 }
-
-export type UseCrawlControllerReturn = ReturnType<typeof useCrawlController>;

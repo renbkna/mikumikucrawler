@@ -1,16 +1,21 @@
 import type { Database } from "bun:sqlite";
 import {
 	CRAWL_PAGE_SNAPSHOT_LIMIT,
+	type CrawlPageDetails,
 	type CrawlPageSummary,
 	type CrawlPagesResponse,
+	isCrawlPageDetails,
+	PAGE_TEXT_LIMITS,
 } from "../../../shared/contracts/index.js";
+import { truncateUtf8Text } from "../../../shared/text.js";
+import type { OwnStatement } from "../db.js";
 
 export interface ExportPageRow {
 	id: number;
 	url: string;
-	title: string;
-	description: string;
-	contentType: string;
+	title: string | null;
+	description: string | null;
+	contentType: string | null;
 	domain: string;
 	content: string | null;
 	crawledAt: string;
@@ -37,8 +42,6 @@ export const CSV_EXPORT_PAGE_FIELDS = [
 	"crawledAt",
 ] as const satisfies readonly (keyof ExportPageRow)[];
 
-export type PageRepo = ReturnType<typeof createPageRepo>;
-
 interface PageSummaryRow {
 	id: number;
 	url: string;
@@ -46,10 +49,28 @@ interface PageSummaryRow {
 	description: string | null;
 	contentType: string | null;
 	domain: string;
+	wordCount: number | null;
+	readingTime: number | null;
+	language: string | null;
 }
 
-export function createPageRepo(db: Database) {
-	const exportWithContent = db.query<ExportPageRow, [string]>(`
+function readPageDetails(row: PageSummaryRow): CrawlPageDetails {
+	const details = {
+		...(row.wordCount !== null ? { wordCount: row.wordCount } : {}),
+		...(row.readingTime !== null ? { readingTime: row.readingTime } : {}),
+		...(row.language !== null
+			? { language: truncateUtf8Text(row.language, PAGE_TEXT_LIMITS.languageBytes) }
+			: {}),
+	};
+	if (!isCrawlPageDetails(details)) {
+		throw new Error("Stored page details violate the recovery contract");
+	}
+	return details;
+}
+
+export function createPageRepo(db: Database, own: OwnStatement) {
+	const exportWithContent = own(
+		db.query<ExportPageRow, [string]>(`
 		SELECT id, url, title, description,
 			content_type AS contentType,
 			domain,
@@ -58,8 +79,10 @@ export function createPageRepo(db: Database) {
 		FROM pages
 		WHERE crawl_id = ?
 		ORDER BY crawled_at DESC, id DESC
-	`);
-	const exportWithoutContent = db.query<ExportPageRow, [string]>(`
+	`),
+	);
+	const exportWithoutContent = own(
+		db.query<ExportPageRow, [string]>(`
 		SELECT id, url, title, description,
 			content_type AS contentType,
 			domain,
@@ -68,22 +91,28 @@ export function createPageRepo(db: Database) {
 		FROM pages
 		WHERE crawl_id = ?
 		ORDER BY crawled_at DESC, id DESC
-	`);
-	const listSummaries = db.query<PageSummaryRow, [string, number]>(`
+	`),
+	);
+	const listSummaries = own(
+		db.query<PageSummaryRow, [string, number]>(`
 		SELECT
 			id,
 			url,
-			title,
-			description,
+			substr(title, 1, ${PAGE_TEXT_LIMITS.summaryTextCharacters}) AS title,
+			substr(description, 1, ${PAGE_TEXT_LIMITS.summaryTextCharacters}) AS description,
 			content_type AS contentType,
-			domain
+			domain,
+			word_count AS wordCount,
+			reading_time AS readingTime,
+			language
 		FROM pages
 		WHERE crawl_id = ?
 		ORDER BY crawled_at DESC, id DESC
 		LIMIT ?
-	`);
-	const countByCrawlId = db.query<{ count: number }, [string]>(
-		"SELECT COUNT(*) AS count FROM pages WHERE crawl_id = ?",
+	`),
+	);
+	const countByCrawlId = own(
+		db.query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM pages WHERE crawl_id = ?"),
 	);
 
 	return {
@@ -104,6 +133,7 @@ export function createPageRepo(db: Database) {
 					...(row.description ? { description: row.description } : {}),
 					...(row.contentType ? { contentType: row.contentType } : {}),
 					domain: row.domain,
+					details: readPageDetails(row),
 				}),
 			);
 			return {

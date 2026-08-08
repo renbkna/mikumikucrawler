@@ -25,10 +25,23 @@ function buildFtsQuery(query: string): string | null {
 export function searchApi(services: RouteServicesPlugin) {
 	return new Elysia({ name: "search-api", prefix: API_PATHS.root }).use(services).get(
 		API_PATHS.search.slice(API_PATHS.root.length),
+		{
+			query: SearchQuerySchema,
+			response: {
+				200: SearchResponseSchema,
+				422: ApiErrorSchema,
+				500: ApiErrorSchema,
+			},
+			detail: {
+				tags: ["Search"],
+				summary: "Search stored pages",
+			},
+		},
 		({ query, repos }) => {
 			const ftsQuery = buildFtsQuery(query.q);
 			if (!ftsQuery) {
 				return {
+					crawlId: query.crawlId,
 					query: query.q,
 					count: 0,
 					results: [],
@@ -42,22 +55,11 @@ export function searchApi(services: RouteServicesPlugin) {
 			);
 			const count = repos.search.count(query.crawlId, ftsQuery);
 			return {
+				crawlId: query.crawlId,
 				query: query.q,
 				count,
 				results,
 			};
-		},
-		{
-			query: SearchQuerySchema,
-			response: {
-				200: SearchResponseSchema,
-				422: ApiErrorSchema,
-				500: ApiErrorSchema,
-			},
-			detail: {
-				tags: ["Search"],
-				summary: "Search stored pages",
-			},
 		},
 	);
 }
