@@ -1,6 +1,5 @@
 import { lookup } from "node:dns/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { cors } from "@elysia/cors";
 import { Elysia } from "elysia";
 import { type Generator, rateLimit } from "elysia-rate-limit";
@@ -25,9 +24,7 @@ import { CrawlManager } from "./runtime/CrawlManager.js";
 import { EventStream } from "./runtime/EventStream.js";
 import { createStorage, type Storage } from "./storage/db.js";
 
-const moduleFilename = fileURLToPath(import.meta.url);
-const moduleDirectory = path.dirname(moduleFilename);
-const distPath = path.join(moduleDirectory, "..", "dist");
+const distPath = path.join(import.meta.dir, "..", "dist");
 
 function isRateLimitExempt(request: Request): boolean {
 	const pathname = new URL(request.url).pathname;

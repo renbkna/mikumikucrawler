@@ -1,9 +1,5 @@
 const encoder = new TextEncoder();
 
-export function utf8ByteLength(value: string): number {
-	return encoder.encode(value).byteLength;
-}
-
 export function truncateUtf8Text(value: string, maximumBytes: number): string {
 	const bytes = encoder.encode(value);
 	if (bytes.byteLength <= maximumBytes) return value;

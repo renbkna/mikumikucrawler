@@ -1,8 +1,8 @@
 # Dependency patches
 
-- `@elysia/static@2.0.0-beta.1` and `@elysia/openapi@2.0.0-beta.1` replace broken
-  bundle-relative imports whose targets are absent from the beta tarballs with public imports;
-  the OpenAPI patch also keeps the JSON specification when the frontend is disabled.
+- `@elysia/static@2.0.0-beta.1` replaces its absent bundled URI decoder with a guarded
+  platform decoder. `@elysia/openapi@2.0.0-beta.1` replaces absent bundle-relative TypeBox
+  imports with the public package and keeps the JSON specification when the frontend is disabled.
 - `elysia-rate-limit@5.1.0` admits requests before parsing and removes its obsolete
   `error.code`/status-based 404 recount path, keeping one global rate-limit decision per
   request and using the active request server for identity.

@@ -30,10 +30,6 @@ const MAX_SUBSCRIBERS_TOTAL = 100;
 const MAX_SUBSCRIBERS_PER_CLIENT = 4;
 const MAX_SUBSCRIBERS_PER_CLIENT_PER_CRAWL = 2;
 
-function cloneValue<T>(value: T): T {
-	return structuredClone(value);
-}
-
 export class EventStream {
 	private readonly streams = new Map<string, StreamState>();
 	private readonly cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -159,7 +155,7 @@ export class EventStream {
 			crawlId,
 			sequence: state.sequence + 1,
 			timestamp: new Date().toISOString(),
-			payload: cloneValue(payload),
+			payload: structuredClone(payload),
 		};
 
 		state.sequence = event.sequence;
@@ -172,7 +168,7 @@ export class EventStream {
 
 		for (const subscriber of Array.from(state.subscribers)) {
 			try {
-				subscriber.onEvent(cloneValue(event as CrawlEventEnvelope));
+				subscriber.onEvent(structuredClone(event as CrawlEventEnvelope));
 			} catch {
 				this.removeSubscriber(state, subscriber);
 				try {
@@ -181,7 +177,7 @@ export class EventStream {
 			}
 		}
 
-		return cloneValue(event);
+		return structuredClone(event);
 	}
 
 	subscribe(
@@ -212,7 +208,7 @@ export class EventStream {
 		try {
 			for (const { event } of state.history) {
 				if (event.sequence > afterSequence) {
-					onEvent(cloneValue(event));
+					onEvent(structuredClone(event));
 				}
 			}
 		} catch (error) {

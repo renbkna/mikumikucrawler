@@ -38,7 +38,7 @@ const started = await (async () => {
 		);
 		return { dependencies, instance: listeningApp };
 	} catch (error) {
-		logger.fatal({ error, port: config.port }, "server failed to start");
+		logger.fatal({ err: error, port: config.port }, "server failed to start");
 		if (bootstrap.server) await bootstrap.stop(true);
 		dependencies?.eventStream.close();
 		dependencies?.storage.close();

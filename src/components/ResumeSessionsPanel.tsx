@@ -3,11 +3,9 @@ import { useEffect, useEffectEvent } from "react";
 import type { ResumableSessionSummary } from "../../shared/contracts/index.js";
 import { useDialogModal } from "../hooks/useDialogModal";
 
-export type SessionSummary = ResumableSessionSummary;
-
 interface ResumeSessionsPanelProps {
 	isOpen: boolean;
-	sessions: SessionSummary[];
+	sessions: ResumableSessionSummary[];
 	isLoading: boolean;
 	fetchError: string | null;
 	deletingId: string | null;
@@ -70,7 +68,7 @@ export function ResumeSessionsPanel({
 
 	// ── Event handlers ─────────────────────────────────────────────────────────
 
-	const handleResume = async (session: SessionSummary) => {
+	const handleResume = async (session: ResumableSessionSummary) => {
 		if (isActionPending) {
 			return;
 		}

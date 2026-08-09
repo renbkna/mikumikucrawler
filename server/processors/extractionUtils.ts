@@ -1,4 +1,3 @@
-import { URL } from "node:url";
 import type { CheerioAPI } from "cheerio";
 import { PAGE_TEXT_LIMITS, type PageMetadata } from "../../shared/contracts/pageData.js";
 import { truncateUtf8Text } from "../../shared/text.js";

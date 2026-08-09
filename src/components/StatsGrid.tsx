@@ -28,13 +28,13 @@ export const StatsGrid = memo(function StatsGrid({
 					</div>
 
 					<div className="text-4xl font-semibold text-miku-accent/80 mb-3 tracking-tight">
-						{(stats.pagesScanned || 0).toLocaleString()}
+						{stats.pagesScanned.toLocaleString()}
 					</div>
 
 					{queueStats && isAttacking && (
 						<div className="flex items-center gap-2 text-xs font-semibold text-miku-teal-dark px-1 py-1 w-fit">
 							<Activity className="w-3 h-3 animate-pulse" />
-							<span>{(queueStats.pagesPerSecond || 0).toFixed(1)} / sec</span>
+							<span>{queueStats.pagesPerSecond.toFixed(1)} / sec</span>
 						</div>
 					)}
 				</div>
@@ -52,7 +52,7 @@ export const StatsGrid = memo(function StatsGrid({
 					</div>
 
 					<div className="text-4xl font-semibold text-miku-accent/80 mb-3 tracking-tight">
-						{(stats.linksFound || 0).toLocaleString()}
+						{stats.linksFound.toLocaleString()}
 					</div>
 
 					<div className="flex gap-2">
@@ -80,7 +80,7 @@ export const StatsGrid = memo(function StatsGrid({
 					</div>
 
 					<div className="text-4xl font-semibold text-miku-accent/80 mb-3 tracking-tight">
-						{(stats.totalDataKb || 0).toLocaleString()}{" "}
+						{stats.totalDataKb.toLocaleString()}{" "}
 						<span className="text-lg text-miku-text/50 font-medium">KB</span>
 					</div>
 

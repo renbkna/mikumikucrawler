@@ -39,7 +39,6 @@
 		"elysia": "2.0.0-beta.2",
 		"elysia-rate-limit": "5.1.0",
 		"exact-mirror": "1.2.4",
-		"fast-decode-uri-component": "1.0.1",
 		"franc": "^6.2.0",
 		"ipaddr.js": "^2.4.0",
 		"lru-cache": "^11.5.2",

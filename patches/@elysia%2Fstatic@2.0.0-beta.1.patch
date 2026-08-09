@@ -7,7 +7,7 @@ index 14b86a68c377c546e4030009546fa40768378564..bc72c34e3126f1dfcbb93abcbee6f869
 -const require_runtime = require('./_virtual/_rolldown/runtime.js');
  const require_utils = require('./utils.js');
 -const require_index = require('./node_modules/fast-decode-uri-component/index.js');
-+const decodeUriComponent = require('fast-decode-uri-component');
++const decodeUriComponent = (value) => { try { return decodeURIComponent(value); } catch (error) { if (error instanceof URIError) return null; throw error; } };
  let elysia = require("elysia");
  
  //#region src/index.ts
@@ -41,7 +41,7 @@ index 982fa37c5d0a381a8025af2154e81cf78e838844..de5558fa33408c236ee6ba55f3ab1c0e
 -import { __toESM } from "./_virtual/_rolldown/runtime.mjs";
  import { LRUCache, alreadyCachedDownstream, fileExists, generateETag, getBuiltinModule, getFile, getFileStats, isBun, listFiles } from "./utils.mjs";
 -import { require_fast_decode_uri_component } from "./node_modules/fast-decode-uri-component/index.mjs";
-+import decodeUriComponent from "fast-decode-uri-component";
++const decodeUriComponent = (value) => { try { return decodeURIComponent(value); } catch (error) { if (error instanceof URIError) return null; throw error; } };
  import { Elysia, NotFound } from "elysia";
  
  //#region src/index.ts

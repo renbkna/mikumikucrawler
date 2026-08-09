@@ -1,12 +1,4 @@
-import {
-	startTransition,
-	useCallback,
-	useEffect,
-	useEffectEvent,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { startTransition, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import type {
 	CrawlExportFormat,
 	CrawledPage,
@@ -393,11 +385,6 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 			}
 		},
 		[addToast, dispatch, getControllerLifetimeSignal, stateRef],
-	);
-
-	const refreshResumableSessionsWithCommand = useCallback(
-		() => refreshResumableSessions(true),
-		[refreshResumableSessions],
 	);
 
 	useEffect(() => {
@@ -808,10 +795,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 		return () => controller.abort();
 	}, [state.activeCrawlId, state.searchQuery]);
 
-	const displayedPages = useMemo(
-		() => (state.searchQuery.trim() ? pageSearch.pages : state.crawledPages),
-		[pageSearch.pages, state.crawledPages, state.searchQuery],
-	);
+	const displayedPages = state.searchQuery.trim() ? pageSearch.pages : state.crawledPages;
 	const clearLogs = useCallback(() => dispatch({ type: "logsCleared" }), [dispatch]);
 	const setSearchQuery = useCallback(
 		(searchQuery: string) => dispatch({ type: "searchChanged", searchQuery }),
@@ -855,7 +839,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 		resumableSessionsError: state.resumableSessions.error,
 		deletingResumableSessionId: state.resumableSessions.deletingId,
 		resumingResumableSessionId: state.resumableSessions.resumingId,
-		refreshResumableSessions: refreshResumableSessionsWithCommand,
+		refreshResumableSessions,
 		deleteResumableSession,
 		startCrawl,
 		pauseCrawl,

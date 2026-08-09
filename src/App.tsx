@@ -1,6 +1,5 @@
 import { History, Music2, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import type { CrawlExportFormat } from "../shared/contracts/index.js";
 import { ActionButtons } from "./components/ActionButtons";
 import { ConfigurationView } from "./components/ConfigurationView";
 import { CrawledPagesSection } from "./components/CrawledPagesSection";
@@ -85,10 +84,6 @@ function App() {
 		[startCrawl],
 	);
 
-	const pauseAttack = useCallback(() => {
-		void pauseCrawl();
-	}, [pauseCrawl]);
-
 	const forceStopAttack = useCallback(() => {
 		if (!window.confirm("Force stop this crawl and clear its pending queue?")) {
 			return;
@@ -102,13 +97,6 @@ function App() {
 		}
 	}, [isAttacking, theatreStatus]);
 
-	const handleExport = useCallback(
-		(format: CrawlExportFormat) => {
-			void exportCrawl(format);
-		},
-		[exportCrawl],
-	);
-
 	const handleResumeSession = useCallback(
 		(sessionId: string) => {
 			return resumeCrawl(sessionId).then((resumed: boolean) => {
@@ -120,10 +108,6 @@ function App() {
 		},
 		[resumeCrawl],
 	);
-
-	const handleRefreshResumableSessions = useCallback(() => {
-		void refreshResumableSessions();
-	}, [refreshResumableSessions]);
 
 	const handleTheatreComplete = useCallback(() => {
 		setTheatreStatus("live");
@@ -138,7 +122,7 @@ function App() {
 				status={theatreStatus}
 				onComplete={handleTheatreComplete}
 				isCrawlActive={canPause || canForceStop}
-				onStop={canPause ? pauseAttack : forceStopAttack}
+				onStop={canPause ? pauseCrawl : forceStopAttack}
 				stopLabel={canPause ? "Pause" : "Force Stop"}
 				volume={audioVol}
 			/>
@@ -154,7 +138,7 @@ function App() {
 
 				<main className="relative z-10 max-w-7xl mx-auto space-y-3">
 					<header className="flex items-center justify-center py-4">
-						<div className="brand-shell glass-panel px-4 py-2 inline-flex items-center gap-3">
+						<div className="px-4 py-2 inline-flex items-center gap-3">
 							<div>
 								<h1 className="text-lg font-bold uppercase tracking-[0.12em] flex items-center gap-2 text-miku-accent">
 									<Sparkles className="text-miku-accent/40" size={15} />
@@ -168,7 +152,7 @@ function App() {
 
 					<section
 						aria-label="Crawler Control"
-						className="control-stage glass-panel relative group transition-all duration-500"
+						className="relative group transition-all duration-500"
 					>
 						<MikuBanner active={isAttacking} />
 
@@ -180,10 +164,8 @@ function App() {
 							canStart={canStart}
 							canForceStop={canForceStop}
 							canPause={canPause}
-							startAttack={(isQuick) => {
-								void startAttack(isQuick);
-							}}
-							pauseAttack={pauseAttack}
+							startAttack={startAttack}
+							pauseAttack={pauseCrawl}
 							forceStopAttack={forceStopAttack}
 							setOpenedConfig={setOpenedConfig}
 							connectionState={connectionState}
@@ -208,7 +190,7 @@ function App() {
 					)}
 
 					<section aria-label="Statistics" className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-						<div className="metric-group lg:col-span-2 glass-panel">
+						<div className="lg:col-span-2">
 							<StatsGrid stats={stats} queueStats={queueStats} isAttacking={isAttacking} />
 						</div>
 						<div className="glass-panel p-5 flex flex-col justify-center">
@@ -307,7 +289,7 @@ function App() {
 			<ExportDialog
 				isOpen={openExportDialog}
 				onClose={() => setOpenExportDialog(false)}
-				onExport={handleExport}
+				onExport={exportCrawl}
 			/>
 
 			<ResumeSessionsPanel
@@ -317,7 +299,7 @@ function App() {
 				fetchError={resumableSessionsError}
 				deletingId={deletingResumableSessionId}
 				resumingId={resumingResumableSessionId}
-				onRefresh={handleRefreshResumableSessions}
+				onRefresh={refreshResumableSessions}
 				onDelete={(sessionId) => {
 					void deleteResumableSession(sessionId);
 				}}

@@ -2,8 +2,7 @@ import { describe, expect, expectTypeOf, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import type { Static } from "typebox";
 import { API_LIST_LIMIT_BOUNDS } from "../../../shared/contracts/http.js";
 import type {
@@ -19,7 +18,7 @@ import {
 import { DEFAULT_BACKEND_PORT } from "../../../shared/deploymentDefaults.js";
 import { CrawlListQuerySchema, ResumableCrawlListQuerySchema } from "../crawls.js";
 
-const SERVER_CONTRACTS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
+const SERVER_CONTRACTS_DIR = join(import.meta.dir, "..");
 const REPOSITORY_ROOT = join(SERVER_CONTRACTS_DIR, "../..");
 
 function expectBackendPortProjections(source: string, patterns: RegExp[]): void {

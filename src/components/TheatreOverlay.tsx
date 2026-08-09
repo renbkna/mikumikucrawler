@@ -1,5 +1,5 @@
 import { CircleStop } from "lucide-react";
-import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import { SEQUENCE_TIMINGS } from "../constants";
 
 export type TheatreStatus = "idle" | "blackout" | "live";
@@ -32,9 +32,7 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 	const sequenceStartedRef = useRef(false);
 	const rippleCountRef = useRef(0);
 
-	// Stable refs for callbacks to avoid effect re-runs
-	const onCompleteRef = useRef(onComplete);
-	onCompleteRef.current = onComplete;
+	const completeSequence = useEffectEvent(onComplete);
 
 	// Audio should play when status is not "idle"
 	const shouldPlayAudio = status !== "idle";
@@ -132,7 +130,7 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 			{
 				fn: () => {
 					setCount(null);
-					onCompleteRef.current();
+					completeSequence();
 				},
 				delay: SEQUENCE_TIMINGS.COMPLETE,
 			},

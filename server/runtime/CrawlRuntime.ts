@@ -48,8 +48,6 @@ interface EventSink {
 	log(message: string): void;
 }
 
-const sleep = (ms: number) => Bun.sleep(ms);
-
 class RuntimeStopSignalError extends Error {
 	constructor(message: string) {
 		super(message);
@@ -499,7 +497,7 @@ export class CrawlRuntime {
 					const { item, waitMs } = this.queue.nextReady();
 					if (!item) {
 						if (waitMs > 0) {
-							await sleep(Math.min(waitMs, CRAWL_QUEUE_CONSTANTS.DEFAULT_SLEEP_MS));
+							await Bun.sleep(Math.min(waitMs, CRAWL_QUEUE_CONSTANTS.DEFAULT_SLEEP_MS));
 						}
 						break;
 					}
@@ -511,7 +509,7 @@ export class CrawlRuntime {
 					if (this.state.isStopRequested || this.queue.pendingCount === 0) {
 						break;
 					}
-					await sleep(CRAWL_QUEUE_CONSTANTS.DEFAULT_SLEEP_MS);
+					await Bun.sleep(CRAWL_QUEUE_CONSTANTS.DEFAULT_SLEEP_MS);
 					continue;
 				}
 

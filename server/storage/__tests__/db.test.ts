@@ -11,6 +11,47 @@ import {
 import { DurableStorageBudget } from "../DurableStorageBudget.js";
 import { applyMigrations, createStorage, DatabaseOwnershipError } from "../db.js";
 
+const PRE_BASELINE_LEDGER = [
+	["0001_crawl_runs.sql", "1edde97ced24f365f39170e3a1c7aa4243c6de9206da76e20a43c6a3c5f0aa65"],
+	["0002_queue_pages.sql", "39ba2a8bed421955fe3440a7c941811b3455a24834022e73001b584e4cc4e4dd"],
+	["0003_pages_fts.sql", "c5ab6c1a66d02d4eb6b25bbf95ca65d3d3a3f0f8e8c52deda57e969107f9be7a"],
+	[
+		"0004_runtime_persistence.sql",
+		"1ee0367d3d7e2d509b854f865f57de227552f773ff65e05d3253c7d44921a125",
+	],
+	[
+		"0005_domain_state_search_content.sql",
+		"4db5499beebd32a2ef89b3d320b641e08096b9a14cab074bdbb13d9f25b0ccf6",
+	],
+	["0006_canonical_schema.sql", "1799d36e1cd490d5c66c6e6a9a5b70366f1fdfeacb7f9ec43018c82b672f0fd4"],
+	[
+		"0007_terminal_queue_exclusion.sql",
+		"6bdd9a79314b27d205d86b2132d8b1a5389f5856edffd02a4acb00797f79a4c5",
+	],
+	[
+		"0008_storage_authority.sql",
+		"26478c5cfc7daf4a30e8717be9b274dc5364b9a8421fe2856c9a733b4310ac21",
+	],
+	[
+		"0009_redirect_domain_authority.sql",
+		"d76d2a85f3d608f8274b55656048390cfa5edf70d28337b07ce34dca8f8688dd",
+	],
+	[
+		"0010_compact_projections.sql",
+		"c738d8793d4c80fd78c79888cbcdb54750444df7b212ad6766521cea6b089920",
+	],
+] as const;
+
+function replaceWithPreBaselineLedger(db: Database): void {
+	db.exec("DELETE FROM schema_migrations");
+	const insertMigration = db.prepare("INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)");
+	try {
+		for (const [id, checksum] of PRE_BASELINE_LEDGER) insertMigration.run(id, checksum);
+	} finally {
+		insertMigration.finalize();
+	}
+}
+
 describe("storage contract", () => {
 	test("applies migrations and records them", () => {
 		const storage = createInMemoryStorage();
@@ -265,6 +306,40 @@ describe("storage contract", () => {
 		expect((db.query("SELECT COUNT(*) AS count FROM pages").get() as { count: number }).count).toBe(
 			1,
 		);
+	});
+
+	test("adopts the canonical baseline from its exact pre-baseline lineage", () => {
+		const db = new Database(":memory:");
+		applyMigrations(db);
+		db.exec(`
+			CREATE TABLE legacy_import_quarantine (id TEXT PRIMARY KEY);
+			INSERT INTO legacy_import_quarantine (id) VALUES ('preserved');
+		`);
+		replaceWithPreBaselineLedger(db);
+
+		applyMigrations(db);
+
+		expect(
+			db.query("SELECT id FROM schema_migrations ORDER BY id").all() as Array<{ id: string }>,
+		).toEqual([{ id: "0001_schema.sql" }]);
+		expect((db.query("SELECT id FROM legacy_import_quarantine").get() as { id: string }).id).toBe(
+			"preserved",
+		);
+		db.close();
+	});
+
+	test("rejects baseline adoption when the live schema diverges", () => {
+		const db = new Database(":memory:");
+		applyMigrations(db);
+		db.exec("DROP INDEX idx_crawl_runs_updated_at");
+		replaceWithPreBaselineLedger(db);
+
+		expect(() => applyMigrations(db)).toThrow("does not match the canonical schema");
+		expect(
+			(db.query("SELECT COUNT(*) AS count FROM schema_migrations").get() as { count: number })
+				.count,
+		).toBe(10);
+		db.close();
 	});
 
 	test("crawl run persistence rejects invalid lifecycle state at the database boundary", () => {

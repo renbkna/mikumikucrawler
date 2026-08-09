@@ -7,12 +7,9 @@ html {
 :root {
 	--miku-teal: #69c9e5;
 	--miku-teal-soft: #acd5f5;
-	--miku-teal-pale: #edf8fd;
 	--miku-teal-dark: #4b9fc7;
 
 	--miku-pink: #e98ab7;
-	--miku-pink-soft: #f3c8dc;
-	--miku-pink-pale: #fff5fa;
 	--miku-pink-dark: #bd6e9a;
 
 	--miku-accent: #776ddf;
@@ -24,8 +21,6 @@ html {
 	--kawaii-card: rgba(255, 255, 255, 0.82);
 
 	--miku-text: #71779f;
-	--miku-text-soft: #9298b8;
-	--miku-text-light: #b5bad2;
 
 	--shadow-cute: 0 8px 28px rgba(105, 117, 170, 0.055);
 	--shadow-hover: 0 10px 32px rgba(105, 117, 170, 0.075);
@@ -40,24 +35,9 @@ html {
 	--color-miku-lavender: var(--miku-lavender);
 	--color-miku-border: var(--miku-border);
 	--color-miku-text: var(--miku-text);
-	--color-miku-primary: var(--miku-teal);
-	--color-miku-secondary: var(--miku-pink);
-
-	--animate-float: float 3s ease-in-out infinite;
 	--animate-bounce-slow: bounce-slow 2s ease-in-out infinite;
-	--animate-sparkle: sparkle 1.5s ease-in-out infinite;
 	--animate-pop: pop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
 	--animate-heart-beat: heart-beat 1s ease-in-out infinite;
-
-	@keyframes float {
-		0%,
-		100% {
-			transform: translateY(0px);
-		}
-		50% {
-			transform: translateY(-8px);
-		}
-	}
 
 	@keyframes bounce-slow {
 		0%,
@@ -154,11 +134,6 @@ dialog select {
 	box-shadow: none;
 }
 
-body::before,
-body::after {
-	content: none;
-}
-
 .glass-panel {
 	background: var(--kawaii-card);
 	border: 1px solid var(--miku-border);
@@ -187,10 +162,6 @@ body::after {
 	position: relative;
 }
 
-.cute-card::before {
-	content: none;
-}
-
 .cute-card:hover {
 	background: rgba(255, 255, 255, 0.9);
 	border-color: var(--miku-border-strong);
@@ -198,13 +169,6 @@ body::after {
 
 .sparkle {
 	animation: sparkle 1.5s ease-in-out infinite;
-}
-
-.sparkle:nth-child(2n) {
-	animation-delay: 0.3s;
-}
-.sparkle:nth-child(3n) {
-	animation-delay: 0.6s;
 }
 
 .gradient-text {
@@ -253,33 +217,6 @@ body::after {
 	background-size: 200% 100%;
 	animation: gradient-shift 2s ease infinite;
 	border-radius: 50px;
-}
-
-.brand-shell {
-	background: transparent;
-	border: 0;
-	box-shadow: none;
-	border-radius: 0;
-	overflow: visible;
-}
-
-.brand-shell:hover {
-	border-color: transparent;
-	box-shadow: none;
-}
-
-.control-stage,
-.metric-group {
-	background: transparent;
-	border: 0;
-	box-shadow: none;
-	overflow: visible;
-}
-
-.control-stage:hover,
-.metric-group:hover {
-	border-color: transparent;
-	box-shadow: none;
 }
 
 .metric-card::after {

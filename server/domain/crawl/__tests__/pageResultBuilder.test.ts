@@ -4,7 +4,6 @@ import {
 	type CrawlPageData,
 	PAGE_TEXT_LIMITS,
 } from "../../../../shared/contracts/index.js";
-import { utf8ByteLength } from "../../../../shared/text.js";
 import type { CompletedPageData } from "../../../storage/repos/crawlItemPersistence.js";
 import type { ProcessedContent } from "../../../types.js";
 import type { QueueItem } from "../CrawlQueue.js";
@@ -83,9 +82,9 @@ describe("page result projection", () => {
 			description: "Metadata description",
 			details: { wordCount: 2, readingTime: 1 },
 		});
-		expect(utf8ByteLength(result.eventPayload.details.language ?? "")).toBeLessThanOrEqual(
-			PAGE_TEXT_LIMITS.languageBytes,
-		);
+		expect(
+			new TextEncoder().encode(result.eventPayload.details.language ?? "").byteLength,
+		).toBeLessThanOrEqual(PAGE_TEXT_LIMITS.languageBytes);
 		expectTypeOf(result.eventPayload).toEqualTypeOf<CrawlPageData>();
 		expectTypeOf(result.pageData).toEqualTypeOf<CompletedPageData>();
 		expect(result.eventPayload).not.toHaveProperty("id");
