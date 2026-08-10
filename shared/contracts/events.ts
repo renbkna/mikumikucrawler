@@ -31,6 +31,8 @@ export type CrawlEventMap = {
 	[TType in CrawlEventType]: Extract<CrawlEventEnvelope, { type: TType }>["payload"];
 };
 
+export type CrawlLogLevel = CrawlEventMap["crawl.log"]["level"];
+
 export type CrawlEventEnvelopeBase<TType extends CrawlEventType> = Omit<
 	CrawlEventEnvelope,
 	"type" | "payload"

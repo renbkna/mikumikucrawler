@@ -75,3 +75,45 @@ index f5913c72eea31133f2688221b133c5b3cb6cb86d..be8d7854c4b6141e97abc9e0bebd8ebb
  			error({ error }) {
  				console.log("[@elysia/openapi] error at specPath");
  				console.warn(error);
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -1,6 +1,5 @@
+-import { TSchema } from "./node_modules/typebox/build/type/types/schema.js";
+-import { OpenAPIV3 } from "./node_modules/openapi-types/dist/index.js";
+-import { ApiReferenceConfiguration } from "./node_modules/@scalar/types/dist/api-reference/api-reference-configuration.js";
++import { TSchema } from "typebox";
++import { OpenAPIV3 } from "openapi-types";
+ import { SwaggerUIOptions } from "./swagger/types.js";
+ //#region src/types.d.ts
+ type OpenAPIProvider = 'scalar' | 'swagger-ui' | null;
+@@ -93,7 +92,7 @@
+   /**
+    * Scalar configuration to customize scalar
+    *'
+    * @see https://github.com/scalar/scalar/blob/main/documentation/configuration.md
+    */
+-  scalar?: Partial<ApiReferenceConfiguration> & {
++  scalar?: Record<string, unknown> & {
+     /**
+diff --git a/dist/openapi.d.ts b/dist/openapi.d.ts
+--- a/dist/openapi.d.ts
++++ b/dist/openapi.d.ts
+@@ -1,4 +1,4 @@
+-import { OpenAPIV3 } from "./node_modules/openapi-types/dist/index.js";
++import { OpenAPIV3 } from "openapi-types";
+ import { AdditionalReferences, ElysiaOpenAPIConfig, MapJsonSchema } from "./types.js";
+ import { AnyElysia } from "elysia/base";
+ import { InputSchema } from "elysia/types";
+diff --git a/dist/scalar/index.d.ts b/dist/scalar/index.d.ts
+--- a/dist/scalar/index.d.ts
++++ b/dist/scalar/index.d.ts
+@@ -1 +1 @@
+-import { OpenAPIV3 } from "../node_modules/openapi-types/dist/index.js";
++import { OpenAPIV3 } from "openapi-types";
+diff --git a/dist/swagger/index.d.ts b/dist/swagger/index.d.ts
+--- a/dist/swagger/index.d.ts
++++ b/dist/swagger/index.d.ts
+@@ -1 +1 @@
+-import { OpenAPIV3 } from "../node_modules/openapi-types/dist/index.js";
++import { OpenAPIV3 } from "openapi-types";

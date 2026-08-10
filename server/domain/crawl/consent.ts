@@ -82,3 +82,10 @@ export function requiresStrictConsentBypass(url: string): boolean {
 		return false;
 	}
 }
+
+export function isUnresolvedStrictConsentWall(
+	result: { detected: boolean; bypassed: boolean },
+	finalDocumentUrl: string,
+): boolean {
+	return result.detected && !result.bypassed && requiresStrictConsentBypass(finalDocumentUrl);
+}

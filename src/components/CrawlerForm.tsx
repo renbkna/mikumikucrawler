@@ -9,7 +9,7 @@ import {
 	WifiOff,
 	Zap,
 } from "lucide-react";
-import { type ChangeEvent, memo } from "react";
+import { type ChangeEvent, type FormEvent, memo } from "react";
 import type { CrawlOptions } from "../../shared/contracts/index.js";
 import { normalizeCanonicalHttpUrl } from "../../shared/url";
 import type { ConnectionState } from "../hooks/crawlControllerState";
@@ -53,11 +53,13 @@ export const CrawlerForm = memo(function CrawlerForm({
 		setTarget(val);
 	};
 
-	const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-		if (e.key === "Enter" && canStart && !validationError && hasRunnableTarget) {
-			e.preventDefault();
-			startAttack();
+	const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+		event.preventDefault();
+		if (isAttacking) {
+			if (canPause) pauseAttack();
+			return;
 		}
+		if (canStart && !validationError && hasRunnableTarget) startAttack();
 	};
 
 	const connectionStyles = (() => {
@@ -80,7 +82,7 @@ export const CrawlerForm = memo(function CrawlerForm({
 	})();
 
 	return (
-		<div className="relative mb-0 space-y-0">
+		<form onSubmit={handleSubmit} className="relative mb-0 space-y-0">
 			<div className="glass-panel rounded-t-[18px] rounded-b-none p-5 relative overflow-hidden group">
 				<div className="relative z-10 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-4 items-end">
 					<div className="space-y-2">
@@ -96,7 +98,6 @@ export const CrawlerForm = memo(function CrawlerForm({
 								type="text"
 								value={target}
 								onChange={handleTargetChange}
-								onKeyDown={handleKeyDown}
 								placeholder="https://example.com"
 								className={`w-full px-5 py-3.5 rounded-xl bg-white/75 border focus:ring-3 transition-all duration-300 outline-none text-miku-text placeholder:text-miku-text/35 font-medium text-base shadow-none ${
 									validationError
@@ -140,8 +141,7 @@ export const CrawlerForm = memo(function CrawlerForm({
 						)}
 
 						<button
-							type="button"
-							onClick={() => (isAttacking && canPause ? pauseAttack() : startAttack())}
+							type="submit"
 							disabled={
 								isAttacking ? !canPause : !canStart || !!validationError || !hasRunnableTarget
 							}
@@ -208,6 +208,6 @@ export const CrawlerForm = memo(function CrawlerForm({
 					</span>
 				</div>
 			</div>
-		</div>
+		</form>
 	);
 });

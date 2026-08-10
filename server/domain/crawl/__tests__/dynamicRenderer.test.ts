@@ -687,6 +687,83 @@ describe("dynamic renderer network contract", () => {
 		expect(httpClient.fetch).toHaveBeenCalledTimes(2);
 	});
 
+	test("serializes concurrent body reads against one shared byte budget", async () => {
+		const budget = createDynamicRouteBudget(2, 5);
+		const httpClient: HttpClient = {
+			fetch: mock(async () => new Response("1234")),
+		};
+		const routes = [
+			createRoute({ url: "https://example.com/a.js", resourceType: "script" }),
+			createRoute({ url: "https://example.com/b.js", resourceType: "script" }),
+		];
+
+		const results = await Promise.all(
+			routes.map(({ route }) => fulfillRouteWithPinnedHttpClient(route, httpClient, { budget })),
+		);
+
+		expect(results).toContainEqual({ type: "fulfilled" });
+		expect(results).toContainEqual({ type: "aborted", reason: "response-budget" });
+		expect(routes.map(({ calls }) => calls.fulfill.mock.calls.length)).toEqual([1, 0]);
+		expect(routes.map(({ calls }) => calls.abort.mock.calls.length)).toEqual([0, 1]);
+	});
+
+	test("disposes a fetched response when cancellation wins while waiting for the byte budget", async () => {
+		const firstReadStarted = Promise.withResolvers<void>();
+		const releaseFirstRead = Promise.withResolvers<void>();
+		const firstResponse = new Response(
+			new ReadableStream({
+				async pull(controller) {
+					firstReadStarted.resolve();
+					await releaseFirstRead.promise;
+					controller.enqueue(new TextEncoder().encode("1"));
+					controller.close();
+				},
+			}),
+		);
+		const secondResponse = new Response("2");
+		const cancelSecond = mock(async () => undefined);
+		Object.defineProperty(secondResponse.body, "cancel", { value: cancelSecond });
+		let request = 0;
+		const httpClient: HttpClient = {
+			fetch: mock(async () => (request++ === 0 ? firstResponse : secondResponse)),
+		};
+		const budget = createDynamicRouteBudget(2, 5);
+		const first = fulfillRouteWithPinnedHttpClient(
+			createRoute({ url: "https://example.com/first.js", resourceType: "script" }).route,
+			httpClient,
+			{ budget },
+		);
+		await firstReadStarted.promise;
+		const controller = new AbortController();
+		const second = fulfillRouteWithPinnedHttpClient(
+			createRoute({ url: "https://example.com/second.js", resourceType: "script" }).route,
+			httpClient,
+			{ budget, signal: controller.signal },
+		);
+		controller.abort(new Error("cancelled"));
+
+		await expect(second).resolves.toMatchObject({ type: "aborted", reason: "transport-failure" });
+		expect(cancelSecond).toHaveBeenCalledTimes(1);
+		releaseFirstRead.resolve();
+		await expect(first).resolves.toEqual({ type: "fulfilled" });
+	});
+
+	test("rejects a successful document without Content-Type before reading its body", async () => {
+		const { route, calls } = createRoute({ url: "https://example.com/" });
+		const httpClient: HttpClient = {
+			fetch: mock(async () => new Response(new Uint8Array([1, 2, 3]))),
+		};
+
+		await expect(fulfillRouteWithPinnedHttpClient(route, httpClient)).resolves.toEqual({
+			type: "aborted",
+			reason: "unsupported-content",
+			contentType: "",
+			statusCode: 200,
+		});
+		expect(calls.abort).toHaveBeenCalledTimes(1);
+		expect(calls.fulfill).not.toHaveBeenCalled();
+	});
+
 	test("bounds dynamic subrequest concurrency and same-host dispatch rate", async () => {
 		const admission = createDynamicSubrequestAdmission(2, 0);
 		const releaseFirst = await admission.acquire("https://one.example/a.js");

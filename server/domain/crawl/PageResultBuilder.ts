@@ -13,10 +13,6 @@ import { mergeRobotsDirectives } from "./PageDecisionPolicy.js";
 
 type SuccessfulFetchResult = Extract<FetchResult, { type: "success" }>;
 
-function omitUndefined<T extends Record<string, unknown>>(value: T): T {
-	return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
-}
-
 export interface BuiltPageResult {
 	robotsDirectives: ReturnType<typeof mergeRobotsDirectives>;
 	pageData: CompletedPageData;
@@ -49,11 +45,15 @@ export function buildPageResult(
 	const language = processedContent.analysis.language
 		? truncateUtf8Text(processedContent.analysis.language, PAGE_TEXT_LIMITS.languageBytes)
 		: undefined;
-	const details = omitUndefined({
-		wordCount: processedContent.analysis.wordCount,
-		readingTime: processedContent.analysis.readingTime,
-		language,
-	});
+	const details = {
+		...(processedContent.analysis.wordCount === undefined
+			? {}
+			: { wordCount: processedContent.analysis.wordCount }),
+		...(processedContent.analysis.readingTime === undefined
+			? {}
+			: { readingTime: processedContent.analysis.readingTime }),
+		...(language === undefined ? {} : { language }),
+	};
 
 	const eventPayload: CrawlPageData = {
 		url: item.url,

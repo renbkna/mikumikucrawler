@@ -3,6 +3,7 @@ import type {
 	CrawlCounters,
 	CrawlEventMap,
 	CrawlEventType,
+	CrawlLogLevel,
 	CrawlOptions,
 } from "../../shared/contracts/index.js";
 import { isActiveCrawlStatus } from "../../shared/contracts/index.js";
@@ -34,6 +35,7 @@ export interface CrawlRuntimeDependencies {
 	eventStream: EventStream;
 	httpClient: HttpClient;
 	robotsService: RobotsService;
+	dynamicRenderer?: CrawlRuntimeRenderer;
 	acquirePdfWork?: AcquireWork;
 	allowLocalhostSeed?: boolean;
 	initialCounters?: CrawlCounters;
@@ -44,9 +46,10 @@ export interface CrawlRuntimeDependencies {
 	onSettled: () => void;
 }
 
-interface EventSink {
-	log(message: string): void;
-}
+export type CrawlRuntimeRenderer = Pick<
+	DynamicRenderer,
+	"close" | "initialize" | "isEnabled" | "render"
+>;
 
 class RuntimeStopSignalError extends Error {
 	constructor(message: string) {
@@ -58,7 +61,7 @@ class RuntimeStopSignalError extends Error {
 export class CrawlRuntime {
 	private readonly state: CrawlState;
 	private readonly queue: CrawlQueue;
-	private readonly dynamicRenderer: DynamicRenderer;
+	private readonly dynamicRenderer: CrawlRuntimeRenderer;
 	private readonly pipeline: PagePipeline;
 	private readonly activeTasks = new Map<string, Promise<void>>();
 	private readonly activeControllers = new Map<string, AbortController>();
@@ -83,7 +86,8 @@ export class CrawlRuntime {
 			deps.initialStartedAtMs,
 			deps.initialDomainStates,
 		);
-		this.dynamicRenderer = new DynamicRenderer(deps.options, deps.logger, deps.httpClient);
+		this.dynamicRenderer =
+			deps.dynamicRenderer ?? new DynamicRenderer(deps.options, deps.logger, deps.httpClient);
 		const fetchService = new FetchService(
 			deps.httpClient,
 			this.dynamicRenderer,
@@ -102,10 +106,11 @@ export class CrawlRuntime {
 				deps.repos.crawlQueue.reschedule(deps.crawlId, toPersistedQueueItem(item)),
 			clear: () => deps.repos.crawlQueue.clear(deps.crawlId),
 		});
-		const eventSink: EventSink = {
-			log: (message) =>
+		const eventSink = {
+			log: (message: string, level: CrawlLogLevel = "info") =>
 				this.publish("crawl.log", {
 					message,
+					level,
 				}),
 		};
 		this.pipeline = new PagePipeline(
@@ -278,7 +283,7 @@ export class CrawlRuntime {
 
 	async interrupt(reason = "Runtime interrupted"): Promise<void> {
 		this.interrupted = true;
-		this.state.requestStop(reason);
+		this.state.requestStop(reason, { overrideReason: !this.forceStopRequested });
 		this.lifecycleController.abort(this.stopSignalReason);
 		this.deferPendingToDelayWatermarks();
 		for (const controller of this.activeControllers.values()) {
@@ -336,7 +341,7 @@ export class CrawlRuntime {
 			this.deps.logger.error(
 				`[Runtime] Failed to process ${item.url}: ${error instanceof Error ? error.message : String(error)}`,
 			);
-			this.publish("crawl.log", { message: `[Crawler] Failure: ${item.url}` });
+			this.publish("crawl.log", { message: `[Crawler] Failure: ${item.url}`, level: "error" });
 			return {
 				terminalOutcome: "failure",
 				terminalEffects: {
@@ -440,7 +445,7 @@ export class CrawlRuntime {
 			);
 			this.throwIfForceStopped();
 			if (!initResult.dynamicEnabled && initResult.fallbackLog) {
-				this.publish("crawl.log", { message: initResult.fallbackLog });
+				this.publish("crawl.log", { message: initResult.fallbackLog, level: "warn" });
 			}
 		}
 		this.started = true;
@@ -457,6 +462,8 @@ export class CrawlRuntime {
 	}
 
 	private finishStopped(): void {
+		this.queue.clearPending();
+		this.queue.clearPersisted();
 		const stopReason = this.state.stopReason ?? "Crawl stopped";
 		const stopped = this.deps.repos.crawlRuns.markStopped(
 			this.deps.crawlId,
@@ -480,6 +487,47 @@ export class CrawlRuntime {
 
 		this.inactiveNotified = true;
 		this.deps.onInactive?.();
+	}
+
+	private finalizeRequestedLifecycle(): boolean {
+		if (this.forceStopRequested) {
+			this.finishStopped();
+			return true;
+		}
+
+		if (this.interrupted) {
+			this.deferPendingToDelayWatermarks();
+			this.persistInterrupted(this.state.stopReason ?? "Process shutdown");
+			this.markInactive();
+			return true;
+		}
+
+		if (!this.pauseRequested) {
+			if (!this.state.isStopRequested) return false;
+			this.finishStopped();
+			return true;
+		}
+
+		this.deferPendingToDelayWatermarks();
+		this.publish("crawl.log", {
+			message: this.state.stopReason ?? "Crawl paused",
+			level: "info",
+		});
+		this.emitProgress();
+		const paused = this.deps.repos.crawlRuns.markPaused(
+			this.deps.crawlId,
+			this.state.stopReason,
+			this.getCurrentSequence() + 1,
+		);
+		if (!paused) {
+			throw new Error(`Paused crawl disappeared during transition: ${this.deps.crawlId}`);
+		}
+		this.markInactive();
+		this.publish("crawl.paused", {
+			stopReason: this.state.stopReason,
+			counters: paused.counters,
+		});
+		return true;
 	}
 
 	private async run(): Promise<void> {
@@ -520,45 +568,11 @@ export class CrawlRuntime {
 			}
 
 			await Promise.allSettled(this.activeTasks.values());
-
-			if (this.interrupted) {
-				this.deferPendingToDelayWatermarks();
-				this.persistInterrupted(this.state.stopReason ?? "Process shutdown");
-				this.markInactive();
-				return;
-			}
-
-			if (this.pauseRequested && !this.forceStopRequested) {
-				await this.dynamicRenderer.close();
-				this.deferPendingToDelayWatermarks();
-				this.publish("crawl.log", {
-					message: this.state.stopReason ?? "Crawl paused",
-				});
-				this.emitProgress();
-				const paused = this.deps.repos.crawlRuns.markPaused(
-					this.deps.crawlId,
-					this.state.stopReason,
-					this.getCurrentSequence() + 1,
-				);
-				if (!paused) {
-					throw new Error(`Paused crawl disappeared during transition: ${this.deps.crawlId}`);
-				}
-				this.markInactive();
-				this.publish("crawl.paused", {
-					stopReason: this.state.stopReason,
-					counters: paused.counters,
-				});
-				return;
-			}
+			await this.dynamicRenderer.close();
+			if (this.finalizeRequestedLifecycle()) return;
 
 			this.queue.clearPending();
 			this.queue.clearPersisted();
-			await this.dynamicRenderer.close();
-
-			if (this.state.stopReason && this.state.isStopRequested) {
-				this.finishStopped();
-				return;
-			}
 
 			const completed = this.deps.repos.crawlRuns.markCompleted(
 				this.deps.crawlId,
@@ -581,22 +595,7 @@ export class CrawlRuntime {
 			}
 			await Promise.allSettled(this.activeTasks.values());
 			await this.dynamicRenderer.close();
-			if (
-				this.forceStopRequested &&
-				this.state.isStopRequested &&
-				error instanceof RuntimeStopSignalError
-			) {
-				this.finishStopped();
-				return;
-			}
-			if (
-				this.interrupted &&
-				this.state.isStopRequested &&
-				error instanceof RuntimeStopSignalError
-			) {
-				this.deferPendingToDelayWatermarks();
-				this.persistInterrupted(this.state.stopReason ?? "Process shutdown");
-				this.markInactive();
+			if (error instanceof RuntimeStopSignalError && this.finalizeRequestedLifecycle()) {
 				return;
 			}
 			const message = error instanceof Error ? error.message : String(error);

@@ -30,7 +30,9 @@ html {
 
 @theme {
 	--color-miku-teal: var(--miku-teal);
+	--color-miku-teal-dark: var(--miku-teal-dark);
 	--color-miku-pink: var(--miku-pink);
+	--color-miku-pink-dark: var(--miku-pink-dark);
 	--color-miku-accent: var(--miku-accent);
 	--color-miku-lavender: var(--miku-lavender);
 	--color-miku-border: var(--miku-border);
@@ -79,18 +81,6 @@ html {
 		}
 		50% {
 			transform: scale(1.1);
-		}
-	}
-
-	@keyframes gradient-shift {
-		0% {
-			background-position: 0% 50%;
-		}
-		50% {
-			background-position: 100% 50%;
-		}
-		100% {
-			background-position: 0% 50%;
 		}
 	}
 }
@@ -210,13 +200,6 @@ dialog select {
 
 ::-webkit-scrollbar-thumb:hover {
 	background: var(--miku-teal);
-}
-
-.energy-bar {
-	background: linear-gradient(90deg, var(--miku-teal), var(--miku-lavender), var(--miku-teal));
-	background-size: 200% 100%;
-	animation: gradient-shift 2s ease infinite;
-	border-radius: 50px;
 }
 
 .metric-card::after {

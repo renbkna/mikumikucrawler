@@ -122,6 +122,18 @@ describe("normalizeCanonicalHttpUrl", () => {
 		expect(normalizeCanonicalHttpUrl("ftp://files.example.com")).toEqual({
 			error: "Only HTTP and HTTPS URLs are supported",
 		});
+		expect(normalizeCanonicalHttpUrl("ftp:123")).toEqual({
+			error: "Only HTTP and HTTPS URLs are supported",
+		});
+	});
+
+	test("accepts deliberate dotted-host and localhost ports without a scheme", () => {
+		expect(normalizeCanonicalHttpUrl("example.com:8080/path")).toEqual({
+			url: "http://example.com:8080/path",
+		});
+		expect(normalizeCanonicalHttpUrl("localhost:3000/path")).toEqual({
+			url: "http://localhost:3000/path",
+		});
 	});
 
 	test("rejects empty input", () => {

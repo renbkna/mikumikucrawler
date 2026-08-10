@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import type { CrawlOptions } from "../../../shared/contracts/index.js";
+import type { CrawlLogLevel, CrawlOptions } from "../../../shared/contracts/index.js";
 import { CRAWL_QUEUE_CONSTANTS, RETRY_CONSTANTS } from "../../constants.js";
 import { OutboundPolicyError } from "../../outbound/HttpClient.js";
 import { processContent } from "../../processors/ContentProcessor.js";
@@ -34,7 +34,7 @@ type PagePipelineQueue = CrawlAdmissionQueue & Pick<CrawlQueue, "scheduleRetry">
 type PageFetcher = Pick<FetchService, "fetch">;
 
 interface EventSink {
-	log(message: string): void;
+	log(message: string, level?: CrawlLogLevel): void;
 }
 
 interface TerminalEffects {
@@ -223,7 +223,7 @@ export class PagePipeline {
 				);
 				return { rescheduled: true };
 			}
-			this.eventSink.log(`[Crawler] Processing timeout terminal failure: ${item.url}`);
+			this.eventSink.log(`[Crawler] Processing timeout terminal failure: ${item.url}`, "error");
 			return this.recordFetchedTerminal(
 				"failure",
 				context.chargedDomain === item.domain ? undefined : context.chargedDomain,
@@ -256,7 +256,7 @@ export class PagePipeline {
 		if (this.options.respectRobots) {
 			const identity = getCrawlUrlIdentity(item.url);
 			if ("error" in identity) {
-				this.eventSink.log(`[Policy] Invalid queued URL: ${item.url}`);
+				this.eventSink.log(`[Policy] Invalid queued URL: ${item.url}`, "error");
 				return this.recordTerminal("failure");
 			}
 			const policy = await this.robotsService.evaluateIdentity(identity, signal, {
@@ -265,7 +265,10 @@ export class PagePipeline {
 			});
 			signal?.throwIfAborted();
 			if (policy.type === "blocked") {
-				this.eventSink.log(`[Policy] Outbound request denied for ${item.url}: ${policy.reason}`);
+				this.eventSink.log(
+					`[Policy] Outbound request denied for ${item.url}: ${policy.reason}`,
+					"error",
+				);
 				return this.recordTerminal("failure");
 			}
 			if (policy.type === "disallowed") {
@@ -307,6 +310,7 @@ export class PagePipeline {
 				const result = this.recordFetchedTerminal("failure", chargedDomainOverride());
 				this.eventSink.log(
 					`[Crawler] ${fetchResult.type === "rateLimited" ? "Rate limited" : "Transient failure"} terminal failure: ${item.url}`,
+					"error",
 				);
 				return result;
 			}
@@ -315,9 +319,12 @@ export class PagePipeline {
 				this.state.adaptDomainDelay(context.chargedDomain, fetchResult.statusCode);
 				const result = this.recordFetchedTerminal("failure", chargedDomainOverride());
 				if (fetchResult.type === "blocked" && fetchResult.reason) {
-					this.eventSink.log(`[Crawler] ${fetchResult.reason}`);
+					this.eventSink.log(`[Crawler] ${fetchResult.reason}`, "error");
 				} else {
-					this.eventSink.log(`[Crawler] Failed ${item.url} with ${fetchResult.statusCode}`);
+					this.eventSink.log(
+						`[Crawler] Failed ${item.url} with ${fetchResult.statusCode}`,
+						"error",
+					);
 				}
 				return result;
 			}
@@ -342,13 +349,13 @@ export class PagePipeline {
 			signal?.throwIfAborted();
 			if (processedContent.errors.length > 0) {
 				const result = this.recordFetchedTerminal("failure", chargedDomainOverride());
-				this.eventSink.log(`[Crawler] Content processing failed: ${item.url}`);
+				this.eventSink.log(`[Crawler] Content processing failed: ${item.url}`, "error");
 				return result;
 			}
 			const mainContent = processedContent.extractedData.mainContent ?? "";
 			if (!hasUsablePageContent(fetchResult.contentType, mainContent)) {
 				const result = this.recordFetchedTerminal("failure", chargedDomainOverride());
-				this.eventSink.log(`[Crawler] No usable page content: ${item.url}`);
+				this.eventSink.log(`[Crawler] No usable page content: ${item.url}`, "error");
 				return result;
 			}
 
@@ -363,7 +370,7 @@ export class PagePipeline {
 
 			if (isClientErrorShell(pageResult.pageData.title, pageResult.pageData.mainContent)) {
 				const result = this.recordFetchedTerminal("failure", chargedDomainOverride());
-				this.eventSink.log(`[Crawler] Client error shell detected: ${item.url}`);
+				this.eventSink.log(`[Crawler] Client error shell detected: ${item.url}`, "error");
 				return result;
 			}
 
@@ -395,7 +402,7 @@ export class PagePipeline {
 				await this.enqueueLinks(item, normalizedCrawlLinks, signal);
 			}
 
-			this.eventSink.log(`[Crawler] Crawled ${item.url}`);
+			this.eventSink.log(`[Crawler] Crawled ${item.url}`, "success");
 			return {
 				terminalOutcome: "success",
 				terminalEffects: {

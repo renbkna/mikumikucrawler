@@ -16,7 +16,13 @@ import { getPageContent } from "../api/pages";
 
 type PageContentState = { type: "unloaded" } | { type: "loaded"; content: string | null };
 
-const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledPage }) {
+const CrawledPageCard = memo(function CrawledPageCard({
+	crawlId,
+	page,
+}: {
+	crawlId: string;
+	page: CrawledPage;
+}) {
 	const [isExpanded, setIsExpanded] = useState(false);
 	const [showSource, setShowSource] = useState(false);
 	const [contentState, setContentState] = useState<PageContentState>({ type: "unloaded" });
@@ -39,7 +45,7 @@ const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledP
 		contentRequestRef.current = lifetimeController;
 
 		try {
-			const result = await getPageContent(page.id, lifetimeController.signal);
+			const result = await getPageContent(crawlId, page.id, lifetimeController.signal);
 			if (lifetimeController.signal.aborted) {
 				return;
 			}
@@ -222,6 +228,7 @@ const CrawledPageCard = memo(function CrawledPageCard({ page }: { page: CrawledP
 });
 
 interface CrawledPagesSectionProps {
+	crawlId: string;
 	crawledPages: CrawledPage[];
 	displayedPages: CrawledPage[];
 	searchQuery: string;
@@ -234,6 +241,7 @@ interface CrawledPagesSectionProps {
 }
 
 export const CrawledPagesSection = memo(function CrawledPagesSection({
+	crawlId,
 	crawledPages,
 	displayedPages,
 	searchQuery,
@@ -305,7 +313,7 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 					)}
 					<div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
 						{displayedPages.map((page) => (
-							<CrawledPageCard key={page.id} page={page} />
+							<CrawledPageCard key={page.id} crawlId={crawlId} page={page} />
 						))}
 						{showFooter && (
 							<div className="text-center text-xs font-bold text-miku-text/30 py-4 uppercase tracking-widest flex items-center justify-center gap-2">

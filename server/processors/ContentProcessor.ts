@@ -30,10 +30,6 @@ function safeExtract<T>(fn: () => T, fallback: T, logger: Logger, context: strin
 	}
 }
 
-function serializeJsonMainContent(value: unknown): string {
-	return typeof value === "string" ? value : JSON.stringify(value);
-}
-
 async function processingCheckpoint(signal?: AbortSignal): Promise<void> {
 	signal?.throwIfAborted();
 	await sleep(0, undefined, signal ? { signal } : undefined);
@@ -66,16 +62,7 @@ export async function processContent(
 				run: (operationSignal) => processHtml(content, url, result, logger, operationSignal),
 			});
 		} else if (isJsonContentType(contentType)) {
-			await runWithTimeout({
-				timeoutMs: TIMEOUT_CONSTANTS.CONTENT_PROCESSING,
-				operationName: `JSON processing for ${url}`,
-				...(signal ? { signal } : {}),
-				run: async (operationSignal) => {
-					operationSignal.throwIfAborted();
-					processJson(content, result);
-					operationSignal.throwIfAborted();
-				},
-			});
+			processJson(content, result);
 		} else if (isPdfContentType(contentType)) {
 			await processPdfContent(content, result, logger, signal);
 		}
@@ -135,7 +122,8 @@ function processJson(content: string | Buffer, result: ProcessedContent): void {
 	} catch {
 		mainContent = jsonString.slice(0, 500);
 	}
-	const serializedContent = serializeJsonMainContent(mainContent);
+	const serializedContent =
+		typeof mainContent === "string" ? mainContent : JSON.stringify(mainContent);
 	result.extractedData = {
 		mainContent: serializedContent,
 	};

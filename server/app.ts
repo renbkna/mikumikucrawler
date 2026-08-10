@@ -8,7 +8,6 @@ import { API_PATHS } from "../shared/contracts/index.js";
 import { routeServicesPlugin } from "./api/context.js";
 import { crawlsApi } from "./api/crawls.js";
 import { healthApi } from "./api/health.js";
-import { pagesApi } from "./api/pages.js";
 import { searchApi } from "./api/search.js";
 import { sseApi } from "./api/sse.js";
 import { isCorsOriginAllowed } from "./config/cors.js";
@@ -88,7 +87,7 @@ export function createApp(
 		.use(
 			cors({
 				origin: (request) => isCorsOriginAllowed(request.headers.get("origin"), config),
-				credentials: true,
+				credentials: false,
 			}),
 		)
 		.use(
@@ -105,7 +104,6 @@ export function createApp(
 	return app
 		.use(crawlsApi(routeServices))
 		.use(sseApi(routeServices))
-		.use(pagesApi(routeServices))
 		.use(searchApi(routeServices))
 		.use(healthApi(routeServices))
 		.use(spaRoutes)

@@ -53,6 +53,21 @@ describe("readLimitedResponseBody", () => {
 		expect(canceled).toBe(true);
 	});
 
+	test("returns concatenated bytes as the body length authority", async () => {
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new Uint8Array([1, 2]));
+				controller.enqueue(new Uint8Array([3]));
+				controller.close();
+			},
+		});
+
+		const result = await readLimitedResponseBody(new Response(body), 3);
+
+		expect(result.type).toBe("body");
+		if (result.type === "body") expect([...result.bytes]).toEqual([1, 2, 3]);
+	});
+
 	test("aborts and cancels a stalled body read", async () => {
 		let canceled = false;
 		const body = new ReadableStream<Uint8Array>({

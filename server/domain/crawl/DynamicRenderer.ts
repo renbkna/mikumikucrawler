@@ -30,14 +30,14 @@ import {
 import { getErrorMessage } from "../../utils/helpers.js";
 import { disposeResponseBody, readLimitedResponseBody } from "../../utils/responseBody.js";
 import { OperationTimeoutError, runWithTimeout } from "../../utils/timeout.js";
-import { type WorkLease, WorkPermitPool } from "../../utils/WorkPermitPool.js";
+import { type AcquireWork, type WorkLease, WorkPermitPool } from "../../utils/WorkPermitPool.js";
 import type { QueueItem } from "./CrawlQueue.js";
 import {
 	CONSENT_ACTION_MARKERS,
 	CONSENT_BUTTON_SELECTORS,
 	CONSENT_NEGATIVE_ACTION_MARKERS,
 	isConsentWallText,
-	requiresStrictConsentBypass,
+	isUnresolvedStrictConsentWall,
 } from "./consent.js";
 import type { DestinationAuthorizer } from "./FetchService.js";
 
@@ -160,6 +160,7 @@ const BROWSER_REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 interface DynamicRouteBudget {
 	remainingRequests: number;
 	remainingBytes: number;
+	acquireBodyRead: AcquireWork;
 }
 
 class DynamicRouteBudgetError extends Error {}
@@ -168,7 +169,11 @@ export function createDynamicRouteBudget(
 	maxRequests: number = DYNAMIC_RENDERER_CONSTANTS.NETWORK_BUDGET.MAX_REQUESTS_PER_PAGE,
 	maxBytes: number = DYNAMIC_RENDERER_CONSTANTS.NETWORK_BUDGET.MAX_RESPONSE_BYTES_PER_PAGE,
 ): DynamicRouteBudget {
-	return { remainingRequests: maxRequests, remainingBytes: maxBytes };
+	return {
+		remainingRequests: maxRequests,
+		remainingBytes: maxBytes,
+		acquireBodyRead: new WorkPermitPool(1).acquire,
+	};
 }
 
 type DynamicSubrequestAdmission = {
@@ -614,7 +619,7 @@ export async function fulfillRouteWithPinnedHttpClient(
 				await route.abort();
 				return { type: "aborted", reason: "static-representation", url: requestUrl };
 			}
-			if (response.ok && contentType && !isSupportedDocumentContentType(contentType)) {
+			if (response.ok && !isSupportedDocumentContentType(contentType)) {
 				await disposeResponseBody(response);
 				await route.abort();
 				return {
@@ -633,24 +638,36 @@ export async function fulfillRouteWithPinnedHttpClient(
 			});
 			return { type: "fulfilled" };
 		}
-		const contentLimit = isDocument
-			? maxProcessableDocumentBytes(contentType)
-			: Number.POSITIVE_INFINITY;
-		const responseBudgetOwnsLimit = budget.remainingBytes < contentLimit;
-		const body = await readLimitedResponseBody(
-			response,
-			Math.min(contentLimit, budget.remainingBytes),
-			options.signal,
-		);
-		if (body.type === "tooLarge") {
-			if (responseBudgetOwnsLimit) budget.remainingBytes = 0;
-			await route.abort();
-			return {
-				type: "aborted",
-				reason: responseBudgetOwnsLimit ? "response-budget" : "response-too-large",
-			};
+		let releaseBodyRead: WorkLease;
+		try {
+			releaseBodyRead = await budget.acquireBodyRead(options.signal);
+		} catch (error) {
+			await disposeResponseBody(response);
+			throw error;
 		}
-		budget.remainingBytes -= body.contentLength;
+		let body: Awaited<ReturnType<typeof readLimitedResponseBody>>;
+		try {
+			const contentLimit = isDocument
+				? maxProcessableDocumentBytes(contentType)
+				: Number.POSITIVE_INFINITY;
+			const responseBudgetOwnsLimit = budget.remainingBytes < contentLimit;
+			body = await readLimitedResponseBody(
+				response,
+				Math.min(contentLimit, budget.remainingBytes),
+				options.signal,
+			);
+			if (body.type === "tooLarge") {
+				if (responseBudgetOwnsLimit) budget.remainingBytes = 0;
+				await route.abort();
+				return {
+					type: "aborted",
+					reason: responseBudgetOwnsLimit ? "response-budget" : "response-too-large",
+				};
+			}
+			budget.remainingBytes -= body.bytes.byteLength;
+		} finally {
+			releaseBodyRead();
+		}
 		await route.fulfill({
 			status: response.status,
 			headers: createRouteFulfillHeaders(response.headers),
@@ -1083,20 +1100,16 @@ export class DynamicRenderer {
 				return documentRouteFailure;
 			}
 
-			const consentBypass = await this.handleConsentModals(page, item.url, signal);
+			const consentBypass = await this.handleConsentModals(page, documentState.url, signal);
 			signal?.throwIfAborted();
 			if (documentRouteFailure) {
 				return documentRouteFailure;
 			}
-			if (
-				consentBypass.detected &&
-				!consentBypass.bypassed &&
-				requiresStrictConsentBypass(item.url)
-			) {
+			if (isUnresolvedStrictConsentWall(consentBypass, documentState.url)) {
 				const statusCode = documentState.response?.statusCode ?? 200;
 				return {
 					type: "consentBlocked",
-					message: `Consent wall could not be bypassed for ${item.url}`,
+					message: `Consent wall could not be bypassed for ${documentState.url}`,
 					statusCode: statusCode >= 400 ? statusCode : 403,
 				};
 			}

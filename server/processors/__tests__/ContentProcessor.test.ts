@@ -193,6 +193,7 @@ startxref
 			"application/pdf",
 		);
 
-		expect(result.extractedData.mainContent).toBeDefined();
+		expect(result.errors).toEqual([]);
+		expect(result.extractedData.mainContent).toContain("Hello World");
 	}, 30_000);
 });

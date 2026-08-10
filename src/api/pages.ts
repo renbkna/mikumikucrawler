@@ -8,12 +8,14 @@ import type { ApiResult } from "./result";
 const PAGE_CONTENT_REQUEST_TIMEOUT_MS = 15_000;
 
 export async function getPageContent(
+	crawlId: string,
 	pageId: number,
 	signal?: AbortSignal,
 ): Promise<ApiResult<PageContentResponse>> {
 	const requestSignal = createRequestSignal(signal, PAGE_CONTENT_REQUEST_TIMEOUT_MS);
 	const response = await api.api
-		.pages({ id: pageId })
+		.crawls({ id: crawlId })
+		.pages({ pageId })
 		.content.get({ fetch: { signal: requestSignal } });
 	const { data, error } = response;
 

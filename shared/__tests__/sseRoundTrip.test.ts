@@ -87,7 +87,8 @@ describe("SSE boundary", () => {
 			},
 			{
 				type: "crawl.log",
-				publish: (stream, crawlId) => stream.publish(crawlId, "crawl.log", { message: "ready" }),
+				publish: (stream, crawlId) =>
+					stream.publish(crawlId, "crawl.log", { message: "ready", level: "info" }),
 			},
 			{
 				type: "crawl.completed",
@@ -128,10 +129,39 @@ describe("SSE boundary", () => {
 		}
 	});
 
+	test("delivers a replayed settled event before closing, even beyond the pending-event bound", async () => {
+		const stream = new EventStream();
+		const crawlId = "settled-replay";
+		stream.initialize(crawlId);
+		stream.publish(crawlId, "crawl.log", { message: "before settlement", level: "info" });
+		stream.publish(crawlId, "crawl.failed", {
+			error: `failed-${"x".repeat(300_000)}`,
+			counters: {
+				pagesScanned: 0,
+				successCount: 0,
+				failureCount: 0,
+				skippedCount: 0,
+				linksFound: 0,
+				mediaFiles: 0,
+				totalDataKb: 0,
+			},
+		});
+
+		const response = await createResponse(stream, crawlId);
+		const wire = await response.text();
+
+		expect(wire).toContain("event: crawl.log");
+		expect(wire).toContain("event: crawl.failed");
+		expect(wire).toContain("failed-xxx");
+		expect(stream.hasSubscriberCapacity(crawlId)).toBe(true);
+		const unsubscribers = Array.from({ length: 10 }, () => stream.subscribe(crawlId, () => {}));
+		for (const unsubscribe of unsubscribers) unsubscribe();
+	});
+
 	test("Elysia stream cancellation releases EventStream subscriber ownership", async () => {
 		const stream = new EventStream();
 		stream.initialize("cancel");
-		stream.publish("cancel", "crawl.log", { message: "ready" });
+		stream.publish("cancel", "crawl.log", { message: "ready", level: "info" });
 		const response = await createResponse(stream, "cancel");
 		const reader = response.body?.getReader();
 		if (!reader) throw new Error("Expected SSE response body");
@@ -147,7 +177,7 @@ describe("SSE boundary", () => {
 		stream.initialize("slow-client");
 		const response = await createResponse(stream, "slow-client");
 		for (let index = 0; index < 40; index += 1) {
-			stream.publish("slow-client", "crawl.log", { message: `event-${index}` });
+			stream.publish("slow-client", "crawl.log", { message: `event-${index}`, level: "info" });
 		}
 		await Promise.resolve();
 
@@ -162,7 +192,10 @@ describe("SSE boundary", () => {
 		const stream = new EventStream();
 		stream.initialize("oversized-event");
 		const response = await createResponse(stream, "oversized-event");
-		stream.publish("oversized-event", "crawl.log", { message: "x".repeat(300_000) });
+		stream.publish("oversized-event", "crawl.log", {
+			message: "x".repeat(300_000),
+			level: "info",
+		});
 		await Promise.resolve();
 
 		const unsubscribers = Array.from({ length: 10 }, () =>
@@ -176,7 +209,10 @@ describe("SSE boundary", () => {
 		const stream = new EventStream();
 		stream.initialize("replay-overflow");
 		for (let index = 0; index < 40; index += 1) {
-			stream.publish("replay-overflow", "crawl.log", { message: `event-${index}` });
+			stream.publish("replay-overflow", "crawl.log", {
+				message: `event-${index}`,
+				level: "info",
+			});
 		}
 		const setIntervalSpy = spyOn(globalThis, "setInterval");
 		let response: Response | undefined;

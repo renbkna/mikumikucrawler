@@ -13,7 +13,6 @@
 		"noUncheckedSideEffectImports": true,
 		"useUnknownInCatchVariables": true,
 		"allowJs": false,
-		"checkJs": false,
 		"verbatimModuleSyntax": true,
 		"isolatedModules": true,
 		"isolatedDeclarations": false,

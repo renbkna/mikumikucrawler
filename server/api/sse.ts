@@ -1,5 +1,9 @@
-import { Elysia } from "elysia";
-import { API_PATHS, CRAWL_ROUTE_SEGMENTS } from "../../shared/contracts/index.js";
+import { Elysia, t } from "elysia";
+import {
+	API_PATHS,
+	CRAWL_ROUTE_SEGMENTS,
+	isActiveCrawlStatus,
+} from "../../shared/contracts/index.js";
 import { CrawlIdParamsSchema } from "../../shared/contracts/schemas.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
 import { SseHeadersSchema } from "../contracts/http.js";
@@ -15,6 +19,7 @@ export function sseApi(services: RouteServicesPlugin) {
 			headers: SseHeadersSchema,
 			params: CrawlIdParamsSchema,
 			response: {
+				204: t.Void({ description: "Crawl settled with no unseen terminal event" }),
 				404: ApiErrorSchema,
 				422: ApiErrorSchema,
 				429: ApiErrorSchema,
@@ -39,6 +44,13 @@ export function sseApi(services: RouteServicesPlugin) {
 			if (!crawl) {
 				return status(404, { error: "Crawl not found" });
 			}
+			const afterSequence = headers["last-event-id"] ?? 0;
+			if (
+				!isActiveCrawlStatus(crawl.status) &&
+				!eventStream.hasReplayableSettledEvent(params.id, afterSequence)
+			) {
+				return new Response(null, { status: 204 });
+			}
 			const clientKey = await resolveClientKey(request, server);
 			if (!eventStream.hasSubscriberCapacity(params.id, clientKey)) {
 				return status(429, {
@@ -54,7 +66,7 @@ export function sseApi(services: RouteServicesPlugin) {
 			return createCrawlEventStream({
 				crawlId: params.id,
 				eventStream,
-				afterSequence: headers["last-event-id"] ?? 0,
+				afterSequence,
 				clientKey,
 			});
 		},

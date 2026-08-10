@@ -24,13 +24,18 @@ interface ListOptions {
 	limit?: number;
 }
 
-function toSqliteDateTime(value: string): string {
+function toSqliteDateTime(value: string, bound: "lower" | "upper"): string {
 	const parsed = new Date(value);
 	if (Number.isNaN(parsed.getTime())) {
 		return value;
 	}
 
-	return parsed.toISOString().slice(0, 19).replace("T", " ");
+	const milliseconds = parsed.getTime();
+	const roundedMilliseconds =
+		bound === "lower"
+			? Math.ceil(milliseconds / 1_000) * 1_000
+			: Math.floor(milliseconds / 1_000) * 1_000;
+	return new Date(roundedMilliseconds).toISOString().slice(0, 19).replace("T", " ");
 }
 
 export function createCrawlRunRepo(db: Database, own: OwnStatement) {
@@ -178,12 +183,12 @@ export function createCrawlRunRepo(db: Database, own: OwnStatement) {
 
 		if (options.from) {
 			clauses.push("updated_at >= ?");
-			params.push(toSqliteDateTime(options.from));
+			params.push(toSqliteDateTime(options.from, "lower"));
 		}
 
 		if (options.to) {
 			clauses.push("updated_at <= ?");
-			params.push(toSqliteDateTime(options.to));
+			params.push(toSqliteDateTime(options.to, "upper"));
 		}
 
 		const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";

@@ -50,7 +50,8 @@ function parseHttpUrl(url: string): URL | { error: string } {
 	let candidate = url.trim();
 	const hasExplicitHttpScheme = /^https?:\/\//i.test(candidate);
 	const hasSchemeLikePrefix = /^[a-z][a-z0-9+.-]*:/i.test(candidate);
-	const looksLikeHostWithPort = /^[^/?#]+:\d/.test(candidate);
+	const looksLikeHostWithPort =
+		/^(?:localhost|(?:[^./?#:\s]+\.)+[^./?#:\s]+|\[[^\]]+\]):\d+(?:[/?#]|$)/i.test(candidate);
 
 	if (hasSchemeLikePrefix && !hasExplicitHttpScheme && !looksLikeHostWithPort) {
 		return { error: "Only HTTP and HTTPS URLs are supported" };

@@ -1,7 +1,6 @@
 export const API_PATHS = {
 	root: "/api",
 	crawls: "/api/crawls",
-	pages: "/api/pages",
 	search: "/api/search",
 	health: "/health",
 	openapi: "/openapi",
@@ -15,12 +14,9 @@ export const CRAWL_ROUTE_SEGMENTS = {
 	resume: "/:id/resume",
 	snapshot: "/:id/snapshot",
 	pages: "/:id/pages",
+	pageContent: "/:id/pages/:pageId/content",
 	export: "/:id/export",
 	events: "/:id/events",
-} as const;
-
-export const PAGE_ROUTE_SEGMENTS = {
-	content: "/:id/content",
 } as const;
 
 export const OPENAPI_CRAWL_EVENTS_PATH = `${API_PATHS.crawls}/{id}/events`;

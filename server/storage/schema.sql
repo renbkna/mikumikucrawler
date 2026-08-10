@@ -110,9 +110,6 @@ ON pages(crawl_id, crawled_at DESC);
 CREATE INDEX idx_crawl_terminal_urls_crawl_id
 ON crawl_terminal_urls(crawl_id, terminal_sequence ASC);
 
-CREATE INDEX idx_crawl_domain_state_crawl_id
-ON crawl_domain_state(crawl_id, delay_key);
-
 CREATE TRIGGER prevent_queue_for_terminal_url
 BEFORE INSERT ON crawl_queue_items
 WHEN EXISTS (

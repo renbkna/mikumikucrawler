@@ -1,4 +1,4 @@
-import { Music, Sparkles } from "lucide-react";
+import { Music } from "lucide-react";
 import { memo } from "react";
 import type { RunPhase } from "../hooks/crawlControllerState";
 
@@ -38,20 +38,12 @@ export const ProgressBar = memo(function ProgressBar({ progress, runPhase }: Pro
 				</div>
 			</div>
 
-			<div className="relative h-5 rounded-full bg-miku-accent/5 overflow-hidden border border-miku-accent/15">
-				<div
-					className="relative h-full transition-all duration-700 ease-out energy-bar rounded-full"
-					style={{ width: `${progress}%` }}
-				>
-					<div className="absolute inset-0 bg-white/10" />
-
-					{isWorking && progress > 0 && progress < 100 && (
-						<div className="absolute right-1 top-1/2 -translate-y-1/2">
-							<Sparkles className="text-white animate-ping" size={12} />
-						</div>
-					)}
-				</div>
-			</div>
+			<progress
+				value={progress}
+				max={100}
+				aria-label="Crawl progress"
+				className="w-full h-5 accent-miku-teal"
+			/>
 
 			<div className="mt-3 text-center h-5">
 				{isWorking && progress > 0 && progress < 100 && (

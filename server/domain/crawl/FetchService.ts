@@ -92,12 +92,12 @@ async function readResponseContent(
 		? {
 				type: "content",
 				content: Buffer.from(body.bytes.buffer, body.bytes.byteOffset, body.bytes.byteLength),
-				contentLength: body.contentLength,
+				contentLength: body.bytes.byteLength,
 			}
 		: {
 				type: "content",
 				content: decodeDocumentBytes(body.bytes, contentType),
-				contentLength: body.contentLength,
+				contentLength: body.bytes.byteLength,
 			};
 }
 

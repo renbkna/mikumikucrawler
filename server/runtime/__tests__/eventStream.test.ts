@@ -176,8 +176,14 @@ describe("event stream contract", () => {
 	test("bounds retained replay history by UTF-8 bytes", () => {
 		const stream = new EventStream();
 		stream.initialize("crawl-byte-budget");
-		stream.publish("crawl-byte-budget", "crawl.log", { message: "a".repeat(600_000) });
-		stream.publish("crawl-byte-budget", "crawl.log", { message: "b".repeat(600_000) });
+		stream.publish("crawl-byte-budget", "crawl.log", {
+			message: "a".repeat(600_000),
+			level: "info",
+		});
+		stream.publish("crawl-byte-budget", "crawl.log", {
+			message: "b".repeat(600_000),
+			level: "info",
+		});
 		const seen: number[] = [];
 
 		stream.subscribe("crawl-byte-budget", (event) => seen.push(event.sequence))();
@@ -199,6 +205,7 @@ describe("event stream contract", () => {
 		expect(() =>
 			stream.publish("crawl-subscriber-failure", "crawl.log", {
 				message: "hello",
+				level: "info",
 			}),
 		).not.toThrow();
 		expect(seen).toEqual([1]);
@@ -207,7 +214,7 @@ describe("event stream contract", () => {
 	test("cleans up inactive crawl history after the cleanup delay", async () => {
 		const stream = new EventStream();
 		const generation = stream.initialize("crawl-cleanup");
-		stream.publish("crawl-cleanup", "crawl.log", { message: "hello" });
+		stream.publish("crawl-cleanup", "crawl.log", { message: "hello", level: "info" });
 		stream.scheduleCleanup("crawl-cleanup", generation, 5);
 		await Bun.sleep(20);
 
@@ -223,7 +230,7 @@ describe("event stream contract", () => {
 	test("late subscribers do not cancel inactive crawl cleanup", async () => {
 		const stream = new EventStream();
 		const generation = stream.initialize("crawl-late-cleanup");
-		stream.publish("crawl-late-cleanup", "crawl.log", { message: "hello" });
+		stream.publish("crawl-late-cleanup", "crawl.log", { message: "hello", level: "info" });
 		stream.scheduleCleanup("crawl-late-cleanup", generation, 5);
 
 		const unsubscribe = stream.subscribe("crawl-late-cleanup", () => {});
