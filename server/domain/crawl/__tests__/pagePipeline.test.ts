@@ -142,6 +142,7 @@ describe("page pipeline contract", () => {
 		});
 		expect(eventSink.log).toHaveBeenCalledWith(
 			"[Crawler] Consent wall could not be bypassed for https://www.youtube.com/watch?v=test",
+			"error",
 		);
 	});
 
@@ -370,7 +371,7 @@ describe("page pipeline contract", () => {
 			terminalOutcome: "success",
 			terminalEffects: { chargeDomainBudget: true },
 		});
-		expect(eventSink.log).toHaveBeenCalledWith("[Crawler] Crawled https://example.com/");
+		expect(eventSink.log).toHaveBeenCalledWith("[Crawler] Crawled https://example.com/", "success");
 	});
 
 	test("rendered client error shells return terminal failure without page data", async () => {
@@ -413,6 +414,7 @@ describe("page pipeline contract", () => {
 		expect(result.page).toBeUndefined();
 		expect(eventSink.log).toHaveBeenCalledWith(
 			"[Crawler] Client error shell detected: https://example.com/crashed-app",
+			"error",
 		);
 	});
 

@@ -1,22 +1,48 @@
 import { History, Music2, Sparkles } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { ActionButtons } from "./components/ActionButtons";
-import { ConfigurationView } from "./components/ConfigurationView";
-import { CrawledPagesSection } from "./components/CrawledPagesSection";
 import { CrawlerForm } from "./components/CrawlerForm";
-import { ExportDialog } from "./components/ExportDialog";
-import { LogsSection } from "./components/LogsSection";
 import { MikuBanner } from "./components/MikuBanner";
 import { ProgressBar } from "./components/ProgressBar";
-import { ResumeSessionsPanel } from "./components/ResumeSessionsPanel";
 import { StatsGrid } from "./components/StatsGrid";
-import { StatsVisualizer } from "./components/StatsVisualizer";
-import { TheatreOverlay, type TheatreStatus } from "./components/TheatreOverlay";
+import type { TheatreStatus } from "./components/TheatreOverlay";
 import { ToastNotification } from "./components/ToastNotification";
 import { UI_LIMITS } from "./constants";
 import { isTerminalRunPhase } from "./hooks/crawlControllerState";
 import { useCrawlController } from "./hooks/useCrawlController";
 import { useToast } from "./hooks/useToast";
+
+const ConfigurationView = lazy(() =>
+	import("./components/ConfigurationView").then(({ ConfigurationView }) => ({
+		default: ConfigurationView,
+	})),
+);
+const CrawledPagesSection = lazy(() =>
+	import("./components/CrawledPagesSection").then(({ CrawledPagesSection }) => ({
+		default: CrawledPagesSection,
+	})),
+);
+const ExportDialog = lazy(() =>
+	import("./components/ExportDialog").then(({ ExportDialog }) => ({ default: ExportDialog })),
+);
+const LogsSection = lazy(() =>
+	import("./components/LogsSection").then(({ LogsSection }) => ({ default: LogsSection })),
+);
+const ResumeSessionsPanel = lazy(() =>
+	import("./components/ResumeSessionsPanel").then(({ ResumeSessionsPanel }) => ({
+		default: ResumeSessionsPanel,
+	})),
+);
+const StatsVisualizer = lazy(() =>
+	import("./components/StatsVisualizer").then(({ StatsVisualizer }) => ({
+		default: StatsVisualizer,
+	})),
+);
+const TheatreOverlay = lazy(() =>
+	import("./components/TheatreOverlay").then(({ TheatreOverlay }) => ({
+		default: TheatreOverlay,
+	})),
+);
 
 function App() {
 	const [theatreStatus, setTheatreStatus] = useState<TheatreStatus>("idle");
@@ -29,6 +55,7 @@ function App() {
 	const { toasts, addToast, dismissToast } = useToast();
 
 	const {
+		activeCrawlId,
 		target,
 		crawlOptions,
 		activeCrawlOptions,
@@ -118,14 +145,18 @@ function App() {
 
 	return (
 		<div className="relative w-screen h-screen overflow-hidden text-miku-text font-sans">
-			<TheatreOverlay
-				status={theatreStatus}
-				onComplete={handleTheatreComplete}
-				isCrawlActive={canPause || canForceStop}
-				onStop={canPause ? pauseCrawl : forceStopAttack}
-				stopLabel={canPause ? "Pause" : "Force Stop"}
-				volume={audioVol}
-			/>
+			{theatreStatus !== "idle" && (
+				<Suspense fallback={<div className="fixed inset-0 z-[100] bg-black" />}>
+					<TheatreOverlay
+						status={theatreStatus}
+						onComplete={handleTheatreComplete}
+						isCrawlActive={canPause || canForceStop}
+						onStop={canPause ? pauseCrawl : forceStopAttack}
+						stopLabel={canPause ? "Pause" : "Force Stop"}
+						volume={audioVol}
+					/>
+				</Suspense>
+			)}
 
 			<div
 				className={`relative w-full h-full px-4 pb-12 transition-all duration-1000 ${isUIHidden ? "opacity-0 scale-95 blur-xl pointer-events-none" : "opacity-100 scale-100 blur-0"} ${isModalOpen ? "overflow-hidden" : "overflow-y-auto"}`}
@@ -172,22 +203,28 @@ function App() {
 						/>
 					</section>
 
-					{resumableSessions.length > 0 && !isAttacking && (
-						<div className="flex items-center justify-between px-5 py-3 rounded-xl border border-miku-border bg-white/70 text-miku-text shadow-sm">
-							<div className="flex items-center gap-2 text-sm font-bold">
-								<History className="w-4 h-4 shrink-0" />
-								{resumableSessions.length} resumable crawl
-								{resumableSessions.length !== 1 ? "s" : ""} found
+					{!isAttacking &&
+						(resumableSessions.length > 0 ||
+							resumableSessionsLoading ||
+							resumableSessionsError) && (
+							<div className="flex items-center justify-between px-5 py-3 rounded-xl border border-miku-border bg-white/70 text-miku-text shadow-sm">
+								<div className="flex items-center gap-2 text-sm font-bold">
+									<History className="w-4 h-4 shrink-0" />
+									{resumableSessionsError
+										? "Saved crawls need attention"
+										: resumableSessionsLoading
+											? "Checking saved crawls…"
+											: `${resumableSessions.length} resumable crawl${resumableSessions.length !== 1 ? "s" : ""} found`}
+								</div>
+								<button
+									type="button"
+									onClick={() => setOpenResumePanel(true)}
+									className="px-4 py-1.5 rounded-lg bg-miku-teal hover:bg-miku-teal-dark text-white text-xs font-bold transition-colors"
+								>
+									View &amp; Resume
+								</button>
 							</div>
-							<button
-								type="button"
-								onClick={() => setOpenResumePanel(true)}
-								className="px-4 py-1.5 rounded-lg bg-miku-teal hover:bg-miku-teal-dark text-white text-xs font-bold transition-colors"
-							>
-								View &amp; Resume
-							</button>
-						</div>
-					)}
+						)}
 
 					<section aria-label="Statistics" className="grid grid-cols-1 lg:grid-cols-3 gap-3">
 						<div className="lg:col-span-2">
@@ -205,7 +242,11 @@ function App() {
 						setShowDetails={setShowDetails}
 					/>
 
-					{showDetails && <StatsVisualizer stats={stats} queueStats={queueStats} />}
+					{showDetails && (
+						<Suspense fallback={null}>
+							<StatsVisualizer stats={stats} queueStats={queueStats} />
+						</Suspense>
+					)}
 
 					<div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
 						<section
@@ -221,7 +262,19 @@ function App() {
 									System Logs
 								</h2>
 							</div>
-							<LogsSection logs={logs} clearLogs={clearLogs} />
+							{logs.length > 0 ? (
+								<Suspense fallback={null}>
+									<LogsSection logs={logs} clearLogs={clearLogs} />
+								</Suspense>
+							) : (
+								<div className="h-full flex flex-col items-center justify-center text-miku-text/40">
+									<Music2 className="text-miku-teal/35 mb-3" size={34} />
+									<p className="font-medium">Waiting for Miku to start writing...</p>
+									<p className="text-xs mt-1 opacity-60">
+										Logs will appear here when crawling begins
+									</p>
+								</div>
+							)}
 						</section>
 						<section
 							aria-labelledby="data-heading"
@@ -237,17 +290,27 @@ function App() {
 								</h2>
 								<span className="cute-badge flex items-center gap-1">{storedPageCount} stored</span>
 							</div>
-							<CrawledPagesSection
-								crawledPages={crawledPages}
-								displayedPages={displayedPages}
-								searchQuery={searchQuery}
-								onSearchChange={setSearchQuery}
-								onClearSearch={clearSearch}
-								searchResultCount={searchResultCount}
-								isSearching={isSearchingPages}
-								searchError={pageSearchError}
-								pageLimit={UI_LIMITS.MAX_PAGE_BUFFER}
-							/>
+							{activeCrawlId ? (
+								<Suspense fallback={null}>
+									<CrawledPagesSection
+										crawlId={activeCrawlId}
+										crawledPages={crawledPages}
+										displayedPages={displayedPages}
+										searchQuery={searchQuery}
+										onSearchChange={setSearchQuery}
+										onClearSearch={clearSearch}
+										searchResultCount={searchResultCount}
+										isSearching={isSearchingPages}
+										searchError={pageSearchError}
+										pageLimit={UI_LIMITS.MAX_PAGE_BUFFER}
+									/>
+								</Suspense>
+							) : (
+								<div className="h-full flex flex-col items-center justify-center text-miku-text/40">
+									<p className="font-semibold text-base">No pages crawled yet...</p>
+									<p className="text-xs mt-1 font-medium">Start the Miku Beam to begin!</p>
+								</div>
+							)}
 						</section>
 					</div>
 				</main>
@@ -275,37 +338,39 @@ function App() {
 				</footer>
 			</div>
 
-			<ConfigurationView
-				isOpen={openedConfig}
-				onClose={() => setOpenedConfig(false)}
-				options={crawlOptions}
-				editingNextRun={activeCrawlOptions !== null && !isTerminalRunPhase(runPhase)}
-				onSave={(options) => {
-					setCrawlOptions(options);
-					addToast("success", "Configuration saved! ✨");
-				}}
-			/>
-
-			<ExportDialog
-				isOpen={openExportDialog}
-				onClose={() => setOpenExportDialog(false)}
-				onExport={exportCrawl}
-			/>
-
-			<ResumeSessionsPanel
-				isOpen={openResumePanel}
-				sessions={resumableSessions}
-				isLoading={resumableSessionsLoading}
-				fetchError={resumableSessionsError}
-				deletingId={deletingResumableSessionId}
-				resumingId={resumingResumableSessionId}
-				onRefresh={refreshResumableSessions}
-				onDelete={(sessionId) => {
-					void deleteResumableSession(sessionId);
-				}}
-				onClose={() => setOpenResumePanel(false)}
-				onResume={handleResumeSession}
-			/>
+			<Suspense fallback={null}>
+				{openedConfig && (
+					<ConfigurationView
+						isOpen
+						onClose={() => setOpenedConfig(false)}
+						options={crawlOptions}
+						editingNextRun={activeCrawlOptions !== null && !isTerminalRunPhase(runPhase)}
+						onSave={(options) => {
+							setCrawlOptions(options);
+							addToast("success", "Configuration saved! ✨");
+						}}
+					/>
+				)}
+				{openExportDialog && (
+					<ExportDialog isOpen onClose={() => setOpenExportDialog(false)} onExport={exportCrawl} />
+				)}
+				{openResumePanel && (
+					<ResumeSessionsPanel
+						isOpen
+						sessions={resumableSessions}
+						isLoading={resumableSessionsLoading}
+						fetchError={resumableSessionsError}
+						deletingId={deletingResumableSessionId}
+						resumingId={resumingResumableSessionId}
+						onRefresh={refreshResumableSessions}
+						onDelete={(sessionId) => {
+							void deleteResumableSession(sessionId);
+						}}
+						onClose={() => setOpenResumePanel(false)}
+						onResume={handleResumeSession}
+					/>
+				)}
+			</Suspense>
 		</div>
 	);
 }

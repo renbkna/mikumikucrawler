@@ -1,5 +1,5 @@
 import { type SSEPayload, sse } from "elysia";
-import type { CrawlEventEnvelope } from "../../shared/contracts/index.js";
+import { type CrawlEventEnvelope, isSettledCrawlEventType } from "../../shared/contracts/index.js";
 import type { EventStream } from "../runtime/EventStream.js";
 
 const KEEPALIVE_INTERVAL_MS = 15_000;
@@ -67,14 +67,22 @@ export function createCrawlEventStream(options: {
 			const write = (event: CrawlEventEnvelope) => {
 				if (closed) return;
 				try {
-					enqueue(
-						sse({
-							id: event.sequence,
-							event: event.type,
-							data: event,
-						}),
-						new TextEncoder().encode(JSON.stringify(event)).byteLength,
-					);
+					const payload = sse({
+						id: event.sequence,
+						event: event.type,
+						data: event,
+					});
+					const bytes = new TextEncoder().encode(JSON.stringify(event)).byteLength;
+					if (!isSettledCrawlEventType(event.type)) {
+						enqueue(payload, bytes);
+						return;
+					}
+
+					for (const queued of pending) controller.enqueue(queued.payload);
+					pending.length = 0;
+					pendingBytes = 0;
+					controller.enqueue(payload);
+					close();
 				} catch {
 					close();
 				}

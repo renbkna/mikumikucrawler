@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { isConsentWallText, requiresStrictConsentBypass } from "../consent.js";
+import {
+	isConsentWallText,
+	isUnresolvedStrictConsentWall,
+	requiresStrictConsentBypass,
+} from "../consent.js";
 
 describe("consent heuristics contract", () => {
 	test("detects english and german consent walls", () => {
@@ -13,5 +17,14 @@ describe("consent heuristics contract", () => {
 		);
 		expect(requiresStrictConsentBypass("https://m.youtube.com/watch?v=fidFUKnRGNQ")).toBe(true);
 		expect(requiresStrictConsentBypass("https://example.com/watch?v=test")).toBe(false);
+	});
+
+	test("uses the final document URL when redirects change consent policy", () => {
+		const unresolved = { detected: true, bypassed: false };
+		expect(isUnresolvedStrictConsentWall(unresolved, "https://youtube.com/watch?v=1")).toBe(true);
+		expect(isUnresolvedStrictConsentWall(unresolved, "https://example.com/watch?v=1")).toBe(false);
+		expect(
+			isUnresolvedStrictConsentWall({ detected: true, bypassed: true }, "https://youtube.com/"),
+		).toBe(false);
 	});
 });

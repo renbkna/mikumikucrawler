@@ -4,6 +4,7 @@ import type {
 	CrawlEventMap,
 	CrawlEventType,
 } from "../../shared/contracts/index.js";
+import { isSettledCrawlEventType } from "../../shared/contracts/index.js";
 
 interface StreamState {
 	generation: number;
@@ -238,6 +239,16 @@ export class EventStream {
 			);
 		}
 		return false;
+	}
+
+	hasReplayableSettledEvent(crawlId: string, afterSequence = 0): boolean {
+		return (
+			this.streams
+				.get(crawlId)
+				?.history.some(
+					({ event }) => event.sequence > afterSequence && isSettledCrawlEventType(event.type),
+				) ?? false
+		);
 	}
 
 	delete(crawlId: string): void {

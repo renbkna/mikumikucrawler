@@ -64,20 +64,23 @@ export function isCrawlCounters(value: unknown): value is CrawlCounters {
 	return check(CrawlCountersSchema, value) && hasValidCrawlCounterIdentity(value);
 }
 
-export function isCrawlSummary(value: unknown): value is CrawlSummary {
-	if (!check(CrawlSummarySchema, value)) {
-		return false;
-	}
-
+function hasValidCrawlSummarySemantics(summary: CrawlSummary): boolean {
 	return (
-		isCrawlOptions(value.options) &&
-		isCrawlCounters(value.counters) &&
-		value.target === value.options.target
+		hasValidCrawlOptionSemantics(summary.options) &&
+		hasValidCrawlCounterIdentity(summary.counters) &&
+		summary.target === summary.options.target
 	);
 }
 
+export function isCrawlSummary(value: unknown): value is CrawlSummary {
+	return check(CrawlSummarySchema, value) && hasValidCrawlSummarySemantics(value);
+}
+
 export function isResumableCrawlListResponse(value: unknown): value is ResumableCrawlListResponse {
-	return check(ResumableCrawlListResponseSchema, value) && value.crawls.every(isCrawlSummary);
+	return (
+		check(ResumableCrawlListResponseSchema, value) &&
+		value.crawls.every(hasValidCrawlSummarySemantics)
+	);
 }
 
 export function isDeleteCrawlResponse(value: unknown): value is DeleteCrawlResponse {
@@ -103,8 +106,7 @@ export function isCrawlPageSummary(value: unknown): value is CrawlPageSummary {
 export function isCrawlRecoverySnapshot(value: unknown): value is CrawlRecoverySnapshot {
 	return (
 		check(CrawlRecoverySnapshotSchema, value) &&
-		isCrawlSummary(value.crawl) &&
-		value.pages.every(isCrawlPageSummary) &&
+		hasValidCrawlSummarySemantics(value.crawl) &&
 		value.pageCount >= value.pages.length
 	);
 }
@@ -118,7 +120,7 @@ export function isCrawlEventEnvelope(value: unknown): value is CrawlEventEnvelop
 		return false;
 	}
 
-	return !("counters" in value.payload) || isCrawlCounters(value.payload.counters);
+	return !("counters" in value.payload) || hasValidCrawlCounterIdentity(value.payload.counters);
 }
 
 export function parseCrawlEventEnvelope(raw: string): CrawlEventEnvelope | null {

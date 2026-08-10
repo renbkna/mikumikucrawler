@@ -66,6 +66,18 @@ function createCrawlRequestBody(options: unknown = crawlBody, id = crypto.random
 }
 
 describe("api contract", () => {
+	test("allowed cross-origin responses do not grant browser credentials", async () => {
+		const { app } = buildApp();
+		const response = await app.handle(
+			new Request("http://localhost/api/health", {
+				headers: { origin: "http://localhost:5173" },
+			}),
+		);
+
+		expect(response.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
+		expect(response.headers.get("access-control-allow-credentials")).toBeNull();
+	});
+
 	test("app factory uses injected storage", async () => {
 		const { app, storage } = buildApp();
 
@@ -130,7 +142,7 @@ describe("api contract", () => {
 		expect(searchResponse.status).toBe(422);
 
 		const pageContentResponse = await app.handle(
-			new Request("http://localhost/api/pages/1.5/content"),
+			new Request("http://localhost/api/crawls/example/pages/1.5/content"),
 		);
 		expect(pageContentResponse.status).toBe(422);
 	});
@@ -155,6 +167,26 @@ describe("api contract", () => {
 			);
 			expect(response.status).toBe(404);
 		}
+	});
+
+	test("settled SSE reconnects stop after the terminal event cursor", async () => {
+		const { app, crawlManager } = buildApp();
+		const crawlId = "settled-sse-reconnect";
+		crawlManager.create(crawlId, { ...crawlBody, maxPages: 1 });
+		const settled = await waitFor(
+			() => crawlManager.get(crawlId),
+			(crawl) => crawl?.status === "completed",
+		);
+		if (!settled) throw new Error("Expected completed crawl");
+
+		const response = await app.handle(
+			new Request(`http://localhost/api/crawls/${crawlId}/events`, {
+				headers: { "last-event-id": String(settled.eventSequence) },
+			}),
+		);
+
+		expect(response.status).toBe(204);
+		expect(await response.text()).toBe("");
 	});
 
 	test("rate limits failed SSE handshakes and ordinary query-string lookalikes", async () => {
@@ -470,7 +502,7 @@ describe("api contract", () => {
 			],
 		});
 		const pageContentResponse = await app.handle(
-			new Request(`http://localhost/api/pages/${pages[0].id}/content`),
+			new Request(`http://localhost/api/crawls/${created.id}/pages/${pages[0].id}/content`),
 		);
 		expect(pageContentResponse.status).toBe(200);
 		const pageContent = await pageContentResponse.json();
@@ -500,14 +532,35 @@ describe("api contract", () => {
 		});
 
 		const emptyResponse = await app.handle(
-			new Request(`http://localhost/api/pages/${emptyId}/content`),
+			new Request(`http://localhost/api/crawls/${crawl.id}/pages/${emptyId}/content`),
 		);
 		const nullResponse = await app.handle(
-			new Request(`http://localhost/api/pages/${nullId}/content`),
+			new Request(`http://localhost/api/crawls/${crawl.id}/pages/${nullId}/content`),
 		);
 
 		expect(await emptyResponse.json()).toMatchObject({ content: "" });
 		expect(await nullResponse.json()).toMatchObject({ content: null });
+	});
+
+	test("page content cannot be read through another crawl identity", async () => {
+		const { app, storage } = buildApp();
+		const owner = storage.repos.crawlRuns.createRun("page-owner", crawlBody);
+		const other = storage.repos.crawlRuns.createRun("other-crawl", {
+			...crawlBody,
+			target: "https://other.example/",
+		});
+		const pageId = persistPageFixture(storage, {
+			crawlId: owner.id,
+			url: "https://example.com/private",
+			content: "owner-only",
+		});
+
+		const response = await app.handle(
+			new Request(`http://localhost/api/crawls/${other.id}/pages/${pageId}/content`),
+		);
+
+		expect(response.status).toBe(404);
+		expect(await response.json()).toEqual({ error: "Page not found for crawl" });
 	});
 
 	test("export includes stored content and search count reports total matches", async () => {
@@ -567,6 +620,9 @@ describe("api contract", () => {
 		expect(findParameter("/api/crawls/", "limit")?.schema.default).toBe(25);
 		expect(findParameter("/api/crawls/resumable", "limit")?.schema.default).toBe(25);
 		expect(findParameter("/api/search", "limit")?.schema.default).toBe(20);
+		expect(spec.tags.map(({ name }: { name: string }) => name)).not.toContain("Pages");
+		expect(spec.paths["/api/crawls/{id}/pages/{pageId}/content"].get.tags).toEqual(["Crawls"]);
+		expect(spec.paths["/api/crawls/{id}/events"].get.responses).toHaveProperty("204");
 		expect(eventContent).toHaveProperty("text/event-stream");
 		expect(eventContent).not.toHaveProperty("text/plain");
 

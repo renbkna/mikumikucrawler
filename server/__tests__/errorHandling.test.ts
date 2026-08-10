@@ -54,6 +54,26 @@ describe("app error handling", () => {
 		expect(logger.error).not.toHaveBeenCalled();
 	});
 
+	test("treats response-schema violations as internal failures", async () => {
+		const logger = createLogger();
+		const app = new Elysia()
+			.error(({ error, status }) => {
+				const response = handleAppError({ error, logger });
+				return status(response.status, response.body);
+			})
+			.get(
+				"/invalid-response",
+				{ response: { 200: t.Object({ value: t.Number() }) } },
+				() => ({ value: "private invalid state" }) as never,
+			);
+
+		const response = await app.handle(new Request("http://localhost/invalid-response"));
+
+		expect(response.status).toBe(500);
+		expect(await response.json()).toEqual({ error: "Internal Server Error" });
+		expect(logger.error).toHaveBeenCalledTimes(1);
+	});
+
 	test("preserves parse errors as 400 responses", async () => {
 		const logger = createLogger();
 		const app = new Elysia()

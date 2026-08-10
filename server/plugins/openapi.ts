@@ -27,7 +27,6 @@ export function openapiPlugin(options: { interactive: boolean } = { interactive:
 			},
 			tags: [
 				{ name: "Crawls", description: "Crawl lifecycle control and state" },
-				{ name: "Pages", description: "Stored page content access" },
 				{ name: "Search", description: "Run-scoped search across stored pages" },
 				{ name: "Health", description: "Runtime health endpoints" },
 			],
@@ -64,6 +63,9 @@ export function openapiPlugin(options: { interactive: boolean } = { interactive:
 										schema: { type: "string" },
 									},
 								},
+							},
+							"204": {
+								description: "Crawl settled with no unseen terminal event",
 							},
 							"404": {
 								description: "Crawl not found",

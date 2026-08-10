@@ -15,7 +15,7 @@ import {
 	createInitialCrawlControllerState,
 	getCrawlCommandAvailability,
 } from "../crawlControllerState";
-import { isStartOperationSettled } from "../useCrawlController";
+import { drainQueuedRefreshes, isStartOperationSettled } from "../useCrawlController";
 
 const options: CrawlOptions = {
 	target: "https://example.com/",
@@ -103,6 +103,24 @@ function reduce(state: CrawlControllerState, action: CrawlControllerAction) {
 }
 
 describe("crawl controller state", () => {
+	test("coalesces refresh requests received while a refresh is in flight", async () => {
+		const firstRefresh = Promise.withResolvers<void>();
+		const state = { queued: false };
+		let calls = 0;
+		const draining = drainQueuedRefreshes(state, async () => {
+			calls += 1;
+			if (calls === 1) await firstRefresh.promise;
+		});
+
+		await Promise.resolve();
+		state.queued = true;
+		state.queued = true;
+		firstRefresh.resolve();
+		await draining;
+
+		expect(calls).toBe(2);
+	});
+
 	test("releases a start operation only after a definitive create outcome", () => {
 		for (const status of [503, 507]) {
 			expect(
@@ -174,6 +192,29 @@ describe("crawl controller state", () => {
 		});
 
 		expect(recovered.state).toMatchObject({ pendingCommand: null, runPhase: "paused" });
+		expect(recovered.effects).toEqual([
+			{ type: "toast", level: "error", message: "Only active crawls can be stopped" },
+		]);
+	});
+
+	test("treats a durably recovered pause outcome as command success", () => {
+		const recovered = reduce(active({ pendingCommand: "stop", runPhase: "pausing" }), {
+			type: "commandFailed",
+			kind: "stop",
+			error: "request connection closed",
+			recoveredCrawl: summary({ status: "paused", resumable: true }),
+		});
+
+		expect(recovered.state).toMatchObject({ pendingCommand: null, runPhase: "paused" });
+		expect(recovered.effects).toEqual([]);
+	});
+
+	test("preserves the durable paused phase after the stop command resolves", () => {
+		const paused = active({ pendingCommand: "stop", runPhase: "paused" });
+		expect(reduce(paused, { type: "commandSucceeded", kind: "stop" }).state).toMatchObject({
+			pendingCommand: null,
+			runPhase: "paused",
+		});
 	});
 
 	test("binds a newly accepted crawl and handles resume sequence separately", () => {
@@ -198,29 +239,29 @@ describe("crawl controller state", () => {
 		const state = active({ lastSequence: 2 });
 		const wrongCrawl = reduce(state, {
 			type: "sseEventReceived",
-			envelope: event("crawl.log", { message: "wrong" }, 3, "crawl-2"),
+			envelope: event("crawl.log", { message: "wrong", level: "info" }, 3, "crawl-2"),
 		}).state;
 		const duplicate = reduce(state, {
 			type: "sseEventReceived",
-			envelope: event("crawl.log", { message: "duplicate" }, 2),
+			envelope: event("crawl.log", { message: "duplicate", level: "info" }, 2),
 		}).state;
 		const accepted = reduce(state, {
 			type: "sseEventReceived",
-			envelope: event("crawl.log", { message: "accepted" }, 3),
+			envelope: event("crawl.log", { message: "accepted", level: "error" }, 3),
 		}).state;
 
 		expect(wrongCrawl).toBe(state);
 		expect(duplicate).toBe(state);
 		expect(accepted).toMatchObject({
 			lastSequence: 3,
-			logs: [{ id: 1, message: "accepted" }],
+			logs: [{ id: 1, message: "accepted", level: "error" }],
 		});
 		expect(
 			reduce(
 				{ ...accepted, runPhase: "completed" },
 				{
 					type: "sseEventReceived",
-					envelope: event("crawl.log", { message: "late" }, 4),
+					envelope: event("crawl.log", { message: "late", level: "info" }, 4),
 				},
 			).state,
 		).toEqual({ ...accepted, runPhase: "completed" });
@@ -338,6 +379,7 @@ describe("crawl controller state", () => {
 			const transition = reduce(state, {
 				type: "logAppended",
 				message: index < 2 ? `Falling back to static crawling ${index}` : `ordinary log ${index}`,
+				level: "info",
 			});
 			state = transition.state;
 			warningCount += transition.effects.filter(
@@ -377,5 +419,53 @@ describe("crawl controller state", () => {
 		);
 		state = reduce(state, { type: "resumableSessionDeleted", sessionId: session.id }).state;
 		expect(state.resumableSessions).toMatchObject({ items: [], deletingId: null });
+	});
+
+	test("active session deletion uses the live-state reset policy", () => {
+		const sessionId = "crawl-1";
+		const state = active({
+			lastSequence: 8,
+			progress: 70,
+			stats: counters(7),
+			queueStats: { activeRequests: 1, queueLength: 2, elapsedTime: 3, pagesPerSecond: 1 },
+			crawledPages: [page(1)],
+			storedPageCount: 1,
+			logs: [{ id: 1, message: "running", level: "info" }],
+			searchQuery: "needle",
+			resumableSessions: {
+				items: [
+					{
+						id: sessionId,
+						target: options.target,
+						status: "paused",
+						pagesScanned: 7,
+						createdAt: "2026-01-01T00:00:00.000Z",
+						updatedAt: "2026-01-01T00:00:01.000Z",
+					},
+				],
+				isLoading: false,
+				error: null,
+				deletingId: sessionId,
+				resumingId: null,
+			},
+		});
+
+		const deleted = reduce(state, { type: "resumableSessionDeleted", sessionId }).state;
+
+		expect(deleted).toMatchObject({
+			activeCrawlId: null,
+			activeCrawlOptions: null,
+			connectionState: "connected",
+			runPhase: "idle",
+			stats: counters(),
+			queueStats: null,
+			crawledPages: [],
+			storedPageCount: 0,
+			progress: 0,
+			logs: [],
+			searchQuery: "",
+			lastSequence: 0,
+			resumableSessions: { items: [], deletingId: null },
+		});
 	});
 });

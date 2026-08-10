@@ -16,7 +16,7 @@ import {
 	CrawlRuntimeCapacityError,
 	type ResumeCrawlResult,
 } from "../CrawlManager.js";
-import { CrawlRuntime } from "../CrawlRuntime.js";
+import { CrawlRuntime, type CrawlRuntimeRenderer } from "../CrawlRuntime.js";
 import { EventStream } from "../EventStream.js";
 
 function createRobotsService(httpClient: HttpClient): RobotsService {
@@ -74,6 +74,21 @@ function createManager(
 
 function createCrawl(manager: CrawlManager, options: CrawlOptions) {
 	return manager.create(crypto.randomUUID(), options);
+}
+
+function createCleanupControlledRenderer(
+	closeStarted: PromiseWithResolvers<void>,
+	releaseClose: PromiseWithResolvers<void>,
+): CrawlRuntimeRenderer {
+	return {
+		isEnabled: () => false,
+		initialize: async () => ({ dynamicEnabled: false }),
+		render: async () => ({ type: "staticFallback", reason: "renderer-unavailable" }),
+		close: async () => {
+			closeStarted.resolve();
+			await releaseClose.promise;
+		},
+	};
 }
 
 describe("crawl manager contract", () => {
@@ -1785,6 +1800,168 @@ describe("crawl manager contract", () => {
 			"Force stop requested",
 		);
 		expect(storage.repos.crawlRuns.getById(created.id)?.stopReason).toBe("Force stop requested");
+	});
+
+	test("force stop wins over pause and shutdown when requested during cleanup", async () => {
+		const fetchStarted = Promise.withResolvers<void>();
+		const releaseFetch = Promise.withResolvers<Response>();
+		const closeStarted = Promise.withResolvers<void>();
+		const releaseClose = Promise.withResolvers<void>();
+		const storage = createInMemoryStorage();
+		const eventStream = new EventStream();
+		const crawlId = "pause-cleanup-race";
+		const options = createOptions("https://pause-cleanup.example/");
+		storage.repos.crawlRuns.createRun(crawlId, options);
+		eventStream.initialize(crawlId);
+		const httpClient: HttpClient = {
+			fetch: async () => {
+				fetchStarted.resolve();
+				return releaseFetch.promise;
+			},
+		};
+		const runtime = new CrawlRuntime({
+			crawlId,
+			options,
+			logger: silentLogger,
+			repos: storage.repos,
+			storageBudget: storage.budget,
+			eventStream,
+			httpClient,
+			robotsService: createRobotsService(httpClient),
+			dynamicRenderer: createCleanupControlledRenderer(closeStarted, releaseClose),
+			resume: false,
+			onSettled: () => {},
+		});
+
+		const run = runtime.start();
+		await fetchStarted.promise;
+		const pause = runtime.requestPause();
+		releaseFetch.resolve(htmlResponse("done"));
+		await closeStarted.promise;
+		const forceStop = runtime.requestForceStop();
+		const interruption = runtime.interrupt("Process shutdown");
+		releaseClose.resolve();
+		await Promise.all([run, pause, forceStop, interruption]);
+
+		expect(storage.repos.crawlRuns.getById(crawlId)).toMatchObject({
+			status: "stopped",
+			stopReason: "Force stop requested",
+			resumable: false,
+		});
+	});
+
+	test("shutdown interruption wins when requested during pause cleanup", async () => {
+		const fetchStarted = Promise.withResolvers<void>();
+		const releaseFetch = Promise.withResolvers<Response>();
+		const closeStarted = Promise.withResolvers<void>();
+		const releaseClose = Promise.withResolvers<void>();
+		const storage = createInMemoryStorage();
+		const eventStream = new EventStream();
+		const crawlId = "pause-shutdown-race";
+		const options = createOptions("https://pause-shutdown.example/");
+		storage.repos.crawlRuns.createRun(crawlId, options);
+		eventStream.initialize(crawlId);
+		const httpClient: HttpClient = {
+			fetch: async () => {
+				fetchStarted.resolve();
+				return releaseFetch.promise;
+			},
+		};
+		const runtime = new CrawlRuntime({
+			crawlId,
+			options,
+			logger: silentLogger,
+			repos: storage.repos,
+			storageBudget: storage.budget,
+			eventStream,
+			httpClient,
+			robotsService: createRobotsService(httpClient),
+			dynamicRenderer: createCleanupControlledRenderer(closeStarted, releaseClose),
+			resume: false,
+			onSettled: () => {},
+		});
+
+		const run = runtime.start();
+		await fetchStarted.promise;
+		const pause = runtime.requestPause();
+		releaseFetch.resolve(htmlResponse("done"));
+		await closeStarted.promise;
+		const interruption = runtime.interrupt("Process shutdown");
+		releaseClose.resolve();
+		await Promise.all([run, pause, interruption]);
+
+		expect(storage.repos.crawlRuns.getById(crawlId)).toMatchObject({
+			status: "interrupted",
+			stopReason: "Process shutdown",
+			resumable: true,
+		});
+	});
+
+	test("shutdown interruption wins when requested during normal cleanup", async () => {
+		const closeStarted = Promise.withResolvers<void>();
+		const releaseClose = Promise.withResolvers<void>();
+		const storage = createInMemoryStorage();
+		const eventStream = new EventStream();
+		const crawlId = "shutdown-cleanup-race";
+		const options = createOptions("https://shutdown-cleanup.example/");
+		storage.repos.crawlRuns.createRun(crawlId, options);
+		eventStream.initialize(crawlId);
+		const runtime = new CrawlRuntime({
+			crawlId,
+			options,
+			logger: silentLogger,
+			repos: storage.repos,
+			storageBudget: storage.budget,
+			eventStream,
+			httpClient: successfulHtmlHttpClient,
+			robotsService: createRobotsService(successfulHtmlHttpClient),
+			dynamicRenderer: createCleanupControlledRenderer(closeStarted, releaseClose),
+			resume: false,
+			onSettled: () => {},
+		});
+
+		const run = runtime.start();
+		await closeStarted.promise;
+		const interruption = runtime.interrupt("Process shutdown");
+		releaseClose.resolve();
+		await Promise.all([run, interruption]);
+
+		expect(storage.repos.crawlRuns.getById(crawlId)).toMatchObject({
+			status: "interrupted",
+			stopReason: "Process shutdown",
+			resumable: true,
+		});
+	});
+
+	test("runtime policy stops remain stopped after centralized cleanup", async () => {
+		const links = Array.from(
+			{ length: 20 },
+			(_, index) => `<a href="https://example.com/failure-${index}">failure</a>`,
+		).join("");
+		const httpClient: HttpClient = {
+			fetch: async ({ url }) =>
+				url === "https://example.com/"
+					? htmlDocumentResponse(`<html><body><main>seed</main>${links}</body></html>`)
+					: new Response("failure", { status: 500 }),
+		};
+		const { manager, storage } = createManager(httpClient);
+		const created = createCrawl(manager, {
+			...createOptions(),
+			maxPages: 21,
+			maxConcurrentRequests: 1,
+			retryLimit: 0,
+		});
+
+		const stopped = await waitFor(
+			() => storage.repos.crawlRuns.getById(created.id),
+			(run) => run?.status === "stopped",
+		);
+
+		expect(stopped).toMatchObject({
+			status: "stopped",
+			stopReason: "Circuit breaker tripped after 20 consecutive failures",
+			counters: { successCount: 1, failureCount: 20 },
+		});
 	});
 
 	test("maxPages caps admitted URLs even when a page discovers more links", async () => {

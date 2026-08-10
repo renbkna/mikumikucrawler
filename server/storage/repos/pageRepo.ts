@@ -116,8 +116,10 @@ export function createPageRepo(db: Database, own: OwnStatement) {
 	);
 
 	return {
-		getContentById(id: number): string | null | undefined {
-			const row = db.query("SELECT content FROM pages WHERE id = ? LIMIT 1").get(id) as {
+		getContentById(crawlId: string, id: number): string | null | undefined {
+			const row = db
+				.query("SELECT content FROM pages WHERE crawl_id = ? AND id = ? LIMIT 1")
+				.get(crawlId, id) as {
 				content: string | null;
 			} | null;
 			if (row === null) return undefined;

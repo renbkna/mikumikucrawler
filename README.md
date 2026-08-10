@@ -142,13 +142,15 @@ RENDER=false
 # On Render this also trusts the platform's client-IP forwarding for rate limits.
 # Browser rendering is skipped when process RSS exceeds this many MB.
 # Defaults to 350 on Render and 600 elsewhere.
-MEMORY_THRESHOLD_MB=600
 ```
 
 One process exclusively owns `DB_PATH` while it is running. New and resumed
 crawls reserve an 8 MiB safety allowance for each remaining page. When necessary,
 the storage owner removes the oldest completed, stopped, or failed runs first;
 active, paused, and interrupted checkpoints are never reclaimed automatically.
+`server/storage/schema.sql` is the only supported schema. A database whose
+schema differs is replaced at startup; releases do not migrate or preserve
+incompatible stored data.
 
 </details>
 
@@ -196,7 +198,7 @@ requests or 20 MiB of response bodies per page.
 | 📄 | `GET` | `/api/crawls/:id/pages` | List the latest stored page summaries and total stored count |
 | 📦 | `GET` | `/api/crawls/:id/export` | Export pages (JSON / CSV) |
 | 🗑️ | `DELETE` | `/api/crawls/:id` | Delete a stored crawl |
-| 📄 | `GET` | `/api/pages/:id/content` | Fetch stored page content |
+| 📄 | `GET` | `/api/crawls/:id/pages/:pageId/content` | Fetch crawl-owned stored page content |
 | 🔎 | `GET` | `/api/search?crawlId=:id&q=keyword` | Search one crawl's stored pages (FTS5) |
 | 💚 | `GET` | `/health` | Health check |
 
@@ -218,7 +220,7 @@ source.addEventListener("crawl.progress", (event) => {
 | `crawl.started` | Crawl begins processing |
 | `crawl.progress` | Counter & queue stats update |
 | `crawl.page` | A page was persisted, with its positive row ID and post-commit stored-page count |
-| `crawl.log` | Runtime log message |
+| `crawl.log` | Runtime log message with explicit severity |
 | `crawl.completed` | Crawl finished normally |
 | `crawl.paused` | Paused by user and available to resume |
 | `crawl.stopped` | Stopped by user |
@@ -227,6 +229,8 @@ source.addEventListener("crawl.progress", (event) => {
 Events are sequenced. `Last-Event-ID` replays recent in-memory events; after a
 restart or cleanup, recover from the backend-owned crawl snapshot, which contains
 the persisted crawl summary, bounded latest-page window, and total stored count.
+Settled streams close after their terminal frame; reconnects with no unseen
+terminal event receive `204` so native `EventSource` clients stop reconnecting.
 Search and export cover the full stored set.
 
 ---
@@ -291,7 +295,7 @@ server/
 │   ├── analysisUtils.ts    #   Word count, reading time, language
 │   └── extractionUtils.ts  #   Main content, metadata, media count, links
 ├── storage/                # SQLite persistence
-│   ├── migrations/         #   Schema migrations
+│   ├── schema.sql          #   Current schema; incompatible databases reset
 │   └── repos/              #   Query repositories
 ├── outbound/               # SSRF-safe DNS resolution and pinned HTTP
 ├── plugins/                # Elysia plugins (SSE, OpenAPI, static)

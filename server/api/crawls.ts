@@ -1,4 +1,4 @@
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import { DeleteCrawlResponseSchema } from "../../shared/contracts/http.js";
 import {
 	API_PATHS,
@@ -17,6 +17,7 @@ import {
 	CreateCrawlResponseSchema,
 	ExportQuerySchema,
 	GetCrawlResponseSchema,
+	PageContentResponseSchema,
 	ResumableCrawlListResponseSchema,
 	StopCrawlBodySchema,
 	StopCrawlResponseSchema,
@@ -25,6 +26,7 @@ import { validatePublicHttpUrl } from "../../shared/url.js";
 import { config } from "../config/env.js";
 import { CrawlListQuerySchema, ResumableCrawlListQuerySchema } from "../contracts/crawls.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
+import { PositiveIntegerIdSchema } from "../contracts/http.js";
 import { createCrawlExportResponse } from "../domain/export/CrawlExportService.js";
 import {
 	CrawlIdentityConflictError,
@@ -40,6 +42,11 @@ const CRAWL_SERVICE_CLOSING_ERROR = {
 	error: "Crawl service is shutting down",
 	code: "SERVICE_CLOSING",
 } as const;
+
+const CrawlPageContentParamsSchema = t.Object({
+	id: CrawlIdParamsSchema.properties.id,
+	pageId: PositiveIntegerIdSchema,
+});
 
 function createCrawlRecoverySnapshot(
 	crawl: CrawlSummary,
@@ -58,6 +65,31 @@ export function crawlsApi(services: RouteServicesPlugin) {
 		.use(services)
 		.guard({ schema: "merge", params: CrawlIdParamsSchema }, (app) =>
 			app
+				.get(
+					CRAWL_ROUTE_SEGMENTS.pageContent,
+					{
+						params: CrawlPageContentParamsSchema,
+						response: {
+							200: PageContentResponseSchema,
+							404: ApiErrorSchema,
+							422: ApiErrorSchema,
+						},
+						detail: {
+							tags: ["Crawls"],
+							summary: "Fetch stored page content owned by a crawl",
+						},
+					},
+					({ crawlManager, params, repos, status }) => {
+						if (!crawlManager.get(params.id)) {
+							return status(404, { error: "Crawl not found" });
+						}
+						const content = repos.pages.getContentById(params.id, params.pageId);
+						if (content === undefined) {
+							return status(404, { error: "Page not found for crawl" });
+						}
+						return { status: "ok", content };
+					},
+				)
 				.post(
 					CRAWL_ROUTE_SEGMENTS.stop,
 					{

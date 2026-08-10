@@ -28,8 +28,6 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 	const [count, setCount] = useState<string | null>(null);
 	const [ripples, setRipples] = useState<{ id: number; color: string }[]>([]);
 	const audioRef = useRef<HTMLAudioElement | null>(null);
-	const timeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-	const sequenceStartedRef = useRef(false);
 	const rippleCountRef = useRef(0);
 
 	const completeSequence = useEffectEvent(onComplete);
@@ -40,10 +38,6 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 	/** Release the lazily-created audio element on unmount. */
 	useEffect(() => {
 		return () => {
-			for (const id of timeoutsRef.current) {
-				clearTimeout(id);
-			}
-			timeoutsRef.current = [];
 			const audio = audioRef.current;
 			if (!audio) return;
 			audio.ontimeupdate = null;
@@ -84,14 +78,8 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 	/** Reset state when returning to idle */
 	useEffect(() => {
 		if (status === "idle") {
-			sequenceStartedRef.current = false;
 			setCount(null);
 			setRipples([]);
-			// Clear any remaining timeouts
-			for (const id of timeoutsRef.current) {
-				clearTimeout(id);
-			}
-			timeoutsRef.current = [];
 		}
 	}, [status]);
 
@@ -117,9 +105,8 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 
 	/** Countdown sequence - runs once when blackout starts */
 	useEffect(() => {
-		if (status !== "blackout" || sequenceStartedRef.current) return;
+		if (status !== "blackout") return undefined;
 
-		sequenceStartedRef.current = true;
 		const timeouts: Array<ReturnType<typeof setTimeout>> = [];
 
 		const sequence = [
@@ -140,7 +127,11 @@ export const TheatreOverlay = memo(function TheatreOverlay({
 			timeouts.push(setTimeout(item.fn, item.delay));
 		}
 
-		timeoutsRef.current = timeouts;
+		return () => {
+			for (const id of timeouts) {
+				clearTimeout(id);
+			}
+		};
 	}, [status]);
 
 	if (status === "idle") return null;

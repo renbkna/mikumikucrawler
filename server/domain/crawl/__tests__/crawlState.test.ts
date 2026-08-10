@@ -11,7 +11,6 @@ import { CrawlState } from "../CrawlState.js";
  *   - terminal identity: a URL can enter terminal state exactly once
  *   - domain rate adaptation: only responds to 429/503/403
  *   - domain budget: maxPagesPerDomain=0 means unlimited
- *   - canScheduleMore: false when stopped OR pagesScanned >= maxPages
  */
 
 function makeOptions(overrides: Partial<CrawlOptions> = {}): CrawlOptions {
@@ -194,28 +193,6 @@ describe("CrawlState", () => {
 
 			expect(state.isStopRequested).toBe(true);
 			expect(state.stopReason).toBe("Circuit breaker tripped after 20 consecutive failures");
-		});
-	});
-
-	describe("canScheduleMore", () => {
-		test("false when pagesScanned reaches maxPages", () => {
-			const state = new CrawlState(makeOptions({ maxPages: 2 }));
-
-			state.recordTerminal("https://a.example/1", "success");
-			expect(state.canScheduleMore()).toBe(true);
-
-			state.recordTerminal("https://a.example/2", "success");
-			expect(state.canScheduleMore()).toBe(false);
-			expect(state.hasPageCapacity()).toBe(false);
-		});
-
-		test("false when stop requested", () => {
-			const state = new CrawlState(makeOptions());
-			expect(state.canScheduleMore()).toBe(true);
-
-			state.requestStop("Manual stop");
-			expect(state.canScheduleMore()).toBe(false);
-			expect(state.hasPageCapacity()).toBe(true);
 		});
 	});
 

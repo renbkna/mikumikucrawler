@@ -1,26 +1,95 @@
-import { Copy, Filter, Music2, Trash2, X } from "lucide-react";
-import { memo, useMemo, useState } from "react";
 import {
-	getLogCategory,
-	getLogLevelConfig,
-	highlightUrls,
-	type ParsedLog,
-	parseLog,
-} from "../utils/logParser";
+	AlertCircle,
+	AlertTriangle,
+	CheckCircle2,
+	Copy,
+	Filter,
+	Info,
+	Music2,
+	Trash2,
+	X,
+} from "lucide-react";
+import { memo, type ReactNode, useMemo, useState } from "react";
+import type { ControllerLog } from "../hooks/crawlControllerState";
+
+const LOG_LEVELS = {
+	info: {
+		icon: Info,
+		color: "text-miku-teal",
+		bgColor: "bg-miku-teal/10",
+		borderColor: "border-miku-teal/30",
+		label: "INFO",
+	},
+	error: {
+		icon: AlertCircle,
+		color: "text-rose-500",
+		bgColor: "bg-rose-500/10",
+		borderColor: "border-rose-500/30",
+		label: "ERROR",
+	},
+	warn: {
+		icon: AlertTriangle,
+		color: "text-amber-500",
+		bgColor: "bg-amber-500/10",
+		borderColor: "border-amber-500/30",
+		label: "WARN",
+	},
+	success: {
+		icon: CheckCircle2,
+		color: "text-emerald-500",
+		bgColor: "bg-emerald-500/10",
+		borderColor: "border-emerald-500/30",
+		label: "SUCCESS",
+	},
+} as const;
+
+function highlightUrls(text: string): ReactNode {
+	const parts: ReactNode[] = [];
+	let offset = 0;
+	for (const match of text.matchAll(/https?:\/\/[^\s]+/g)) {
+		if (match.index > offset) {
+			parts.push(<span key={`text-${offset}`}>{text.slice(offset, match.index)}</span>);
+		}
+		const url = match[0];
+		parts.push(
+			<span
+				key={`url-${match.index}`}
+				className="text-miku-pink font-medium underline decoration-dotted hover:decoration-solid cursor-pointer"
+				title={url}
+			>
+				{url.length > 50 ? `${url.substring(0, 50)}...` : url}
+			</span>,
+		);
+		offset = match.index + url.length;
+	}
+	if (offset < text.length) parts.push(<span key={`text-${offset}`}>{text.slice(offset)}</span>);
+	return parts.length > 0 ? parts : text;
+}
+
+function getLogCategory(message: string): string {
+	const lowerMessage = message.toLowerCase();
+	if (lowerMessage.includes("fetch")) return "🌐 Network";
+	if (lowerMessage.includes("crawl") || lowerMessage.includes("session")) return "🕷️ Crawler";
+	if (lowerMessage.includes("playwright") || lowerMessage.includes("chrome")) return "🎭 Browser";
+	if (lowerMessage.includes("client") || lowerMessage.includes("socket")) return "🔌 Connection";
+	if (lowerMessage.includes("retry")) return "🔄 Retry";
+	if (lowerMessage.includes("page")) return "📄 Page";
+	return "📝 System";
+}
 
 interface LogItemProps {
-	log: ParsedLog;
+	log: ControllerLog;
 	stableIndex: number;
 	onCopy: (text: string) => void;
 }
 
 function LogItem({ log, stableIndex, onCopy }: LogItemProps) {
-	const config = getLogLevelConfig(log.level);
+	const config = LOG_LEVELS[log.level];
 	const Icon = config.icon;
 	const category = getLogCategory(log.message);
 
 	return (
-		<div className="group relative py-3 px-3 border-b border-miku-border/60 hover:bg-white/55 transition-colors duration-200 animate-in slide-in-from-left-2 fade-in duration-500">
+		<div className="group relative py-3 px-3 border-b border-miku-border/60 hover:bg-white/55 transition-colors duration-200">
 			<div className="flex items-start gap-3">
 				{/* Index number */}
 				<span className="text-miku-teal/30 font-mono text-xs mt-1 select-none font-bold min-w-[1.5rem]">
@@ -49,7 +118,7 @@ function LogItem({ log, stableIndex, onCopy }: LogItemProps) {
 						{/* Copy button - appears on hover */}
 						<button
 							type="button"
-							onClick={() => onCopy(log.raw)}
+							onClick={() => onCopy(log.message)}
 							className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-miku-text/10 text-miku-text/40 hover:text-miku-text/60"
 							title="Copy log"
 						>
@@ -68,7 +137,7 @@ function LogItem({ log, stableIndex, onCopy }: LogItemProps) {
 }
 
 interface LogsSectionProps {
-	logs: ReadonlyArray<{ id: number; message: string }>;
+	logs: readonly ControllerLog[];
 	clearLogs: () => void;
 }
 
@@ -76,17 +145,13 @@ export const LogsSection = memo(function LogsSection({
 	logs,
 	clearLogs,
 }: Readonly<LogsSectionProps>) {
-	const [filterLevel, setFilterLevel] = useState<ParsedLog["level"] | "all">("all");
+	const [filterLevel, setFilterLevel] = useState<ControllerLog["level"] | "all">("all");
 	const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
-	const parsedLogs = useMemo(() => {
-		return logs.map(({ id, message }) => ({ id, parsed: parseLog(message) }));
-	}, [logs]);
-
 	const filteredLogs = useMemo(() => {
-		if (filterLevel === "all") return parsedLogs;
-		return parsedLogs.filter(({ parsed }) => parsed.level === filterLevel);
-	}, [parsedLogs, filterLevel]);
+		if (filterLevel === "all") return logs;
+		return logs.filter((log) => log.level === filterLevel);
+	}, [logs, filterLevel]);
 
 	const handleCopy = (text: string) => {
 		void navigator.clipboard
@@ -104,7 +169,7 @@ export const LogsSection = memo(function LogsSection({
 	};
 
 	const levelOptions: {
-		value: ParsedLog["level"] | "all";
+		value: ControllerLog["level"] | "all";
 		label: string;
 		count: number;
 	}[] = [
@@ -112,22 +177,22 @@ export const LogsSection = memo(function LogsSection({
 		{
 			value: "info",
 			label: "Info",
-			count: parsedLogs.filter(({ parsed }) => parsed.level === "info").length,
+			count: logs.filter((log) => log.level === "info").length,
 		},
 		{
 			value: "error",
 			label: "Error",
-			count: parsedLogs.filter(({ parsed }) => parsed.level === "error").length,
+			count: logs.filter((log) => log.level === "error").length,
 		},
 		{
 			value: "warn",
 			label: "Warn",
-			count: parsedLogs.filter(({ parsed }) => parsed.level === "warn").length,
+			count: logs.filter((log) => log.level === "warn").length,
 		},
 		{
 			value: "success",
 			label: "Success",
-			count: parsedLogs.filter(({ parsed }) => parsed.level === "success").length,
+			count: logs.filter((log) => log.level === "success").length,
 		},
 	];
 
@@ -171,7 +236,7 @@ export const LogsSection = memo(function LogsSection({
 
 				{/* Copied notification */}
 				{copiedIndex !== null && (
-					<div className="absolute top-12 left-1/2 -translate-x-1/2 z-50 bg-miku-teal text-white px-3 py-1.5 rounded-lg text-xs font-medium shadow-sm animate-in fade-in slide-in-from-top-2">
+					<div className="absolute top-12 left-1/2 -translate-x-1/2 z-50 bg-miku-teal text-white px-3 py-1.5 rounded-lg text-xs font-medium shadow-sm">
 						Copied to clipboard!
 					</div>
 				)}
@@ -196,10 +261,10 @@ export const LogsSection = memo(function LogsSection({
 				{/* Logs list */}
 				<div className="flex-1 overflow-y-auto custom-scrollbar">
 					{filteredLogs.length > 0 ? (
-						filteredLogs.map(({ id, parsed }, index) => (
+						filteredLogs.map((log, index) => (
 							<LogItem
-								key={id}
-								log={parsed}
+								key={log.id}
+								log={log}
 								stableIndex={filteredLogs.length - index}
 								onCopy={handleCopy}
 							/>

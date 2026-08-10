@@ -47,6 +47,19 @@ interface UseCrawlControllerOptions {
 	addToast: (type: Toast["type"], message: string, timeout?: number) => void;
 }
 
+export async function drainQueuedRefreshes<T>(
+	state: { queued: boolean },
+	refresh: () => Promise<T>,
+): Promise<T> {
+	state.queued = false;
+	let result = await refresh();
+	while (state.queued) {
+		state.queued = false;
+		result = await refresh();
+	}
+	return result;
+}
+
 function formatControllerError(error: unknown): string {
 	return error instanceof Error ? error.message : "Request failed";
 }
@@ -92,6 +105,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 	const subscriptionRef = useRef<ReturnType<typeof subscribeToCrawlEvents> | null>(null);
 	const activeSubscriptionCrawlIdRef = useRef<string | null>(null);
 	const resumableRefreshAbortRef = useRef<AbortController | null>(null);
+	const resumableRefreshQueueRef = useRef({ queued: false });
 	const durableSyncAbortRef = useRef<AbortController | null>(null);
 	const durableSyncErrorCrawlIdRef = useRef<string | null>(null);
 	const startOperationRef = useRef<{
@@ -216,6 +230,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 	});
 
 	const cancelResumableRefresh = useEffectEvent(() => {
+		resumableRefreshQueueRef.current.queued = false;
 		resumableRefreshAbortRef.current?.abort();
 		resumableRefreshAbortRef.current = null;
 	});
@@ -248,6 +263,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				isTerminalCrawlStatus(snapshotResult.data.crawl.status)
 			) {
 				closeSubscription(crawlId);
+				void refreshResumableSessions(false);
 			}
 			durableSyncErrorCrawlIdRef.current = null;
 		} catch (error) {
@@ -327,61 +343,51 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 
 	const refreshResumableSessions = useCallback(
 		async (trackCommand = true) => {
-			if (
-				stateRef.current.resumableSessions.resumingId ||
-				stateRef.current.resumableSessions.isLoading
-			) {
+			if (stateRef.current.resumableSessions.resumingId) {
+				return;
+			}
+			if (resumableRefreshAbortRef.current) {
+				resumableRefreshQueueRef.current.queued = true;
 				return;
 			}
 			if (trackCommand && !canStartCommand(stateRef.current, "refresh")) {
 				addToast("warning", "Another command is already running");
 				return;
 			}
-			const controller = new AbortController();
-			resumableRefreshAbortRef.current = controller;
-			const signal = AbortSignal.any([getControllerLifetimeSignal(), controller.signal]);
 			if (trackCommand) {
 				dispatch({ type: "commandStarted", kind: "refresh" });
 			}
-			dispatch({ type: "resumableSessionsLoading" });
-			let result: ApiResult<ResumableSessionSummary[]>;
-			try {
-				result = await listResumableCrawls(signal);
-			} catch (error) {
-				result = { ok: false, error: formatControllerError(error) };
-			}
-
-			if (!result.ok) {
-				if (signal.aborted || resumableRefreshAbortRef.current !== controller) {
-					return;
+			const result = await drainQueuedRefreshes(resumableRefreshQueueRef.current, async () => {
+				const controller = new AbortController();
+				resumableRefreshAbortRef.current = controller;
+				const signal = AbortSignal.any([getControllerLifetimeSignal(), controller.signal]);
+				dispatch({ type: "resumableSessionsLoading" });
+				let currentResult: ApiResult<ResumableSessionSummary[]>;
+				try {
+					currentResult = await listResumableCrawls(signal);
+				} catch (error) {
+					currentResult = { ok: false, error: formatControllerError(error) };
 				}
-				dispatch({
-					type: "resumableSessionsFailed",
-					error: result.error,
-				});
-				if (trackCommand) {
-					dispatch({
-						type: "commandFailed",
-						kind: "refresh",
-						error: result.error,
-					});
+
+				if (signal.aborted || resumableRefreshAbortRef.current !== controller) return null;
+				if (currentResult.ok) {
+					dispatch({ type: "resumableSessionsLoaded", sessions: currentResult.data });
+				} else {
+					dispatch({ type: "resumableSessionsFailed", error: currentResult.error });
 				}
 				if (resumableRefreshAbortRef.current === controller) {
 					resumableRefreshAbortRef.current = null;
 				}
-				return;
-			}
-
-			if (signal.aborted || resumableRefreshAbortRef.current !== controller) return;
-			dispatch({
-				type: "resumableSessionsLoaded",
-				sessions: result.data,
+				return currentResult;
 			});
+			if (!result) return;
+
 			if (trackCommand) {
-				dispatch({ type: "commandSucceeded", kind: "refresh" });
-			}
-			if (resumableRefreshAbortRef.current === controller) {
-				resumableRefreshAbortRef.current = null;
+				dispatch(
+					result.ok
+						? { type: "commandSucceeded", kind: "refresh" }
+						: { type: "commandFailed", kind: "refresh", error: result.error },
+				);
 			}
 		},
 		[addToast, dispatch, getControllerLifetimeSignal, stateRef],
@@ -565,6 +571,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 			dispatch({
 				type: "logAppended",
 				message: "Initiating Miku Beam Sequence...",
+				level: "info",
 			});
 			connectToEvents(result.data.id);
 			return true;
@@ -810,6 +817,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 
 	return {
 		target: state.crawlOptions.target,
+		activeCrawlId: state.activeCrawlId,
 		crawlOptions: state.crawlOptions,
 		activeCrawlOptions: state.activeCrawlOptions,
 		setCrawlOptions,

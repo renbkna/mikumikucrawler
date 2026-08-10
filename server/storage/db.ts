@@ -1,6 +1,5 @@
 import { Database } from "bun:sqlite";
-import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import type { CrawlOptions, CrawlStatus } from "../../shared/contracts/index.js";
 import {
@@ -19,7 +18,7 @@ import { createCrawlRunRepo } from "./repos/crawlRunRepo.js";
 import { createPageRepo } from "./repos/pageRepo.js";
 import { createSearchRepo } from "./repos/searchRepo.js";
 
-const migrationsDirectory = path.join(import.meta.dir, "migrations");
+const schemaPath = path.join(import.meta.dir, "schema.sql");
 
 export interface StorageRepos {
 	crawlRuns: ReturnType<typeof createCrawlRunRepo>;
@@ -80,189 +79,91 @@ function configurePragmas(db: Database, databasePath: string): void {
 	`);
 }
 
-function migrationChecksum(sql: string): string {
-	return createHash("sha256").update(sql).digest("hex");
+interface SchemaObject {
+	type: string;
+	name: string;
+	tableName: string;
+	sql: string | null;
 }
 
-interface MigrationLedgerRow {
-	id: string;
-	checksum: string;
+function normalizeSchemaSql(sql: string | null): string | null {
+	return (
+		sql
+			?.replaceAll('"', "")
+			.replace(/\s+/g, " ")
+			.replace(/\s*([(),])\s*/g, "$1")
+			.trim() ?? null
+	);
 }
 
-const PRE_BASELINE_MIGRATION_LINEAGE: readonly MigrationLedgerRow[] = [
-	{
-		id: "0001_crawl_runs.sql",
-		checksum: "1edde97ced24f365f39170e3a1c7aa4243c6de9206da76e20a43c6a3c5f0aa65",
-	},
-	{
-		id: "0002_queue_pages.sql",
-		checksum: "39ba2a8bed421955fe3440a7c941811b3455a24834022e73001b584e4cc4e4dd",
-	},
-	{
-		id: "0003_pages_fts.sql",
-		checksum: "c5ab6c1a66d02d4eb6b25bbf95ca65d3d3a3f0f8e8c52deda57e969107f9be7a",
-	},
-	{
-		id: "0004_runtime_persistence.sql",
-		checksum: "1ee0367d3d7e2d509b854f865f57de227552f773ff65e05d3253c7d44921a125",
-	},
-	{
-		id: "0005_domain_state_search_content.sql",
-		checksum: "4db5499beebd32a2ef89b3d320b641e08096b9a14cab074bdbb13d9f25b0ccf6",
-	},
-	{
-		id: "0006_canonical_schema.sql",
-		checksum: "1799d36e1cd490d5c66c6e6a9a5b70366f1fdfeacb7f9ec43018c82b672f0fd4",
-	},
-	{
-		id: "0007_terminal_queue_exclusion.sql",
-		checksum: "6bdd9a79314b27d205d86b2132d8b1a5389f5856edffd02a4acb00797f79a4c5",
-	},
-	{
-		id: "0008_storage_authority.sql",
-		checksum: "26478c5cfc7daf4a30e8717be9b274dc5364b9a8421fe2856c9a733b4310ac21",
-	},
-	{
-		id: "0009_redirect_domain_authority.sql",
-		checksum: "d76d2a85f3d608f8274b55656048390cfa5edf70d28337b07ce34dca8f8688dd",
-	},
-	{
-		id: "0010_compact_projections.sql",
-		checksum: "c738d8793d4c80fd78c79888cbcdb54750444df7b212ad6766521cea6b089920",
-	},
-];
-
-function normalizeSchemaSql(sql: string | null): string {
-	return (sql ?? "")
-		.replaceAll('"', "")
-		.replace(/\s+/g, " ")
-		.replace(/\s*([(),])\s*/g, "$1")
-		.trim();
+function describeSchema(db: Database): SchemaObject[] {
+	return (
+		db
+			.query(
+				"SELECT type, name, tbl_name AS tableName, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name",
+			)
+			.all() as SchemaObject[]
+	).map((object) => ({ ...object, sql: normalizeSchemaSql(object.sql) }));
 }
 
-function matchesCanonicalSchema(db: Database, canonicalSql: string): boolean {
+function hasCurrentSchema(db: Database, schemaSql: string): boolean {
 	const canonical = new Database(":memory:");
 	try {
-		canonical.exec(canonicalSql);
-		const canonicalObjects = canonical
-			.query(
-				"SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name",
-			)
-			.all() as Array<{ type: string; name: string; sql: string | null }>;
-
-		for (const expected of canonicalObjects) {
-			const actual = db
-				.query("SELECT sql FROM sqlite_master WHERE type = ? AND name = ?")
-				.get(expected.type, expected.name) as { sql: string | null } | null;
-			if (actual === null || normalizeSchemaSql(actual.sql) !== normalizeSchemaSql(expected.sql)) {
-				return false;
-			}
-		}
-
-		return db.query("PRAGMA foreign_key_check").all().length === 0;
+		canonical.exec(schemaSql);
+		return (
+			JSON.stringify(describeSchema(db)) === JSON.stringify(describeSchema(canonical)) &&
+			db.query("PRAGMA foreign_key_check").all().length === 0
+		);
 	} finally {
 		canonical.close();
 	}
 }
 
-function adoptCanonicalBaseline(
-	db: Database,
-	ledgerRows: MigrationLedgerRow[],
-	migrationFiles: string[],
-	migrationDirectory: string,
-): MigrationLedgerRow[] {
-	if (
-		migrationFiles.length !== 1 ||
-		migrationFiles[0] !== "0001_schema.sql" ||
-		ledgerRows.length !== PRE_BASELINE_MIGRATION_LINEAGE.length ||
-		!ledgerRows.every(
-			(row, index) =>
-				row.id === PRE_BASELINE_MIGRATION_LINEAGE[index]?.id &&
-				row.checksum === PRE_BASELINE_MIGRATION_LINEAGE[index]?.checksum,
-		)
-	) {
-		return ledgerRows;
+function openDatabase(databasePath: string): Database {
+	const db = new Database(databasePath);
+	try {
+		configurePragmas(db, databasePath);
+		return db;
+	} catch (error) {
+		db.close();
+		throw error;
 	}
-
-	const baselineId = migrationFiles[0];
-	const baselineSql = readFileSync(path.join(migrationDirectory, baselineId), "utf8");
-	if (!matchesCanonicalSchema(db, baselineSql)) {
-		throw new Error(
-			"Applied pre-baseline migration lineage does not match the canonical schema; no migration was performed",
-		);
-	}
-
-	const baseline = { id: baselineId, checksum: migrationChecksum(baselineSql) };
-	db.exec("DELETE FROM schema_migrations");
-	db.query("INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)").run(
-		baseline.id,
-		baseline.checksum,
-	);
-	return [baseline];
 }
 
-export function applyMigrations(db: Database, migrationDirectory = migrationsDirectory): void {
-	const migrationFiles = readdirSync(migrationDirectory)
-		.filter((fileName) => fileName.endsWith(".sql"))
-		.sort();
-	const knownMigrationIds = new Set(migrationFiles);
+function removeDatabaseFiles(databasePath: string): void {
+	for (const suffix of ["", "-wal", "-shm"]) {
+		rmSync(`${databasePath}${suffix}`, { force: true });
+	}
+}
 
-	db.transaction(() => {
-		db.exec(`
-			CREATE TABLE IF NOT EXISTS schema_migrations (
-				id TEXT PRIMARY KEY,
-				applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				checksum TEXT NOT NULL
-			)
-		`);
+function createSchema(db: Database, schemaSql: string): void {
+	db.transaction(() => db.exec(schemaSql))();
+}
 
-		const storedLedgerRows = db
-			.query("SELECT id, checksum FROM schema_migrations ORDER BY id")
-			.all() as MigrationLedgerRow[];
-		const ledgerRows = adoptCanonicalBaseline(
-			db,
-			storedLedgerRows,
-			migrationFiles,
-			migrationDirectory,
-		);
-		const unknownAppliedMigration = ledgerRows.find((row) => !knownMigrationIds.has(row.id));
-		if (unknownAppliedMigration !== undefined) {
-			throw new Error(
-				`Applied migration ${unknownAppliedMigration.id} is not present in this release lineage`,
-			);
+function openCurrentDatabase(databasePath: string): Database {
+	const schemaSql = readFileSync(schemaPath, "utf8");
+	let db = openDatabase(databasePath);
+	try {
+		if (describeSchema(db).length === 0) {
+			createSchema(db, schemaSql);
+			return db;
 		}
-		for (const [index, row] of ledgerRows.entries()) {
-			if (migrationFiles[index] !== row.id) {
-				throw new Error(
-					`Applied migrations must form an ordered prefix; found ${row.id} at position ${index + 1}`,
-				);
-			}
-		}
-		const applied = new Map(ledgerRows.map((row) => [row.id, row.checksum] as const));
-		const insertMigration = db.prepare(
-			"INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)",
-		);
-		try {
-			for (const fileName of migrationFiles) {
-				const sql = readFileSync(path.join(migrationDirectory, fileName), "utf8");
-				const checksum = migrationChecksum(sql);
-				const appliedChecksum = applied.get(fileName);
-				if (appliedChecksum !== undefined) {
-					if (appliedChecksum !== checksum) {
-						throw new Error(
-							`Applied migration ${fileName} checksum mismatch; database was migrated with different SQL`,
-						);
-					}
-					continue;
-				}
+		if (hasCurrentSchema(db, schemaSql)) return db;
+	} catch (error) {
+		db.close();
+		throw error;
+	}
 
-				db.exec(sql);
-				insertMigration.run(fileName, checksum);
-			}
-		} finally {
-			insertMigration.finalize();
-		}
-	})();
+	db.close(true);
+	removeDatabaseFiles(databasePath);
+	db = openDatabase(databasePath);
+	try {
+		createSchema(db, schemaSql);
+		return db;
+	} catch (error) {
+		db.close();
+		throw error;
+	}
 }
 
 export function createStorage(
@@ -270,15 +171,13 @@ export function createStorage(
 	options: CreateStorageOptions = {},
 ): Storage {
 	ensureDatabaseDirectory(databasePath);
-	const db = new Database(databasePath);
+	const db = openCurrentDatabase(databasePath);
 	const ownedStatements: Array<{ finalize(): void }> = [];
 	const ownStatement: OwnStatement = (statement) => {
 		ownedStatements.push(statement);
 		return statement;
 	};
 	try {
-		configurePragmas(db, databasePath);
-		applyMigrations(db);
 		let closed = false;
 
 		return {

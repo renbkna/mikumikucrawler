@@ -226,6 +226,7 @@ export const CrawlProgressPayloadSchema = t.Object({
 
 export const CrawlLogPayloadSchema = t.Object({
 	message: t.String(),
+	level: t.Union([t.Literal("info"), t.Literal("error"), t.Literal("warn"), t.Literal("success")]),
 });
 
 export const CrawlCompletedPayloadSchema = t.Object({

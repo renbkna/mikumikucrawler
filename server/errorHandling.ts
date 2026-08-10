@@ -6,14 +6,14 @@ import { getErrorMessage } from "./utils/helpers.js";
 
 function resolveErrorStatus(error: unknown): number {
 	if (error instanceof NotFound) return 404;
-	if (error instanceof ValidationError) return 422;
+	if (error instanceof ValidationError) return error.type === "response" ? 500 : 422;
 	if (error instanceof ParseError) return 400;
 	if (error instanceof InvalidCookie && error.status === 400) return 400;
 	return 500;
 }
 
 function validationDetails(error: unknown): ValidationErrorDetail[] | undefined {
-	if (!(error instanceof ValidationError)) {
+	if (!(error instanceof ValidationError) || error.type === "response") {
 		return undefined;
 	}
 

@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { persistPageFixture } from "../../__tests__/pageFixture.js";
@@ -9,58 +9,16 @@ import {
 	createInMemoryStorage,
 } from "../../__tests__/storageFixture.js";
 import { DurableStorageBudget } from "../DurableStorageBudget.js";
-import { applyMigrations, createStorage, DatabaseOwnershipError } from "../db.js";
-
-const PRE_BASELINE_LEDGER = [
-	["0001_crawl_runs.sql", "1edde97ced24f365f39170e3a1c7aa4243c6de9206da76e20a43c6a3c5f0aa65"],
-	["0002_queue_pages.sql", "39ba2a8bed421955fe3440a7c941811b3455a24834022e73001b584e4cc4e4dd"],
-	["0003_pages_fts.sql", "c5ab6c1a66d02d4eb6b25bbf95ca65d3d3a3f0f8e8c52deda57e969107f9be7a"],
-	[
-		"0004_runtime_persistence.sql",
-		"1ee0367d3d7e2d509b854f865f57de227552f773ff65e05d3253c7d44921a125",
-	],
-	[
-		"0005_domain_state_search_content.sql",
-		"4db5499beebd32a2ef89b3d320b641e08096b9a14cab074bdbb13d9f25b0ccf6",
-	],
-	["0006_canonical_schema.sql", "1799d36e1cd490d5c66c6e6a9a5b70366f1fdfeacb7f9ec43018c82b672f0fd4"],
-	[
-		"0007_terminal_queue_exclusion.sql",
-		"6bdd9a79314b27d205d86b2132d8b1a5389f5856edffd02a4acb00797f79a4c5",
-	],
-	[
-		"0008_storage_authority.sql",
-		"26478c5cfc7daf4a30e8717be9b274dc5364b9a8421fe2856c9a733b4310ac21",
-	],
-	[
-		"0009_redirect_domain_authority.sql",
-		"d76d2a85f3d608f8274b55656048390cfa5edf70d28337b07ce34dca8f8688dd",
-	],
-	[
-		"0010_compact_projections.sql",
-		"c738d8793d4c80fd78c79888cbcdb54750444df7b212ad6766521cea6b089920",
-	],
-] as const;
-
-function replaceWithPreBaselineLedger(db: Database): void {
-	db.exec("DELETE FROM schema_migrations");
-	const insertMigration = db.prepare("INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)");
-	try {
-		for (const [id, checksum] of PRE_BASELINE_LEDGER) insertMigration.run(id, checksum);
-	} finally {
-		insertMigration.finalize();
-	}
-}
+import { createStorage, DatabaseOwnershipError } from "../db.js";
 
 describe("storage contract", () => {
-	test("applies migrations and records them", () => {
+	test("creates the current schema without a migration ledger", () => {
 		const storage = createInMemoryStorage();
-		const rows = storage.db
-			.query("SELECT id, checksum FROM schema_migrations ORDER BY id")
-			.all() as Array<{ id: string; checksum: string | null }>;
-
-		expect(rows.map((row) => row.id)).toEqual(["0001_schema.sql"]);
-		expect(rows.every((row) => typeof row.checksum === "string")).toBe(true);
+		expect(
+			storage.db
+				.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'")
+				.get(),
+		).toBeNull();
 		expect(storage.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
 		const runColumns = (
 			storage.db.query("PRAGMA table_info(crawl_runs)").all() as Array<{ name: string }>
@@ -91,23 +49,63 @@ describe("storage contract", () => {
 				.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'page_links'")
 				.get(),
 		).toBeNull();
+		expect(
+			storage.db
+				.query(
+					"SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_crawl_domain_state_crawl_id'",
+				)
+				.get(),
+		).toBeNull();
+		const domainStatePlan = storage.db
+			.query(
+				"EXPLAIN QUERY PLAN SELECT delay_key, delay_ms, next_allowed_at FROM crawl_domain_state WHERE crawl_id = ? ORDER BY delay_key",
+			)
+			.all("crawl-id") as Array<{ detail: string }>;
+		expect(domainStatePlan.some(({ detail }) => detail.includes("(crawl_id=?)"))).toBe(true);
 		expect((storage.db.query("PRAGMA temp_store").get() as { temp_store: number }).temp_store).toBe(
 			1,
 		);
 	});
 
-	test("one live process connection owns the database until storage closes", () => {
+	test("one live process owns the database while matching-schema data survives restart", () => {
 		const databasePath = path.join(
 			mkdtempSync(path.join(tmpdir(), "miku-owned-db-")),
 			"crawler.db",
 		);
 		const owner = createStorage(databasePath);
+		owner.repos.crawlRuns.createRun("preserved-run", createCrawlOptionsFixture());
 
 		expect(() => createStorage(databasePath)).toThrow(DatabaseOwnershipError);
 		owner.close();
 		const nextOwner = createStorage(databasePath);
 		expect(() => owner.repos.crawlRuns.list()).toThrow();
+		expect(nextOwner.repos.crawlRuns.getById("preserved-run")).not.toBeNull();
 		nextOwner.close();
+	});
+
+	test("replaces an incompatible database with the current schema", () => {
+		const databasePath = path.join(
+			mkdtempSync(path.join(tmpdir(), "miku-incompatible-db-")),
+			"crawler.db",
+		);
+		const incompatible = new Database(databasePath);
+		incompatible.exec(
+			"CREATE TABLE legacy_data (value TEXT); INSERT INTO legacy_data VALUES ('old');",
+		);
+		incompatible.close();
+
+		const storage = createStorage(databasePath);
+		expect(
+			storage.db
+				.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'legacy_data'")
+				.get(),
+		).toBeNull();
+		expect(
+			storage.db
+				.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'crawl_runs'")
+				.get(),
+		).not.toBeNull();
+		storage.close();
 	});
 
 	test("durable capacity reclaims the oldest terminal run and protects resumable state", () => {
@@ -222,37 +220,6 @@ describe("storage contract", () => {
 		expect(storage.repos.pages).not.toHaveProperty("getDiscoveredLinkCountByPageUrl");
 	});
 
-	test("fails startup when an applied migration file changes", () => {
-		const migrationDir = mkdtempSync(path.join(tmpdir(), "miku-migrations-"));
-		const migrationPath = path.join(migrationDir, "0001_test.sql");
-		writeFileSync(migrationPath, "CREATE TABLE test_table (id TEXT PRIMARY KEY);");
-
-		const db = new Database(":memory:");
-		applyMigrations(db, migrationDir);
-
-		writeFileSync(migrationPath, "CREATE TABLE test_table (id TEXT PRIMARY KEY, changed TEXT);");
-
-		expect(() => applyMigrations(db, migrationDir)).toThrow("checksum mismatch");
-	});
-
-	test("fails startup when the database ledger names an absent migration", () => {
-		const migrationDir = mkdtempSync(path.join(tmpdir(), "miku-migrations-"));
-		writeFileSync(
-			path.join(migrationDir, "0001_test.sql"),
-			"CREATE TABLE test_table (id TEXT PRIMARY KEY);",
-		);
-		const db = new Database(":memory:");
-		applyMigrations(db, migrationDir);
-		db.query("INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)").run(
-			"9999_missing.sql",
-			"missing",
-		);
-
-		expect(() => applyMigrations(db, migrationDir)).toThrow(
-			"is not present in this release lineage",
-		);
-	});
-
 	test("default crawl history ordering uses its global updated-at index", () => {
 		const storage = createInMemoryStorage();
 		const plan = storage.db
@@ -260,86 +227,6 @@ describe("storage contract", () => {
 			.all() as Array<{ detail: string }>;
 
 		expect(plan.some((row) => row.detail.includes("idx_crawl_runs_updated_at"))).toBe(true);
-	});
-
-	test("rejects a migration ledger that is not an ordered lineage prefix", () => {
-		const migrationDir = mkdtempSync(path.join(tmpdir(), "miku-migrations-"));
-		writeFileSync(path.join(migrationDir, "0001_first.sql"), "CREATE TABLE first_table (id TEXT);");
-		writeFileSync(
-			path.join(migrationDir, "0002_second.sql"),
-			"CREATE TABLE second_table (id TEXT);",
-		);
-		writeFileSync(path.join(migrationDir, "0003_third.sql"), "CREATE TABLE third_table (id TEXT);");
-		const db = new Database(":memory:");
-		db.exec(`
-			CREATE TABLE schema_migrations (
-				id TEXT PRIMARY KEY,
-				applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				checksum TEXT NOT NULL
-			);
-			INSERT INTO schema_migrations (id, checksum)
-			VALUES ('0001_first.sql', 'unverified');
-			INSERT INTO schema_migrations (id, checksum)
-			VALUES ('0003_third.sql', 'unverified');
-		`);
-
-		expect(() => applyMigrations(db, migrationDir)).toThrow("must form an ordered prefix");
-		expect(
-			db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'second_table'").get(),
-		).toBeNull();
-	});
-
-	test("rejects unsupported migration lineages without mutating existing tables", () => {
-		const db = new Database(":memory:");
-		db.exec(`
-			CREATE TABLE pages (id INTEGER PRIMARY KEY, url TEXT);
-			INSERT INTO pages (id, url) VALUES (1, 'https://existing.example');
-			CREATE TABLE schema_migrations (
-				id TEXT PRIMARY KEY,
-				applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				checksum TEXT NOT NULL
-			);
-			INSERT INTO schema_migrations (id, checksum) VALUES ('9999_unknown.sql', 'unknown');
-		`);
-
-		expect(() => applyMigrations(db)).toThrow("is not present in this release lineage");
-		expect((db.query("SELECT COUNT(*) AS count FROM pages").get() as { count: number }).count).toBe(
-			1,
-		);
-	});
-
-	test("adopts the canonical baseline from its exact pre-baseline lineage", () => {
-		const db = new Database(":memory:");
-		applyMigrations(db);
-		db.exec(`
-			CREATE TABLE legacy_import_quarantine (id TEXT PRIMARY KEY);
-			INSERT INTO legacy_import_quarantine (id) VALUES ('preserved');
-		`);
-		replaceWithPreBaselineLedger(db);
-
-		applyMigrations(db);
-
-		expect(
-			db.query("SELECT id FROM schema_migrations ORDER BY id").all() as Array<{ id: string }>,
-		).toEqual([{ id: "0001_schema.sql" }]);
-		expect((db.query("SELECT id FROM legacy_import_quarantine").get() as { id: string }).id).toBe(
-			"preserved",
-		);
-		db.close();
-	});
-
-	test("rejects baseline adoption when the live schema diverges", () => {
-		const db = new Database(":memory:");
-		applyMigrations(db);
-		db.exec("DROP INDEX idx_crawl_runs_updated_at");
-		replaceWithPreBaselineLedger(db);
-
-		expect(() => applyMigrations(db)).toThrow("does not match the canonical schema");
-		expect(
-			(db.query("SELECT COUNT(*) AS count FROM schema_migrations").get() as { count: number })
-				.count,
-		).toBe(10);
-		db.close();
 	});
 
 	test("crawl run persistence rejects invalid lifecycle state at the database boundary", () => {
@@ -382,6 +269,22 @@ describe("storage contract", () => {
 		expect(() => storage.repos.crawlRuns.getById("crawl-constraints")).toThrow(
 			"Persisted timestamp is outside the date-time contract",
 		);
+	});
+
+	test("preserves fractional list bounds against second-precision storage", () => {
+		const storage = createInMemoryStorage();
+		const run = storage.repos.crawlRuns.createRun(
+			"fractional-list-bound",
+			createCrawlOptionsFixture(),
+		);
+		storage.db
+			.query("UPDATE crawl_runs SET updated_at = '2026-01-01 00:00:00' WHERE id = ?")
+			.run(run.id);
+
+		expect(storage.repos.crawlRuns.list({ from: "2026-01-01T00:00:00.001Z" })).toEqual([]);
+		expect(storage.repos.crawlRuns.list({ to: "2026-01-01T00:00:00.999Z" })).toEqual([
+			expect.objectContaining({ id: run.id }),
+		]);
 	});
 
 	test("runtime persistence tables reject impossible queue, page, and domain values", () => {

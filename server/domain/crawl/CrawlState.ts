@@ -74,7 +74,7 @@ export function deriveTerminalCounters(
 }
 
 export class CrawlState {
-	private readonly terminalOutcomes = new Map<string, TerminalOutcome>();
+	private readonly terminalUrls = new Set<string>();
 	private readonly admittedUrls = new Set<string>();
 	private readonly domainDelays = new Map<string, number>();
 	private readonly domainNextAllowedAt = new Map<string, number>();
@@ -124,10 +124,6 @@ export class CrawlState {
 		return this.stopRequested;
 	}
 
-	canScheduleMore(): boolean {
-		return !this.stopRequested && this.hasPageCapacity();
-	}
-
 	hasPageCapacity(): boolean {
 		return this.counters.pagesScanned < this.options.maxPages;
 	}
@@ -137,14 +133,14 @@ export class CrawlState {
 	}
 
 	hasVisited(url: string): boolean {
-		return this.terminalOutcomes.has(url);
+		return this.terminalUrls.has(url);
 	}
 
 	restoreTerminals(records: RestoredTerminalRecord[]): void {
 		const restoredUrls = new Set<string>();
 		const restoredDomains = new Map<string, string>();
 		for (const record of records) {
-			if (this.terminalOutcomes.has(record.url) || restoredUrls.has(record.url)) {
+			if (this.terminalUrls.has(record.url) || restoredUrls.has(record.url)) {
 				throw new Error(`Cannot restore duplicate terminal URL: ${record.url}`);
 			}
 			const identity = getCrawlUrlIdentity(record.url);
@@ -177,7 +173,7 @@ export class CrawlState {
 		);
 
 		for (const record of records) {
-			this.terminalOutcomes.set(record.url, record.outcome);
+			this.terminalUrls.add(record.url);
 			if (record.outcome === "failure") {
 				this.consecutiveFailures += 1;
 				if (this.consecutiveFailures >= FAILURE_CIRCUIT_BREAKER_THRESHOLD) {
@@ -389,7 +385,7 @@ export class CrawlState {
 		outcome: TerminalOutcome,
 		effects: TerminalCounterEffects = {},
 	): CrawlCounters {
-		if (this.terminalOutcomes.has(url)) {
+		if (this.terminalUrls.has(url)) {
 			throw new Error(`Cannot complete already-terminal URL: ${url}`);
 		}
 
@@ -402,7 +398,7 @@ export class CrawlState {
 		options: TerminalCounterEffects = {},
 	): void {
 		const nextCounters = this.previewTerminalCounters(url, outcome, options);
-		this.terminalOutcomes.set(url, outcome);
+		this.terminalUrls.add(url);
 		Object.assign(this.counters, nextCounters);
 
 		switch (outcome) {

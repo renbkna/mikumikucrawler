@@ -103,7 +103,7 @@ export class DefaultResolver implements Resolver {
 			.toLowerCase()
 			.replace(/\.$/, "");
 
-		if (normalizedHost.toLowerCase() === "localhost") {
+		if (normalizedHost === "localhost") {
 			if (this.allowLocalhost && options.allowLocalhost === true) {
 				return Object.freeze(["127.0.0.1"]);
 			}
