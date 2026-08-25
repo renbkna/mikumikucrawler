@@ -93,7 +93,7 @@ Every crawled page is reduced to the data used by crawling, recovery, search, an
 
 ## 🚀 Quick Start
 
-> **Requires [Bun 1.3.14](https://bun.sh)** — the repository's declared runtime.
+> **Requires [Bun 1.4.0](https://bun.sh)** — the repository's declared runtime.
 
 ```bash
 git clone https://github.com/renbkna/mikumikucrawler

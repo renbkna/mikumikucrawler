@@ -70,10 +70,14 @@ describe("cross-boundary invariants", () => {
 		const manifest = JSON.parse(packageJson) as {
 			dependencies: Record<string, string>;
 			devDependencies: Record<string, string>;
+			packageManager: string;
 		};
+		const bunVersion = manifest.packageManager.match(/^bun@(\d+\.\d+\.\d+)$/)?.[1] ?? "";
 		const playwrightVersion = manifest.dependencies.playwright;
 
-		expect(dockerfile).toMatch(/^ARG BUN_IMAGE=oven\/bun:1\.3\.14@sha256:[a-f0-9]{64}$/m);
+		expect(bunVersion).not.toBe("");
+		expect(manifest.devDependencies["@types/bun"]).toBe(bunVersion);
+		expect(dockerfile).toContain(`ARG BUN_IMAGE=oven/bun:${bunVersion}@sha256:`);
 		expect(playwrightVersion).toMatch(/^\d+\.\d+\.\d+$/);
 		expect(dockerfile).toMatch(
 			/^ARG PLAYWRIGHT_IMAGE=mcr\.microsoft\.com\/playwright:v\d+\.\d+\.\d+-noble@sha256:[a-f0-9]{64}$/m,
