@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { CrawlOptions, CrawlStatus } from "../../shared/contracts/index.js";
 import {
@@ -130,35 +130,40 @@ function openDatabase(databasePath: string): Database {
 	}
 }
 
-function removeDatabaseFiles(databasePath: string): void {
-	for (const suffix of ["", "-wal", "-shm"]) {
-		rmSync(`${databasePath}${suffix}`, { force: true });
-	}
-}
-
 function createSchema(db: Database, schemaSql: string): void {
 	db.transaction(() => db.exec(schemaSql))();
 }
 
+function resetSchema(db: Database, schemaSql: string): void {
+	// Keep the exclusive connection and file identity throughout the reset.
+	db.exec("PRAGMA foreign_keys = OFF");
+	try {
+		db.transaction(() => {
+			for (const type of ["trigger", "view", "table"]) {
+				// Re-read after each drop: virtual tables remove their own shadow tables.
+				while (true) {
+					const object = describeSchema(db).find((entry) => entry.type === type);
+					if (!object) break;
+					db.exec(`DROP ${type} "${object.name.replaceAll('"', '""')}"`);
+				}
+			}
+			db.exec(schemaSql);
+		})();
+	} finally {
+		db.exec("PRAGMA foreign_keys = ON");
+	}
+}
+
 function openCurrentDatabase(databasePath: string): Database {
 	const schemaSql = readFileSync(schemaPath, "utf8");
-	let db = openDatabase(databasePath);
+	const db = openDatabase(databasePath);
 	try {
 		if (describeSchema(db).length === 0) {
 			createSchema(db, schemaSql);
 			return db;
 		}
 		if (hasCurrentSchema(db, schemaSql)) return db;
-	} catch (error) {
-		db.close();
-		throw error;
-	}
-
-	db.close(true);
-	removeDatabaseFiles(databasePath);
-	db = openDatabase(databasePath);
-	try {
-		createSchema(db, schemaSql);
+		resetSchema(db, schemaSql);
 		return db;
 	} catch (error) {
 		db.close();

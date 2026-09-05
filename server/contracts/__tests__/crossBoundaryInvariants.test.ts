@@ -76,7 +76,12 @@ describe("cross-boundary invariants", () => {
 		const playwrightVersion = manifest.dependencies.playwright;
 
 		expect(bunVersion).not.toBe("");
-		expect(manifest.devDependencies["@types/bun"]).toBe(bunVersion);
+		// Type releases can lag runtime patches; stay on the same minor without declaring newer APIs.
+		const bunMinor = bunVersion.split(".").slice(0, 2).join(".");
+		const bunTypesVersion = manifest.devDependencies["@types/bun"] ?? "";
+		expect(bunTypesVersion).toMatch(/^\d+\.\d+\.\d+$/);
+		expect(Bun.semver.satisfies(bunTypesVersion, `>=${bunMinor}.0 <=${bunVersion}`)).toBe(true);
+		expect(readme).toContain(`Requires [Bun ${bunVersion}]`);
 		expect(dockerfile).toContain(`ARG BUN_IMAGE=oven/bun:${bunVersion}@sha256:`);
 		expect(playwrightVersion).toMatch(/^\d+\.\d+\.\d+$/);
 		expect(dockerfile).toMatch(

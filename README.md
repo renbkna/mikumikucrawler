@@ -93,7 +93,7 @@ Every crawled page is reduced to the data used by crawling, recovery, search, an
 
 ## 🚀 Quick Start
 
-> **Requires [Bun 1.4.0](https://bun.sh)** — the repository's declared runtime.
+> **Requires [Bun 1.4.2](https://bun.sh)** — the repository's declared runtime.
 
 ```bash
 git clone https://github.com/renbkna/mikumikucrawler
@@ -149,8 +149,10 @@ crawls reserve an 8 MiB safety allowance for each remaining page. When necessary
 the storage owner removes the oldest completed, stopped, or failed runs first;
 active, paused, and interrupted checkpoints are never reclaimed automatically.
 `server/storage/schema.sql` is the only supported schema. A database whose
-schema differs is replaced at startup; releases do not migrate or preserve
-incompatible stored data.
+schema differs is reset in place at startup while retaining exclusive ownership;
+releases do not migrate or preserve incompatible stored data. The searchable-text
+column is derived from extracted main content, falling back to raw content; FTS
+indexing, snippets, rebuilds, and JSON exports use that same projection.
 
 </details>
 
@@ -231,7 +233,16 @@ restart or cleanup, recover from the backend-owned crawl snapshot, which contain
 the persisted crawl summary, bounded latest-page window, and total stored count.
 Settled streams close after their terminal frame; reconnects with no unseen
 terminal event receive `204` so native `EventSource` clients stop reconnecting.
-Search and export cover the full stored set.
+Search and export cover the full stored set. An active search refreshes when live events
+or recovery change the stored page count, and when the crawl phase changes. Refreshes
+coalesce behind one in-flight request; changing the query or crawl cancels that request.
+HTML/JSON acquisition and rendered snapshots are bounded to 2 MiB per document;
+larger documents are rejected before synchronous processing.
+Exports capture page membership at request time and stream bodies on demand; later pages belong to the next export.
+If deletion or storage reclamation removes an unread page, the download fails
+instead of silently returning a partial set. Cancelling a download stops further reads.
+Export fields, nullability, and column order are defined in `shared/contracts/export.ts`;
+storage types, JSON/CSV projections, and the OpenAPI 3.1 schema derive from it.
 
 ---
 
@@ -414,6 +425,9 @@ bun run check
 ```
 
 Typecheck (`tsgo`) → Format check and lint (`biome ci`) → Tests → Build
+
+The mounted controller regression runs in Chromium using the same browser resolution
+as the crawler. Install Chromium as described above before running the checks.
 
 ---
 

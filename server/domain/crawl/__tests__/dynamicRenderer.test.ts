@@ -569,6 +569,47 @@ describe("dynamic renderer network contract", () => {
 		expect(bodyRead).toBe(false);
 	});
 
+	test("admits and snapshots script-heavy HTML above 1 MiB without truncation", async () => {
+		const script = " ".repeat(1536 * 1024);
+		const html = `<html><script>${script}</script></html>`;
+		const { route, calls } = createRoute({ url: "https://example.com/video" });
+		const result = await fulfillRouteWithPinnedHttpClient(route, {
+			fetch: async () => new Response(html, { headers: { "content-type": "text/html" } }),
+		});
+		expect(result.type).toBe("fulfilled");
+		expect(calls.fulfill.mock.calls[0]?.[0]?.body).toEqual(Buffer.from(html));
+
+		// Execute the actual in-page snapshot callback with the production byte limit.
+		const root = {
+			nodeType: 1,
+			tagName: "HTML",
+			attributes: [],
+			outerHTML: html,
+			childNodes: [
+				{
+					nodeType: 1,
+					tagName: "SCRIPT",
+					attributes: [],
+					childNodes: [{ nodeType: 3, nodeValue: script, childNodes: [] }],
+				},
+			],
+		};
+		const page = {
+			evaluate: async (callback: (limits: object) => unknown, limits: object) =>
+				runInNewContext(`(${callback.toString()})(limits)`, {
+					limits,
+					document: { documentElement: root, title: "Video", querySelector: () => null },
+					window: { location: { href: "https://example.com/video" } },
+					Node: { ELEMENT_NODE: 1, COMMENT_NODE: 8 },
+				}),
+		} as unknown as Page;
+		expect(await extractRenderedSnapshot(page)).toMatchObject({
+			content: html,
+			contentLength: Buffer.byteLength(html),
+			title: "Video",
+		});
+	});
+
 	test("applies the parse-safe limit to browser document responses", async () => {
 		let bodyRead = false;
 		const { route, calls } = createRoute({

@@ -43,8 +43,8 @@ export const REQUEST_CONSTANTS = {
 	ROBOTS_FETCH_TIMEOUT_MS: 5000,
 	/** Maximum robots.txt body size to buffer (512 KiB). */
 	MAX_ROBOTS_RESPONSE_BYTES: 512 * 1024,
-	/** Maximum decoded HTML/JSON document size admitted to synchronous processing (1 MiB). */
-	MAX_TEXT_DOCUMENT_BYTES: 1 * 1024 * 1024,
+	/** Maximum decoded HTML/JSON document size admitted to synchronous processing (2 MiB). */
+	MAX_TEXT_DOCUMENT_BYTES: 2 * 1024 * 1024,
 } as const;
 
 /** PDF processing limits to prevent resource exhaustion */

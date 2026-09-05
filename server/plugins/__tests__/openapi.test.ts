@@ -7,7 +7,14 @@ import { openapiPlugin } from "../openapi.js";
 
 test("production OpenAPI exposes the local specification without a remote interactive script", async () => {
 	const app = new Elysia({ introspect: true })
-		.get("/ping", { query: t.Object({ status: CrawlStatusSchema }) }, () => "pong")
+		.get(
+			"/ping",
+			{
+				query: t.Object({ status: CrawlStatusSchema, count: t.Optional(t.Numeric()) }),
+				response: t.Object({ value: t.Nullable(t.String()) }),
+			},
+			() => ({ value: null }),
+		)
 		.use(openapiPlugin({ interactive: false }));
 
 	const interactive = await app.handle(new Request("http://localhost/openapi"));

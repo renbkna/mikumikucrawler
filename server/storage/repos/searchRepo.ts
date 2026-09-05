@@ -32,8 +32,7 @@ export function createSearchRepo(db: Database) {
 								snippet(pages_fts, -1, '', '', '…', 32),
 								substr(
 										COALESCE(
-											NULLIF(p.main_content, ''),
-											NULLIF(p.content, ''),
+											NULLIF(p.search_content, ''),
 											NULLIF(p.description, ''),
 											NULLIF(p.title, ''),
 										p.url

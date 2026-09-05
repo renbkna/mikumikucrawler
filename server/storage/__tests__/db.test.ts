@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { closeSync, fstatSync, mkdtempSync, openSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { persistPageFixture } from "../../__tests__/pageFixture.js";
@@ -83,29 +83,59 @@ describe("storage contract", () => {
 		nextOwner.close();
 	});
 
-	test("replaces an incompatible database with the current schema", () => {
-		const databasePath = path.join(
-			mkdtempSync(path.join(tmpdir(), "miku-incompatible-db-")),
-			"crawler.db",
-		);
+	test("resets incompatible schemas without replacing the owned database file", () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "miku-incompatible-db-"));
+		const databasePath = path.join(directory, "crawler.db");
 		const incompatible = new Database(databasePath);
-		incompatible.exec(
-			"CREATE TABLE legacy_data (value TEXT); INSERT INTO legacy_data VALUES ('old');",
-		);
+		incompatible.exec(`
+			PRAGMA foreign_keys = ON;
+			CREATE TABLE legacy_data (id INTEGER PRIMARY KEY, value TEXT);
+			CREATE TABLE child (parent_id INTEGER REFERENCES legacy_data(id));
+			INSERT INTO legacy_data VALUES (1, 'old');
+			INSERT INTO child VALUES (1);
+			CREATE VIEW "legacy""view" AS SELECT * FROM legacy_data;
+			CREATE TRIGGER legacy_trigger AFTER INSERT ON child BEGIN
+				UPDATE legacy_data SET value = 'changed' WHERE id = NEW.parent_id;
+			END;
+			CREATE VIRTUAL TABLE legacy_fts USING fts5(value);
+			INSERT INTO legacy_fts VALUES ('indexed');
+		`);
 		incompatible.close();
 
+		// Hold the old inode open so unlink/recreate cannot reuse it and fool this proof.
+		const originalFile = openSync(databasePath, "r");
 		const storage = createStorage(databasePath);
-		expect(
-			storage.db
-				.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'legacy_data'")
-				.get(),
-		).toBeNull();
-		expect(
-			storage.db
-				.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'crawl_runs'")
-				.get(),
-		).not.toBeNull();
-		storage.close();
+		try {
+			expect(statSync(databasePath).ino).toBe(fstatSync(originalFile).ino);
+			expect(
+				storage.db
+					.query("SELECT name FROM sqlite_master WHERE name LIKE 'legacy%' OR name = 'child'")
+					.all(),
+			).toEqual([]);
+			expect(storage.db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+			expect(storage.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+			storage.repos.crawlRuns.createRun("after-reset", createCrawlOptionsFixture());
+			const competitor = Bun.spawnSync([
+				process.execPath,
+				"--eval",
+				`import { createStorage, DatabaseOwnershipError } from ${JSON.stringify(path.resolve(import.meta.dir, "../db.ts"))};
+				try { createStorage(process.argv[1]).close(); process.exit(1); }
+				catch (error) { if (!(error instanceof DatabaseOwnershipError)) throw error; }`,
+				databasePath,
+			]);
+			expect(competitor.stderr.toString()).toBe("");
+			expect(competitor.exitCode).toBe(0);
+		} finally {
+			storage.close();
+			closeSync(originalFile);
+		}
+		const reopened = createStorage(databasePath);
+		try {
+			expect(reopened.repos.crawlRuns.getById("after-reset")).not.toBeNull();
+		} finally {
+			reopened.close();
+			rmSync(directory, { recursive: true, force: true });
+		}
 	});
 
 	test("durable capacity reclaims the oldest terminal run and protects resumable state", () => {
@@ -505,6 +535,55 @@ describe("storage contract", () => {
 		expect(rawRow.crawled_at).toBeUndefined();
 	});
 
+	test("overlapping exports keep independent membership and permit writes between pulls", () => {
+		const storage = createInMemoryStorage();
+		try {
+			for (const crawlId of ["alpha", "beta"]) {
+				storage.repos.crawlRuns.createRun(crawlId, createCrawlOptionsFixture());
+				for (let index = 0; index < 3; index++) {
+					persistPageFixture(storage, {
+						crawlId,
+						url: `https://${crawlId}.example/${index}`,
+						content: "body",
+					});
+				}
+			}
+			const expected = Array.from(storage.repos.pages.iterateForExport("alpha"));
+			const first = storage.repos.pages.iterateForExport("alpha");
+			const second = storage.repos.pages.iterateForExport("alpha");
+			const other = storage.repos.pages.iterateForExport("beta");
+			const csv = storage.repos.pages.iterateForExport("alpha", { includeContent: false });
+			expect(first.next().value).toEqual(expected[0]);
+			expect(second.next().value).toEqual(expected[0]);
+			expect(other.next().value?.url).toBe("https://beta.example/2");
+			expect(csv.next().value).toEqual({ ...expected[0], content: null });
+			second.return?.();
+			other.return?.();
+			csv.return?.();
+			persistPageFixture(storage, { crawlId: "alpha", url: "https://alpha.example/later" });
+			expect(Array.from(first)).toEqual(expected.slice(1));
+			expect(Array.from(storage.repos.pages.iterateForExport("alpha"))).toHaveLength(4);
+		} finally {
+			storage.close();
+		}
+	});
+
+	test("export fails if deletion removes an unread page instead of silently truncating", () => {
+		const storage = createInMemoryStorage();
+		try {
+			storage.repos.crawlRuns.createRun("deleted", createCrawlOptionsFixture());
+			for (let index = 0; index < 3; index++) {
+				persistPageFixture(storage, { crawlId: "deleted", url: `https://example.com/${index}` });
+			}
+			const rows = storage.repos.pages.iterateForExport("deleted");
+			expect(rows.next().done).toBe(false);
+			storage.repos.crawlRuns.deleteRun("deleted");
+			expect(() => rows.next()).toThrow("deleted during export");
+		} finally {
+			storage.close();
+		}
+	});
+
 	test("page updates replace stale FTS terms for search", () => {
 		const storage = createInMemoryStorage();
 		const created = storage.repos.crawlRuns.createRun(
@@ -587,7 +666,7 @@ describe("storage contract", () => {
 		expect(storage.repos.search.count(created.id, '"uniqueemptycontentneedle"*')).toBe(1);
 	});
 
-	test("search indexes canonical main content before raw HTML source", () => {
+	test("FTS snippets, rebuilds, updates and deletion use the canonical searchable text", () => {
 		const storage = createInMemoryStorage();
 		const created = storage.repos.crawlRuns.createRun(
 			"crawl-main-content-search",
@@ -602,8 +681,25 @@ describe("storage contract", () => {
 			mainContent: "uniquemainonlyneedle body",
 		});
 
-		expect(storage.repos.search.count(created.id, '"uniquemainonlyneedle"*')).toBe(1);
-		expect(storage.repos.search.count(created.id, '"uniquerawonlyneedle"*')).toBe(0);
+		try {
+			const before = storage.repos.search.search(created.id, '"uniquemainonlyneedle"*', 10);
+			expect(before).toHaveLength(1);
+			expect(before[0]?.snippet).toBe("uniquemainonlyneedle body");
+			storage.db.exec("INSERT INTO pages_fts(pages_fts) VALUES ('rebuild')");
+			expect(storage.repos.search.search(created.id, '"uniquemainonlyneedle"*', 10)).toEqual(
+				before,
+			);
+			expect(storage.repos.search.count(created.id, '"uniquerawonlyneedle"*')).toBe(0);
+			storage.db.query("UPDATE pages SET main_content = '' WHERE crawl_id = ?").run(created.id);
+			expect(storage.repos.search.count(created.id, '"uniquemainonlyneedle"*')).toBe(0);
+			expect(storage.repos.search.count(created.id, '"uniquerawonlyneedle"*')).toBe(1);
+			// rank=1 compares the FTS index with its external content, including stale terms.
+			storage.db.exec("INSERT INTO pages_fts(pages_fts, rank) VALUES ('integrity-check', 1)");
+			storage.repos.crawlRuns.deleteRun(created.id);
+			storage.db.exec("INSERT INTO pages_fts(pages_fts, rank) VALUES ('integrity-check', 1)");
+		} finally {
+			storage.close();
+		}
 	});
 
 	test("metadata-only search matches return non-empty snippets", () => {

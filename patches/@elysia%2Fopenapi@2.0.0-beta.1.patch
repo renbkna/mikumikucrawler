@@ -83,7 +83,7 @@ diff --git a/dist/types.d.ts b/dist/types.d.ts
 -import { OpenAPIV3 } from "./node_modules/openapi-types/dist/index.js";
 -import { ApiReferenceConfiguration } from "./node_modules/@scalar/types/dist/api-reference/api-reference-configuration.js";
 +import { TSchema } from "typebox";
-+import { OpenAPIV3 } from "openapi-types";
++import { OpenAPIV3_1 as OpenAPIV3 } from "openapi-types";
  import { SwaggerUIOptions } from "./swagger/types.js";
  //#region src/types.d.ts
  type OpenAPIProvider = 'scalar' | 'swagger-ui' | null;
@@ -117,3 +117,35 @@ diff --git a/dist/swagger/index.d.ts b/dist/swagger/index.d.ts
 @@ -1 +1 @@
 -import { OpenAPIV3 } from "../node_modules/openapi-types/dist/index.js";
 +import { OpenAPIV3 } from "openapi-types";
+diff --git a/dist/openapi.js b/dist/openapi.js
+--- a/dist/openapi.js
++++ b/dist/openapi.js
+@@ -282,6 +282,12 @@
+ */
+ const enumToOpenApi = (_schema) => {
+ 	if (!_schema || typeof _schema !== "object") return _schema;
++	_schema = { ..._schema };
++	delete _schema["~elyTyp"];
++	for (const keyword of ["anyOf", "allOf", "oneOf"]) {
++		if (Array.isArray(_schema[keyword])) _schema[keyword] = _schema[keyword].map(enumToOpenApi);
++	}
++	if (_schema.not) _schema.not = enumToOpenApi(_schema.not);
+ 	{
+ 		const schema = _schema;
+ 		if (schema.anyOf && Array.isArray(schema.anyOf) && schema.anyOf.length > 0 && schema.anyOf.every((item) => item && typeof item === "object" && item.const !== void 0)) return {
+diff --git a/dist/openapi.mjs b/dist/openapi.mjs
+--- a/dist/openapi.mjs
++++ b/dist/openapi.mjs
+@@ -281,6 +281,12 @@
+ */
+ const enumToOpenApi = (_schema) => {
+ 	if (!_schema || typeof _schema !== "object") return _schema;
++	_schema = { ..._schema };
++	delete _schema["~elyTyp"];
++	for (const keyword of ["anyOf", "allOf", "oneOf"]) {
++		if (Array.isArray(_schema[keyword])) _schema[keyword] = _schema[keyword].map(enumToOpenApi);
++	}
++	if (_schema.not) _schema.not = enumToOpenApi(_schema.not);
+ 	{
+ 		const schema = _schema;
+ 		if (schema.anyOf && Array.isArray(schema.anyOf) && schema.anyOf.length > 0 && schema.anyOf.every((item) => item && typeof item === "object" && item.const !== void 0)) return {

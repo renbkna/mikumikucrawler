@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { ExportPageRow } from "../../../../shared/contracts/index.js";
 import { createCrawlExportResponse } from "../CrawlExportService.js";
 
 const pages = [
@@ -93,16 +94,24 @@ describe("crawl export service contract", () => {
 		);
 	});
 
-	test("pulls export rows only as the response stream requests them", async () => {
+	test.each([
+		"json",
+		"csv",
+	] as const)("%s export stops reading and releases the source on cancellation", async (format) => {
 		let yielded = 0;
+		let closed = false;
 		function* rows() {
-			for (const page of pages) {
-				yielded += 1;
-				yield page;
+			try {
+				for (let index = 0; index < 100; index++) {
+					yielded += 1;
+					yield pages[0];
+				}
+			} finally {
+				closed = true;
 			}
 		}
 
-		const response = createCrawlExportResponse("crawl-stream", rows(), "json");
+		const response = createCrawlExportResponse("crawl-stream", rows(), format);
 		expect(yielded).toBe(0);
 		const reader = response.body?.getReader();
 		if (!reader) throw new Error("Expected streaming response body");
@@ -111,5 +120,30 @@ describe("crawl export service contract", () => {
 		await reader.read();
 		expect(yielded).toBe(1);
 		await reader.cancel();
+		expect(closed).toBe(true);
+		expect(yielded).toBe(1);
+	});
+
+	test.each([
+		"json",
+		"csv",
+	] as const)("%s export propagates serialization failure and closes its source", async (format) => {
+		let closed = false;
+		function* rows(): Generator<ExportPageRow> {
+			try {
+				yield {
+					...pages[0],
+					get title(): string {
+						throw new Error("cannot serialize row");
+					},
+				};
+			} finally {
+				closed = true;
+			}
+		}
+		await expect(createCrawlExportResponse("broken", rows(), format).text()).rejects.toThrow(
+			"cannot serialize row",
+		);
+		expect(closed).toBe(true);
 	});
 });

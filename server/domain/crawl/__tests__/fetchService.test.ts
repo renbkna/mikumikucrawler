@@ -612,6 +612,24 @@ describe("fetch service contract", () => {
 		expect(httpFetch).not.toHaveBeenCalled();
 	});
 
+	test("admits script-heavy HTML above 1 MiB without truncating it", async () => {
+		const html = `<html><script>${" ".repeat(1536 * 1024)}</script><body>Video details</body></html>`;
+		const service = new FetchServiceHarness({
+			fetch: async () => new Response(html, { headers: { "content-type": "text/html" } }),
+		});
+		const result = await service.fetch({
+			url: "https://example.com/video",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+		expect(result).toMatchObject({
+			type: "success",
+			content: html,
+			contentLength: Buffer.byteLength(html),
+		});
+	});
+
 	test("rejects declared oversized static responses before buffering", async () => {
 		let textRead = false;
 		const response = new Response("unused", {

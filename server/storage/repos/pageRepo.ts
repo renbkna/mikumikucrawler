@@ -4,43 +4,12 @@ import {
 	type CrawlPageDetails,
 	type CrawlPageSummary,
 	type CrawlPagesResponse,
+	type ExportPageRow,
 	isCrawlPageDetails,
 	PAGE_TEXT_LIMITS,
 } from "../../../shared/contracts/index.js";
 import { truncateUtf8Text } from "../../../shared/text.js";
 import type { OwnStatement } from "../db.js";
-
-export interface ExportPageRow {
-	id: number;
-	url: string;
-	title: string | null;
-	description: string | null;
-	contentType: string | null;
-	domain: string;
-	content: string | null;
-	crawledAt: string;
-}
-
-export const EXPORT_PAGE_FIELDS = [
-	"id",
-	"url",
-	"title",
-	"description",
-	"contentType",
-	"domain",
-	"content",
-	"crawledAt",
-] as const satisfies readonly (keyof ExportPageRow)[];
-
-export const CSV_EXPORT_PAGE_FIELDS = [
-	"id",
-	"url",
-	"title",
-	"description",
-	"contentType",
-	"domain",
-	"crawledAt",
-] as const satisfies readonly (keyof ExportPageRow)[];
 
 interface PageSummaryRow {
 	id: number;
@@ -69,28 +38,19 @@ function readPageDetails(row: PageSummaryRow): CrawlPageDetails {
 }
 
 export function createPageRepo(db: Database, own: OwnStatement) {
-	const exportWithContent = own(
-		db.query<ExportPageRow, [string]>(`
-		SELECT id, url, title, description,
-			content_type AS contentType,
-			domain,
-			COALESCE(NULLIF(main_content, ''), content) AS content,
-			crawled_at AS crawledAt
-		FROM pages
-		WHERE crawl_id = ?
-		ORDER BY crawled_at DESC, id DESC
-	`),
+	const exportIds = own(
+		db.query<{ id: number }, [string]>(`
+			SELECT id FROM pages WHERE crawl_id = ? ORDER BY crawled_at DESC, id DESC
+		`),
 	);
-	const exportWithoutContent = own(
-		db.query<ExportPageRow, [string]>(`
+	const exportPage = own(
+		db.query<ExportPageRow, [boolean, number, string]>(`
 		SELECT id, url, title, description,
 			content_type AS contentType,
 			domain,
-			NULL AS content,
+			CASE WHEN ? THEN search_content ELSE NULL END AS content,
 			crawled_at AS crawledAt
-		FROM pages
-		WHERE crawl_id = ?
-		ORDER BY crawled_at DESC, id DESC
+		FROM pages WHERE id = ? AND crawl_id = ?
 	`),
 	);
 	const listSummaries = own(
@@ -147,7 +107,16 @@ export function createPageRepo(db: Database, own: OwnStatement) {
 			crawlId: string,
 			options: { includeContent: boolean } = { includeContent: true },
 		): IterableIterator<ExportPageRow> {
-			return (options.includeContent ? exportWithContent : exportWithoutContent).iterate(crawlId);
+			// Snapshot membership, not bodies. Stored pages are immutable; no cursor spans a yield.
+			const ids = exportIds.all(crawlId);
+			const { includeContent } = options;
+			return (function* () {
+				for (const { id } of ids) {
+					const page = exportPage.get(includeContent, id, crawlId);
+					if (!page) throw new Error(`Crawl ${crawlId} was deleted during export`);
+					yield page;
+				}
+			})();
 		},
 	};
 }

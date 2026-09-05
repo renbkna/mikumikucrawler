@@ -60,6 +60,9 @@ CREATE TABLE pages (
   description TEXT,
   content TEXT,
   main_content TEXT,
+  search_content TEXT GENERATED ALWAYS AS (
+    COALESCE(NULLIF(main_content, ''), content)
+  ) VIRTUAL,
   word_count INTEGER CHECK(word_count IS NULL OR word_count >= 0),
   reading_time INTEGER CHECK(reading_time IS NULL OR reading_time >= 0),
   language TEXT,
@@ -186,7 +189,7 @@ CREATE VIRTUAL TABLE pages_fts USING fts5(
   url,
   title,
   description,
-  content,
+  search_content,
   content='pages',
   content_rowid='id',
   tokenize='porter unicode61'
@@ -195,49 +198,49 @@ CREATE VIRTUAL TABLE pages_fts USING fts5(
 CREATE TRIGGER pages_ai
 AFTER INSERT ON pages
 BEGIN
-  INSERT INTO pages_fts(rowid, url, title, description, content)
+  INSERT INTO pages_fts(rowid, url, title, description, search_content)
   VALUES (
     NEW.id,
     NEW.url,
     COALESCE(NEW.title, ''),
     COALESCE(NEW.description, ''),
-    COALESCE(NULLIF(NEW.main_content, ''), NULLIF(NEW.content, ''), '')
+    NEW.search_content
   );
 END;
 
 CREATE TRIGGER pages_ad
 AFTER DELETE ON pages
 BEGIN
-  INSERT INTO pages_fts(pages_fts, rowid, url, title, description, content)
+  INSERT INTO pages_fts(pages_fts, rowid, url, title, description, search_content)
   VALUES (
     'delete',
     OLD.id,
     OLD.url,
     COALESCE(OLD.title, ''),
     COALESCE(OLD.description, ''),
-    COALESCE(NULLIF(OLD.main_content, ''), NULLIF(OLD.content, ''), '')
+    OLD.search_content
   );
 END;
 
 CREATE TRIGGER pages_au
 AFTER UPDATE ON pages
 BEGIN
-  INSERT INTO pages_fts(pages_fts, rowid, url, title, description, content)
+  INSERT INTO pages_fts(pages_fts, rowid, url, title, description, search_content)
   VALUES (
     'delete',
     OLD.id,
     OLD.url,
     COALESCE(OLD.title, ''),
     COALESCE(OLD.description, ''),
-    COALESCE(NULLIF(OLD.main_content, ''), NULLIF(OLD.content, ''), '')
+    OLD.search_content
   );
 
-  INSERT INTO pages_fts(rowid, url, title, description, content)
+  INSERT INTO pages_fts(rowid, url, title, description, search_content)
   VALUES (
     NEW.id,
     NEW.url,
     COALESCE(NEW.title, ''),
     COALESCE(NEW.description, ''),
-    COALESCE(NULLIF(NEW.main_content, ''), NULLIF(NEW.content, ''), '')
+    NEW.search_content
   );
 END;

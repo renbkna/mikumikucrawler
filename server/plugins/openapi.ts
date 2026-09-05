@@ -2,6 +2,7 @@ import { openapi } from "@elysia/openapi";
 import {
 	API_PATHS,
 	CRAWL_EXPORT_FORMAT_VALUES,
+	CrawlExportSchema,
 	OPENAPI_CRAWL_EVENTS_PATH,
 	OPENAPI_CRAWL_EXPORT_PATH,
 } from "../../shared/contracts/index.js";
@@ -20,6 +21,8 @@ export function openapiPlugin(options: { interactive: boolean } = { interactive:
 		provider: options.interactive ? "scalar" : null,
 		scalar: { version: "1.62.9" },
 		documentation: {
+			openapi: "3.1.0",
+			components: { schemas: { CrawlExport: CrawlExportSchema } },
 			info: {
 				title: "MikuMikuCrawler API",
 				version: "3.0.0",
@@ -109,13 +112,7 @@ export function openapiPlugin(options: { interactive: boolean } = { interactive:
 								description: "Exported crawl pages",
 								content: {
 									"application/json": {
-										schema: {
-											type: "array",
-											items: {
-												type: "object",
-												additionalProperties: true,
-											},
-										},
+										schema: { $ref: "#/components/schemas/CrawlExport" },
 									},
 									"text/csv": {
 										schema: { type: "string" },

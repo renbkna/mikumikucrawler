@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Value } from "typebox/value";
 import { type CrawlOptions, isActiveCrawlStatus } from "../../../shared/contracts/index.js";
 import { persistPageFixture } from "../../__tests__/pageFixture.js";
 import {
@@ -595,12 +596,13 @@ describe("api contract", () => {
 	});
 
 	test("openapi documents streaming and export media types truthfully", async () => {
-		const { app } = buildApp();
+		const { app, storage } = buildApp();
 
 		const response = await app.handle(new Request("http://localhost/openapi/json"));
 
 		expect(response.status).toBe(200);
 		const spec = await response.json();
+		expect(JSON.stringify(spec)).not.toContain("~elyTyp");
 		const lastEventIdParameter = spec.paths["/api/crawls/{id}/events"].get.parameters.find(
 			(parameter: { name?: string }) => parameter.name === "Last-Event-ID",
 		);
@@ -642,7 +644,54 @@ describe("api contract", () => {
 
 		const uiResponse = await app.handle(new Request("http://localhost/openapi"));
 		expect(uiResponse.status).toBe(404);
-		expect(exportContent["application/json"].schema.type).toBe("array");
+		const crawl = storage.repos.crawlRuns.createRun("openapi-export", crawlBody);
+		persistPageFixture(storage, {
+			crawlId: crawl.id,
+			url: "https://example.com/nullable",
+			content: null,
+		});
+		// The SQL contract permits absent metadata, including data not produced by today's extractor.
+		storage.db.run(
+			"UPDATE pages SET title = NULL, description = NULL, content_type = NULL WHERE crawl_id = ?",
+			[crawl.id],
+		);
+
+		const download = await app.handle(
+			new Request(`http://localhost/api/crawls/${crawl.id}/export`),
+		);
+		const rows = await download.json();
+		const responseSchema = exportContent["application/json"].schema;
+		const exportSchema = responseSchema.$ref
+			? spec.components.schemas[responseSchema.$ref.split("/").at(-1)]
+			: responseSchema;
+		expect(Value.Check(exportSchema, rows)).toBe(true);
+		expect(rows[0]).toMatchObject({
+			title: null,
+			description: null,
+			contentType: null,
+			content: null,
+		});
+		// A client must be able to rely on every column, its type, and its nullability.
+		expect(exportSchema.items.required).toEqual([
+			"id",
+			"url",
+			"title",
+			"description",
+			"contentType",
+			"domain",
+			"content",
+			"crawledAt",
+		]);
+		for (const field of exportSchema.items.required) {
+			const missing = { ...rows[0] };
+			delete missing[field];
+			expect(Value.Check(exportSchema, [missing])).toBe(false);
+			expect(Value.Check(exportSchema, [{ ...rows[0], [field]: false }])).toBe(false);
+		}
+		expect(Value.Check(exportSchema, [{ ...rows[0], unexpected: "column" }])).toBe(false);
+
+		expect(exportSchema.type).toBe("array");
+		expect(spec.openapi).toBe("3.1.0");
 		expect(exportContent).toHaveProperty("application/json");
 		expect(exportContent).toHaveProperty("text/csv");
 		expect(exportContent).not.toHaveProperty("text/plain");
