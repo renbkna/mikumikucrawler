@@ -169,6 +169,31 @@ describe("PDF resource lifecycle", () => {
 		expect(result.metadata.title?.startsWith("🎵")).toBe(true);
 	});
 
+	test("gives PDFJS owned bytes so transfer cannot detach the caller buffer", async () => {
+		const content = Buffer.from(new ArrayBuffer(32));
+		Buffer.from("%PDF-owned-bytes").copy(content);
+		const original = Buffer.from(content);
+		let received: Uint8Array | undefined;
+		const loadPdfJs: PdfJsLoader = async () =>
+			({
+				getDocument: ({ data }: { data: Uint8Array }) => {
+					received = data;
+					structuredClone(data, { transfer: [data.buffer] });
+					return {
+						promise: Promise.resolve({ numPages: 0, getMetadata: async () => null }),
+						destroy: async () => undefined,
+					};
+				},
+			}) as never;
+
+		const result = createResult();
+		await processWithLoader(content, result, loadPdfJs);
+
+		expect(received?.buffer.byteLength).toBe(0);
+		expect(content.equals(original)).toBe(true);
+		expect(result.errors).toEqual([]);
+	});
+
 	test("propagates caller abort only after owned PDF resources begin cleanup", async () => {
 		let rejectText: ((reason: Error) => void) | undefined;
 		const cleanup = mock(() => undefined);

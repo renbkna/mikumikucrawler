@@ -61,7 +61,7 @@ export async function processPdfContent(
 		if (pdfBuffer.subarray(0, 5).toString("ascii") !== "%PDF-") {
 			throw new Error("Invalid PDF header");
 		}
-		const data = new Uint8Array(pdfBuffer.buffer, pdfBuffer.byteOffset, pdfBuffer.byteLength);
+		const data = new Uint8Array(pdfBuffer);
 		const pdfjs = await loadPdfJs();
 		signal?.throwIfAborted();
 		const task = pdfjs.getDocument({ data });
