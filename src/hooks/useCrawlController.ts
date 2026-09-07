@@ -1,19 +1,15 @@
-import { startTransition, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import type {
 	CrawlExportFormat,
-	CrawledPage,
 	CrawlRecoverySnapshot,
 	CrawlSummary,
 	ResumableSessionSummary,
 	StopCrawlMode,
 } from "../../shared/contracts/index.js";
 import {
-	type CrawlEventEnvelope,
 	crawlOptionsEqual,
 	isActiveCrawlStatus,
 	isResumableCrawlStatus,
-	isSettledCrawlEventType,
-	isTerminalCrawlStatus,
 } from "../../shared/contracts/index.js";
 import { normalizeCanonicalHttpUrl } from "../../shared/url";
 import {
@@ -24,10 +20,8 @@ import {
 	listResumableCrawls,
 	resumeCrawl as resumeCrawlRequest,
 	stopCrawl as stopCrawlRequest,
-	subscribeToCrawlEvents,
 } from "../api/crawls";
 import type { ApiFailure, ApiResult } from "../api/result";
-import { searchStoredPages } from "../api/search";
 import type { Toast } from "../types";
 import {
 	type CommandKind,
@@ -38,10 +32,9 @@ import {
 	crawlControllerReducer,
 	createInitialCrawlControllerState,
 	getCrawlCommandAvailability,
-	isTerminalRunPhase,
 } from "./crawlControllerState";
-
-const DURABLE_RECOVERY_RETRY_MS = 5_000;
+import { useCrawlLiveConnection } from "./useCrawlLiveConnection";
+import { useStoredPageSearch } from "./useStoredPageSearch";
 
 interface UseCrawlControllerOptions {
 	addToast: (type: Toast["type"], message: string, timeout?: number) => void;
@@ -102,12 +95,8 @@ function useControllerState({ addToast }: UseCrawlControllerOptions) {
 
 export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 	const { state, stateRef, dispatch } = useControllerState({ addToast });
-	const subscriptionRef = useRef<ReturnType<typeof subscribeToCrawlEvents> | null>(null);
-	const activeSubscriptionCrawlIdRef = useRef<string | null>(null);
 	const resumableRefreshAbortRef = useRef<AbortController | null>(null);
 	const resumableRefreshQueueRef = useRef({ queued: false });
-	const durableSyncAbortRef = useRef<AbortController | null>(null);
-	const durableSyncErrorCrawlIdRef = useRef<string | null>(null);
 	const startOperationRef = useRef<{
 		crawlId: string;
 		options: typeof state.crawlOptions;
@@ -127,17 +116,11 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 			controller.abort();
 		};
 	}, []);
-	const requestPageSearchRef = useRef(() => {});
-	const [pageSearch, setPageSearch] = useState<{
-		pages: CrawledPage[];
-		count: number;
-		isLoading: boolean;
-		error: string | null;
-	}>({
-		pages: [],
-		count: 0,
-		isLoading: false,
-		error: null,
+	const pageSearch = useStoredPageSearch({
+		crawlId: state.activeCrawlId,
+		query: state.searchQuery,
+		storedPageCount: state.storedPageCount,
+		runPhase: state.runPhase,
 	});
 
 	const executeCommand = useCallback(
@@ -172,9 +155,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				result = await request(signal);
 			} catch (error) {
 				if (signal.aborted) return abortedResult();
-				const message = formatControllerError(error);
-				dispatch({ type: "commandFailed", kind, error: message });
-				return { ok: false, error: message };
+				result = { ok: false, error: formatControllerError(error) };
 			} finally {
 				if (commandAbortRef.current === commandController) {
 					commandAbortRef.current = null;
@@ -215,131 +196,10 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 		[addToast, dispatch, getControllerLifetimeSignal, stateRef],
 	);
 
-	const closeSubscription = useEffectEvent((crawlId?: string) => {
-		if (crawlId !== undefined && activeSubscriptionCrawlIdRef.current !== crawlId) {
-			return;
-		}
-
-		subscriptionRef.current?.close();
-		subscriptionRef.current = null;
-		activeSubscriptionCrawlIdRef.current = null;
-	});
-
-	const cancelDurableSync = useEffectEvent(() => {
-		durableSyncAbortRef.current?.abort();
-		durableSyncAbortRef.current = null;
-	});
-
 	const cancelResumableRefresh = useEffectEvent(() => {
 		resumableRefreshQueueRef.current.queued = false;
 		resumableRefreshAbortRef.current?.abort();
 		resumableRefreshAbortRef.current = null;
-	});
-
-	const synchronizeDurableSnapshot = useEffectEvent(async (crawlId: string) => {
-		durableSyncAbortRef.current?.abort();
-		const controller = new AbortController();
-		durableSyncAbortRef.current = controller;
-
-		try {
-			const snapshotResult = await getCrawlRecoverySnapshot(crawlId, controller.signal);
-			if (!snapshotResult.ok) {
-				throw new Error(snapshotResult.error);
-			}
-			if (
-				controller.signal.aborted ||
-				durableSyncAbortRef.current !== controller ||
-				stateRef.current.activeCrawlId !== crawlId
-			) {
-				return;
-			}
-
-			dispatch({
-				type: "crawlRecoverySnapshotSynchronized",
-				snapshot: snapshotResult.data,
-			});
-
-			if (
-				isResumableCrawlStatus(snapshotResult.data.crawl.status) ||
-				isTerminalCrawlStatus(snapshotResult.data.crawl.status)
-			) {
-				closeSubscription(crawlId);
-				void refreshResumableSessions(false);
-			}
-			durableSyncErrorCrawlIdRef.current = null;
-		} catch (error) {
-			if (
-				controller.signal.aborted ||
-				durableSyncAbortRef.current !== controller ||
-				stateRef.current.activeCrawlId !== crawlId
-			) {
-				return;
-			}
-
-			if (durableSyncErrorCrawlIdRef.current !== crawlId) {
-				durableSyncErrorCrawlIdRef.current = crawlId;
-				addToast(
-					"warning",
-					`Live connection recovered, but durable state refresh failed: ${formatControllerError(error)}`,
-				);
-			}
-		} finally {
-			if (durableSyncAbortRef.current === controller) {
-				durableSyncAbortRef.current = null;
-			}
-		}
-	});
-
-	const applyEnvelope = useEffectEvent((envelope: CrawlEventEnvelope) => {
-		const hasSequenceGap = envelope.sequence > stateRef.current.lastSequence + 1;
-		startTransition(() => {
-			dispatch({ type: "sseEventReceived", envelope });
-		});
-		if (hasSequenceGap && stateRef.current.activeCrawlId === envelope.crawlId) {
-			void synchronizeDurableSnapshot(envelope.crawlId);
-		}
-
-		if (
-			activeSubscriptionCrawlIdRef.current === envelope.crawlId &&
-			isSettledCrawlEventType(envelope.type)
-		) {
-			closeSubscription(envelope.crawlId);
-		}
-		if (isSettledCrawlEventType(envelope.type)) {
-			void refreshResumableSessions(false);
-		}
-	});
-
-	const connectToEvents = useEffectEvent((crawlId: string) => {
-		const lifetimeSignal = getControllerLifetimeSignal();
-		if (lifetimeSignal.aborted) return;
-		closeSubscription();
-		cancelDurableSync();
-		durableSyncErrorCrawlIdRef.current = null;
-		dispatch({ type: "connectionChanged", connectionState: "connecting" });
-		activeSubscriptionCrawlIdRef.current = crawlId;
-		subscriptionRef.current = subscribeToCrawlEvents(crawlId, {
-			onOpen: () => {
-				if (lifetimeSignal.aborted || activeSubscriptionCrawlIdRef.current !== crawlId) return;
-				dispatch({ type: "connectionChanged", connectionState: "connected" });
-			},
-			onError: () => {
-				if (lifetimeSignal.aborted || activeSubscriptionCrawlIdRef.current !== crawlId) return;
-				dispatch({
-					type: "connectionChanged",
-					connectionState: "disconnected",
-				});
-				void synchronizeDurableSnapshot(crawlId);
-			},
-			onInvalidEvent: () => {
-				if (lifetimeSignal.aborted || activeSubscriptionCrawlIdRef.current !== crawlId) return;
-				void synchronizeDurableSnapshot(crawlId);
-			},
-			onEvent: (event) => {
-				if (!lifetimeSignal.aborted) applyEnvelope(event);
-			},
-		});
-		void synchronizeDurableSnapshot(crawlId);
 	});
 
 	const refreshResumableSessions = useCallback(
@@ -399,47 +259,24 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 	}, [refreshResumableSessions]);
 
 	useEffect(() => {
-		const crawlId = state.activeCrawlId;
-		if (
-			!crawlId ||
-			state.connectionState === "connected" ||
-			state.runPhase === "idle" ||
-			state.runPhase === "paused" ||
-			state.runPhase === "interrupted" ||
-			isTerminalRunPhase(state.runPhase)
-		) {
-			return;
-		}
-
-		let cancelled = false;
-		let retryTimer: ReturnType<typeof setTimeout> | null = null;
-		const poll = async () => {
-			await synchronizeDurableSnapshot(crawlId);
-			if (!cancelled) {
-				retryTimer = setTimeout(() => {
-					void poll();
-				}, DURABLE_RECOVERY_RETRY_MS);
-			}
-		};
-
-		retryTimer = setTimeout(() => {
-			void poll();
-		}, DURABLE_RECOVERY_RETRY_MS);
-
-		return () => {
-			cancelled = true;
-			if (retryTimer) clearTimeout(retryTimer);
-		};
-	}, [state.activeCrawlId, state.connectionState, state.runPhase]);
-
-	useEffect(() => {
 		return () => {
 			commandAbortRef.current?.abort();
 			cancelResumableRefresh();
-			closeSubscription();
-			cancelDurableSync();
 		};
 	}, []);
+
+	const connectToEvents = useCrawlLiveConnection({
+		activeCrawlId: state.activeCrawlId,
+		connectionState: state.connectionState,
+		runPhase: state.runPhase,
+		readState: () => stateRef.current,
+		dispatch,
+		getLifetimeSignal: getControllerLifetimeSignal,
+		onSettled: () => {
+			void refreshResumableSessions(false);
+		},
+		onRecoveryError: (message) => addToast("warning", message),
+	});
 
 	const handleTargetChange = useCallback(
 		(nextTarget: string) => {
@@ -582,6 +419,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 			dispatch,
 			getControllerLifetimeSignal,
 			refreshResumableSessions,
+			connectToEvents,
 			state.crawlOptions,
 			stateRef,
 		],
@@ -688,7 +526,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 			connectToEvents(result.data.crawl.id);
 			return true;
 		},
-		[addToast, dispatch, getControllerLifetimeSignal, stateRef],
+		[addToast, dispatch, getControllerLifetimeSignal, stateRef, connectToEvents],
 	);
 
 	const exportCurrentCrawl = useCallback(
@@ -756,75 +594,6 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 		},
 		[addToast, dispatch, executeCommand, stateRef],
 	);
-
-	useEffect(() => {
-		const query = state.searchQuery.trim();
-		const crawlId = state.activeCrawlId;
-
-		if (!query || !crawlId) {
-			setPageSearch({ pages: [], count: 0, isLoading: false, error: null });
-			return;
-		}
-
-		const controller = new AbortController();
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		let running = false;
-		let queued = false;
-		setPageSearch({ pages: [], count: 0, isLoading: true, error: null });
-
-		// Keep one request in flight and coalesce page bursts into its next refresh.
-		const schedule = (delay = 250) => {
-			queued = true;
-			if (running || timer !== undefined) return;
-			timer = setTimeout(() => {
-				timer = undefined;
-				queued = false;
-				running = true;
-				setPageSearch((current) => ({ ...current, isLoading: true, error: null }));
-				void searchStoredPages(crawlId, query, controller.signal)
-					.then((result) => {
-						if (controller.signal.aborted) return;
-						if (!result.ok) {
-							setPageSearch({ pages: [], count: 0, isLoading: false, error: result.error });
-							return;
-						}
-						setPageSearch({
-							pages: result.data.pages,
-							count: result.data.count,
-							isLoading: false,
-							error: null,
-						});
-					})
-					.catch((error: unknown) => {
-						if (controller.signal.aborted) return;
-						setPageSearch({
-							pages: [],
-							count: 0,
-							isLoading: false,
-							error: formatControllerError(error),
-						});
-					})
-					.finally(() => {
-						running = false;
-						if (queued && !controller.signal.aborted) schedule();
-					});
-			}, delay);
-		};
-
-		requestPageSearchRef.current = schedule;
-		schedule(0);
-		return () => {
-			requestPageSearchRef.current = () => {};
-			clearTimeout(timer);
-			controller.abort();
-		};
-	}, [state.activeCrawlId, state.searchQuery]);
-
-	// These durable revisions invalidate results without cancelling an in-flight search.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: Membership and phase are invalidation signals, not request arguments.
-	useEffect(() => {
-		requestPageSearchRef.current();
-	}, [state.storedPageCount, state.runPhase]);
 
 	const displayedPages = state.searchQuery.trim() ? pageSearch.pages : state.crawledPages;
 	const clearLogs = useCallback(() => dispatch({ type: "logsCleared" }), [dispatch]);

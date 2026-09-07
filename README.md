@@ -345,6 +345,14 @@ connection stays inside the storage owner; SQL inspection and corruption fixture
 live in test support. Renderer acquisition, disabling, and page disposal likewise
 stay private behind initialization, rendering, and closure.
 
+On the frontend, `useCrawlController` coordinates commands. `useCrawlLiveConnection`
+owns subscriptions, snapshot recovery, and disconnected polling. Recovery triggers
+coalesce behind the current request; replacing a subscription retires its callbacks
+even when resuming the same crawl ID. Stream closure permits outstanding recovery
+to finish; switching crawls or unmounting cancels it.
+`useStoredPageSearch` owns search requests, cancellation, and refresh coalescing;
+the controller supplies the selected crawl, query, stored count, and run phase.
+
 </details>
 
 ---
