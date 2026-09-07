@@ -40,6 +40,7 @@ export function sseApi(services: RouteServicesPlugin) {
 			set,
 			status,
 		}) => {
+			const clientKey = await resolveClientKey(request, server);
 			const crawl = crawlManager.get(params.id);
 			if (!crawl) {
 				return status(404, { error: "Crawl not found" });
@@ -51,7 +52,6 @@ export function sseApi(services: RouteServicesPlugin) {
 			) {
 				return new Response(null, { status: 204 });
 			}
-			const clientKey = await resolveClientKey(request, server);
 			if (!eventStream.hasSubscriberCapacity(params.id, clientKey)) {
 				return status(429, {
 					error: "SSE subscriber capacity reached",
