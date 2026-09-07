@@ -3,12 +3,12 @@ import type { CrawlState } from "./CrawlState.js";
 import { getCrawlUrlIdentity } from "./UrlPolicy.js";
 
 export interface QueueItem {
-	url: string;
-	domain: string;
-	depth: number;
-	retries: number;
-	availableAt?: number;
-	parentUrl?: string;
+	readonly url: string;
+	readonly domain: string;
+	readonly depth: number;
+	readonly retries: number;
+	readonly availableAt?: number;
+	readonly parentUrl?: string;
 }
 
 interface QueuePersistence {
@@ -20,7 +20,8 @@ interface QueuePersistence {
 export class CrawlQueue {
 	private readonly pending: QueueItem[] = [];
 	private readonly queuedUrls = new Set<string>();
-	private readonly activeUrls = new Set<string>();
+	private readonly activeItems = new Map<string, QueueItem>();
+	private discarded = false;
 
 	constructor(
 		private readonly options: CrawlOptions,
@@ -29,14 +30,16 @@ export class CrawlQueue {
 	) {}
 
 	get activeCount(): number {
-		return this.activeUrls.size;
+		return this.activeItems.size;
 	}
 
 	get pendingCount(): number {
 		return this.pending.length;
 	}
 
-	restore(items: QueueItem[]): void {
+	restore(records: readonly QueueItem[]): void {
+		if (this.discarded) throw new Error("Cannot restore a discarded queue");
+		const items = records.map((item) => Object.freeze({ ...item }));
 		const targetIdentity = getCrawlUrlIdentity(this.options.target);
 		if ("error" in targetIdentity) {
 			throw new Error(`Cannot restore queue for invalid crawl target: ${this.options.target}`);
@@ -82,9 +85,13 @@ export class CrawlQueue {
 	}
 
 	enqueueNormalized(item: QueueItem): boolean {
+		if (this.discarded) return false;
+		if (item.retries !== 0) {
+			throw new Error("New queue admissions must start without retries");
+		}
 		if (
 			this.state.hasVisited(item.url) ||
-			this.activeUrls.has(item.url) ||
+			this.activeItems.has(item.url) ||
 			this.queuedUrls.has(item.url)
 		) {
 			return false;
@@ -94,10 +101,10 @@ export class CrawlQueue {
 			return false;
 		}
 
-		const queueItem: QueueItem = {
+		const queueItem: QueueItem = Object.freeze({
 			...item,
 			availableAt: item.availableAt ?? Date.now(),
-		};
+		});
 
 		this.persistence.enqueueMany([queueItem]);
 		this.state.recordAdmission(queueItem.url, queueItem.domain);
@@ -106,16 +113,27 @@ export class CrawlQueue {
 		return true;
 	}
 
-	scheduleRetry(item: QueueItem, delayMs: number): void {
-		const retryItem: QueueItem = {
+	tryScheduleRetry(item: QueueItem, delayMs: number): boolean {
+		this.requireActiveItem(item);
+		if (this.discarded) return false;
+		if (this.queuedUrls.has(item.url)) {
+			throw new Error(`Retry already scheduled for active item: ${item.url}`);
+		}
+		const availableAt = Date.now() + delayMs;
+		if (!Number.isFinite(delayMs) || delayMs < 0 || availableAt > Number.MAX_SAFE_INTEGER) {
+			throw new Error("Retry delay must produce a finite, nonnegative safe timestamp");
+		}
+		if (item.retries >= this.options.retryLimit) return false;
+		const retryItem: QueueItem = Object.freeze({
 			...item,
 			retries: item.retries + 1,
-			availableAt: Date.now() + delayMs,
-		};
+			availableAt,
+		});
 
 		this.persistence.reschedule(retryItem);
 		this.pending.push(retryItem);
 		this.queuedUrls.add(retryItem.url);
+		return true;
 	}
 
 	nextReady(now = Date.now()): { item: QueueItem | null; waitMs: number } {
@@ -127,14 +145,14 @@ export class CrawlQueue {
 		const iterations = this.pending.length;
 
 		for (let index = 0; index < iterations; index += 1) {
-			const candidate = this.pending.shift();
+			let candidate = this.pending.shift();
 			if (!candidate) {
 				break;
 			}
 			this.queuedUrls.delete(candidate.url);
 			const delayKey = candidate.domain;
 
-			if (this.activeUrls.has(candidate.url)) {
+			if (this.activeItems.has(candidate.url)) {
 				this.pending.push(candidate);
 				this.queuedUrls.add(candidate.url);
 				continue;
@@ -151,16 +169,14 @@ export class CrawlQueue {
 				continue;
 			}
 
-			this.activeUrls.add(candidate.url);
 			this.state.reserveDomain(delayKey, now);
 			const nextAllowedAt = this.state.nextAllowedAtForDomain(delayKey);
 			if (nextAllowedAt > (candidate.availableAt ?? 0)) {
-				this.persistence.reschedule({ ...candidate, availableAt: nextAllowedAt });
-				candidate.availableAt = nextAllowedAt;
+				candidate = Object.freeze({ ...candidate, availableAt: nextAllowedAt });
+				this.persistence.reschedule(candidate);
 			}
-			this.deferPendingByDelayKey((pendingDelayKey) =>
-				this.state.nextAllowedAtForDomain(pendingDelayKey),
-			);
+			this.activeItems.set(candidate.url, candidate);
+			this.deferPendingToDomainDelays();
 			return { item: candidate, waitMs: 0 };
 		}
 
@@ -170,28 +186,35 @@ export class CrawlQueue {
 		};
 	}
 
-	markDone(item: QueueItem): void {
-		this.activeUrls.delete(item.url);
+	private requireActiveItem(item: QueueItem): void {
+		if (this.activeItems.get(item.url) !== item) {
+			throw new Error(`Queue item is not the current active attempt: ${item.url}`);
+		}
 	}
 
-	deferPendingByDelayKey(getNextAllowedAt: (delayKey: string) => number): void {
-		for (const item of this.pending) {
-			const nextAllowedAt = getNextAllowedAt(item.domain);
+	markDone(item: QueueItem): void {
+		this.requireActiveItem(item);
+		this.activeItems.delete(item.url);
+	}
+
+	deferPendingToDomainDelays(): void {
+		for (const [index, item] of this.pending.entries()) {
+			const nextAllowedAt = this.state.nextAllowedAtForDomain(item.domain);
 			if (nextAllowedAt <= (item.availableAt ?? 0)) {
 				continue;
 			}
 
-			this.persistence.reschedule({ ...item, availableAt: nextAllowedAt });
-			item.availableAt = nextAllowedAt;
+			const deferred = Object.freeze({ ...item, availableAt: nextAllowedAt });
+			this.persistence.reschedule(deferred);
+			this.pending[index] = deferred;
 		}
 	}
 
-	clearPending(): void {
+	discard(): void {
+		if (this.discarded) return;
+		this.persistence.clear();
+		this.discarded = true;
 		this.pending.length = 0;
 		this.queuedUrls.clear();
-	}
-
-	clearPersisted(): void {
-		this.persistence.clear();
 	}
 }

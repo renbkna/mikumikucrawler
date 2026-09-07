@@ -7,16 +7,17 @@ import {
 	successfulHtmlHttpClient,
 	waitFor,
 } from "../../__tests__/runtimeFixture.js";
-import { createInMemoryStorage } from "../../__tests__/storageFixture.js";
+import { createInMemoryStorage, getTestDatabase } from "../../__tests__/storageFixture.js";
 import { CRAWL_QUEUE_CONSTANTS } from "../../constants.js";
 import { RobotsService } from "../../domain/crawl/RobotsService.js";
+import type { CrawlRenderer } from "../../domain/crawl/rendering/contracts.js";
 import type { HttpClient } from "../../outbound/HttpClient.js";
 import {
 	CrawlManager,
 	CrawlRuntimeCapacityError,
 	type ResumeCrawlResult,
 } from "../CrawlManager.js";
-import { CrawlRuntime, type CrawlRuntimeRenderer } from "../CrawlRuntime.js";
+import { CrawlRuntime } from "../CrawlRuntime.js";
 import { EventStream } from "../EventStream.js";
 
 function createRobotsService(httpClient: HttpClient): RobotsService {
@@ -79,7 +80,7 @@ function createCrawl(manager: CrawlManager, options: CrawlOptions) {
 function createCleanupControlledRenderer(
 	closeStarted: PromiseWithResolvers<void>,
 	releaseClose: PromiseWithResolvers<void>,
-): CrawlRuntimeRenderer {
+): CrawlRenderer {
 	return {
 		isEnabled: () => false,
 		initialize: async () => ({ dynamicEnabled: false }),
@@ -1200,7 +1201,7 @@ describe("crawl manager contract", () => {
 		storage.repos.crawlRuns.markPaused(created.id, "Paused", 0);
 		const invalidOptions = { ...createOptions() };
 		delete (invalidOptions as Partial<typeof invalidOptions>).maxConcurrentRequests;
-		storage.db
+		getTestDatabase(storage)
 			.query("UPDATE crawl_runs SET options_json = ? WHERE id = ?")
 			.run(JSON.stringify(invalidOptions), created.id);
 
@@ -1210,7 +1211,9 @@ describe("crawl manager contract", () => {
 		expect(manager.activeRuntimeCount).toBe(0);
 		expect(
 			(
-				storage.db.query("SELECT status FROM crawl_runs WHERE id = ?").get(created.id) as {
+				getTestDatabase(storage)
+					.query("SELECT status FROM crawl_runs WHERE id = ?")
+					.get(created.id) as {
 					status: string;
 				}
 			).status,
@@ -1357,8 +1360,11 @@ describe("crawl manager contract", () => {
 		]);
 		expect(manager.activeRuntimeCount).toBe(0);
 		expect(
-			(storage.db.query("SELECT COUNT(*) AS count FROM crawl_runs").get() as { count: number })
-				.count,
+			(
+				getTestDatabase(storage).query("SELECT COUNT(*) AS count FROM crawl_runs").get() as {
+					count: number;
+				}
+			).count,
 		).toBe(1);
 	});
 
@@ -1413,7 +1419,7 @@ describe("crawl manager contract", () => {
 		const crawlId = "crawl-resume-elapsed";
 		storage.repos.crawlRuns.createRun(crawlId, createOptions("https://elapsed.example"));
 		storage.repos.crawlRuns.markPaused(crawlId, "Pause requested", 0);
-		storage.db
+		getTestDatabase(storage)
 			.query("UPDATE crawl_runs SET started_at = datetime('now', '-60 seconds') WHERE id = ?")
 			.run(crawlId);
 		const elapsedSeconds: number[] = [];

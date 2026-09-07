@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { CrawlOptions } from "../../../../shared/contracts/index.js";
 import { CrawlState } from "../CrawlState.js";
+import {
+	deriveTerminalCounters,
+	type TerminalCounterEffects,
+	type TerminalOutcome,
+} from "../completion.js";
 
 /**
  * CONTRACT: CrawlState
@@ -43,21 +48,55 @@ function makeCounters(successCount = 0, failureCount = 0, skippedCount = 0) {
 	};
 }
 
+// Model the durable commit input; assertions below independently specify its observable effects.
+function complete(
+	state: CrawlState,
+	url: string,
+	outcome: TerminalOutcome,
+	effects: TerminalCounterEffects = {},
+	chargedDomain: string | null = new URL(url).hostname,
+) {
+	if (state.canAdmit(url, new URL(url).hostname)) {
+		state.recordAdmission(url, new URL(url).hostname);
+	}
+	state.applyCommittedTerminal(url, outcome, {
+		counters: deriveTerminalCounters(state.snapshotCounters(), outcome, effects),
+		effects,
+		chargedDomain,
+	});
+}
+
 describe("CrawlState", () => {
 	describe("invariant: counter identity", () => {
+		test("counter inputs and progress observations cannot mutate the owned aggregate", () => {
+			const initial = makeCounters();
+			const state = new CrawlState(makeOptions(), initial);
+			initial.pagesScanned = 100;
+			expect(state.hasPageCapacity()).toBe(true);
+			const progress = state.buildProgress({ activeRequests: 0, queueLength: 0 });
+			progress.counters.failureCount = 100;
+			const snapshot = state.snapshotCounters();
+			snapshot.successCount = 100;
+			expect(state.snapshotCounters()).toEqual(makeCounters());
+			complete(state, "https://example.com/done", "success");
+			expect(initial.successCount).toBe(0);
+			expect(progress.counters.successCount).toBe(0);
+			expect(state.snapshotCounters()).toEqual(makeCounters(1));
+		});
+
 		test("pagesScanned always equals success + failure + skipped", () => {
 			const state = new CrawlState(makeOptions());
 
-			state.recordTerminal("https://a.example/1", "success");
-			state.recordTerminal("https://a.example/2", "failure");
-			state.recordTerminal("https://a.example/3", "skip");
-			state.recordTerminal("https://a.example/4", "success", {
+			complete(state, "https://a.example/1", "success");
+			complete(state, "https://a.example/2", "failure");
+			complete(state, "https://a.example/3", "skip");
+			complete(state, "https://a.example/4", "success", {
 				dataKb: 10,
 				mediaFiles: 2,
 				discoveredLinks: 3,
 			});
 
-			const c = state.counters;
+			const c = state.snapshotCounters();
 			expect(c.pagesScanned).toBe(c.successCount + c.failureCount + c.skippedCount);
 			expect(c.pagesScanned).toBe(4);
 			expect(c.successCount).toBe(2);
@@ -71,16 +110,16 @@ describe("CrawlState", () => {
 	});
 
 	describe("invariant: terminal identity", () => {
-		test("recordTerminal rejects a duplicate URL without changing counters", () => {
+		test("completion rejects a duplicate URL without changing counters", () => {
 			const state = new CrawlState(makeOptions());
 
-			state.recordTerminal("https://a.example/1", "success");
-			expect(() => state.recordTerminal("https://a.example/1", "success")).toThrow(
+			complete(state, "https://a.example/1", "success");
+			expect(() => complete(state, "https://a.example/1", "success")).toThrow(
 				"Cannot complete already-terminal URL: https://a.example/1",
 			);
 
-			expect(state.counters.pagesScanned).toBe(1);
-			expect(state.counters.successCount).toBe(1);
+			expect(state.snapshotCounters().pagesScanned).toBe(1);
+			expect(state.snapshotCounters().successCount).toBe(1);
 		});
 
 		test("restoreTerminals rejects duplicate input before restoring any record", () => {
@@ -113,11 +152,11 @@ describe("CrawlState", () => {
 			const state = new CrawlState(makeOptions({ maxPages: 100 }));
 
 			for (let i = 0; i < 19; i++) {
-				state.recordTerminal(`https://a.example/fail-${i}`, "failure");
+				complete(state, `https://a.example/fail-${i}`, "failure");
 			}
 			expect(state.isStopRequested).toBe(false);
 
-			state.recordTerminal("https://a.example/fail-19", "failure");
+			complete(state, "https://a.example/fail-19", "failure");
 			expect(state.isStopRequested).toBe(true);
 			expect(state.stopReason).toContain("Circuit breaker");
 		});
@@ -126,14 +165,14 @@ describe("CrawlState", () => {
 			const state = new CrawlState(makeOptions({ maxPages: 100 }));
 
 			for (let i = 0; i < 19; i++) {
-				state.recordTerminal(`https://a.example/fail-${i}`, "failure");
+				complete(state, `https://a.example/fail-${i}`, "failure");
 			}
 			// Success resets the counter
-			state.recordTerminal("https://a.example/ok", "success");
+			complete(state, "https://a.example/ok", "success");
 
 			// 19 more failures should not trip the breaker (counter reset to 0)
 			for (let i = 0; i < 19; i++) {
-				state.recordTerminal(`https://a.example/fail-b-${i}`, "failure");
+				complete(state, `https://a.example/fail-b-${i}`, "failure");
 			}
 			expect(state.isStopRequested).toBe(false);
 		});
@@ -142,10 +181,10 @@ describe("CrawlState", () => {
 			const state = new CrawlState(makeOptions({ maxPages: 100 }));
 
 			for (let i = 0; i < 19; i++) {
-				state.recordTerminal(`https://a.example/fail-${i}`, "failure");
+				complete(state, `https://a.example/fail-${i}`, "failure");
 			}
-			state.recordTerminal("https://a.example/skipped", "skip");
-			state.recordTerminal("https://a.example/fail-after-skip", "failure");
+			complete(state, "https://a.example/skipped", "skip");
+			complete(state, "https://a.example/fail-after-skip", "failure");
 
 			expect(state.isStopRequested).toBe(false);
 		});
@@ -160,7 +199,7 @@ describe("CrawlState", () => {
 				})),
 				{ url: "https://a.example/restored-skip", outcome: "skip" },
 			]);
-			state.recordTerminal("https://a.example/fail-after-restored-skip", "failure");
+			complete(state, "https://a.example/fail-after-restored-skip", "failure");
 
 			expect(state.isStopRequested).toBe(false);
 		});
@@ -176,7 +215,7 @@ describe("CrawlState", () => {
 			);
 			expect(state.isStopRequested).toBe(false);
 
-			state.recordTerminal("https://a.example/fail-after-resume", "failure");
+			complete(state, "https://a.example/fail-after-resume", "failure");
 			expect(state.isStopRequested).toBe(true);
 			expect(state.stopReason).toContain("Circuit breaker");
 		});
@@ -231,6 +270,66 @@ describe("CrawlState", () => {
 			expect(() => state.restoreTerminals([])).toThrow(
 				"Persisted terminal rows must match the durable terminal counter",
 			);
+		});
+	});
+
+	describe("committed completion ownership", () => {
+		test("unadmitted and mismatched commits cannot partially settle a URL", () => {
+			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 1 }));
+			const url = "https://source.example/page";
+			const commit = {
+				counters: makeCounters(1),
+				effects: {},
+				chargedDomain: "destination.example",
+			};
+			expect(() => state.applyCommittedTerminal(url, "success", commit)).toThrow(
+				"Missing crawl admission",
+			);
+			expect(state.snapshotCounters()).toEqual(makeCounters());
+			state.recordAdmission(url, "source.example");
+			expect(state.tryReserveRedirectDomain(url, "destination.example")).toBe(true);
+			expect(() =>
+				state.applyCommittedTerminal(url, "success", { ...commit, counters: makeCounters(2) }),
+			).toThrow("diverged");
+			expect(state.hasVisited(url)).toBe(false);
+			expect(state.snapshotCounters()).toEqual(makeCounters());
+			expect(state.canAdmit("https://source.example/other", "source.example")).toBe(false);
+			expect(state.canAdmit("https://destination.example/other", "destination.example")).toBe(
+				false,
+			);
+			state.applyCommittedTerminal(url, "success", commit);
+			expect(state.hasVisited(url)).toBe(true);
+			expect(state.snapshotCounters()).toEqual(makeCounters(1));
+			expect(state.canAdmit("https://source.example/other", "source.example")).toBe(true);
+			expect(state.isDomainBudgetExceeded("source.example")).toBe(false);
+			expect(state.isDomainBudgetExceeded("destination.example")).toBe(true);
+			// Ending an old attempt cannot release the now-settled destination charge.
+			state.releaseAttempt(url);
+			expect(state.canAdmit("https://destination.example/other", "destination.example")).toBe(
+				false,
+			);
+		});
+
+		test("invalid or over-budget domain facts leave admissions and counters intact", () => {
+			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 1 }));
+			const url = "https://source.example/page";
+			state.recordAdmission(url, "source.example");
+			complete(state, "https://full.example/page", "success");
+			for (const chargedDomain of ["full.example", "invalid/domain"]) {
+				expect(() =>
+					state.applyCommittedTerminal(url, "success", {
+						counters: makeCounters(2),
+						effects: {},
+						chargedDomain,
+					}),
+				).toThrow();
+				expect(state.hasVisited(url)).toBe(false);
+				expect(state.snapshotCounters()).toEqual(makeCounters(1));
+				expect(state.canAdmit("https://source.example/other", "source.example")).toBe(false);
+			}
+			complete(state, url, "skip", {}, null);
+			expect(state.canAdmit("https://source.example/other", "source.example")).toBe(true);
+			expect(state.snapshotCounters()).toEqual(makeCounters(1, 0, 1));
 		});
 	});
 
@@ -290,19 +389,16 @@ describe("CrawlState", () => {
 	describe("domain budget", () => {
 		test("redirect reservations exclude concurrent admissions to the destination domain", () => {
 			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 1 }));
+			state.recordAdmission("https://source.example/start", "source.example");
 
 			expect(
-				state.tryReserveRedirectDomain(
-					"https://source.example/start",
-					"destination.example",
-					"source.example",
-				),
+				state.tryReserveRedirectDomain("https://source.example/start", "destination.example"),
 			).toBe(true);
 			expect(state.canAdmit("https://destination.example/other", "destination.example")).toBe(
 				false,
 			);
 
-			state.releaseRedirectReservation("https://source.example/start");
+			state.releaseAttempt("https://source.example/start");
 			expect(state.canAdmit("https://destination.example/other", "destination.example")).toBe(true);
 		});
 
@@ -313,33 +409,33 @@ describe("CrawlState", () => {
 			state.recordAdmission("https://example.com/first", "example.com");
 			expect(state.canAdmit("https://example.com/second", "example.com")).toBe(false);
 
-			state.releaseDomainAdmission("example.com");
+			complete(state, "https://example.com/first", "skip", {}, null);
 			expect(state.canAdmit("https://example.com/second", "example.com")).toBe(true);
 		});
 
 		test("maxPagesPerDomain=0 means unlimited", () => {
-			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 0 }));
+			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 0, maxPages: 100 }));
 			for (let i = 0; i < 100; i++) {
-				state.recordDomainPage("example.com");
+				complete(state, `https://example.com/${state.snapshotCounters().pagesScanned}`, "success");
 			}
 			expect(state.isDomainBudgetExceeded("example.com")).toBe(false);
 		});
 
 		test("enforces per-domain limit", () => {
 			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 3 }));
-			state.recordDomainPage("example.com");
-			state.recordDomainPage("example.com");
+			complete(state, `https://example.com/${state.snapshotCounters().pagesScanned}`, "success");
+			complete(state, `https://example.com/${state.snapshotCounters().pagesScanned}`, "success");
 			expect(state.isDomainBudgetExceeded("example.com")).toBe(false);
 
-			state.recordDomainPage("example.com");
+			complete(state, `https://example.com/${state.snapshotCounters().pagesScanned}`, "success");
 			expect(state.isDomainBudgetExceeded("example.com")).toBe(true);
 		});
 
 		test("tracks domains independently", () => {
 			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 2 }));
-			state.recordDomainPage("a.example");
-			state.recordDomainPage("a.example");
-			state.recordDomainPage("b.example");
+			complete(state, `https://a.example/${state.snapshotCounters().pagesScanned}`, "success");
+			complete(state, `https://a.example/${state.snapshotCounters().pagesScanned}`, "success");
+			complete(state, "https://b.example/1", "success");
 
 			expect(state.isDomainBudgetExceeded("a.example")).toBe(true);
 			expect(state.isDomainBudgetExceeded("b.example")).toBe(false);

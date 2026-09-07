@@ -30,7 +30,6 @@ export interface StorageRepos {
 }
 
 export interface Storage {
-	db: Database;
 	repos: StorageRepos;
 	budget: DurableStorageBudget;
 	close(): void;
@@ -186,7 +185,6 @@ export function createStorage(
 		let closed = false;
 
 		return {
-			db,
 			budget: new DurableStorageBudget(db, {
 				maxBytes: options.maxBytes ?? config.maxStorageBytes,
 				...(options.pageReservationBytes === undefined

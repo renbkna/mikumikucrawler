@@ -1,12 +1,14 @@
 import type { CrawlCounters, CrawlOptions } from "../../../shared/contracts/index.js";
 import { createEmptyCrawlCounters, isCrawlCounters } from "../../../shared/contracts/index.js";
 import type { QueueStats } from "../../../shared/contracts/pageData.js";
-import { kilobytesToBytes } from "../../../shared/text.js";
 import { DOMAIN_DELAY_CONSTANTS } from "../../constants.js";
+import {
+	type CommittedTerminal,
+	deriveTerminalCounters,
+	type TerminalOutcome,
+} from "./completion.js";
 import { shouldAdaptDomainDelay } from "./httpStatusPolicy.js";
 import { getCrawlUrlIdentity } from "./UrlPolicy.js";
-
-export type TerminalOutcome = "success" | "failure" | "skip";
 
 const FAILURE_CIRCUIT_BREAKER_THRESHOLD = 20;
 
@@ -32,50 +34,9 @@ export interface DomainStateRecord {
 	nextAllowedAt: number;
 }
 
-export interface TerminalCounterEffects {
-	dataKb?: number;
-	mediaFiles?: number;
-	discoveredLinks?: number;
-}
-
-function requireCounterIncrement(count: number, label: string): number {
-	if (!Number.isSafeInteger(count) || count < 0) {
-		throw new Error(`${label} counter increment must be a non-negative safe integer`);
-	}
-	return count;
-}
-
-export function deriveTerminalCounters(
-	current: CrawlCounters,
-	outcome: TerminalOutcome,
-	effects: TerminalCounterEffects = {},
-): CrawlCounters {
-	const counters = { ...current };
-	const dataKb = effects.dataKb ?? 0;
-	kilobytesToBytes(dataKb);
-	const mediaFiles = requireCounterIncrement(effects.mediaFiles ?? 0, "media file");
-	const discoveredLinks = requireCounterIncrement(effects.discoveredLinks ?? 0, "discovered link");
-	counters.pagesScanned += 1;
-	counters.linksFound += discoveredLinks;
-	counters.mediaFiles += mediaFiles;
-	switch (outcome) {
-		case "success":
-			counters.successCount += 1;
-			counters.totalDataKb += dataKb;
-			break;
-		case "failure":
-			counters.failureCount += 1;
-			break;
-		case "skip":
-			counters.skippedCount += 1;
-			break;
-	}
-	return counters;
-}
-
 export class CrawlState {
 	private readonly terminalUrls = new Set<string>();
-	private readonly admittedUrls = new Set<string>();
+	private readonly admittedDomains = new Map<string, string | undefined>();
 	private readonly domainDelays = new Map<string, number>();
 	private readonly domainNextAllowedAt = new Map<string, number>();
 	private readonly domainPageCounts = new Map<string, number>();
@@ -86,8 +47,12 @@ export class CrawlState {
 	private stopRequested = false;
 	private admissionCount: number;
 
-	readonly counters: CrawlCounters;
-	stopReason: string | null = null;
+	private readonly counters: CrawlCounters;
+	private requestedStopReason: string | null = null;
+
+	get stopReason(): string | null {
+		return this.requestedStopReason;
+	}
 
 	constructor(
 		private readonly options: CrawlOptions,
@@ -99,7 +64,7 @@ export class CrawlState {
 		if (initialCounters !== undefined && !isCrawlCounters(initialCounters)) {
 			throw new Error("Cannot restore crawl state from invalid counters");
 		}
-		this.counters = initialCounters ?? createEmptyCrawlCounters();
+		this.counters = initialCounters ? { ...initialCounters } : createEmptyCrawlCounters();
 		this.admissionCount = this.counters.pagesScanned;
 		for (const record of initialDomainStates) {
 			const delayMs = this.requireDomainDelay(record.delayMs);
@@ -174,16 +139,7 @@ export class CrawlState {
 
 		for (const record of records) {
 			this.terminalUrls.add(record.url);
-			if (record.outcome === "failure") {
-				this.consecutiveFailures += 1;
-				if (this.consecutiveFailures >= FAILURE_CIRCUIT_BREAKER_THRESHOLD) {
-					this.requestStop(
-						`Circuit breaker tripped after ${this.consecutiveFailures} consecutive failures`,
-					);
-				}
-			} else {
-				this.consecutiveFailures = 0;
-			}
+			this.observeOutcome(record.outcome);
 
 			if (!record.domainBudgetCharged) {
 				continue;
@@ -205,7 +161,7 @@ export class CrawlState {
 		const restoredUrls = new Set<string>();
 		const restoredDomainCounts = new Map<string, number>();
 		for (const record of records) {
-			if (this.admittedUrls.has(record.url) || restoredUrls.has(record.url)) {
+			if (this.admittedDomains.has(record.url) || restoredUrls.has(record.url)) {
 				throw new Error(`Cannot restore duplicate admitted URL: ${record.url}`);
 			}
 			if (consumeGlobalBudget && this.admissionCount + restoredUrls.size >= this.options.maxPages) {
@@ -224,7 +180,7 @@ export class CrawlState {
 			restoredDomainCounts.set(record.domain, restoredCount);
 		}
 
-		for (const url of restoredUrls) this.admittedUrls.add(url);
+		for (const record of records) this.admittedDomains.set(record.url, record.domain);
 		if (consumeGlobalBudget) this.admissionCount += restoredUrls.size;
 		for (const [domain, count] of restoredDomainCounts) {
 			this.domainAdmissionCounts.set(domain, (this.domainAdmissionCounts.get(domain) ?? 0) + count);
@@ -232,7 +188,7 @@ export class CrawlState {
 	}
 
 	canAdmit(url: string, domain: string): boolean {
-		if (this.admittedUrls.has(url) || this.admissionCount >= this.options.maxPages) {
+		if (this.admittedDomains.has(url) || this.admissionCount >= this.options.maxPages) {
 			return false;
 		}
 		const domainBudget = this.options.maxPagesPerDomain;
@@ -246,12 +202,13 @@ export class CrawlState {
 		if (!this.canAdmit(url, domain)) {
 			throw new Error(`Cannot record unavailable crawl admission: ${url}`);
 		}
-		this.admittedUrls.add(url);
+		this.admittedDomains.set(url, domain);
 		this.admissionCount += 1;
 		this.restoreDomainAdmission(domain);
 	}
 
-	tryReserveRedirectDomain(url: string, domain: string, sourceDomain: string): boolean {
+	tryReserveRedirectDomain(url: string, domain: string): boolean {
+		const sourceDomain = this.requirePendingAdmission(url);
 		if (domain === sourceDomain) {
 			this.releaseRedirectReservation(url);
 			return true;
@@ -273,14 +230,19 @@ export class CrawlState {
 		return true;
 	}
 
-	releaseRedirectReservation(url: string): void {
+	/** Release attempt-scoped reservations while retaining the queued admission for retry/resume. */
+	releaseAttempt(url: string): void {
+		this.releaseRedirectReservation(url);
+	}
+
+	private releaseRedirectReservation(url: string): void {
 		const domain = this.redirectReservations.get(url);
 		if (!domain) return;
 		this.redirectReservations.delete(url);
 		this.decrementRedirectReservation(domain);
 	}
 
-	settleDomainAdmission(url: string, fromDomain: string, chargedDomain: string): void {
+	private settleDomainAdmission(url: string, fromDomain: string, chargedDomain: string): void {
 		this.releaseRedirectReservation(url);
 		if (fromDomain === chargedDomain || this.options.maxPagesPerDomain <= 0) return;
 		this.releaseDomainAdmission(fromDomain);
@@ -295,7 +257,8 @@ export class CrawlState {
 
 	requestStop(reason: string, options: { overrideReason?: boolean } = {}): void {
 		this.stopRequested = true;
-		this.stopReason = options.overrideReason || this.stopReason === null ? reason : this.stopReason;
+		this.requestedStopReason =
+			options.overrideReason || this.stopReason === null ? reason : this.stopReason;
 	}
 
 	setDomainDelay(domain: string, delayMs: number, now = Date.now()): void {
@@ -340,7 +303,7 @@ export class CrawlState {
 		this.setDomainDelay(domain, nextDelay);
 	}
 
-	recordDomainPage(domain: string): void {
+	private recordDomainPage(domain: string): void {
 		this.domainPageCounts.set(domain, (this.domainPageCounts.get(domain) ?? 0) + 1);
 	}
 
@@ -353,7 +316,7 @@ export class CrawlState {
 		this.domainAdmissionCounts.set(domain, nextCount);
 	}
 
-	releaseDomainAdmission(domain: string): void {
+	private releaseDomainAdmission(domain: string): void {
 		if (this.options.maxPagesPerDomain <= 0) return;
 		const admitted = this.domainAdmissionCounts.get(domain) ?? 0;
 		if (admitted < 1) {
@@ -380,42 +343,55 @@ export class CrawlState {
 		});
 	}
 
-	previewTerminalCounters(
-		url: string,
-		outcome: TerminalOutcome,
-		effects: TerminalCounterEffects = {},
-	): CrawlCounters {
+	private requirePendingAdmission(url: string): string {
 		if (this.terminalUrls.has(url)) {
 			throw new Error(`Cannot complete already-terminal URL: ${url}`);
 		}
-
-		return deriveTerminalCounters(this.counters, outcome, effects);
+		const domain = this.admittedDomains.get(url);
+		if (domain === undefined) throw new Error(`Missing crawl admission: ${url}`);
+		return domain;
 	}
 
-	recordTerminal(
-		url: string,
-		outcome: TerminalOutcome,
-		options: TerminalCounterEffects = {},
-	): void {
-		const nextCounters = this.previewTerminalCounters(url, outcome, options);
+	applyCommittedTerminal(url: string, outcome: TerminalOutcome, commit: CommittedTerminal): void {
+		const sourceDomain = this.requirePendingAdmission(url);
+		const nextCounters = deriveTerminalCounters(this.counters, outcome, commit.effects);
+		if (!Bun.deepEquals(nextCounters, commit.counters, true)) {
+			throw new Error("Runtime counters diverged from the committed crawl aggregate");
+		}
+		const { chargedDomain } = commit;
+		if (chargedDomain !== null) {
+			const identity = getCrawlUrlIdentity(`http://${chargedDomain}/`);
+			if ("error" in identity || identity.hostname !== chargedDomain) {
+				throw new Error(`Invalid committed domain: ${chargedDomain}`);
+			}
+			if (
+				chargedDomain !== sourceDomain &&
+				this.options.maxPagesPerDomain > 0 &&
+				(this.domainAdmissionCounts.get(chargedDomain) ?? 0) >= this.options.maxPagesPerDomain
+			) {
+				throw new Error(`Cannot exceed the domain page budget for ${chargedDomain}`);
+			}
+		}
+
+		// Validate all durable facts before changing any projection of the completion.
+		if (chargedDomain === null) {
+			this.releaseRedirectReservation(url);
+			this.releaseDomainAdmission(sourceDomain);
+		} else {
+			this.settleDomainAdmission(url, sourceDomain, chargedDomain);
+			this.recordDomainPage(chargedDomain);
+		}
 		this.terminalUrls.add(url);
 		Object.assign(this.counters, nextCounters);
+		this.observeOutcome(outcome);
+	}
 
-		switch (outcome) {
-			case "success":
-				this.consecutiveFailures = 0;
-				break;
-			case "failure":
-				this.consecutiveFailures += 1;
-				if (this.consecutiveFailures >= FAILURE_CIRCUIT_BREAKER_THRESHOLD) {
-					this.requestStop(
-						`Circuit breaker tripped after ${this.consecutiveFailures} consecutive failures`,
-					);
-				}
-				break;
-			case "skip":
-				this.consecutiveFailures = 0;
-				break;
+	private observeOutcome(outcome: TerminalOutcome): void {
+		this.consecutiveFailures = outcome === "failure" ? this.consecutiveFailures + 1 : 0;
+		if (this.consecutiveFailures >= FAILURE_CIRCUIT_BREAKER_THRESHOLD) {
+			this.requestStop(
+				`Circuit breaker tripped after ${this.consecutiveFailures} consecutive failures`,
+			);
 		}
 	}
 
@@ -423,8 +399,8 @@ export class CrawlState {
 		return { ...this.counters };
 	}
 
-	buildProgress(queue: QueueSnapshot, counters?: CrawlCounters) {
-		const snapshot = counters ?? this.counters;
+	buildProgress(queue: QueueSnapshot) {
+		const snapshot = this.snapshotCounters();
 		const elapsedSeconds = Math.max(Math.floor((Date.now() - this.startedAtMs) / 1000), 0);
 		const pagesPerSecond =
 			elapsedSeconds > 0 ? Number((snapshot.pagesScanned / elapsedSeconds).toFixed(2)) : 0;

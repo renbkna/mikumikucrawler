@@ -7,6 +7,8 @@ import { persistPageFixture } from "../../__tests__/pageFixture.js";
 import {
 	createCrawlOptionsFixture,
 	createInMemoryStorage,
+	createStorageFixture,
+	getTestDatabase,
 } from "../../__tests__/storageFixture.js";
 import { DurableStorageBudget } from "../DurableStorageBudget.js";
 import { createStorage, DatabaseOwnershipError } from "../db.js";
@@ -15,16 +17,18 @@ describe("storage contract", () => {
 	test("creates the current schema without a migration ledger", () => {
 		const storage = createInMemoryStorage();
 		expect(
-			storage.db
+			getTestDatabase(storage)
 				.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'")
 				.get(),
 		).toBeNull();
-		expect(storage.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+		expect(getTestDatabase(storage).query("PRAGMA foreign_key_check").all()).toEqual([]);
 		const runColumns = (
-			storage.db.query("PRAGMA table_info(crawl_runs)").all() as Array<{ name: string }>
+			getTestDatabase(storage).query("PRAGMA table_info(crawl_runs)").all() as Array<{
+				name: string;
+			}>
 		).map((column) => column.name);
 		const pageColumns = (
-			storage.db.query("PRAGMA table_info(pages)").all() as Array<{ name: string }>
+			getTestDatabase(storage).query("PRAGMA table_info(pages)").all() as Array<{ name: string }>
 		).map((column) => column.name);
 		expect(runColumns).not.toContain("target");
 		expect(runColumns).not.toContain("total_data_kb");
@@ -45,26 +49,27 @@ describe("storage contract", () => {
 			expect(pageColumns).not.toContain(deadColumn);
 		}
 		expect(
-			storage.db
+			getTestDatabase(storage)
 				.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'page_links'")
 				.get(),
 		).toBeNull();
 		expect(
-			storage.db
+			getTestDatabase(storage)
 				.query(
 					"SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_crawl_domain_state_crawl_id'",
 				)
 				.get(),
 		).toBeNull();
-		const domainStatePlan = storage.db
+		const domainStatePlan = getTestDatabase(storage)
 			.query(
 				"EXPLAIN QUERY PLAN SELECT delay_key, delay_ms, next_allowed_at FROM crawl_domain_state WHERE crawl_id = ? ORDER BY delay_key",
 			)
 			.all("crawl-id") as Array<{ detail: string }>;
 		expect(domainStatePlan.some(({ detail }) => detail.includes("(crawl_id=?)"))).toBe(true);
-		expect((storage.db.query("PRAGMA temp_store").get() as { temp_store: number }).temp_store).toBe(
-			1,
-		);
+		expect(
+			(getTestDatabase(storage).query("PRAGMA temp_store").get() as { temp_store: number })
+				.temp_store,
+		).toBe(1);
 	});
 
 	test("one live process owns the database while matching-schema data survives restart", () => {
@@ -104,16 +109,18 @@ describe("storage contract", () => {
 
 		// Hold the old inode open so unlink/recreate cannot reuse it and fool this proof.
 		const originalFile = openSync(databasePath, "r");
-		const storage = createStorage(databasePath);
+		const storage = createStorageFixture(databasePath);
 		try {
 			expect(statSync(databasePath).ino).toBe(fstatSync(originalFile).ino);
 			expect(
-				storage.db
+				getTestDatabase(storage)
 					.query("SELECT name FROM sqlite_master WHERE name LIKE 'legacy%' OR name = 'child'")
 					.all(),
 			).toEqual([]);
-			expect(storage.db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
-			expect(storage.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+			expect(getTestDatabase(storage).query("PRAGMA foreign_keys").get()).toEqual({
+				foreign_keys: 1,
+			});
+			expect(getTestDatabase(storage).query("PRAGMA foreign_key_check").all()).toEqual([]);
 			storage.repos.crawlRuns.createRun("after-reset", createCrawlOptionsFixture());
 			const competitor = Bun.spawnSync([
 				process.execPath,
@@ -159,10 +166,10 @@ describe("storage contract", () => {
 			});
 			storage.repos.crawlRuns.markCompleted(crawlId, null);
 		}
-		storage.db
+		getTestDatabase(storage)
 			.query("UPDATE crawl_runs SET completed_at = '2026-01-01 00:00:00' WHERE id = ?")
 			.run("a-old-terminal");
-		storage.db
+		getTestDatabase(storage)
 			.query("UPDATE crawl_runs SET completed_at = '2026-02-01 00:00:00' WHERE id = ?")
 			.run("z-new-terminal");
 		storage.repos.crawlRuns.createRun("paused-checkpoint", {
@@ -171,10 +178,11 @@ describe("storage contract", () => {
 		});
 		storage.repos.crawlRuns.markPaused("paused-checkpoint", "Pause requested");
 
-		const pageSize = (storage.db.query("PRAGMA page_size").get() as { page_size: number })
-			.page_size;
-		const usedBefore = storage.budget.usedBytes();
-		const constrainedBudget = new DurableStorageBudget(storage.db, {
+		const pageSize = (
+			getTestDatabase(storage).query("PRAGMA page_size").get() as { page_size: number }
+		).page_size;
+		const usedBefore = storage.budget.usage().usedBytes;
+		const constrainedBudget = new DurableStorageBudget(getTestDatabase(storage), {
 			maxBytes: usedBefore + pageSize - 1,
 			pageReservationBytes: pageSize,
 		});
@@ -209,17 +217,18 @@ describe("storage contract", () => {
 			});
 			storage.repos.crawlRuns.markCompleted(crawlId, null);
 		}
-		storage.db
+		getTestDatabase(storage)
 			.query("UPDATE crawl_runs SET completed_at = '2026-01-01 00:00:00' WHERE id = ?")
 			.run("owned-terminal");
-		storage.db
+		getTestDatabase(storage)
 			.query("UPDATE crawl_runs SET completed_at = '2026-02-01 00:00:00' WHERE id = ?")
 			.run("reclaimable-terminal");
 
-		const pageSize = (storage.db.query("PRAGMA page_size").get() as { page_size: number })
-			.page_size;
-		const budget = new DurableStorageBudget(storage.db, {
-			maxBytes: storage.budget.usedBytes() + pageSize - 1,
+		const pageSize = (
+			getTestDatabase(storage).query("PRAGMA page_size").get() as { page_size: number }
+		).page_size;
+		const budget = new DurableStorageBudget(getTestDatabase(storage), {
+			maxBytes: storage.budget.usage().usedBytes + pageSize - 1,
 			pageReservationBytes: pageSize,
 		});
 		budget.reserve("owned-terminal", { maxPages: 1, pagesScanned: 1 });
@@ -252,7 +261,7 @@ describe("storage contract", () => {
 
 	test("default crawl history ordering uses its global updated-at index", () => {
 		const storage = createInMemoryStorage();
-		const plan = storage.db
+		const plan = getTestDatabase(storage)
 			.query("EXPLAIN QUERY PLAN SELECT * FROM crawl_runs ORDER BY updated_at DESC LIMIT 50")
 			.all() as Array<{ detail: string }>;
 
@@ -267,33 +276,33 @@ describe("storage contract", () => {
 		);
 
 		expect(() =>
-			storage.db
+			getTestDatabase(storage)
 				.query("UPDATE crawl_runs SET status = 'resumable-ish' WHERE id = ?")
 				.run("crawl-constraints"),
 		).toThrow();
 		expect(() =>
-			storage.db
+			getTestDatabase(storage)
 				.query("UPDATE crawl_runs SET options_json = '{bad json' WHERE id = ?")
 				.run("crawl-constraints"),
 		).toThrow();
 		expect(() =>
-			storage.db
+			getTestDatabase(storage)
 				.query(
 					"UPDATE crawl_runs SET pages_scanned = 2, success_count = 1, failure_count = 0, skipped_count = 0 WHERE id = ?",
 				)
 				.run("crawl-constraints"),
 		).toThrow();
 		expect(() =>
-			storage.db
+			getTestDatabase(storage)
 				.query("UPDATE crawl_runs SET pages_scanned = 1.5, success_count = 1.5 WHERE id = ?")
 				.run("crawl-constraints"),
 		).toThrow();
 		expect(() =>
-			storage.db
+			getTestDatabase(storage)
 				.query("UPDATE crawl_runs SET event_sequence = -1 WHERE id = ?")
 				.run("crawl-constraints"),
 		).toThrow();
-		storage.db
+		getTestDatabase(storage)
 			.query("UPDATE crawl_runs SET created_at = '2026-02-30 00:00:00' WHERE id = ?")
 			.run("crawl-constraints");
 		expect(() => storage.repos.crawlRuns.getById("crawl-constraints")).toThrow(
@@ -307,7 +316,7 @@ describe("storage contract", () => {
 			"fractional-list-bound",
 			createCrawlOptionsFixture(),
 		);
-		storage.db
+		getTestDatabase(storage)
 			.query("UPDATE crawl_runs SET updated_at = '2026-01-01 00:00:00' WHERE id = ?")
 			.run(run.id);
 
@@ -325,14 +334,14 @@ describe("storage contract", () => {
 		);
 
 		expect(() =>
-			storage.db
+			getTestDatabase(storage)
 				.query(
 					"INSERT INTO crawl_queue_items (crawl_id, url, depth, retries, domain, available_at) VALUES (?, ?, ?, ?, ?, ?)",
 				)
 				.run("crawl-runtime-constraints", "https://db.example/bad-depth", -1, 0, "db.example", 0),
 		).toThrow();
 		expect(() =>
-			storage.db
+			getTestDatabase(storage)
 				.query("INSERT INTO pages (crawl_id, url, domain, word_count) VALUES (?, ?, ?, ?)")
 				.run("crawl-runtime-constraints", "https://db.example/page", "db.example", -1),
 		).toThrow();
@@ -344,7 +353,7 @@ describe("storage contract", () => {
 			}),
 		).toThrow();
 		expect(() =>
-			storage.db
+			getTestDatabase(storage)
 				.query(
 					"INSERT INTO crawl_domain_state (crawl_id, delay_key, delay_ms, next_allowed_at) VALUES (?, ?, ?, ?)",
 				)
@@ -408,7 +417,7 @@ describe("storage contract", () => {
 		if (!initial) throw new Error("Expected the initial queue item");
 
 		expect(() => storage.repos.crawlQueue.enqueueMany(crawl.id, [initial])).toThrow();
-		storage.db
+		getTestDatabase(storage)
 			.query("DELETE FROM crawl_queue_items WHERE crawl_id = ? AND url = ?")
 			.run(crawl.id, initial.url);
 		expect(() => storage.repos.crawlQueue.reschedule(crawl.id, { ...initial, retries: 1 })).toThrow(
@@ -602,7 +611,7 @@ describe("storage contract", () => {
 		expect(storage.repos.search.count(created.id, '"old"*')).toBe(1);
 		expect(storage.repos.search.count(created.id, '"fresh"*')).toBe(0);
 
-		storage.db
+		getTestDatabase(storage)
 			.query(
 				"UPDATE pages SET title = ?, description = ?, content = ? WHERE crawl_id = ? AND url = ?",
 			)
@@ -685,18 +694,24 @@ describe("storage contract", () => {
 			const before = storage.repos.search.search(created.id, '"uniquemainonlyneedle"*', 10);
 			expect(before).toHaveLength(1);
 			expect(before[0]?.snippet).toBe("uniquemainonlyneedle body");
-			storage.db.exec("INSERT INTO pages_fts(pages_fts) VALUES ('rebuild')");
+			getTestDatabase(storage).exec("INSERT INTO pages_fts(pages_fts) VALUES ('rebuild')");
 			expect(storage.repos.search.search(created.id, '"uniquemainonlyneedle"*', 10)).toEqual(
 				before,
 			);
 			expect(storage.repos.search.count(created.id, '"uniquerawonlyneedle"*')).toBe(0);
-			storage.db.query("UPDATE pages SET main_content = '' WHERE crawl_id = ?").run(created.id);
+			getTestDatabase(storage)
+				.query("UPDATE pages SET main_content = '' WHERE crawl_id = ?")
+				.run(created.id);
 			expect(storage.repos.search.count(created.id, '"uniquemainonlyneedle"*')).toBe(0);
 			expect(storage.repos.search.count(created.id, '"uniquerawonlyneedle"*')).toBe(1);
 			// rank=1 compares the FTS index with its external content, including stale terms.
-			storage.db.exec("INSERT INTO pages_fts(pages_fts, rank) VALUES ('integrity-check', 1)");
+			getTestDatabase(storage).exec(
+				"INSERT INTO pages_fts(pages_fts, rank) VALUES ('integrity-check', 1)",
+			);
 			storage.repos.crawlRuns.deleteRun(created.id);
-			storage.db.exec("INSERT INTO pages_fts(pages_fts, rank) VALUES ('integrity-check', 1)");
+			getTestDatabase(storage).exec(
+				"INSERT INTO pages_fts(pages_fts, rank) VALUES ('integrity-check', 1)",
+			);
 		} finally {
 			storage.close();
 		}

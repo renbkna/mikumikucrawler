@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { runInNewContext } from "node:vm";
 import type { Browser, BrowserContext, Frame, Page, Route, WebSocketRoute } from "playwright";
 import type { CrawlOptions } from "../../../../shared/contracts/index.js";
@@ -6,19 +6,22 @@ import { silentLogger } from "../../../__tests__/runtimeFixture.js";
 import { DYNAMIC_RENDERER_CONSTANTS, REQUEST_CONSTANTS } from "../../../constants.js";
 import { type HttpClient, OutboundPolicyError } from "../../../outbound/HttpClient.js";
 import { OperationTimeoutError } from "../../../utils/timeout.js";
+import { DynamicRenderer } from "../DynamicRenderer.js";
+import {
+	extractRenderedSnapshot,
+	openBrowserPageWithRetry,
+	readBoundedDocumentText,
+} from "../rendering/browserPage.js";
+import { handleConsentModals } from "../rendering/consentInteraction.js";
 import {
 	configurePinnedBrowserContext,
 	createDynamicBrowserContextOptions,
 	createDynamicBrowserLaunchArgs,
 	createDynamicRouteBudget,
 	createDynamicSubrequestAdmission,
-	DynamicRenderer,
-	extractRenderedSnapshot,
 	fulfillRouteWithPinnedHttpClient,
-	openBrowserPageWithRetry,
-	readBoundedDocumentText,
 	requiresStaticRepresentationFetch,
-} from "../DynamicRenderer.js";
+} from "../rendering/pinnedBrowserNetwork.js";
 
 const dynamicOptions: CrawlOptions = {
 	target: "https://www.youtube.com/watch?v=test",
@@ -728,6 +731,21 @@ describe("dynamic renderer network contract", () => {
 		expect(httpClient.fetch).toHaveBeenCalledTimes(2);
 	});
 
+	test("rejects invalid route budgets and denies dispatch when no requests are allocated", async () => {
+		for (const invalid of [-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+			expect(() => createDynamicRouteBudget(invalid, 5)).toThrow(RangeError);
+			expect(() => createDynamicRouteBudget(2, invalid)).toThrow(RangeError);
+		}
+		const httpClient: HttpClient = { fetch: mock(async () => new Response("unused")) };
+		const { route } = createRoute({ url: "https://example.com/" });
+		await expect(
+			fulfillRouteWithPinnedHttpClient(route, httpClient, {
+				budget: createDynamicRouteBudget(0, 0),
+			}),
+		).resolves.toEqual({ type: "aborted", reason: "request-budget" });
+		expect(httpClient.fetch).not.toHaveBeenCalled();
+	});
+
 	test("serializes concurrent body reads against one shared byte budget", async () => {
 		const budget = createDynamicRouteBudget(2, 5);
 		const httpClient: HttpClient = {
@@ -942,12 +960,11 @@ describe("dynamic renderer network contract", () => {
 			return "Video content";
 		});
 		const page = { evaluate: evaluatePage, frames: () => [frame] } as unknown as Page;
-		const httpClient: HttpClient = {
-			fetch: mock(async () => new Response("unused")),
-		};
-		const renderer = new DynamicRenderer(dynamicOptions, silentLogger, httpClient);
-
-		const result = await renderer.handleConsentModals(page, "https://www.youtube.com/watch?v=test");
+		const result = await handleConsentModals(
+			page,
+			"https://www.youtube.com/watch?v=test",
+			silentLogger,
+		);
 
 		expect(result).toEqual({ detected: true, bypassed: true });
 		expect(evaluateFrame).toHaveBeenCalledTimes(2);
@@ -987,28 +1004,58 @@ describe("dynamic renderer network contract", () => {
 	});
 
 	test("relaunches before rendering when the crawl browser disconnected", async () => {
-		const renderer = new DynamicRenderer(dynamicOptions, silentLogger, {
-			fetch: mock(async () => new Response("unused")),
+		using _memory = spyOn(process, "memoryUsage").mockReturnValue({
+			rss: 0,
+			heapUsed: 0,
+			heapTotal: 0,
+			external: 0,
+			arrayBuffers: 0,
 		});
-		(renderer as unknown as { browser: Browser | null }).browser = {
-			isConnected: () => false,
-		} as Browser;
-		renderer.launchBrowser = mock(async () => {
-			throw new Error("replacement browser unavailable");
+		let connected = true;
+		let page!: Page;
+		const context = {
+			newPage: async () => page,
+			close: async () => {},
+		} as unknown as BrowserContext;
+		page = { context: () => context } as Page;
+		const browser = {
+			isConnected: () => connected,
+			newContext: async () => context,
+			close: async () => {},
+		} as unknown as Browser;
+		const launch = mock(async () => {
+			if (!connected) throw new Error("replacement browser unavailable");
+			return browser;
 		});
-
-		await expect(
-			renderer.render({
-				url: dynamicOptions.target,
-				domain: "www.youtube.com",
-				depth: 0,
-				retries: 0,
-			}),
-		).resolves.toEqual({ type: "staticFallback", reason: "renderer-unavailable" });
-		expect(renderer.launchBrowser).toHaveBeenCalledTimes(1);
+		const renderer = new DynamicRenderer(
+			dynamicOptions,
+			silentLogger,
+			{
+				fetch: mock(async () => new Response("unused")),
+			},
+			launch,
+		);
+		try {
+			expect(await renderer.initialize()).toEqual({ dynamicEnabled: true });
+			connected = false;
+			await expect(renderer.render(dynamicOptions.target)).resolves.toEqual({
+				type: "staticFallback",
+				reason: "renderer-unavailable",
+			});
+			expect(launch).toHaveBeenCalledTimes(2);
+		} finally {
+			await renderer.close();
+		}
 	});
 
-	test("shares one browser acquisition across concurrent relaunches", async () => {
+	test("shares one browser acquisition across concurrent initialization", async () => {
+		using _memory = spyOn(process, "memoryUsage").mockReturnValue({
+			rss: 0,
+			heapUsed: 0,
+			heapTotal: 0,
+			external: 0,
+			arrayBuffers: 0,
+		});
 		const pendingBrowser = Promise.withResolvers<Browser>();
 		const launch = mock(async () => pendingBrowser.promise);
 		const closeContext = mock(async () => undefined);
@@ -1031,12 +1078,15 @@ describe("dynamic renderer network contract", () => {
 			launch,
 		);
 
-		const first = renderer.launchBrowser();
-		const second = renderer.launchBrowser();
+		const first = renderer.initialize();
+		const second = renderer.initialize();
 		expect(launch).toHaveBeenCalledTimes(1);
 		pendingBrowser.resolve(browser);
 
-		await Promise.all([first, second]);
+		expect(await Promise.all([first, second])).toEqual([
+			{ dynamicEnabled: true },
+			{ dynamicEnabled: true },
+		]);
 		expect(browser.newContext).toHaveBeenCalledTimes(1);
 		expect(closeContext).toHaveBeenCalledTimes(1);
 		await renderer.close();
@@ -1044,6 +1094,13 @@ describe("dynamic renderer network contract", () => {
 	});
 
 	test("lets shutdown finish during a stalled browser launch", async () => {
+		using _memory = spyOn(process, "memoryUsage").mockReturnValue({
+			rss: 0,
+			heapUsed: 0,
+			heapTotal: 0,
+			external: 0,
+			arrayBuffers: 0,
+		});
 		const pendingBrowser = Promise.withResolvers<Browser>();
 		const closeBrowser = mock(async () => undefined);
 		const lateBrowser = {
@@ -1057,7 +1114,7 @@ describe("dynamic renderer network contract", () => {
 			mock(async () => pendingBrowser.promise),
 		);
 
-		const launchAttempt = renderer.launchBrowser();
+		const launchAttempt = renderer.initialize();
 		const closing = renderer.close();
 		const closedPromptly = await Promise.race([
 			closing.then(() => true),
@@ -1066,7 +1123,7 @@ describe("dynamic renderer network contract", () => {
 		pendingBrowser.resolve(lateBrowser);
 
 		expect(closedPromptly).toBe(true);
-		await expect(launchAttempt).rejects.toThrow("closed during browser acquisition");
+		await expect(launchAttempt).resolves.toMatchObject({ dynamicEnabled: false });
 		expect(closeBrowser).toHaveBeenCalledTimes(1);
 	});
 

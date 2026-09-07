@@ -9,7 +9,7 @@ import {
 	successfulHtmlHttpClient,
 	waitFor,
 } from "../../__tests__/runtimeFixture.js";
-import { createInMemoryStorage } from "../../__tests__/storageFixture.js";
+import { createInMemoryStorage, getTestDatabase } from "../../__tests__/storageFixture.js";
 import { createApp } from "../../app.js";
 import { CRAWL_QUEUE_CONSTANTS } from "../../constants.js";
 import type { HttpClient } from "../../outbound/HttpClient.js";
@@ -651,7 +651,7 @@ describe("api contract", () => {
 			content: null,
 		});
 		// The SQL contract permits absent metadata, including data not produced by today's extractor.
-		storage.db.run(
+		getTestDatabase(storage).run(
 			"UPDATE pages SET title = NULL, description = NULL, content_type = NULL WHERE crawl_id = ?",
 			[crawl.id],
 		);

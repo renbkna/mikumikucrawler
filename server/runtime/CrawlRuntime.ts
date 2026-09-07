@@ -20,6 +20,7 @@ import {
 	type PageProcessResult,
 } from "../domain/crawl/PagePipeline.js";
 import type { RobotsService } from "../domain/crawl/RobotsService.js";
+import type { CrawlRenderer } from "../domain/crawl/rendering/contracts.js";
 import type { HttpClient } from "../outbound/HttpClient.js";
 import type { DurableStorageBudget } from "../storage/DurableStorageBudget.js";
 import type { StorageRepos } from "../storage/db.js";
@@ -35,7 +36,7 @@ export interface CrawlRuntimeDependencies {
 	eventStream: EventStream;
 	httpClient: HttpClient;
 	robotsService: RobotsService;
-	dynamicRenderer?: CrawlRuntimeRenderer;
+	dynamicRenderer?: CrawlRenderer;
 	acquirePdfWork?: AcquireWork;
 	allowLocalhostSeed?: boolean;
 	initialCounters?: CrawlCounters;
@@ -45,11 +46,6 @@ export interface CrawlRuntimeDependencies {
 	onInactive?: () => void;
 	onSettled: () => void;
 }
-
-export type CrawlRuntimeRenderer = Pick<
-	DynamicRenderer,
-	"close" | "initialize" | "isEnabled" | "render"
->;
 
 class RuntimeStopSignalError extends Error {
 	constructor(message: string) {
@@ -61,7 +57,7 @@ class RuntimeStopSignalError extends Error {
 export class CrawlRuntime {
 	private readonly state: CrawlState;
 	private readonly queue: CrawlQueue;
-	private readonly dynamicRenderer: CrawlRuntimeRenderer;
+	private readonly dynamicRenderer: CrawlRenderer;
 	private readonly pipeline: PagePipeline;
 	private readonly activeTasks = new Map<string, Promise<void>>();
 	private readonly activeControllers = new Map<string, AbortController>();
@@ -207,21 +203,13 @@ export class CrawlRuntime {
 	}
 
 	private emitProgress() {
-		const counters = this.state.snapshotCounters();
 		this.publish(
 			"crawl.progress",
-			this.state.buildProgress(
-				{
-					activeRequests: this.queue.activeCount,
-					queueLength: this.queue.pendingCount,
-				},
-				counters,
-			),
+			this.state.buildProgress({
+				activeRequests: this.queue.activeCount,
+				queueLength: this.queue.pendingCount,
+			}),
 		);
-	}
-
-	private deferPendingToDelayWatermarks(): void {
-		this.queue.deferPendingByDelayKey((delayKey) => this.state.nextAllowedAtForDomain(delayKey));
 	}
 
 	private async seedInitialQueue(): Promise<void> {
@@ -253,7 +241,7 @@ export class CrawlRuntime {
 
 		this.pauseRequested = true;
 		this.state.requestStop(reason);
-		this.deferPendingToDelayWatermarks();
+		this.queue.deferPendingToDomainDelays();
 		if (this.started) {
 			this.persistProgress("pausing");
 		}
@@ -269,8 +257,7 @@ export class CrawlRuntime {
 		this.pauseRequested = false;
 		this.state.requestStop(reason, { overrideReason: true });
 		this.lifecycleController.abort(this.stopSignalReason);
-		this.queue.clearPending();
-		this.queue.clearPersisted();
+		this.queue.discard();
 		for (const controller of this.activeControllers.values()) {
 			controller.abort(new Error(reason));
 		}
@@ -285,7 +272,7 @@ export class CrawlRuntime {
 		this.interrupted = true;
 		this.state.requestStop(reason, { overrideReason: !this.forceStopRequested });
 		this.lifecycleController.abort(this.stopSignalReason);
-		this.deferPendingToDelayWatermarks();
+		this.queue.deferPendingToDomainDelays();
 		for (const controller of this.activeControllers.values()) {
 			controller.abort(new Error(reason));
 		}
@@ -355,14 +342,8 @@ export class CrawlRuntime {
 	}
 
 	private finalizeItem(item: QueueItem, processResult: PageProcessResult): void {
-		if (processResult.aborted) {
-			this.state.releaseRedirectReservation(item.url);
-			this.queue.markDone(item);
-			return;
-		}
-
-		if (processResult.rescheduled) {
-			this.state.releaseRedirectReservation(item.url);
+		if (processResult.aborted || processResult.rescheduled) {
+			this.state.releaseAttempt(item.url);
 			this.queue.markDone(item);
 			return;
 		}
@@ -404,20 +385,7 @@ export class CrawlRuntime {
 			this.deps.eventStream.delete(reclaimedCrawlId);
 		}
 
-		this.state.recordTerminal(item.url, processResult.terminalOutcome, itemCommit.effects);
-		if (!Bun.deepEquals(this.state.snapshotCounters(), itemCommit.counters, true)) {
-			throw new Error("Runtime counters diverged from the committed crawl aggregate");
-		}
-		if (domainBudgetCharged) {
-			if (itemCommit.chargedDomain === null) {
-				throw new Error("Charged item completion omitted its durable domain identity");
-			}
-			this.state.settleDomainAdmission(item.url, item.domain, itemCommit.chargedDomain);
-			this.state.recordDomainPage(itemCommit.chargedDomain);
-		} else {
-			this.state.releaseRedirectReservation(item.url);
-			this.state.releaseDomainAdmission(item.domain);
-		}
+		this.state.applyCommittedTerminal(item.url, processResult.terminalOutcome, itemCommit);
 
 		if (processResult.page) {
 			if (itemCommit.type !== "page-persisted") {
@@ -462,8 +430,7 @@ export class CrawlRuntime {
 	}
 
 	private finishStopped(): void {
-		this.queue.clearPending();
-		this.queue.clearPersisted();
+		this.queue.discard();
 		const stopReason = this.state.stopReason ?? "Crawl stopped";
 		const stopped = this.deps.repos.crawlRuns.markStopped(
 			this.deps.crawlId,
@@ -496,7 +463,7 @@ export class CrawlRuntime {
 		}
 
 		if (this.interrupted) {
-			this.deferPendingToDelayWatermarks();
+			this.queue.deferPendingToDomainDelays();
 			this.persistInterrupted(this.state.stopReason ?? "Process shutdown");
 			this.markInactive();
 			return true;
@@ -508,7 +475,7 @@ export class CrawlRuntime {
 			return true;
 		}
 
-		this.deferPendingToDelayWatermarks();
+		this.queue.deferPendingToDomainDelays();
 		this.publish("crawl.log", {
 			message: this.state.stopReason ?? "Crawl paused",
 			level: "info",
@@ -571,8 +538,7 @@ export class CrawlRuntime {
 			await this.dynamicRenderer.close();
 			if (this.finalizeRequestedLifecycle()) return;
 
-			this.queue.clearPending();
-			this.queue.clearPersisted();
+			this.queue.discard();
 
 			const completed = this.deps.repos.crawlRuns.markCompleted(
 				this.deps.crawlId,
@@ -610,8 +576,7 @@ export class CrawlRuntime {
 					{ cause: error },
 				);
 			}
-			this.queue.clearPending();
-			this.queue.clearPersisted();
+			this.queue.discard();
 			this.markInactive();
 			this.publish("crawl.failed", {
 				error: message,

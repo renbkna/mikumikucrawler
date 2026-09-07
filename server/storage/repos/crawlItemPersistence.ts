@@ -1,27 +1,14 @@
 import type { Database } from "bun:sqlite";
-import type { CrawlCounters } from "../../../shared/contracts/index.js";
 import { isActiveCrawlStatus } from "../../../shared/contracts/index.js";
 import { bytesToKilobytes, kilobytesToBytes } from "../../../shared/text.js";
 import {
+	type CommittedTerminal,
+	type CompletedPageData,
 	deriveTerminalCounters,
 	type TerminalCounterEffects,
 	type TerminalOutcome,
-} from "../../domain/crawl/CrawlState.js";
+} from "../../domain/crawl/completion.js";
 import type { OwnStatement } from "../db.js";
-
-export interface CompletedPageData {
-	contentType: string;
-	contentLength: number;
-	title: string;
-	description: string;
-	content: string | null;
-	mainContent: string;
-	wordCount: number;
-	readingTime: number;
-	language: string;
-	mediaCount: number;
-	discoveredLinkCount: number;
-}
 
 interface CommitCompletedItemBase {
 	crawlId: string;
@@ -37,13 +24,7 @@ export type CommitCompletedItemInput = CommitCompletedItemBase &
 		| { outcome: Exclude<TerminalOutcome, "success">; page?: never }
 	);
 
-type CommitCompletedItemResultBase = {
-	counters: CrawlCounters;
-	effects: TerminalCounterEffects;
-	chargedDomain: string | null;
-};
-
-export type CommitCompletedItemResult = CommitCompletedItemResultBase &
+export type CommitCompletedItemResult = CommittedTerminal &
 	({ type: "page-persisted"; pageId: number; pageCount: number } | { type: "no-page" });
 
 export interface TerminalUrlRecord {

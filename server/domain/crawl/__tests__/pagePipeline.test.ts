@@ -3,8 +3,8 @@ import type { CrawlOptions } from "../../../../shared/contracts/index.js";
 import { silentLogger } from "../../../__tests__/runtimeFixture.js";
 import type { Logger } from "../../../config/logging.js";
 import type { RobotsPolicyEvaluator } from "../CrawlAdmissionPolicy.js";
-import type { DestinationAuthorizer } from "../FetchService.js";
 import { PagePipeline } from "../PagePipeline.js";
+import type { DestinationAuthorizer } from "../rendering/contracts.js";
 
 type PagePipelineState = ConstructorParameters<typeof PagePipeline>[1];
 type PagePipelineQueue = ConstructorParameters<typeof PagePipeline>[2];
@@ -39,7 +39,7 @@ const defaultState: PagePipelineState = {
 
 const defaultQueue: PagePipelineQueue = {
 	enqueueNormalized: () => true,
-	scheduleRetry: () => undefined,
+	tryScheduleRetry: () => false,
 };
 
 const defaultRobots: RobotsPolicyEvaluator = {
@@ -591,7 +591,7 @@ describe("page pipeline contract", () => {
 	});
 
 	test("preserves retryable active work after a graceful pause request", async () => {
-		const scheduleRetry = mock(() => undefined);
+		const tryScheduleRetry = mock(() => true);
 		const item = {
 			url: "https://example.com/",
 			domain: "example.com",
@@ -604,7 +604,7 @@ describe("page pipeline contract", () => {
 			},
 			{},
 			{
-				scheduleRetry,
+				tryScheduleRetry,
 			},
 			{
 				fetch: async () => ({
@@ -619,11 +619,37 @@ describe("page pipeline contract", () => {
 		await expect(pipeline.process(item)).resolves.toEqual({
 			rescheduled: true,
 		});
-		expect(scheduleRetry).toHaveBeenCalledWith(item, 1000);
+		expect(tryScheduleRetry).toHaveBeenCalledWith(item, 1000);
+	});
+
+	test("queue refusal turns retryable fetch outcomes into terminal failures", async () => {
+		for (const type of ["rateLimited", "transientFailure"] as const) {
+			const tryScheduleRetry = mock(() => false);
+			const pipeline = createPipeline(
+				{ retryLimit: 2 },
+				{},
+				{ tryScheduleRetry },
+				{ fetch: async () => ({ type, statusCode: type === "rateLimited" ? 429 : 500 }) },
+				{},
+				{ log: () => {} },
+			);
+			await expect(
+				pipeline.process({
+					url: "https://example.com/",
+					domain: "example.com",
+					depth: 0,
+					retries: 0,
+				}),
+			).resolves.toEqual({
+				terminalOutcome: "failure",
+				terminalEffects: { chargeDomainBudget: true },
+			});
+			expect(tryScheduleRetry).toHaveBeenCalledTimes(1);
+		}
 	});
 
 	test("owns retry fallback timing for rate limits without retry-after", async () => {
-		const scheduleRetry = mock(() => undefined);
+		const tryScheduleRetry = mock(() => true);
 		const adaptDomainDelay = mock(() => undefined);
 		const item = {
 			url: "https://example.com/",
@@ -639,7 +665,7 @@ describe("page pipeline contract", () => {
 				adaptDomainDelay,
 			},
 			{
-				scheduleRetry,
+				tryScheduleRetry,
 			},
 			{
 				fetch: async () => ({
@@ -654,12 +680,12 @@ describe("page pipeline contract", () => {
 		await expect(pipeline.process(item)).resolves.toEqual({
 			rescheduled: true,
 		});
-		expect(scheduleRetry).toHaveBeenCalledWith(item, 2000);
+		expect(tryScheduleRetry).toHaveBeenCalledWith(item, 2000);
 		expect(adaptDomainDelay).toHaveBeenCalledWith("example.com", 429, 2000);
 	});
 
 	test("waits for timed-out attempt cleanup before handing work to the retry owner", async () => {
-		const scheduleRetry = mock(() => undefined);
+		const tryScheduleRetry = mock(() => true);
 		let attemptSignal: AbortSignal | undefined;
 		const attemptAborted = Promise.withResolvers<void>();
 		const releaseCleanup = Promise.withResolvers<void>();
@@ -674,7 +700,7 @@ describe("page pipeline contract", () => {
 				retryLimit: 2,
 			},
 			{},
-			{ scheduleRetry },
+			{ tryScheduleRetry },
 			{
 				fetch: async (_item: unknown, signal: AbortSignal) => {
 					attemptSignal = signal;
@@ -696,11 +722,11 @@ describe("page pipeline contract", () => {
 
 		const processing = pipeline.process(item);
 		await attemptAborted.promise;
-		expect(scheduleRetry).not.toHaveBeenCalled();
+		expect(tryScheduleRetry).not.toHaveBeenCalled();
 		releaseCleanup.resolve();
 		await expect(processing).resolves.toEqual({ rescheduled: true });
 		expect(attemptSignal?.aborted).toBe(true);
-		expect(scheduleRetry).toHaveBeenCalledWith(item, 2000);
+		expect(tryScheduleRetry).toHaveBeenCalledWith(item, 2000);
 	});
 
 	test("classifies redirected links against the effective document while preserving requested identity", async () => {

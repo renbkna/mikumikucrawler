@@ -75,7 +75,7 @@ export class DurableStorageBudget {
 		return total;
 	}
 
-	usedBytes(): number {
+	private usedBytes(): number {
 		const pageCount = readPageMetric(this.db, "page_count");
 		const freePages = readPageMetric(this.db, "freelist_count");
 		return Math.max(pageCount - freePages, 0) * this.pageSize;

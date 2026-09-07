@@ -4,9 +4,9 @@ import {
 	type CrawlPageData,
 	PAGE_TEXT_LIMITS,
 } from "../../../../shared/contracts/index.js";
-import type { CompletedPageData } from "../../../storage/repos/crawlItemPersistence.js";
 import type { ProcessedContent } from "../../../types.js";
 import type { QueueItem } from "../CrawlQueue.js";
+import type { CompletedPageData } from "../completion.js";
 import type { FetchResult } from "../FetchService.js";
 import { buildPageResult } from "../PageResultBuilder.js";
 

@@ -9,13 +9,17 @@ import {
 import { disposeResponseBody, readLimitedResponseBody } from "../../utils/responseBody.js";
 import type { AcquireWork, WorkLease } from "../../utils/WorkPermitPool.js";
 import type { QueueItem } from "./CrawlQueue.js";
-import type { DynamicRenderer } from "./DynamicRenderer.js";
 import {
 	isAccessBlockedStatus,
 	isPermanentFetchFailureStatus,
 	isRateLimitedStatus,
 	isTransientFetchFailureStatus,
 } from "./httpStatusPolicy.js";
+import type {
+	DestinationAuthorizer,
+	DocumentRenderer,
+	DynamicRenderAttempt,
+} from "./rendering/contracts.js";
 
 export type FetchResult =
 	| {
@@ -54,9 +58,6 @@ export type FetchResult =
 			statusCode: number;
 			reason?: string;
 	  };
-
-export type DestinationAuthorizer = (url: string, signal?: AbortSignal) => Promise<void> | void;
-type DocumentRenderer = Pick<DynamicRenderer, "isEnabled" | "render">;
 
 function parseRetryAfter(value: string | null): number | undefined {
 	if (!value) return undefined;
@@ -163,11 +164,11 @@ export class FetchService {
 			: AbortSignal.timeout(TIMEOUT_CONSTANTS.DOCUMENT_FETCH);
 		const documentTimedOut = () => documentSignal.aborted && signal?.aborted !== true;
 		let staticUrl = item.url;
-		let dynamicResult: Awaited<ReturnType<DynamicRenderer["render"]>> | undefined;
+		let dynamicResult: DynamicRenderAttempt | undefined;
 		if (this.dynamicRenderer.isEnabled()) {
 			try {
 				dynamicResult = await this.dynamicRenderer.render(
-					item,
+					item.url,
 					documentSignal,
 					authorizeDestination,
 				);

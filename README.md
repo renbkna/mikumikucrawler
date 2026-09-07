@@ -292,7 +292,8 @@ server/
 ├── domain/crawl/           # Core crawl logic
 │   ├── CrawlQueue.ts      #   Durable FIFO/delayed queue
 │   ├── CrawlState.ts      #   Counters, visited URLs, stop logic
-│   ├── DynamicRenderer.ts  #   Playwright lifecycle
+│   ├── DynamicRenderer.ts  #   Crawl-scoped browser lifecycle and render outcomes
+│   ├── rendering/          #   Rendering contract, pinned networking, DOM reads, consent
 │   ├── FetchService.ts     #   HTTP fetching with security checks
 │   ├── PagePipeline.ts     #   Fetch → process → store pipeline
 │   ├── RobotsService.ts    #   robots.txt evaluation
@@ -320,6 +321,29 @@ shared/                     # Cross-boundary contracts and policy
 ├── text.ts                 #   Text/byte conversion helpers
 └── url.ts                  #   URL validation & normalization
 ```
+
+`rendering/contracts.ts` defines the capabilities used by fetching and runtime
+orchestration. The pinned network module owns each page's request and byte budget;
+route handlers charge requests and read bounded bodies without mutating counters.
+Browser page operations own evaluation deadlines, while consent interaction owns
+the bounded detection, action, and dismissal sequence.
+
+`completion.ts` owns completed-page data and terminal counter derivation. SQLite
+transactions and in-memory crawl state consume that domain contract. `CrawlState`
+applies each committed terminal result as one transition: counters, circuit breaker,
+admissions, redirect reservations, and domain charges. Callers receive detached
+counter observations and cannot invoke individual settlement mutations. `CrawlQueue`
+owns durable clearing and propagation of domain-delay watermarks into pending work;
+it copies restored records and publishes immutable queue items. It also owns retry
+limits and active-attempt identity: only the dispatched item can schedule one retry
+or release its active slot. Discarding a queue permanently closes admission and
+retries while retaining active slots until their owners finish. The pipeline
+requests retries and handles exhaustion.
+
+`Storage` exposes repositories, capacity management, and closure. Its SQLite
+connection stays inside the storage owner; SQL inspection and corruption fixtures
+live in test support. Renderer acquisition, disabling, and page disposal likewise
+stay private behind initialization, rendering, and closure.
 
 </details>
 

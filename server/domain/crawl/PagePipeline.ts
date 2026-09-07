@@ -12,11 +12,13 @@ import {
 	type RobotsPolicyEvaluator,
 } from "./CrawlAdmissionPolicy.js";
 import type { CrawlQueue, QueueItem } from "./CrawlQueue.js";
-import type { CrawlState, TerminalOutcome } from "./CrawlState.js";
-import type { DestinationAuthorizer, FetchService } from "./FetchService.js";
+import type { CrawlState } from "./CrawlState.js";
+import type { TerminalOutcome } from "./completion.js";
+import type { FetchService } from "./FetchService.js";
 import { hasUsablePageContent, isClientErrorShell, isSoft404 } from "./PageDecisionPolicy.js";
 import type { BuiltPageResult } from "./PageResultBuilder.js";
 import { buildPageResult } from "./PageResultBuilder.js";
+import type { DestinationAuthorizer } from "./rendering/contracts.js";
 import { getCrawlUrlIdentity } from "./UrlPolicy.js";
 
 type PagePipelineState = CrawlAdmissionState &
@@ -30,7 +32,7 @@ type PagePipelineState = CrawlAdmissionState &
 		| "timeUntilDomainReady"
 		| "tryReserveRedirectDomain"
 	>;
-type PagePipelineQueue = CrawlAdmissionQueue & Pick<CrawlQueue, "scheduleRetry">;
+type PagePipelineQueue = CrawlAdmissionQueue & Pick<CrawlQueue, "tryScheduleRetry">;
 type PageFetcher = Pick<FetchService, "fetch">;
 
 interface EventSink {
@@ -177,9 +179,7 @@ export class PagePipeline {
 				}
 			}
 
-			if (
-				!this.state.tryReserveRedirectDomain(item.url, destination.domainBudgetKey, item.domain)
-			) {
+			if (!this.state.tryReserveRedirectDomain(item.url, destination.domainBudgetKey)) {
 				throw new OutboundPolicyError(
 					"crawl-policy",
 					`Document destination domain budget exhausted: ${destination.domainBudgetKey}`,
@@ -216,8 +216,7 @@ export class PagePipeline {
 			}
 			signal?.throwIfAborted();
 			const delayMs = retryDelayMs({}, item.retries);
-			if (item.retries < this.options.retryLimit) {
-				this.queue.scheduleRetry(item, delayMs);
+			if (this.queue.tryScheduleRetry(item, delayMs)) {
 				this.eventSink.log(
 					`[Crawler] Processing timeout: ${item.url} — retrying in ${Math.round(delayMs / 1000)}s`,
 				);
@@ -299,8 +298,7 @@ export class PagePipeline {
 			if (fetchResult.type === "rateLimited" || fetchResult.type === "transientFailure") {
 				const delayMs = retryDelayMs(fetchResult, item.retries);
 				this.state.adaptDomainDelay(context.chargedDomain, fetchResult.statusCode, delayMs);
-				if (item.retries < this.options.retryLimit && !signal.aborted) {
-					this.queue.scheduleRetry(item, delayMs);
+				if (!signal.aborted && this.queue.tryScheduleRetry(item, delayMs)) {
 					this.eventSink.log(
 						`[Crawler] ${fetchResult.type === "rateLimited" ? "Rate limited" : "Transient failure"}: ${item.url} — retrying in ${Math.round(delayMs / 1000)}s`,
 					);

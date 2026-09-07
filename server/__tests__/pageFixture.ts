@@ -1,5 +1,5 @@
+import type { CompletedPageData } from "../domain/crawl/completion.js";
 import type { Storage } from "../storage/db.js";
-import type { CompletedPageData } from "../storage/repos/crawlItemPersistence.js";
 
 export interface PageFixtureInput extends CompletedPageData {
 	crawlId: string;
