@@ -457,6 +457,46 @@ describe("page pipeline contract", () => {
 		});
 	});
 
+	test("combines split mixed-case robots tags before terminal classification", async () => {
+		const eventSink = { log: mock(() => undefined) };
+		const enqueueNormalized = mock(() => true);
+		const pipeline = createPipeline(
+			{},
+			{},
+			{ enqueueNormalized },
+			{
+				fetch: async () => ({
+					type: "success",
+					content:
+						'<html><head><meta name="RoBoTs" content="NoIndex"><meta name="rObOtS" content="NoFoLlOw"></head><body><main>Split directives.</main><a href="/next">next</a></body></html>',
+					effectiveUrl: "https://example.com/split-robots",
+					statusCode: 200,
+					contentType: "text/html",
+					contentLength: 1200,
+					title: "",
+					description: "",
+					xRobotsTag: null,
+				}),
+			},
+			{},
+			eventSink,
+		);
+
+		const result = await pipeline.process({
+			url: "https://example.com/split-robots",
+			domain: "example.com",
+			depth: 0,
+			retries: 0,
+		});
+
+		expect(result).toEqual({
+			terminalOutcome: "skip",
+			terminalEffects: { chargeDomainBudget: true },
+		});
+		expect(result.page).toBeUndefined();
+		expect(enqueueNormalized).not.toHaveBeenCalled();
+	});
+
 	test("abort during noindex link admission rejects before terminal classification", async () => {
 		const eventSink = {
 			log: mock(() => undefined),

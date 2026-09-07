@@ -86,4 +86,33 @@ describe("page extraction", () => {
 			robots: "noindex, nofollow",
 		});
 	});
+
+	const robotsProjectionCases = [
+		{
+			name: "unions split mixed-case directives",
+			head: '<meta name="RoBoTs" content="NoIndex"><meta name="rObOtS" content="NoFoLlOw">',
+			expected: "noindex, nofollow",
+		},
+		{
+			name: "recognizes the none alias",
+			head: '<meta name="robots" content="NONE">',
+			expected: "noindex, nofollow",
+		},
+		{
+			name: "ignores bot-specific tags",
+			head: '<meta name="googlebot" content="noindex, nofollow">',
+			expected: "",
+		},
+		{
+			name: "finds directives after the metadata bound",
+			head: `<meta name="robots" content="${"x".repeat(PAGE_TEXT_LIMITS.metadataValueBytes)}, noindex">`,
+			expected: "noindex",
+		},
+	] as const;
+	for (const { name, head, expected } of robotsProjectionCases) {
+		test(name, () => {
+			const $ = cheerio.load(`<head>${head}</head>`);
+			expect(extractMetadata($).robots).toBe(expected);
+		});
+	}
 });

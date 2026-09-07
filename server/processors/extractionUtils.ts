@@ -2,6 +2,7 @@ import type { CheerioAPI } from "cheerio";
 import { PAGE_TEXT_LIMITS, type PageMetadata } from "../../shared/contracts/pageData.js";
 import { truncateUtf8Text } from "../../shared/text.js";
 import { normalizeCanonicalHttpUrl } from "../../shared/url.js";
+import { parseRobotsDirectives } from "../domain/crawl/PageDecisionPolicy.js";
 import type { ExtractedLink, LoggerLike } from "../types.js";
 import { getErrorMessage } from "../utils/helpers.js";
 
@@ -55,6 +56,10 @@ function chooseMainContentCandidate(
 
 function cleanMetadataValue(value: string | undefined): string {
 	return truncateUtf8Text(value?.trim() ?? "", PAGE_TEXT_LIMITS.metadataValueBytes);
+}
+
+function asciiLower(value: string): string {
+	return value.replace(/[A-Z]/g, (character) => character.toLowerCase());
 }
 
 export function cleanText(text: string | null | undefined): string {
@@ -212,6 +217,17 @@ export function processLinks(
 }
 
 export function extractMetadata(cheerioInstance: CheerioAPI): PageMetadata {
+	let noindex = false;
+	let nofollow = false;
+	cheerioInstance("meta[name]").each((_, element) => {
+		if (asciiLower(cheerioInstance(element).attr("name") ?? "") !== "robots") return;
+		const directives = parseRobotsDirectives(cheerioInstance(element).attr("content"));
+		noindex ||= directives.noindex;
+		nofollow ||= directives.nofollow;
+	});
+	const robots = cleanMetadataValue(
+		[noindex && "noindex", nofollow && "nofollow"].filter(Boolean).join(", "),
+	);
 	return {
 		title: truncateUtf8Text(
 			cheerioInstance("title").text().trim() ||
@@ -222,6 +238,6 @@ export function extractMetadata(cheerioInstance: CheerioAPI): PageMetadata {
 		description:
 			cleanMetadataValue(cheerioInstance('meta[name="description"]').attr("content")) ||
 			cleanMetadataValue(cheerioInstance('meta[property="og:description"]').attr("content")),
-		robots: cleanMetadataValue(cheerioInstance('meta[name="robots"]').attr("content")),
+		robots,
 	};
 }
