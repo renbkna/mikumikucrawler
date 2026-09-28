@@ -1,10 +1,18 @@
 import { describe, expect, mock, test } from "bun:test";
 import { silentLogger, successfulHtmlHttpClient } from "../../../__tests__/runtimeFixture.js";
 import { config } from "../../../config/env.js";
-import { PDF_CONSTANTS, REQUEST_CONSTANTS, TIMEOUT_CONSTANTS } from "../../../constants.js";
-import { FetchService } from "../FetchService.js";
+import { PDF_CONSTANTS, REQUEST_CONSTANTS } from "../../../constants.js";
+import { FetchService, type FetchServiceDependencies } from "../FetchService.js";
 
-type DocumentRenderer = ConstructorParameters<typeof FetchService>[1];
+type DocumentRenderer = FetchServiceDependencies["dynamicRenderer"];
+
+const queueItem = (url: string) => ({
+	url,
+	domain: new URL(url).hostname,
+	depth: 0,
+	retries: 0,
+	availableAt: 0,
+});
 
 const disabledRenderer: DocumentRenderer = {
 	isEnabled: () => false,
@@ -13,12 +21,18 @@ const disabledRenderer: DocumentRenderer = {
 
 class FetchServiceHarness extends FetchService {
 	constructor(
-		httpClient: ConstructorParameters<typeof FetchService>[0] = successfulHtmlHttpClient,
+		httpClient: FetchServiceDependencies["httpClient"] = successfulHtmlHttpClient,
 		renderer: DocumentRenderer = disabledRenderer,
 		localSeedUrl?: string,
-		acquirePdfWork?: ConstructorParameters<typeof FetchService>[4],
+		acquirePdfWork?: FetchServiceDependencies["acquirePdfWork"],
 	) {
-		super(httpClient, renderer, silentLogger, localSeedUrl, acquirePdfWork);
+		super({
+			httpClient,
+			dynamicRenderer: renderer,
+			logger: silentLogger,
+			...(localSeedUrl === undefined ? {} : { localSeedUrl }),
+			...(acquirePdfWork === undefined ? {} : { acquirePdfWork }),
+		});
 	}
 }
 
@@ -42,6 +56,7 @@ describe("fetch service contract", () => {
 			domain: "www.youtube.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toEqual({
@@ -66,7 +81,6 @@ describe("fetch service contract", () => {
 						effectiveUrl: "https://example.com/blocked",
 						statusCode: 403,
 						contentType: "text/html",
-						contentLength: 20,
 						title: "Blocked",
 						description: "",
 						xRobotsTag: null,
@@ -80,6 +94,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toEqual({
@@ -112,7 +127,6 @@ describe("fetch service contract", () => {
 							effectiveUrl: "https://example.com/status",
 							statusCode,
 							contentType: "text/html",
-							contentLength: 19,
 							title: "Status",
 							description: "",
 							xRobotsTag: null,
@@ -127,6 +141,7 @@ describe("fetch service contract", () => {
 					domain: "example.com",
 					depth: 0,
 					retries: 0,
+					availableAt: 0,
 				}),
 			).resolves.toEqual(expected);
 		}
@@ -146,7 +161,6 @@ describe("fetch service contract", () => {
 						effectiveUrl: "https://example.com/error",
 						statusCode: 500,
 						contentType: "text/html",
-						contentLength: 25,
 						title: "Server error",
 						description: "",
 						xRobotsTag: null,
@@ -160,6 +174,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toEqual({
@@ -178,6 +193,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toEqual({
@@ -200,7 +216,6 @@ describe("fetch service contract", () => {
 						effectiveUrl: "https://example.com/rate-limited-dynamic",
 						statusCode: 429,
 						contentType: "text/html",
-						contentLength: 25,
 						title: "Rate limited",
 						description: "",
 						xRobotsTag: null,
@@ -215,6 +230,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toEqual({
@@ -235,6 +251,7 @@ describe("fetch service contract", () => {
 				domain: "example.com",
 				depth: 0,
 				retries: 0,
+				availableAt: 0,
 			}),
 		).resolves.toEqual({
 			type: "rateLimited",
@@ -266,6 +283,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result.type).toBe("success");
@@ -301,6 +319,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toMatchObject({
@@ -330,6 +349,7 @@ describe("fetch service contract", () => {
 				domain: "example.com",
 				depth: 0,
 				retries: 0,
+				availableAt: 0,
 			}),
 		).resolves.toEqual({
 			type: "transientFailure",
@@ -354,6 +374,7 @@ describe("fetch service contract", () => {
 				domain: "example.com",
 				depth: 0,
 				retries: 0,
+				availableAt: 0,
 			}),
 		).resolves.toEqual({
 			type: "blocked",
@@ -379,6 +400,7 @@ describe("fetch service contract", () => {
 				domain: "example.com",
 				depth: 0,
 				retries: 0,
+				availableAt: 0,
 			}),
 		).resolves.toEqual({
 			type: "blocked",
@@ -398,6 +420,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toEqual({
@@ -423,6 +446,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(seenHeaders[0]?.["User-Agent"]).toBe(config.userAgent);
@@ -443,6 +467,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result.type).toBe("rateLimited");
@@ -473,6 +498,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result.type).toBe("success");
@@ -495,6 +521,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toMatchObject({ type: "success", content: "Café €" });
@@ -513,6 +540,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toMatchObject({ type: "success", content: "snowman: ☃" });
@@ -542,6 +570,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result.type).toBe("success");
@@ -573,6 +602,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toEqual({
@@ -602,6 +632,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toEqual({
@@ -622,11 +653,11 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 		expect(result).toMatchObject({
 			type: "success",
 			content: html,
-			contentLength: Buffer.byteLength(html),
 		});
 	});
 
@@ -652,6 +683,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toMatchObject({
@@ -678,6 +710,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toMatchObject({
@@ -702,6 +735,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toMatchObject({
@@ -722,6 +756,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toMatchObject({
@@ -730,9 +765,8 @@ describe("fetch service contract", () => {
 		});
 	});
 
-	test("measures dynamic contentLength from rendered DOM instead of renderer metadata", async () => {
-		const content =
-			"<html><body><main>This dynamic DOM is larger than the stale content-length metadata.</main></body></html>";
+	test("measures dynamic contentLength as the UTF-8 size of the rendered DOM", async () => {
+		const content = "<html><body><main>Rendered DOM with multibyte text: ミク</main></body></html>";
 		const service = new FetchServiceHarness(
 			{
 				fetch: mock(async () => new Response("should not be called")),
@@ -746,7 +780,6 @@ describe("fetch service contract", () => {
 						effectiveUrl: "https://example.com/dynamic",
 						statusCode: 200,
 						contentType: "text/html",
-						contentLength: 12,
 						title: "Dynamic",
 						description: "",
 						xRobotsTag: null,
@@ -760,6 +793,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result.type).toBe("success");
@@ -787,7 +821,6 @@ describe("fetch service contract", () => {
 						effectiveUrl: "https://dynamic.example/final/",
 						statusCode: 200,
 						contentType: "text/html",
-						contentLength: 33,
 						title: "",
 						description: "",
 						xRobotsTag: null,
@@ -800,6 +833,7 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		};
 
 		await expect(staticService.fetch(item)).resolves.toMatchObject({
@@ -822,6 +856,7 @@ describe("fetch service contract", () => {
 				domain: "example.com",
 				depth: 0,
 				retries: 0,
+				availableAt: 0,
 			}),
 		).resolves.toMatchObject({
 			type: "blocked",
@@ -850,18 +885,17 @@ describe("fetch service contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(canceled).toBe(true);
 	});
 
-	test("keeps the document deadline active through rendering and response body reads", async () => {
-		const timeoutConstants = TIMEOUT_CONSTANTS as { DOCUMENT_FETCH: number };
-		const originalTimeout = timeoutConstants.DOCUMENT_FETCH;
-		timeoutConstants.DOCUMENT_FETCH = 5;
+	test("the render and the static fallback each own a deadline that holds through body reads", async () => {
+		const deadlines = { renderMs: 5, documentMs: 5 };
 		let canceled = false;
-		try {
-			const service = new FetchServiceHarness({
+		const stalledBody = new FetchService({
+			httpClient: {
 				fetch: async () =>
 					new Response(
 						new ReadableStream({
@@ -872,36 +906,47 @@ describe("fetch service contract", () => {
 						}),
 						{ headers: { "content-type": "text/html" } },
 					),
-			});
+			},
+			dynamicRenderer: disabledRenderer,
+			logger: silentLogger,
+			deadlines,
+		});
+		await expect(stalledBody.fetch(queueItem("https://example.com/stalled"))).resolves.toEqual({
+			type: "transientFailure",
+			statusCode: 0,
+		});
+		expect(canceled).toBe(true);
 
-			await expect(
-				service.fetch({
-					url: "https://example.com/stalled",
-					domain: "example.com",
-					depth: 0,
-					retries: 0,
-				}),
-			).resolves.toEqual({ type: "transientFailure", statusCode: 0 });
-			expect(canceled).toBe(true);
-
-			const delayedRenderer = new FetchServiceHarness(successfulHtmlHttpClient, {
-				isEnabled: () => true,
-				render: async () => {
-					await Bun.sleep(10);
-					return { type: "staticFallback", reason: "renderer-unavailable" };
+		const renderer = (renderMs: number): DocumentRenderer => ({
+			isEnabled: () => true,
+			render: async (_url, signal) => {
+				await Bun.sleep(renderMs);
+				signal?.throwIfAborted();
+				return { type: "staticFallback", reason: "renderer-unavailable" };
+			},
+		});
+		const service = (renderMs: number) =>
+			new FetchService({
+				httpClient: {
+					fetch: async (request) => {
+						await Bun.sleep(15);
+						return successfulHtmlHttpClient.fetch(request);
+					},
 				},
+				dynamicRenderer: renderer(renderMs),
+				logger: silentLogger,
+				deadlines: { renderMs: 20, documentMs: 20 },
 			});
-			await expect(
-				delayedRenderer.fetch({
-					url: "https://example.com/slow-render",
-					domain: "example.com",
-					depth: 0,
-					retries: 0,
-				}),
-			).resolves.toEqual({ type: "transientFailure", statusCode: 0 });
-		} finally {
-			timeoutConstants.DOCUMENT_FETCH = originalTimeout;
-		}
+		// A render past its own deadline is a transient failure.
+		await expect(service(40).fetch(queueItem("https://example.com/slow"))).resolves.toEqual({
+			type: "transientFailure",
+			statusCode: 0,
+		});
+		// A render within its deadline leaves the static fallback its whole document budget:
+		// render (15ms) plus fetch (15ms) exceeds either 20ms deadline, but neither alone does.
+		await expect(
+			service(15).fetch(queueItem("https://example.com/fallback")),
+		).resolves.toMatchObject({ type: "success" });
 	});
 
 	test("grants local networking only to the configured seed identity", async () => {
@@ -924,12 +969,14 @@ describe("fetch service contract", () => {
 			domain: "localhost",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 		await service.fetch({
 			url: "http://localhost:3000/child",
 			domain: "localhost",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(requests[0]?.allowLocalhostOnInitialRequest).toBe(true);

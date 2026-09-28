@@ -2,8 +2,9 @@ import type { CheerioAPI } from "cheerio";
 import { PAGE_TEXT_LIMITS, type PageMetadata } from "../../shared/contracts/pageData.js";
 import { truncateUtf8Text } from "../../shared/text.js";
 import { normalizeCanonicalHttpUrl } from "../../shared/url.js";
+import type { Logger } from "../config/logging.js";
 import { parseRobotsDirectives } from "../domain/crawl/PageDecisionPolicy.js";
-import type { ExtractedLink, LoggerLike } from "../types.js";
+import type { ExtractedLink } from "../types.js";
 import { getErrorMessage } from "../utils/helpers.js";
 
 const MAIN_CONTENT_NOISE_SELECTOR =
@@ -127,7 +128,7 @@ export function extractMainContent(cheerioInstance: CheerioAPI): string {
 export function extractMediaCount(
 	cheerioInstance: CheerioAPI,
 	baseUrl: string,
-	logger?: LoggerLike,
+	logger?: Pick<Logger, "debug">,
 ): number {
 	const media = new Set<string>();
 	const resolveBase = resolveDocumentBase(cheerioInstance, baseUrl);
@@ -184,7 +185,7 @@ export function extractMediaCount(
 export function processLinks(
 	cheerioInstance: CheerioAPI,
 	baseUrl: string,
-	logger?: LoggerLike,
+	logger?: Pick<Logger, "debug">,
 ): ExtractedLink[] {
 	const links = new Map<string, ExtractedLink>();
 	const resolveBase = resolveDocumentBase(cheerioInstance, baseUrl);

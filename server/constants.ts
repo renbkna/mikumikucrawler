@@ -7,7 +7,8 @@ export const CRAWL_QUEUE_CONSTANTS = {
 } as const;
 
 export const TIMEOUT_CONSTANTS = {
-	DOCUMENT_FETCH: 10000, // 10s for static and browser document acquisition
+	/** One static document request and body read, or one browser navigation. */
+	DOCUMENT_FETCH: 10000,
 	CONTENT_PROCESSING: 5000, // 5s for HTML parsing/analysis
 } as const;
 
@@ -74,8 +75,23 @@ export const DYNAMIC_RENDERER_CONSTANTS = {
 		CONSENT_CLEAR: 10000,
 		/** Time to wait for a detected consent wall to become actionable */
 		CONSENT_EVAL: 5000,
+		/** Time to capture the rendered document */
+		SNAPSHOT: 10000,
 	},
 } as const;
+
+const RENDER_STAGE_TIMEOUTS = DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS;
+
+/**
+ * One browser render of a document: navigation, the slowest consent path (read the
+ * wall, find its control, wait for dismissal), and the snapshot. The sum of the stage
+ * deadlines, so the overall budget never cuts a stage short.
+ */
+export const DYNAMIC_RENDER_TIMEOUT_MS =
+	TIMEOUT_CONSTANTS.DOCUMENT_FETCH +
+	2 * RENDER_STAGE_TIMEOUTS.CONSENT_EVAL +
+	RENDER_STAGE_TIMEOUTS.CONSENT_CLEAR +
+	RENDER_STAGE_TIMEOUTS.SNAPSHOT;
 
 /**
  * Soft 404 detection thresholds.

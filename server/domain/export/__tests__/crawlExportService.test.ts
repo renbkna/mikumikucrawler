@@ -94,56 +94,56 @@ describe("crawl export service contract", () => {
 		);
 	});
 
-	test.each([
-		"json",
-		"csv",
-	] as const)("%s export stops reading and releases the source on cancellation", async (format) => {
-		let yielded = 0;
-		let closed = false;
-		function* rows() {
-			try {
-				for (let index = 0; index < 100; index++) {
-					yielded += 1;
-					yield pages[0];
+	test.each(["json", "csv"] as const)(
+		"%s export stops reading and releases the source on cancellation",
+		async (format) => {
+			let yielded = 0;
+			let closed = false;
+			function* rows() {
+				try {
+					for (let index = 0; index < 100; index++) {
+						yielded += 1;
+						yield pages[0];
+					}
+				} finally {
+					closed = true;
 				}
-			} finally {
-				closed = true;
 			}
-		}
 
-		const response = createCrawlExportResponse("crawl-stream", rows(), format);
-		expect(yielded).toBe(0);
-		const reader = response.body?.getReader();
-		if (!reader) throw new Error("Expected streaming response body");
-		await reader.read();
-		expect(yielded).toBe(0);
-		await reader.read();
-		expect(yielded).toBe(1);
-		await reader.cancel();
-		expect(closed).toBe(true);
-		expect(yielded).toBe(1);
-	});
+			const response = createCrawlExportResponse("crawl-stream", rows(), format);
+			expect(yielded).toBe(0);
+			const reader = response.body?.getReader();
+			if (!reader) throw new Error("Expected streaming response body");
+			await reader.read();
+			expect(yielded).toBe(0);
+			await reader.read();
+			expect(yielded).toBe(1);
+			await reader.cancel();
+			expect(closed).toBe(true);
+			expect(yielded).toBe(1);
+		},
+	);
 
-	test.each([
-		"json",
-		"csv",
-	] as const)("%s export propagates serialization failure and closes its source", async (format) => {
-		let closed = false;
-		function* rows(): Generator<ExportPageRow> {
-			try {
-				yield {
-					...pages[0],
-					get title(): string {
-						throw new Error("cannot serialize row");
-					},
-				};
-			} finally {
-				closed = true;
+	test.each(["json", "csv"] as const)(
+		"%s export propagates serialization failure and closes its source",
+		async (format) => {
+			let closed = false;
+			function* rows(): Generator<ExportPageRow> {
+				try {
+					yield {
+						...pages[0],
+						get title(): string {
+							throw new Error("cannot serialize row");
+						},
+					};
+				} finally {
+					closed = true;
+				}
 			}
-		}
-		await expect(createCrawlExportResponse("broken", rows(), format).text()).rejects.toThrow(
-			"cannot serialize row",
-		);
-		expect(closed).toBe(true);
-	});
+			await expect(createCrawlExportResponse("broken", rows(), format).text()).rejects.toThrow(
+				"cannot serialize row",
+			);
+			expect(closed).toBe(true);
+		},
+	);
 });

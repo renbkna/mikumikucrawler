@@ -1,4 +1,4 @@
-import { t } from "elysia/type-system";
+import { t } from "elysia";
 import type { Static } from "typebox";
 
 export const API_LIST_LIMIT_BOUNDS = {
@@ -6,13 +6,17 @@ export const API_LIST_LIMIT_BOUNDS = {
 	max: 100,
 } as const;
 
-export function optionalBoundedListLimitSchema(defaultValue?: number) {
+/**
+ * An optional list-size query parameter documenting `defaultValue`. Handlers fall back to
+ * the same constant because the handler type cannot express the applied default.
+ */
+export function optionalListLimitSchema(defaultValue: number) {
 	return t.Optional(
 		t.Numeric({
 			minimum: API_LIST_LIMIT_BOUNDS.min,
 			maximum: API_LIST_LIMIT_BOUNDS.max,
 			multipleOf: 1,
-			...(defaultValue === undefined ? {} : { default: defaultValue }),
+			default: defaultValue,
 		}),
 	);
 }

@@ -26,6 +26,7 @@ const parent: QueueItem = {
 	domain: "example.com",
 	depth: 0,
 	retries: 0,
+	availableAt: 0,
 };
 
 describe("CrawlAdmissionPolicy", () => {

@@ -1,7 +1,7 @@
 import { InvalidCookie, NotFound, ParseError, ValidationError } from "elysia";
+import type { Logger } from "./config/logging.js";
 import type { ApiError } from "./contracts/errors.js";
 import type { ValidationErrorDetail } from "./contracts/http.js";
-import type { LoggerLike } from "./types.js";
 import { getErrorMessage } from "./utils/helpers.js";
 
 function resolveErrorStatus(error: unknown): number {
@@ -17,13 +17,14 @@ function validationDetails(error: unknown): ValidationErrorDetail[] | undefined 
 		return undefined;
 	}
 
-	const details = error.payload.errors?.flatMap(({ instancePath, message }) => {
-		return typeof instancePath === "string" && typeof message === "string"
-			? [{ path: instancePath, message }]
-			: [];
-	});
+	const details = error.errors.flatMap(
+		({ instancePath, message }: { instancePath?: unknown; message?: unknown }) =>
+			typeof instancePath === "string" && typeof message === "string"
+				? [{ path: instancePath, message }]
+				: [],
+	);
 
-	return details && details.length > 0 ? details : undefined;
+	return details.length > 0 ? details : undefined;
 }
 
 function publicErrorMessage(status: number, error: unknown): string {
@@ -38,13 +39,19 @@ function publicErrorMessage(status: number, error: unknown): string {
 	return getErrorMessage(error);
 }
 
-export function handleAppError({ error, logger }: { error: unknown; logger: LoggerLike }): {
+export function handleAppError({
+	error,
+	logger,
+}: {
+	error: unknown;
+	logger: Pick<Logger, "error">;
+}): {
 	status: number;
 	body: ApiError;
 } {
 	const status = resolveErrorStatus(error);
 	if (status >= 500) {
-		logger.error(`[App] ${getErrorMessage(error)}`);
+		logger.error({ err: error }, "unhandled request error");
 	}
 
 	return {

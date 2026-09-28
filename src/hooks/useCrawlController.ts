@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import type {
 	CrawlExportFormat,
+	CrawlOptions,
 	CrawlRecoverySnapshot,
 	CrawlSummary,
 	ResumableSessionSummary,
@@ -21,6 +22,7 @@ import {
 	resumeCrawl as resumeCrawlRequest,
 	stopCrawl as stopCrawlRequest,
 } from "../api/crawls";
+import { getApiErrorMessage } from "../api/errors";
 import type { ApiFailure, ApiResult } from "../api/result";
 import type { Toast } from "../types";
 import {
@@ -35,6 +37,38 @@ import {
 } from "./crawlControllerState";
 import { useCrawlLiveConnection } from "./useCrawlLiveConnection";
 import { useStoredPageSearch } from "./useStoredPageSearch";
+
+const COMMAND_BUSY_MESSAGE = "Another command is already running";
+
+/** A command's settled result, or null when the controller lifetime or a superseding command abandoned it. */
+type CommandOutcome<T> = ApiResult<T> | null;
+
+interface CommandSpec<T> {
+	request(signal: AbortSignal): Promise<ApiResult<T>>;
+	/** Applies accepted data before the command is marked successful. */
+	onSuccess?(data: T): void;
+	/** Reads durable crawl state after a failed request so the reducer can reconcile an ambiguous failure. */
+	recoverCrawl?(signal: AbortSignal): Promise<CrawlSummary | undefined>;
+}
+
+interface StartOperation {
+	crawlId: string;
+	options: CrawlOptions;
+}
+
+interface AcceptedStart {
+	crawl: CrawlSummary;
+	/** Present when the durable recovery snapshot, not the create response, proved acceptance. */
+	snapshot: CrawlRecoverySnapshot | null;
+}
+
+async function settleRequest<T>(request: () => Promise<ApiResult<T>>): Promise<ApiResult<T>> {
+	try {
+		return await request();
+	} catch (error) {
+		return { ok: false, error: getApiErrorMessage(error) };
+	}
+}
 
 interface UseCrawlControllerOptions {
 	addToast: (type: Toast["type"], message: string, timeout?: number) => void;
@@ -53,10 +87,6 @@ export async function drainQueuedRefreshes<T>(
 	return result;
 }
 
-function formatControllerError(error: unknown): string {
-	return error instanceof Error ? error.message : "Request failed";
-}
-
 export function isStartOperationSettled(
 	createFailure: ApiFailure,
 	recovery: ApiResult<unknown> | null,
@@ -70,11 +100,8 @@ export function isStartOperationSettled(
 
 function useControllerState({ addToast }: UseCrawlControllerOptions) {
 	const [state, setState] = useState<CrawlControllerState>(createInitialCrawlControllerState);
+	// dispatch is the only writer of controller state, so it keeps this ref current.
 	const stateRef = useRef(state);
-
-	useEffect(() => {
-		stateRef.current = state;
-	}, [state]);
 
 	const dispatch = useCallback(
 		(action: CrawlControllerAction) => {
@@ -97,10 +124,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 	const { state, stateRef, dispatch } = useControllerState({ addToast });
 	const resumableRefreshAbortRef = useRef<AbortController | null>(null);
 	const resumableRefreshQueueRef = useRef({ queued: false });
-	const startOperationRef = useRef<{
-		crawlId: string;
-		options: typeof state.crawlOptions;
-	} | null>(null);
+	const startOperationRef = useRef<StartOperation | null>(null);
 	const controllerLifetimeRef = useRef<AbortController | null>(null);
 	const commandAbortRef = useRef<AbortController | null>(null);
 	const getControllerLifetimeSignal = useCallback(() => {
@@ -123,20 +147,20 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 		runPhase: state.runPhase,
 	});
 
+	const ensureCommandAvailable = useCallback(
+		(kind: CommandKind) => {
+			if (canStartCommand(stateRef.current, kind)) return true;
+			addToast("warning", COMMAND_BUSY_MESSAGE);
+			return false;
+		},
+		[addToast, stateRef],
+	);
+
+	/** Sole owner of command admission, cancellation, reconciliation and completion. */
 	const executeCommand = useCallback(
-		async <T>(
-			kind: CommandKind,
-			request: (signal: AbortSignal) => Promise<ApiResult<T>>,
-			onSuccess?: (data: T) => Promise<void> | void,
-			reconcileFailure?: (
-				failure: ApiFailure,
-				signal: AbortSignal,
-			) => Promise<CrawlSummary | undefined>,
-		) => {
-			if (!canStartCommand(stateRef.current, kind)) {
-				const message = "Another command is already running";
-				addToast("warning", message);
-				return { ok: false, error: message };
+		async <T>(kind: CommandKind, spec: CommandSpec<T>): Promise<CommandOutcome<T>> => {
+			if (!ensureCommandAvailable(kind)) {
+				return { ok: false, error: COMMAND_BUSY_MESSAGE };
 			}
 			if (kind === "forceStop") {
 				commandAbortRef.current?.abort();
@@ -144,33 +168,22 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 			const commandController = new AbortController();
 			commandAbortRef.current = commandController;
 			const signal = AbortSignal.any([getControllerLifetimeSignal(), commandController.signal]);
-			const abortedResult = (): ApiResult<T> => ({
-				ok: false,
-				error: formatControllerError(signal.reason),
-			});
-			if (signal.aborted) return abortedResult();
+			if (signal.aborted) return null;
 			dispatch({ type: "commandStarted", kind });
-			let result: ApiResult<T>;
-			try {
-				result = await request(signal);
-			} catch (error) {
-				if (signal.aborted) return abortedResult();
-				result = { ok: false, error: formatControllerError(error) };
-			} finally {
-				if (commandAbortRef.current === commandController) {
-					commandAbortRef.current = null;
-				}
+			const result = await settleRequest(() => spec.request(signal));
+			if (commandAbortRef.current === commandController) {
+				commandAbortRef.current = null;
 			}
-			if (signal.aborted) return abortedResult();
+			if (signal.aborted) return null;
 
 			if (!result.ok) {
 				let recoveredCrawl: CrawlSummary | undefined;
 				try {
-					recoveredCrawl = await reconcileFailure?.(result, signal);
+					recoveredCrawl = await spec.recoverCrawl?.(signal);
 				} catch {
 					// The original command failure remains authoritative when recovery also fails.
 				}
-				if (signal.aborted) return abortedResult();
+				if (signal.aborted) return null;
 				dispatch({
 					type: "commandFailed",
 					kind,
@@ -181,19 +194,16 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 			}
 
 			try {
-				await onSuccess?.(result.data);
+				spec.onSuccess?.(result.data);
 			} catch (error) {
-				if (signal.aborted) return abortedResult();
-				const message = formatControllerError(error);
+				const message = getApiErrorMessage(error);
 				dispatch({ type: "commandFailed", kind, error: message });
 				return { ok: false, error: message };
 			}
-			if (signal.aborted) return abortedResult();
-
 			dispatch({ type: "commandSucceeded", kind });
 			return result;
 		},
-		[addToast, dispatch, getControllerLifetimeSignal, stateRef],
+		[dispatch, ensureCommandAvailable, getControllerLifetimeSignal],
 	);
 
 	const cancelResumableRefresh = useEffectEvent(() => {
@@ -202,8 +212,34 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 		resumableRefreshAbortRef.current = null;
 	});
 
-	const refreshResumableSessions = useCallback(
-		async (trackCommand = true) => {
+	/** Loads the list, coalescing requests made while one is in flight; null when superseded. */
+	const loadResumableSessions = useCallback(
+		(commandSignal?: AbortSignal) =>
+			drainQueuedRefreshes(resumableRefreshQueueRef.current, async () => {
+				const controller = new AbortController();
+				resumableRefreshAbortRef.current = controller;
+				const signal = AbortSignal.any([
+					getControllerLifetimeSignal(),
+					controller.signal,
+					...(commandSignal ? [commandSignal] : []),
+				]);
+				dispatch({ type: "resumableSessionsLoading" });
+				const result = await settleRequest(() => listResumableCrawls(signal));
+
+				if (signal.aborted || resumableRefreshAbortRef.current !== controller) return null;
+				dispatch(
+					result.ok
+						? { type: "resumableSessionsLoaded", sessions: result.data }
+						: { type: "resumableSessionsFailed", error: result.error },
+				);
+				resumableRefreshAbortRef.current = null;
+				return result;
+			}),
+		[dispatch, getControllerLifetimeSignal],
+	);
+
+	const refreshResumableSessionList = useCallback(
+		async (trackCommand: boolean) => {
 			if (stateRef.current.resumableSessions.resumingId) {
 				return;
 			}
@@ -211,52 +247,29 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				resumableRefreshQueueRef.current.queued = true;
 				return;
 			}
-			if (trackCommand && !canStartCommand(stateRef.current, "refresh")) {
-				addToast("warning", "Another command is already running");
+			if (!trackCommand) {
+				await loadResumableSessions();
 				return;
 			}
-			if (trackCommand) {
-				dispatch({ type: "commandStarted", kind: "refresh" });
-			}
-			const result = await drainQueuedRefreshes(resumableRefreshQueueRef.current, async () => {
-				const controller = new AbortController();
-				resumableRefreshAbortRef.current = controller;
-				const signal = AbortSignal.any([getControllerLifetimeSignal(), controller.signal]);
-				dispatch({ type: "resumableSessionsLoading" });
-				let currentResult: ApiResult<ResumableSessionSummary[]>;
-				try {
-					currentResult = await listResumableCrawls(signal);
-				} catch (error) {
-					currentResult = { ok: false, error: formatControllerError(error) };
-				}
-
-				if (signal.aborted || resumableRefreshAbortRef.current !== controller) return null;
-				if (currentResult.ok) {
-					dispatch({ type: "resumableSessionsLoaded", sessions: currentResult.data });
-				} else {
-					dispatch({ type: "resumableSessionsFailed", error: currentResult.error });
-				}
-				if (resumableRefreshAbortRef.current === controller) {
-					resumableRefreshAbortRef.current = null;
-				}
-				return currentResult;
+			await executeCommand<ResumableSessionSummary[]>("refresh", {
+				request: async (signal) =>
+					(await loadResumableSessions(signal)) ?? {
+						ok: false,
+						error: "Resumable session refresh was cancelled",
+					},
 			});
-			if (!result) return;
-
-			if (trackCommand) {
-				dispatch(
-					result.ok
-						? { type: "commandSucceeded", kind: "refresh" }
-						: { type: "commandFailed", kind: "refresh", error: result.error },
-				);
-			}
 		},
-		[addToast, dispatch, getControllerLifetimeSignal, stateRef],
+		[executeCommand, loadResumableSessions, stateRef],
+	);
+
+	const refreshResumableSessions = useCallback(
+		() => refreshResumableSessionList(true),
+		[refreshResumableSessionList],
 	);
 
 	useEffect(() => {
-		void refreshResumableSessions(false);
-	}, [refreshResumableSessions]);
+		void refreshResumableSessionList(false);
+	}, [refreshResumableSessionList]);
 
 	useEffect(() => {
 		return () => {
@@ -273,7 +286,7 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 		dispatch,
 		getLifetimeSignal: getControllerLifetimeSignal,
 		onSettled: () => {
-			void refreshResumableSessions(false);
+			void refreshResumableSessionList(false);
 		},
 		onRecoveryError: (message) => addToast("warning", message),
 	});
@@ -289,244 +302,241 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 	);
 
 	const setCrawlOptions = useCallback(
-		(
-			next:
-				| typeof state.crawlOptions
-				| ((previous: typeof state.crawlOptions) => typeof state.crawlOptions),
-		) => {
+		(next: CrawlOptions | ((previous: CrawlOptions) => CrawlOptions)) => {
 			const nextValue = typeof next === "function" ? next(state.crawlOptions) : next;
 			dispatch({ type: "crawlOptionsChanged", crawlOptions: nextValue });
 		},
 		[dispatch, state.crawlOptions],
 	);
 
+	const releaseStartOperation = useCallback((operation: StartOperation) => {
+		if (startOperationRef.current?.crawlId === operation.crawlId) {
+			startOperationRef.current = null;
+		}
+	}, []);
+
+	/** Creates the operation's crawl, or proves from durable state that an earlier attempt did. */
+	const requestStart = useCallback(
+		async (operation: StartOperation, signal: AbortSignal): Promise<ApiResult<AcceptedStart>> => {
+			const result = await settleRequest(() =>
+				createCrawl(operation.crawlId, operation.options, signal),
+			);
+			if (result.ok) {
+				releaseStartOperation(operation);
+				return { ok: true, data: { crawl: result.data, snapshot: null } };
+			}
+			if (signal.aborted) return result;
+
+			let recovery: ApiResult<CrawlRecoverySnapshot> | null = null;
+			try {
+				recovery = await getCrawlRecoverySnapshot(operation.crawlId, signal);
+			} catch {
+				// The stable operation ID remains owned by the controller so a
+				// later retry cannot create duplicate work.
+			}
+			if (signal.aborted) return result;
+			if (recovery?.ok && crawlOptionsEqual(recovery.data.crawl.options, operation.options)) {
+				releaseStartOperation(operation);
+				return { ok: true, data: { crawl: recovery.data.crawl, snapshot: recovery.data } };
+			}
+			if (isStartOperationSettled(result, recovery)) {
+				releaseStartOperation(operation);
+			}
+			return result;
+		},
+		[releaseStartOperation],
+	);
+
 	const startCrawl = useCallback(
 		async (isQuick = false) => {
-			const lifetimeSignal = getControllerLifetimeSignal();
-			if (lifetimeSignal.aborted) return false;
-			const pendingOperation = startOperationRef.current;
-			if (!pendingOperation && !state.crawlOptions.target.trim()) {
+			if (getControllerLifetimeSignal().aborted) return false;
+			const { crawlOptions } = stateRef.current;
+			let operation = startOperationRef.current;
+			if (!operation && !crawlOptions.target.trim()) {
 				addToast("error", "Please enter a target URL!");
 				return false;
 			}
-			if (!canStartCommand(stateRef.current, "start")) {
-				addToast("warning", "Another command is already running");
+			if (!ensureCommandAvailable("start")) {
 				return false;
 			}
 
-			let operation = pendingOperation;
 			if (!operation) {
-				const validationResult = normalizeCanonicalHttpUrl(state.crawlOptions.target);
+				const validationResult = normalizeCanonicalHttpUrl(crawlOptions.target);
 				if ("error" in validationResult) {
 					addToast("error", validationResult.error);
 					return false;
 				}
 
 				const normalizedTarget = validationResult.url;
-				if (normalizedTarget !== state.crawlOptions.target) {
+				if (normalizedTarget !== crawlOptions.target) {
 					dispatch({
 						type: "crawlOptionsChanged",
-						crawlOptions: { ...state.crawlOptions, target: normalizedTarget },
+						crawlOptions: { ...crawlOptions, target: normalizedTarget },
 					});
 				}
 				operation = {
 					crawlId: crypto.randomUUID(),
-					options: { ...state.crawlOptions, target: normalizedTarget },
+					options: { ...crawlOptions, target: normalizedTarget },
 				};
 				startOperationRef.current = operation;
-			} else if (!crawlOptionsEqual(operation.options, state.crawlOptions)) {
+			} else if (!crawlOptionsEqual(operation.options, crawlOptions)) {
 				addToast("info", "Reconciling the previous unacknowledged crawl request");
 			}
 
-			dispatch({ type: "commandStarted", kind: "start" });
-
-			if (isQuick) {
-				addToast("info", "Lightning Strike! Skipping animation...");
-			}
-
-			let result: ApiResult<CrawlSummary>;
-			try {
-				result = await createCrawl(operation.crawlId, operation.options, lifetimeSignal);
-			} catch (error) {
-				result = { ok: false, error: formatControllerError(error) };
-			}
-			if (lifetimeSignal.aborted) return false;
-
-			let recoveryResult: ApiResult<CrawlRecoverySnapshot> | null = null;
-			let recoveredSnapshot: CrawlRecoverySnapshot | null = null;
-			if (!result.ok) {
-				try {
-					const recovery = await getCrawlRecoverySnapshot(operation.crawlId, lifetimeSignal);
-					recoveryResult = recovery;
-					if (recovery.ok) {
-						if (crawlOptionsEqual(recovery.data.crawl.options, operation.options)) {
-							recoveredSnapshot = recovery.data;
-							result = { ok: true, data: recovery.data.crawl };
-						}
+			const pendingOperation = operation;
+			const outcome = await executeCommand("start", {
+				request: (signal) => {
+					if (isQuick) {
+						addToast("info", "Lightning Strike! Skipping animation...");
 					}
-				} catch {
-					// The stable operation ID remains owned by the controller so a
-					// later retry cannot create duplicate work.
-				}
-			}
-			if (lifetimeSignal.aborted) return false;
-
-			if (!result.ok) {
-				if (
-					isStartOperationSettled(result, recoveryResult) &&
-					startOperationRef.current?.crawlId === operation.crawlId
-				) {
-					startOperationRef.current = null;
-				}
-				dispatch({ type: "commandFailed", kind: "start", error: result.error });
-				return false;
-			}
-			if (startOperationRef.current?.crawlId === operation.crawlId) {
-				startOperationRef.current = null;
-			}
-
-			dispatch({ type: "liveStateReset" });
-			dispatch({
-				type: "crawlAccepted",
-				crawlId: result.data.id,
-				kind: "start",
-				crawlOptions: result.data.options,
+					return requestStart(pendingOperation, signal);
+				},
+				onSuccess: ({ crawl, snapshot }) => {
+					dispatch({ type: "liveStateReset" });
+					dispatch({
+						type: "crawlAccepted",
+						crawlId: crawl.id,
+						kind: "start",
+						crawlOptions: crawl.options,
+					});
+					dispatch(
+						snapshot
+							? { type: "crawlRecoverySnapshotSynchronized", snapshot }
+							: { type: "crawlSummarySynchronized", crawl },
+					);
+					if (!isActiveCrawlStatus(crawl.status)) {
+						if (isResumableCrawlStatus(crawl.status)) {
+							void refreshResumableSessionList(false);
+						}
+						return;
+					}
+					dispatch({
+						type: "logAppended",
+						message: "Initiating Miku Beam Sequence...",
+						level: "info",
+					});
+					connectToEvents(crawl.id);
+				},
 			});
-			if (recoveredSnapshot) {
-				dispatch({
-					type: "crawlRecoverySnapshotSynchronized",
-					snapshot: recoveredSnapshot,
-				});
-			} else {
-				dispatch({ type: "crawlSummarySynchronized", crawl: result.data });
-			}
-			if (!isActiveCrawlStatus(result.data.status)) {
-				if (isResumableCrawlStatus(result.data.status)) {
-					void refreshResumableSessions(false);
-				}
-				return false;
-			}
-			dispatch({
-				type: "logAppended",
-				message: "Initiating Miku Beam Sequence...",
-				level: "info",
-			});
-			connectToEvents(result.data.id);
-			return true;
+			return outcome?.ok === true && isActiveCrawlStatus(outcome.data.crawl.status);
 		},
 		[
 			addToast,
-			dispatch,
-			getControllerLifetimeSignal,
-			refreshResumableSessions,
 			connectToEvents,
-			state.crawlOptions,
+			dispatch,
+			ensureCommandAvailable,
+			executeCommand,
+			getControllerLifetimeSignal,
+			refreshResumableSessionList,
+			requestStart,
 			stateRef,
 		],
 	);
 
 	const executeStopCommand = useCallback(
 		(crawlId: string, kind: "stop" | "forceStop", mode: StopCrawlMode) =>
-			executeCommand(
-				kind,
-				(signal) => stopCrawlRequest(crawlId, mode, signal),
-				(crawl) => dispatch({ type: "crawlSummarySynchronized", crawl }),
-				async (_failure, signal) => {
+			executeCommand(kind, {
+				request: (signal) => stopCrawlRequest(crawlId, mode, signal),
+				onSuccess: (crawl) => dispatch({ type: "crawlSummarySynchronized", crawl }),
+				recoverCrawl: async (signal) => {
 					const recovery = await getCrawlRecoverySnapshot(crawlId, signal);
 					return recovery.ok ? recovery.data.crawl : undefined;
 				},
-			),
+			}),
 		[dispatch, executeCommand],
 	);
 
 	const pauseCrawl = useCallback(async () => {
 		if (!state.activeCrawlId || !canRequestPause(state.runPhase)) return;
-		const crawlId = state.activeCrawlId;
-
-		await executeStopCommand(crawlId, "stop", "pause");
+		await executeStopCommand(state.activeCrawlId, "stop", "pause");
 	}, [executeStopCommand, state.activeCrawlId, state.runPhase]);
 
 	const forceStopCrawl = useCallback(async () => {
-		if (!state.activeCrawlId || state.pendingCommand === "forceStop") {
-			return;
-		}
-		const crawlId = state.activeCrawlId;
-
-		await executeStopCommand(crawlId, "forceStop", "force");
+		if (!state.activeCrawlId || state.pendingCommand === "forceStop") return;
+		await executeStopCommand(state.activeCrawlId, "forceStop", "force");
 	}, [executeStopCommand, state.activeCrawlId, state.pendingCommand]);
+
+	/** Admits one resumable-session mutation; the reducer rejects a second while one is pending. */
+	const canMutateResumableSession = useCallback(
+		(kind: "resume" | "delete") => {
+			if (!ensureCommandAvailable(kind)) return false;
+			const { deletingId, resumingId } = stateRef.current.resumableSessions;
+			return deletingId === null && resumingId === null;
+		},
+		[ensureCommandAvailable, stateRef],
+	);
 
 	const resumeCrawl = useCallback(
 		async (sessionId: string) => {
-			const lifetimeSignal = getControllerLifetimeSignal();
-			if (lifetimeSignal.aborted) return false;
-			if (
-				stateRef.current.resumableSessions.deletingId ||
-				stateRef.current.resumableSessions.resumingId ||
-				!canStartCommand(stateRef.current, "resume")
-			) {
-				if (!canStartCommand(stateRef.current, "resume")) {
-					addToast("warning", "Another command is already running");
-				}
-				return false;
-			}
+			if (getControllerLifetimeSignal().aborted) return false;
+			if (!canMutateResumableSession("resume")) return false;
 			cancelResumableRefresh();
 			dispatch({ type: "resumableSessionResuming", sessionId });
-			dispatch({ type: "commandStarted", kind: "resume" });
 
-			let result: ApiResult<CrawlRecoverySnapshot>;
-			try {
-				result = await resumeCrawlRequest(sessionId, lifetimeSignal);
-			} catch (error) {
-				result = { ok: false, error: formatControllerError(error) };
-			}
-			if (lifetimeSignal.aborted) return false;
-
-			if (!result.ok) {
-				try {
-					const recovery = await getCrawlRecoverySnapshot(sessionId, lifetimeSignal);
-					if (recovery.ok && !isResumableCrawlStatus(recovery.data.crawl.status)) {
-						result = recovery;
+			const outcome = await executeCommand("resume", {
+				request: async (signal) => {
+					const result = await settleRequest(() => resumeCrawlRequest(sessionId, signal));
+					if (result.ok || signal.aborted) return result;
+					try {
+						const recovery = await getCrawlRecoverySnapshot(sessionId, signal);
+						if (recovery.ok && !isResumableCrawlStatus(recovery.data.crawl.status)) {
+							return recovery;
+						}
+					} catch {
+						// A retry addresses the same crawl ID and is idempotent at the server.
 					}
-				} catch {
-					// A retry addresses the same crawl ID and is idempotent at the server.
-				}
-			}
-			if (lifetimeSignal.aborted) return false;
-
-			if (!result.ok) {
-				dispatch({
-					type: "commandFailed",
-					kind: "resume",
-					error: result.error,
-				});
+					return result;
+				},
+				onSuccess: (snapshot) => {
+					dispatch({ type: "liveStateReset" });
+					dispatch({ type: "crawlOptionsChanged", crawlOptions: snapshot.crawl.options });
+					dispatch({
+						type: "crawlAccepted",
+						crawlId: snapshot.crawl.id,
+						kind: "resume",
+						crawlOptions: snapshot.crawl.options,
+					});
+					dispatch({ type: "crawlRecoverySnapshotSynchronized", snapshot });
+					dispatch({ type: "resumableSessionRemoved", sessionId });
+					if (!isActiveCrawlStatus(snapshot.crawl.status)) return;
+					addToast("info", "Resuming saved crawl...");
+					connectToEvents(snapshot.crawl.id);
+				},
+			});
+			if (outcome === null) return false;
+			if (!outcome.ok) {
 				dispatch({ type: "resumableSessionResumeFinished", sessionId });
 				return false;
 			}
+			return isActiveCrawlStatus(outcome.data.crawl.status);
+		},
+		[
+			addToast,
+			canMutateResumableSession,
+			connectToEvents,
+			dispatch,
+			executeCommand,
+			getControllerLifetimeSignal,
+		],
+	);
 
-			dispatch({ type: "liveStateReset" });
-			dispatch({ type: "crawlOptionsChanged", crawlOptions: result.data.crawl.options });
-			dispatch({
-				type: "crawlAccepted",
-				crawlId: result.data.crawl.id,
-				kind: "resume",
-				crawlOptions: result.data.crawl.options,
+	const deleteResumableSession = useCallback(
+		async (sessionId: string) => {
+			if (!canMutateResumableSession("delete")) return false;
+			cancelResumableRefresh();
+			dispatch({ type: "resumableSessionDeleting", sessionId });
+			const outcome = await executeCommand("delete", {
+				request: (signal) => deleteCrawl(sessionId, signal),
 			});
-			dispatch({
-				type: "crawlRecoverySnapshotSynchronized",
-				snapshot: result.data,
-			});
-			dispatch({
-				type: "resumableSessionRemoved",
-				sessionId,
-			});
-			if (!isActiveCrawlStatus(result.data.crawl.status)) {
+			if (outcome === null) return false;
+			if (!outcome.ok) {
+				dispatch({ type: "resumableSessionDeleteFailed", sessionId, error: outcome.error });
 				return false;
 			}
-			addToast("info", "Resuming saved crawl...");
-			connectToEvents(result.data.crawl.id);
+			dispatch({ type: "resumableSessionDeleted", sessionId });
 			return true;
 		},
-		[addToast, dispatch, getControllerLifetimeSignal, stateRef, connectToEvents],
+		[canMutateResumableSession, dispatch, executeCommand],
 	);
 
 	const exportCurrentCrawl = useCallback(
@@ -558,44 +568,12 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 				}, 100);
 				addToast("success", `${format.toUpperCase()} download ready`);
 			} catch (error) {
-				if (!signal.aborted) addToast("error", formatControllerError(error));
+				if (!signal.aborted) addToast("error", getApiErrorMessage(error));
 			}
 		},
 		[addToast, getControllerLifetimeSignal, state.activeCrawlId],
 	);
 
-	const deleteResumableSession = useCallback(
-		async (sessionId: string) => {
-			if (
-				stateRef.current.resumableSessions.deletingId ||
-				stateRef.current.resumableSessions.resumingId ||
-				!canStartCommand(stateRef.current, "delete")
-			) {
-				if (!canStartCommand(stateRef.current, "delete")) {
-					addToast("warning", "Another command is already running");
-				}
-				return false;
-			}
-
-			cancelResumableRefresh();
-			dispatch({ type: "resumableSessionDeleting", sessionId });
-			const result = await executeCommand("delete", (signal) => deleteCrawl(sessionId, signal));
-			if (!result.ok) {
-				dispatch({
-					type: "resumableSessionDeleteFailed",
-					sessionId,
-					error: result.error,
-				});
-				return false;
-			}
-
-			dispatch({ type: "resumableSessionDeleted", sessionId });
-			return true;
-		},
-		[addToast, dispatch, executeCommand, stateRef],
-	);
-
-	const displayedPages = state.searchQuery.trim() ? pageSearch.pages : state.crawledPages;
 	const clearLogs = useCallback(() => dispatch({ type: "logsCleared" }), [dispatch]);
 	const setSearchQuery = useCallback(
 		(searchQuery: string) => dispatch({ type: "searchChanged", searchQuery }),
@@ -625,10 +603,10 @@ export function useCrawlController({ addToast }: UseCrawlControllerOptions) {
 		clearLogs,
 		searchQuery: state.searchQuery,
 		setSearchQuery,
+		searchResults: pageSearch.results,
 		searchResultCount: pageSearch.count,
 		isSearchingPages: pageSearch.isLoading,
 		pageSearchError: pageSearch.error,
-		displayedPages,
 		clearSearch,
 		isAttacking: availability.isAttacking,
 		canStart: availability.canStart,

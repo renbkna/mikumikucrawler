@@ -51,12 +51,6 @@ describe("page decision policy", () => {
 		expect(
 			isClientErrorShell(
 				"",
-				"Oops! Something went wrong Miku encountered an unexpected error Try Again Reload Page",
-			),
-		).toBe(true);
-		expect(
-			isClientErrorShell(
-				"",
 				"Application error: a client-side exception has occurred while loading example.com",
 			),
 		).toBe(true);

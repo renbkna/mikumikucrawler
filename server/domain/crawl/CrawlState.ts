@@ -1,18 +1,27 @@
-import type { CrawlCounters, CrawlOptions } from "../../../shared/contracts/index.js";
+import type {
+	CrawlCounters,
+	CrawlEventMap,
+	CrawlOptions,
+} from "../../../shared/contracts/index.js";
 import { createEmptyCrawlCounters, isCrawlCounters } from "../../../shared/contracts/index.js";
 import type { QueueStats } from "../../../shared/contracts/pageData.js";
 import { DOMAIN_DELAY_CONSTANTS } from "../../constants.js";
+import { CountMap } from "../../utils/CountMap.js";
 import {
 	type CommittedTerminal,
 	deriveTerminalCounters,
 	type TerminalOutcome,
 } from "./completion.js";
 import { shouldAdaptDomainDelay } from "./httpStatusPolicy.js";
-import { getCrawlUrlIdentity } from "./UrlPolicy.js";
+import { getCrawlUrlIdentity, isCanonicalDomainBudgetKey } from "./UrlPolicy.js";
 
 const FAILURE_CIRCUIT_BREAKER_THRESHOLD = 20;
 
-interface CrawlStateHooks {
+interface CrawlStateRestore {
+	/** Durable counters of a resumed crawl; a new crawl starts from zero. */
+	initialCounters?: CrawlCounters;
+	initialDomainStates?: DomainStateRecord[];
+	startedAtMs?: number;
 	onDomainStateChanged?: (record: DomainStateRecord) => void;
 }
 
@@ -39,10 +48,10 @@ export class CrawlState {
 	private readonly admittedDomains = new Map<string, string | undefined>();
 	private readonly domainDelays = new Map<string, number>();
 	private readonly domainNextAllowedAt = new Map<string, number>();
-	private readonly domainPageCounts = new Map<string, number>();
-	private readonly domainAdmissionCounts = new Map<string, number>();
+	private readonly domainPageCounts = new CountMap<string>();
+	private readonly domainAdmissionCounts = new CountMap<string>();
 	private readonly redirectReservations = new Map<string, string>();
-	private readonly redirectReservationCounts = new Map<string, number>();
+	private readonly redirectReservationCounts = new CountMap<string>();
 	private consecutiveFailures = 0;
 	private stopRequested = false;
 	private admissionCount: number;
@@ -54,13 +63,20 @@ export class CrawlState {
 		return this.requestedStopReason;
 	}
 
+	private readonly startedAtMs: number;
+	private readonly onDomainStateChanged: CrawlStateRestore["onDomainStateChanged"];
+
 	constructor(
 		private readonly options: CrawlOptions,
-		initialCounters?: CrawlCounters,
-		private readonly hooks: CrawlStateHooks = {},
-		private readonly startedAtMs = Date.now(),
-		initialDomainStates: DomainStateRecord[] = [],
+		{
+			initialCounters,
+			initialDomainStates = [],
+			startedAtMs = Date.now(),
+			onDomainStateChanged,
+		}: CrawlStateRestore = {},
 	) {
+		this.startedAtMs = startedAtMs;
+		this.onDomainStateChanged = onDomainStateChanged;
 		if (initialCounters !== undefined && !isCrawlCounters(initialCounters)) {
 			throw new Error("Cannot restore crawl state from invalid counters");
 		}
@@ -113,12 +129,7 @@ export class CrawlState {
 				throw new Error(`Cannot restore invalid terminal URL: ${record.url}`);
 			}
 			const chargedDomain = record.chargedDomain ?? identity.domainBudgetKey;
-			const chargedIdentity = getCrawlUrlIdentity(`http://${chargedDomain}/`);
-			if (
-				"error" in chargedIdentity ||
-				chargedIdentity.domainBudgetKey !== chargedDomain ||
-				chargedIdentity.hostname !== chargedDomain
-			) {
+			if (!isCanonicalDomainBudgetKey(chargedDomain)) {
 				throw new Error(`Cannot restore invalid charged domain: ${chargedDomain}`);
 			}
 			restoredUrls.add(record.url);
@@ -146,7 +157,7 @@ export class CrawlState {
 			}
 
 			const domain = restoredDomains.get(record.url) as string;
-			this.recordDomainPage(domain);
+			this.domainPageCounts.increment(domain);
 		}
 	}
 
@@ -169,10 +180,10 @@ export class CrawlState {
 			}
 			restoredUrls.add(record.url);
 
-			if (record.domain === undefined || this.options.maxPagesPerDomain <= 0) continue;
+			if (record.domain === undefined || !this.hasDomainBudget) continue;
 			const restoredCount = (restoredDomainCounts.get(record.domain) ?? 0) + 1;
 			if (
-				(this.domainAdmissionCounts.get(record.domain) ?? 0) + restoredCount >
+				this.domainAdmissionCounts.get(record.domain) + restoredCount >
 				this.options.maxPagesPerDomain
 			) {
 				throw new Error(`Restored queue exceeds the domain page budget for ${record.domain}`);
@@ -183,7 +194,7 @@ export class CrawlState {
 		for (const record of records) this.admittedDomains.set(record.url, record.domain);
 		if (consumeGlobalBudget) this.admissionCount += restoredUrls.size;
 		for (const [domain, count] of restoredDomainCounts) {
-			this.domainAdmissionCounts.set(domain, (this.domainAdmissionCounts.get(domain) ?? 0) + count);
+			this.domainAdmissionCounts.increment(domain, count);
 		}
 	}
 
@@ -191,11 +202,7 @@ export class CrawlState {
 		if (this.admittedDomains.has(url) || this.admissionCount >= this.options.maxPages) {
 			return false;
 		}
-		const domainBudget = this.options.maxPagesPerDomain;
-		const occupied =
-			(this.domainAdmissionCounts.get(domain) ?? 0) +
-			(this.redirectReservationCounts.get(domain) ?? 0);
-		return domainBudget <= 0 || occupied < domainBudget;
+		return !this.hasDomainBudget || this.domainOccupancy(domain) < this.options.maxPagesPerDomain;
 	}
 
 	recordAdmission(url: string, domain: string): void {
@@ -215,18 +222,12 @@ export class CrawlState {
 		}
 		const current = this.redirectReservations.get(url);
 		if (current === domain) return true;
-		if (this.options.maxPagesPerDomain > 0) {
-			const occupied =
-				(this.domainAdmissionCounts.get(domain) ?? 0) +
-				(this.redirectReservationCounts.get(domain) ?? 0);
-			if (occupied >= this.options.maxPagesPerDomain) return false;
+		if (this.hasDomainBudget && this.domainOccupancy(domain) >= this.options.maxPagesPerDomain) {
+			return false;
 		}
-		if (current) this.decrementRedirectReservation(current);
+		if (current) this.redirectReservationCounts.decrement(current);
 		this.redirectReservations.set(url, domain);
-		this.redirectReservationCounts.set(
-			domain,
-			(this.redirectReservationCounts.get(domain) ?? 0) + 1,
-		);
+		this.redirectReservationCounts.increment(domain);
 		return true;
 	}
 
@@ -239,20 +240,14 @@ export class CrawlState {
 		const domain = this.redirectReservations.get(url);
 		if (!domain) return;
 		this.redirectReservations.delete(url);
-		this.decrementRedirectReservation(domain);
+		this.redirectReservationCounts.decrement(domain);
 	}
 
 	private settleDomainAdmission(url: string, fromDomain: string, chargedDomain: string): void {
 		this.releaseRedirectReservation(url);
-		if (fromDomain === chargedDomain || this.options.maxPagesPerDomain <= 0) return;
+		if (fromDomain === chargedDomain || !this.hasDomainBudget) return;
 		this.releaseDomainAdmission(fromDomain);
 		this.restoreDomainAdmission(chargedDomain);
-	}
-
-	private decrementRedirectReservation(domain: string): void {
-		const count = this.redirectReservationCounts.get(domain) ?? 0;
-		if (count <= 1) this.redirectReservationCounts.delete(domain);
-		else this.redirectReservationCounts.set(domain, count - 1);
 	}
 
 	requestStop(reason: string, options: { overrideReason?: boolean } = {}): void {
@@ -264,7 +259,7 @@ export class CrawlState {
 	setDomainDelay(domain: string, delayMs: number, now = Date.now()): void {
 		const effectiveDelay = Math.max(this.requireDomainDelay(delayMs), this.options.crawlDelay);
 		this.domainDelays.set(domain, effectiveDelay);
-		const nextAllowedAt = Math.max(this.domainNextAllowedAt.get(domain) ?? 0, now + effectiveDelay);
+		const nextAllowedAt = Math.max(this.nextAllowedAtForDomain(domain), now + effectiveDelay);
 		this.domainNextAllowedAt.set(domain, nextAllowedAt);
 		this.emitDomainState(domain);
 	}
@@ -274,8 +269,7 @@ export class CrawlState {
 	}
 
 	timeUntilDomainReady(domain: string, now = Date.now()): number {
-		const nextAllowedAt = this.domainNextAllowedAt.get(domain) ?? 0;
-		return Math.max(nextAllowedAt - now, 0);
+		return Math.max(this.nextAllowedAtForDomain(domain) - now, 0);
 	}
 
 	nextAllowedAtForDomain(domain: string): number {
@@ -303,40 +297,39 @@ export class CrawlState {
 		this.setDomainDelay(domain, nextDelay);
 	}
 
-	private recordDomainPage(domain: string): void {
-		this.domainPageCounts.set(domain, (this.domainPageCounts.get(domain) ?? 0) + 1);
+	/** A zero per-domain limit means domains are unbudgeted. */
+	private get hasDomainBudget(): boolean {
+		return this.options.maxPagesPerDomain > 0;
+	}
+
+	/** Admissions plus in-flight redirect reservations charged against a domain. */
+	private domainOccupancy(domain: string): number {
+		return this.domainAdmissionCounts.get(domain) + this.redirectReservationCounts.get(domain);
 	}
 
 	private restoreDomainAdmission(domain: string): void {
-		if (this.options.maxPagesPerDomain <= 0) return;
-		const nextCount = (this.domainAdmissionCounts.get(domain) ?? 0) + 1;
-		if (nextCount > this.options.maxPagesPerDomain) {
+		if (!this.hasDomainBudget) return;
+		if (this.domainAdmissionCounts.get(domain) >= this.options.maxPagesPerDomain) {
 			throw new Error(`Cannot exceed the domain page budget for ${domain}`);
 		}
-		this.domainAdmissionCounts.set(domain, nextCount);
+		this.domainAdmissionCounts.increment(domain);
 	}
 
 	private releaseDomainAdmission(domain: string): void {
-		if (this.options.maxPagesPerDomain <= 0) return;
-		const admitted = this.domainAdmissionCounts.get(domain) ?? 0;
-		if (admitted < 1) {
+		if (!this.hasDomainBudget) return;
+		if (!this.domainAdmissionCounts.decrement(domain)) {
 			throw new Error(`Cannot release missing domain admission: ${domain}`);
 		}
-		if (admitted === 1) {
-			this.domainAdmissionCounts.delete(domain);
-			return;
-		}
-		this.domainAdmissionCounts.set(domain, admitted - 1);
 	}
 
 	isDomainBudgetExceeded(domain: string): boolean {
-		const budget = this.options.maxPagesPerDomain;
-		if (budget <= 0) return false;
-		return (this.domainPageCounts.get(domain) ?? 0) >= budget;
+		return (
+			this.hasDomainBudget && this.domainPageCounts.get(domain) >= this.options.maxPagesPerDomain
+		);
 	}
 
 	private emitDomainState(delayKey: string): void {
-		this.hooks.onDomainStateChanged?.({
+		this.onDomainStateChanged?.({
 			delayKey,
 			delayMs: this.getDomainDelay(delayKey),
 			nextAllowedAt: this.nextAllowedAtForDomain(delayKey),
@@ -360,14 +353,13 @@ export class CrawlState {
 		}
 		const { chargedDomain } = commit;
 		if (chargedDomain !== null) {
-			const identity = getCrawlUrlIdentity(`http://${chargedDomain}/`);
-			if ("error" in identity || identity.hostname !== chargedDomain) {
+			if (!isCanonicalDomainBudgetKey(chargedDomain)) {
 				throw new Error(`Invalid committed domain: ${chargedDomain}`);
 			}
 			if (
 				chargedDomain !== sourceDomain &&
-				this.options.maxPagesPerDomain > 0 &&
-				(this.domainAdmissionCounts.get(chargedDomain) ?? 0) >= this.options.maxPagesPerDomain
+				this.hasDomainBudget &&
+				this.domainAdmissionCounts.get(chargedDomain) >= this.options.maxPagesPerDomain
 			) {
 				throw new Error(`Cannot exceed the domain page budget for ${chargedDomain}`);
 			}
@@ -379,7 +371,7 @@ export class CrawlState {
 			this.releaseDomainAdmission(sourceDomain);
 		} else {
 			this.settleDomainAdmission(url, sourceDomain, chargedDomain);
-			this.recordDomainPage(chargedDomain);
+			this.domainPageCounts.increment(chargedDomain);
 		}
 		this.terminalUrls.add(url);
 		Object.assign(this.counters, nextCounters);
@@ -399,7 +391,7 @@ export class CrawlState {
 		return { ...this.counters };
 	}
 
-	buildProgress(queue: QueueSnapshot) {
+	buildProgress(queue: QueueSnapshot): CrawlEventMap["crawl.progress"] {
 		const snapshot = this.snapshotCounters();
 		const elapsedSeconds = Math.max(Math.floor((Date.now() - this.startedAtMs) / 1000), 0);
 		const pagesPerSecond =

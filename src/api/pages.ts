@@ -1,9 +1,8 @@
 import type { PageContentResponse } from "../../shared/contracts/index.js";
 import { isPageContentResponse } from "../../shared/contracts/index.js";
 import { api } from "./client";
-import { getApiErrorMessage } from "./errors";
 import { createRequestSignal } from "./requestLifetime";
-import type { ApiResult } from "./result";
+import { type ApiResult, unwrapApiResponse } from "./result";
 
 const PAGE_CONTENT_REQUEST_TIMEOUT_MS = 15_000;
 
@@ -17,18 +16,9 @@ export async function getPageContent(
 		.crawls({ id: crawlId })
 		.pages({ pageId })
 		.content.get({ fetch: { signal: requestSignal } });
-	const { data, error } = response;
-
-	if (error) {
-		return {
-			ok: false,
-			error: getApiErrorMessage(error.value, "Failed to load"),
-		};
-	}
-
-	if (!isPageContentResponse(data)) {
-		return { ok: false, error: "Invalid page content response" };
-	}
-
-	return { ok: true, data };
+	return unwrapApiResponse(response, {
+		isValid: isPageContentResponse,
+		invalidMessage: "Invalid page content response",
+		failureMessage: "Failed to load",
+	});
 }

@@ -1,9 +1,7 @@
 export function getErrorMessage(error: unknown): string {
-	if (error instanceof Error) {
-		return error.message;
-	}
-	if (typeof error === "string") {
-		return error;
-	}
-	return String(error);
+	return error instanceof Error ? error.message : String(error);
+}
+
+export function toError(error: unknown): Error {
+	return error instanceof Error ? error : new Error(String(error), { cause: error });
 }

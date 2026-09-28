@@ -45,7 +45,7 @@
 
 | | Feature |
 |---|---------|
-| 📡 | **SSE streaming** — ordered live events with bounded `Last-Event-ID` replay |
+| 📡 | **SSE streaming** — ordered live events; reconnects recover from the durable snapshot |
 | 🎭 | **Playwright** — renders JavaScript-heavy pages with headless Chromium |
 | ⚡ | **Cheerio** — fast HTML extraction for static pages |
 | 🤖 | **robots.txt** — optional compliance with crawl rules and crawl-delay |
@@ -136,7 +136,8 @@ DB_PATH=./data/crawler.db
 # SQLite allocation budget. Admission reserves an 8 MiB safety allowance per remaining page.
 MAX_STORAGE_MB=2048
 LOG_LEVEL=info
-USER_AGENT=MikuCrawler/3.0.0
+# Defaults to MikuCrawler/<package.json version>.
+# USER_AGENT=MikuCrawler/<version> (+https://example.com/crawler)
 ROBOTS_PRODUCT_TOKEN=MikuCrawler
 RENDER=false
 # On Render this also trusts the platform's client-IP forwarding for rate limits.
@@ -177,7 +178,11 @@ indexing, snippets, rebuilds, and JSON exports use that same projection.
 
 Dynamic pages use a separate fixed subrequest policy: at most four concurrent
 subrequests, at least 50 ms between same-host dispatches, and at most 100
-requests or 20 MiB of response bodies per page.
+requests or 20 MiB of response bodies per page load (a reload, such as after a
+consent wall, starts a new budget). Like other rendering crawlers,
+the browser lets a page's own scripts send `POST` and `PUT` requests so
+script-driven pages can load their data; navigations and form submissions,
+beacons, and other methods stay read-only (`GET`/`HEAD`).
 
 </details>
 
@@ -185,7 +190,7 @@ requests or 20 MiB of response bodies per page.
 
 ## 🔌 API
 
-> The OpenAPI JSON specification is always available at `/openapi/json`; the interactive `/openapi` UI is development-only.
+> API documentation (the interactive `/openapi` UI and its `/openapi/json` specification) is served in development only.
 
 | | Method | Endpoint | Description |
 |---|--------|----------|-------------|
@@ -228,11 +233,12 @@ source.addEventListener("crawl.progress", (event) => {
 | `crawl.stopped` | Stopped by user |
 | `crawl.failed` | Terminated due to error |
 
-Events are sequenced. `Last-Event-ID` replays recent in-memory events; after a
-restart or cleanup, recover from the backend-owned crawl snapshot, which contains
-the persisted crawl summary, bounded latest-page window, and total stored count.
-Settled streams close after their terminal frame; reconnects with no unseen
-terminal event receive `204` so native `EventSource` clients stop reconnecting.
+Events are sequenced and delivered live only: a subscription receives the events
+published after it opens. On connect or reconnect, recover from the backend-owned
+crawl snapshot, which contains the persisted crawl summary, bounded latest-page
+window, and total stored count; log lines emitted while disconnected are not
+recoverable. Streams close after their terminal frame, and a crawl without a live
+runtime answers `204` so native `EventSource` clients stop reconnecting.
 Search and export cover the full stored set. An active search refreshes when live events
 or recovery change the stored page count, and when the crawl phase changes. Refreshes
 coalesce behind one in-flight request; changing the query or crawl cancels that request.

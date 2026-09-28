@@ -1,144 +1,26 @@
 import { describe, expect, test } from "bun:test";
 import { EventStream } from "../EventStream.js";
 
+const logPayload = (message: string) => ({ message, level: "info" as const });
+
 describe("event stream contract", () => {
-	test("emits monotonically increasing per-crawl sequence numbers", () => {
+	test("delivers only events published after subscription, with the publisher's sequence", () => {
 		const stream = new EventStream();
-		const first = stream.publish("crawl-1", "crawl.started", {
-			target: "https://example.com",
-			resume: false,
-		});
-		const second = stream.publish("crawl-1", "crawl.progress", {
-			counters: {
-				pagesScanned: 1,
-				successCount: 1,
-				failureCount: 0,
-				skippedCount: 0,
-				linksFound: 0,
-				mediaFiles: 0,
-				totalDataKb: 1,
-			},
-			queue: {
-				activeRequests: 0,
-				queueLength: 0,
-				elapsedTime: 1,
-				pagesPerSecond: 1,
-			},
-			stopReason: null,
-		});
-		const third = stream.publish("crawl-1", "crawl.completed", {
-			counters: {
-				pagesScanned: 1,
-				successCount: 1,
-				failureCount: 0,
-				skippedCount: 0,
-				linksFound: 0,
-				mediaFiles: 0,
-				totalDataKb: 1,
-			},
+		stream.publish("crawl-live", 1, "crawl.log", logPayload("before"));
+		const seen: Array<{ sequence: number; message: string }> = [];
+		stream.subscribe("crawl-live", (event) => {
+			if (event.type === "crawl.log") {
+				seen.push({ sequence: event.sequence, message: event.payload.message });
+			}
 		});
 
-		expect([first.sequence, second.sequence, third.sequence]).toEqual([1, 2, 3]);
+		const published = stream.publish("crawl-live", 2, "crawl.log", logPayload("after"));
+
+		expect(published).toMatchObject({ crawlId: "crawl-live", sequence: 2, type: "crawl.log" });
+		expect(seen).toEqual([{ sequence: 2, message: "after" }]);
 	});
 
-	test("replays ordered history to late subscribers", () => {
-		const stream = new EventStream();
-		stream.publish("crawl-2", "crawl.started", {
-			target: "https://example.com",
-			resume: true,
-		});
-		stream.publish("crawl-2", "crawl.progress", {
-			counters: {
-				pagesScanned: 0,
-				successCount: 0,
-				failureCount: 0,
-				skippedCount: 0,
-				linksFound: 0,
-				mediaFiles: 0,
-				totalDataKb: 0,
-			},
-			queue: {
-				activeRequests: 0,
-				queueLength: 1,
-				elapsedTime: 0,
-				pagesPerSecond: 0,
-			},
-			stopReason: null,
-		});
-
-		const seen: number[] = [];
-		stream.subscribe("crawl-2", (event) => {
-			seen.push(event.sequence);
-		});
-
-		expect(seen).toEqual([1, 2]);
-	});
-
-	test("reset clears stale replay history and continues after the supplied sequence", () => {
-		const stream = new EventStream();
-		stream.publish("crawl-reset", "crawl.paused", {
-			stopReason: "Pause requested",
-			counters: {
-				pagesScanned: 0,
-				successCount: 0,
-				failureCount: 0,
-				skippedCount: 0,
-				linksFound: 0,
-				mediaFiles: 0,
-				totalDataKb: 0,
-			},
-		});
-
-		stream.reset("crawl-reset", 12);
-		const seenBeforeResume: number[] = [];
-		stream.subscribe("crawl-reset", (event) => {
-			seenBeforeResume.push(event.sequence);
-		});
-
-		const resumed = stream.publish("crawl-reset", "crawl.started", {
-			target: "https://example.com",
-			resume: true,
-		});
-
-		expect(seenBeforeResume).toEqual([13]);
-		expect(resumed.sequence).toBe(13);
-	});
-
-	test("reset closes subscribers from the previous runtime generation", () => {
-		const stream = new EventStream();
-		stream.initialize("crawl-generation");
-		let closed = 0;
-		stream.subscribe(
-			"crawl-generation",
-			() => {},
-			0,
-			() => {
-				closed += 1;
-			},
-		);
-
-		stream.reset("crawl-generation", 4);
-
-		expect(closed).toBe(1);
-	});
-
-	test("an earlier runtime generation cannot clean up a resumed stream", async () => {
-		const stream = new EventStream();
-		const previousGeneration = stream.initialize("crawl-owned-generation", 4);
-		const resumedGeneration = stream.reset("crawl-owned-generation", 12);
-
-		stream.scheduleCleanup("crawl-owned-generation", previousGeneration, 5);
-		await Bun.sleep(20);
-		const event = stream.publish("crawl-owned-generation", "crawl.started", {
-			target: "https://example.com/",
-			resume: true,
-		});
-
-		expect(resumedGeneration).not.toBe(previousGeneration);
-		expect(event.sequence).toBe(13);
-	});
-
-	test("replay history is isolated from later payload mutation", () => {
+	test("isolates delivered events from later payload mutation", () => {
 		const stream = new EventStream();
 		const counters = {
 			pagesScanned: 1,
@@ -149,126 +31,73 @@ describe("event stream contract", () => {
 			mediaFiles: 0,
 			totalDataKb: 1,
 		};
+		const seen: Array<{ pagesScanned: number }> = [];
+		stream.subscribe("crawl-immutable", (event) => {
+			if (event.type === "crawl.progress") seen.push(event.payload.counters);
+		});
 
-		stream.publish("crawl-immutable", "crawl.progress", {
+		stream.publish("crawl-immutable", 1, "crawl.progress", {
 			counters,
-			queue: {
-				activeRequests: 0,
-				queueLength: 0,
-				elapsedTime: 0,
-				pagesPerSecond: 0,
-			},
+			queue: { activeRequests: 0, queueLength: 0, elapsedTime: 0, pagesPerSecond: 0 },
 			stopReason: null,
 		});
-
 		counters.pagesScanned = 99;
 
-		const seen: number[] = [];
-		stream.subscribe("crawl-immutable", (event) => {
-			if (event.type === "crawl.progress") {
-				seen.push(event.payload.counters.pagesScanned);
-			}
-		});
-
-		expect(seen).toEqual([1]);
-	});
-
-	test("bounds retained replay history by UTF-8 bytes", () => {
-		const stream = new EventStream();
-		stream.initialize("crawl-byte-budget");
-		stream.publish("crawl-byte-budget", "crawl.log", {
-			message: "a".repeat(600_000),
-			level: "info",
-		});
-		stream.publish("crawl-byte-budget", "crawl.log", {
-			message: "b".repeat(600_000),
-			level: "info",
-		});
-		const seen: number[] = [];
-
-		stream.subscribe("crawl-byte-budget", (event) => seen.push(event.sequence))();
-
-		expect(seen).toEqual([2]);
+		expect(seen.map((observed) => observed.pagesScanned)).toEqual([1]);
 	});
 
 	test("subscriber failures do not break publish or block other subscribers", () => {
 		const stream = new EventStream();
-		stream.initialize("crawl-subscriber-failure");
 		const seen: number[] = [];
-		stream.subscribe("crawl-subscriber-failure", () => {
-			throw new Error("subscriber failed");
-		});
-		stream.subscribe("crawl-subscriber-failure", (event) => {
-			seen.push(event.sequence);
-		});
+		let failingClosed = false;
+		stream.subscribe(
+			"crawl-subscriber-failure",
+			() => {
+				throw new Error("subscriber failed");
+			},
+			() => {
+				failingClosed = true;
+			},
+		);
+		stream.subscribe("crawl-subscriber-failure", (event) => seen.push(event.sequence));
 
 		expect(() =>
-			stream.publish("crawl-subscriber-failure", "crawl.log", {
-				message: "hello",
-				level: "info",
-			}),
+			stream.publish("crawl-subscriber-failure", 1, "crawl.log", logPayload("hello")),
 		).not.toThrow();
 		expect(seen).toEqual([1]);
+		expect(failingClosed).toBe(true);
 	});
 
-	test("cleans up inactive crawl history after the cleanup delay", async () => {
+	test("closeCrawl ends every subscription to that crawl only", () => {
 		const stream = new EventStream();
-		const generation = stream.initialize("crawl-cleanup");
-		stream.publish("crawl-cleanup", "crawl.log", { message: "hello", level: "info" });
-		stream.scheduleCleanup("crawl-cleanup", generation, 5);
-		await Bun.sleep(20);
-
-		const seen: number[] = [];
-		const unsubscribe = stream.subscribe("crawl-cleanup", (event) => {
-			seen.push(event.sequence);
-		});
-		unsubscribe();
-
-		expect(seen).toEqual([]);
-	});
-
-	test("late subscribers do not cancel inactive crawl cleanup", async () => {
-		const stream = new EventStream();
-		const generation = stream.initialize("crawl-late-cleanup");
-		stream.publish("crawl-late-cleanup", "crawl.log", { message: "hello", level: "info" });
-		stream.scheduleCleanup("crawl-late-cleanup", generation, 5);
-
-		const unsubscribe = stream.subscribe("crawl-late-cleanup", () => {});
-		unsubscribe();
-		await Bun.sleep(20);
-
-		const seen: number[] = [];
-		stream.subscribe("crawl-late-cleanup", (event) => {
-			seen.push(event.sequence);
-		})();
-
-		expect(seen).toEqual([]);
-	});
-
-	test("delete closes every live subscriber", () => {
-		const stream = new EventStream();
-		stream.initialize("crawl-delete");
 		let closed = 0;
 		for (let index = 0; index < 3; index += 1) {
 			stream.subscribe(
-				"crawl-delete",
+				"crawl-settled",
 				() => {},
-				0,
 				() => {
 					closed += 1;
 				},
 			);
 		}
+		let otherClosed = false;
+		stream.subscribe(
+			"crawl-other",
+			() => {},
+			() => {
+				otherClosed = true;
+			},
+		);
 
-		stream.delete("crawl-delete");
+		stream.closeCrawl("crawl-settled");
 
 		expect(closed).toBe(3);
-		expect(stream.hasSubscriberCapacity("crawl-delete")).toBe(true);
+		expect(otherClosed).toBe(false);
+		expect(stream.hasSubscriberCapacity("crawl-settled")).toBe(true);
 	});
 
 	test("bounds subscriber admission per crawl", () => {
 		const stream = new EventStream();
-		stream.initialize("crawl-capacity");
 		for (let index = 0; index < 10; index += 1) {
 			stream.subscribe("crawl-capacity", () => {});
 		}
@@ -281,62 +110,47 @@ describe("event stream contract", () => {
 
 	test("prevents one client from monopolizing a crawl stream", () => {
 		const stream = new EventStream();
-		stream.initialize("crawl-client-capacity");
-		stream.subscribe(
-			"crawl-client-capacity",
-			() => {},
-			0,
-			() => {},
-			"client-a",
-		);
-		stream.subscribe(
-			"crawl-client-capacity",
-			() => {},
-			0,
-			() => {},
-			"client-a",
-		);
+		stream.subscribe("crawl-client-capacity", () => {}, undefined, "client-a");
+		stream.subscribe("crawl-client-capacity", () => {}, undefined, "client-a");
 
 		expect(stream.hasSubscriberCapacity("crawl-client-capacity", "client-a")).toBe(false);
 		expect(stream.hasSubscriberCapacity("crawl-client-capacity", "client-b")).toBe(true);
 	});
 
-	test("closes all owned state and refuses new subscribers during shutdown", () => {
+	test("unsubscribing releases per-client capacity", () => {
 		const stream = new EventStream();
-		const generation = stream.initialize("crawl-shutdown");
+		const unsubscribe = stream.subscribe("crawl-release", () => {}, undefined, "client-a");
+		stream.subscribe("crawl-release", () => {}, undefined, "client-a");
+
+		unsubscribe();
+
+		expect(stream.hasSubscriberCapacity("crawl-release", "client-a")).toBe(true);
+	});
+
+	test("closes every subscriber and refuses new ones during shutdown", async () => {
+		const stream = new EventStream();
 		let closed = 0;
 		stream.subscribe(
 			"crawl-shutdown",
 			() => {},
-			0,
 			() => {
 				closed += 1;
 			},
 		);
-		stream.scheduleCleanup("crawl-shutdown", generation, 60_000);
 
 		stream.close();
-
-		expect(closed).toBe(1);
-		expect(stream.hasSubscriberCapacity("crawl-shutdown")).toBe(false);
-		expect(() => stream.initialize("after-shutdown")).toThrow("Event stream is closed");
-	});
-
-	test("historical subscriptions close without creating live stream ownership", async () => {
-		const stream = new EventStream();
-		let closed = false;
-
+		let lateClosed = false;
 		stream.subscribe(
-			"historical-crawl",
+			"crawl-shutdown",
 			() => {},
-			0,
 			() => {
-				closed = true;
+				lateClosed = true;
 			},
 		);
 		await Promise.resolve();
 
-		expect(closed).toBe(true);
-		expect(stream.getCurrentSequence("historical-crawl")).toBe(0);
+		expect(closed).toBe(1);
+		expect(lateClosed).toBe(true);
+		expect(stream.hasSubscriberCapacity("crawl-shutdown")).toBe(false);
 	});
 });

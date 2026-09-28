@@ -70,7 +70,7 @@ describe("CrawlState", () => {
 	describe("invariant: counter identity", () => {
 		test("counter inputs and progress observations cannot mutate the owned aggregate", () => {
 			const initial = makeCounters();
-			const state = new CrawlState(makeOptions(), initial);
+			const state = new CrawlState(makeOptions(), { initialCounters: initial });
 			initial.pagesScanned = 100;
 			expect(state.hasPageCapacity()).toBe(true);
 			const progress = state.buildProgress({ activeRequests: 0, queueLength: 0 });
@@ -91,7 +91,7 @@ describe("CrawlState", () => {
 			complete(state, "https://a.example/2", "failure");
 			complete(state, "https://a.example/3", "skip");
 			complete(state, "https://a.example/4", "success", {
-				dataKb: 10,
+				dataBytes: 10 * 1024,
 				mediaFiles: 2,
 				discoveredLinks: 3,
 			});
@@ -190,7 +190,9 @@ describe("CrawlState", () => {
 		});
 
 		test("a restored skip resets the restored failure streak", () => {
-			const state = new CrawlState(makeOptions({ maxPages: 100 }), makeCounters(0, 19, 1));
+			const state = new CrawlState(makeOptions({ maxPages: 100 }), {
+				initialCounters: makeCounters(0, 19, 1),
+			});
 
 			state.restoreTerminals([
 				...Array.from({ length: 19 }, (_, index) => ({
@@ -205,7 +207,9 @@ describe("CrawlState", () => {
 		});
 
 		test("restored failures preserve the circuit breaker streak across resume", () => {
-			const state = new CrawlState(makeOptions({ maxPages: 100 }), makeCounters(0, 19));
+			const state = new CrawlState(makeOptions({ maxPages: 100 }), {
+				initialCounters: makeCounters(0, 19),
+			});
 
 			state.restoreTerminals(
 				Array.from({ length: 19 }, (_, index) => ({
@@ -221,7 +225,9 @@ describe("CrawlState", () => {
 		});
 
 		test("restored failures trip the circuit breaker when resume starts at the threshold", () => {
-			const state = new CrawlState(makeOptions({ maxPages: 100 }), makeCounters(0, 20));
+			const state = new CrawlState(makeOptions({ maxPages: 100 }), {
+				initialCounters: makeCounters(0, 20),
+			});
 
 			state.restoreTerminals(
 				Array.from({ length: 20 }, (_, index) => ({
@@ -258,13 +264,15 @@ describe("CrawlState", () => {
 
 		test("restored terminal rows must exactly match the durable terminal counter", () => {
 			const state = new CrawlState(makeOptions({ maxPages: 3 }), {
-				pagesScanned: 1,
-				successCount: 1,
-				failureCount: 0,
-				skippedCount: 0,
-				linksFound: 0,
-				mediaFiles: 0,
-				totalDataKb: 0,
+				initialCounters: {
+					pagesScanned: 1,
+					successCount: 1,
+					failureCount: 0,
+					skippedCount: 0,
+					linksFound: 0,
+					mediaFiles: 0,
+					totalDataKb: 0,
+				},
 			});
 
 			expect(() => state.restoreTerminals([])).toThrow(
@@ -403,7 +411,9 @@ describe("CrawlState", () => {
 		});
 
 		test("uncharged terminal work releases its reserved domain capacity", () => {
-			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 1 }), makeCounters(0, 0, 1));
+			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 1 }), {
+				initialCounters: makeCounters(0, 0, 1),
+			});
 
 			expect(state.canAdmit("https://example.com/first", "example.com")).toBe(true);
 			state.recordAdmission("https://example.com/first", "example.com");
@@ -442,7 +452,9 @@ describe("CrawlState", () => {
 		});
 
 		test("restores persisted domain budget charges across resume", () => {
-			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 1 }), makeCounters(0, 0, 1));
+			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 1 }), {
+				initialCounters: makeCounters(0, 0, 1),
+			});
 
 			state.restoreTerminals([
 				{
@@ -456,7 +468,9 @@ describe("CrawlState", () => {
 		});
 
 		test("does not infer domain budget charges from terminal outcome alone", () => {
-			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 1 }), makeCounters(0, 0, 1));
+			const state = new CrawlState(makeOptions({ maxPagesPerDomain: 1 }), {
+				initialCounters: makeCounters(0, 0, 1),
+			});
 
 			state.restoreTerminals([
 				{
@@ -486,7 +500,7 @@ describe("CrawlState", () => {
 
 		test("setDomainDelay seeds a durable next-ready watermark", () => {
 			const changes: unknown[] = [];
-			const state = new CrawlState(makeOptions({ crawlDelay: 100 }), undefined, {
+			const state = new CrawlState(makeOptions({ crawlDelay: 100 }), {
 				onDomainStateChanged: (record) => changes.push(record),
 			});
 

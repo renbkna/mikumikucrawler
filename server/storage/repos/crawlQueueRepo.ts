@@ -1,5 +1,4 @@
 import type { Database } from "bun:sqlite";
-import type { OwnStatement } from "../db.js";
 
 export interface QueueItemRecord {
 	url: string;
@@ -7,25 +6,31 @@ export interface QueueItemRecord {
 	retries: number;
 	parentUrl?: string;
 	domain: string;
-	availableAt?: number;
+	availableAt: number;
 }
 
-export function createCrawlQueueRepo(db: Database, own: OwnStatement) {
-	const insertItem = own(
-		db.prepare(`
+interface QueueItemRow {
+	url: string;
+	depth: number;
+	retries: number;
+	parent_url: string | null;
+	domain: string;
+	available_at: number;
+}
+
+export function createCrawlQueueRepo(db: Database) {
+	const insertItem = db.prepare<
+		never,
+		[string, string, number, number, string | null, string, number]
+	>(`
 		INSERT INTO crawl_queue_items (
-			crawl_id,
-			url,
-			depth,
-			retries,
-			parent_url,
-			domain,
-			available_at
+			crawl_id, url, depth, retries, parent_url, domain, available_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?)
-	`),
-	);
-	const updateItem = own(
-		db.prepare(`
+	`);
+	const updateItem = db.prepare<
+		never,
+		[number, number, string | null, string, number, string, string]
+	>(`
 		UPDATE crawl_queue_items
 		SET
 			depth = ?,
@@ -35,7 +40,15 @@ export function createCrawlQueueRepo(db: Database, own: OwnStatement) {
 			available_at = ?,
 			created_at = CURRENT_TIMESTAMP
 		WHERE crawl_id = ? AND url = ?
-	`),
+	`);
+	const listItems = db.prepare<QueueItemRow, [string]>(`
+		SELECT url, depth, retries, parent_url, domain, available_at
+		FROM crawl_queue_items
+		WHERE crawl_id = ?
+		ORDER BY available_at ASC, created_at ASC, id ASC
+	`);
+	const clearItems = db.prepare<never, [string]>(
+		"DELETE FROM crawl_queue_items WHERE crawl_id = ?",
 	);
 
 	const insertManyTransaction = db.transaction((crawlId: string, items: QueueItemRecord[]) => {
@@ -47,7 +60,7 @@ export function createCrawlQueueRepo(db: Database, own: OwnStatement) {
 				item.retries,
 				item.parentUrl ?? null,
 				item.domain,
-				item.availableAt ?? 0,
+				item.availableAt,
 			);
 		}
 	});
@@ -58,26 +71,7 @@ export function createCrawlQueueRepo(db: Database, own: OwnStatement) {
 			insertManyTransaction(crawlId, items);
 		},
 		listPending(crawlId: string): QueueItemRecord[] {
-			const rows = db
-				.query(
-					`
-					SELECT url, depth, retries, parent_url, domain
-						, available_at
-					FROM crawl_queue_items
-					WHERE crawl_id = ?
-					ORDER BY available_at ASC, created_at ASC, id ASC
-				`,
-				)
-				.all(crawlId) as Array<{
-				url: string;
-				depth: number;
-				retries: number;
-				parent_url: string | null;
-				domain: string;
-				available_at: number;
-			}>;
-
-			return rows.map((row) => ({
+			return listItems.all(crawlId).map((row) => ({
 				url: row.url,
 				depth: row.depth,
 				retries: row.retries,
@@ -92,7 +86,7 @@ export function createCrawlQueueRepo(db: Database, own: OwnStatement) {
 				item.retries,
 				item.parentUrl ?? null,
 				item.domain,
-				item.availableAt ?? 0,
+				item.availableAt,
 				crawlId,
 				item.url,
 			);
@@ -101,7 +95,7 @@ export function createCrawlQueueRepo(db: Database, own: OwnStatement) {
 			}
 		},
 		clear(crawlId: string): void {
-			db.query("DELETE FROM crawl_queue_items WHERE crawl_id = ?").run(crawlId);
+			clearItems.run(crawlId);
 		},
 	};
 }

@@ -8,7 +8,6 @@ interface DynamicRenderResult {
 	effectiveUrl: string;
 	statusCode: number;
 	contentType: string;
-	contentLength: number;
 	title: string;
 	description: string;
 	xRobotsTag?: string | null;

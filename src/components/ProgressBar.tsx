@@ -1,6 +1,6 @@
 import { Music } from "lucide-react";
 import { memo } from "react";
-import type { RunPhase } from "../hooks/crawlControllerState";
+import { isActiveRunPhase, type RunPhase } from "../hooks/crawlControllerState";
 
 interface ProgressBarProps {
 	progress: number;
@@ -16,11 +16,7 @@ const outcomeMessageByPhase: Partial<Record<RunPhase, string>> = {
 };
 
 export const ProgressBar = memo(function ProgressBar({ progress, runPhase }: ProgressBarProps) {
-	const isWorking =
-		runPhase === "starting" ||
-		runPhase === "running" ||
-		runPhase === "pausing" ||
-		runPhase === "stopping";
+	const isWorking = isActiveRunPhase(runPhase);
 	const outcomeMessage = outcomeMessageByPhase[runPhase];
 	return (
 		<div className="relative">

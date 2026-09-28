@@ -1,4 +1,6 @@
 import type { Database } from "bun:sqlite";
+import { TERMINAL_CRAWL_STATUS_VALUES } from "../../shared/contracts/index.js";
+import { sqlTextList } from "./sql.js";
 
 const DEFAULT_DURABLE_PAGE_RESERVATION_BYTES = 8 * 1024 * 1024;
 
@@ -93,7 +95,7 @@ export class DurableStorageBudget {
 		crawlId: string,
 		request: { maxPages: number; pagesScanned: number },
 		establish: () => void = () => {},
-	): { reservedBytes: number; reclaimedCrawlIds: string[] } {
+	): void {
 		if (
 			!Number.isSafeInteger(request.maxPages) ||
 			!Number.isSafeInteger(request.pagesScanned) ||
@@ -115,15 +117,14 @@ export class DurableStorageBudget {
 			);
 		}
 
-		const reclaimedCrawlIds = this.db.transaction(() => {
-			const reclaimed: string[] = [];
+		this.db.transaction(() => {
 			while (this.usedBytes() + otherReservations + requestedBytes > this.maxBytes) {
 				const candidate = (
 					this.db
 						.query(`
 						SELECT id
 						FROM crawl_runs
-						WHERE status IN ('completed', 'stopped', 'failed')
+						WHERE status IN (${sqlTextList(TERMINAL_CRAWL_STATUS_VALUES)})
 						  AND id <> ?
 						ORDER BY COALESCE(completed_at, updated_at) ASC, updated_at ASC, id ASC
 					`)
@@ -136,16 +137,13 @@ export class DurableStorageBudget {
 					);
 				}
 				this.db.query("DELETE FROM crawl_runs WHERE id = ?").run(candidate.id);
-				reclaimed.push(candidate.id);
 			}
 			establish();
-			return reclaimed;
 		})();
 
 		this.protectedCrawlIds.add(crawlId);
 		if (requestedBytes > 0) this.reservations.set(crawlId, requestedBytes);
 		else this.reservations.delete(crawlId);
-		return { reservedBytes: requestedBytes, reclaimedCrawlIds };
 	}
 
 	release(crawlId: string): void {

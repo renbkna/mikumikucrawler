@@ -1,3 +1,7 @@
+import { abortError } from "./abort.js";
+
+const admissionAbortError = (signal: AbortSignal) => abortError(signal, "Work admission aborted");
+
 export type WorkLease = () => void;
 export type AcquireWork = (signal?: AbortSignal) => Promise<WorkLease>;
 
@@ -20,7 +24,7 @@ export class WorkPermitPool {
 
 	acquire: AcquireWork = (signal) => {
 		if (signal?.aborted) {
-			return Promise.reject(signal.reason ?? new Error("Work admission aborted"));
+			return Promise.reject(admissionAbortError(signal));
 		}
 
 		return new Promise<WorkLease>((resolve, reject) => {
@@ -47,7 +51,7 @@ export class WorkPermitPool {
 			waiter.onAbort = () => {
 				const index = this.waiters.indexOf(waiter);
 				if (index >= 0) this.waiters.splice(index, 1);
-				reject(signal?.reason ?? new Error("Work admission aborted"));
+				if (signal) reject(admissionAbortError(signal));
 			};
 			signal?.addEventListener("abort", waiter.onAbort, { once: true });
 			this.waiters.push(waiter);
@@ -59,7 +63,7 @@ export class WorkPermitPool {
 			const waiter = this.waiters.shift();
 			if (!waiter) return;
 			if (waiter.signal?.aborted) {
-				waiter.reject(waiter.signal.reason ?? new Error("Work admission aborted"));
+				waiter.reject(admissionAbortError(waiter.signal));
 				continue;
 			}
 			waiter.grant();

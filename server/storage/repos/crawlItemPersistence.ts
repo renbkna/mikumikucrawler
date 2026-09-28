@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
-import { isActiveCrawlStatus } from "../../../shared/contracts/index.js";
-import { bytesToKilobytes, kilobytesToBytes } from "../../../shared/text.js";
+import { type CrawlStatus, isActiveCrawlStatus } from "../../../shared/contracts/index.js";
+import { kilobytesToBytes } from "../../../shared/text.js";
 import {
 	type CommittedTerminal,
 	type CompletedPageData,
@@ -8,7 +8,7 @@ import {
 	type TerminalCounterEffects,
 	type TerminalOutcome,
 } from "../../domain/crawl/completion.js";
-import type { OwnStatement } from "../db.js";
+import { type CrawlCounterColumns, countersFromColumns } from "./crawlRunRepo.js";
 
 interface CommitCompletedItemBase {
 	crawlId: string;
@@ -34,67 +34,42 @@ export interface TerminalUrlRecord {
 	chargedDomain: string | null;
 }
 
-export function createCrawlItemPersistence(db: Database, own: OwnStatement) {
-	const insertPage = own(
-		db.prepare(`
+interface TerminalUrlRow {
+	url: string;
+	outcome: TerminalOutcome;
+	domain_budget_charged: number;
+	charged_domain: string | null;
+}
+
+export function createCrawlItemPersistence(
+	db: Database,
+	pages: { countByCrawlId(crawlId: string): number },
+) {
+	const insertPage = db.prepare<
+		{ id: number },
+		[string, string, string, string, string, string, string | null, string, number, number, string]
+	>(`
 		INSERT INTO pages (
-			crawl_id,
-			url,
-			domain,
-			content_type,
-			title,
-			description,
-			content,
-			main_content,
-			word_count,
-			reading_time,
-			language
+			crawl_id, url, domain, content_type, title, description,
+			content, main_content, word_count, reading_time, language
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		RETURNING id
-	`),
-	);
-
-	function insertCompletedPage(
-		crawlId: string,
-		url: string,
-		domain: string,
-		page: CompletedPageData,
-	): number {
-		const pageRow = insertPage.get(
-			crawlId,
-			url,
-			domain,
-			page.contentType,
-			page.title,
-			page.description,
-			page.content,
-			page.mainContent,
-			page.wordCount,
-			page.readingTime,
-			page.language,
-		) as { id: number };
-		return pageRow.id;
-	}
-	const insertTerminal = own(
-		db.prepare(`
+	`);
+	const insertTerminal = db.prepare<
+		never,
+		[string, string, TerminalOutcome, number, string | null]
+	>(`
 		INSERT INTO crawl_terminal_urls (
-				crawl_id,
-				url,
-				outcome,
-				domain_budget_charged,
-				charged_domain
-			) VALUES (?, ?, ?, ?, ?)
-	`),
+			crawl_id, url, outcome, domain_budget_charged, charged_domain
+		) VALUES (?, ?, ?, ?, ?)
+	`);
+	const takeQueueItem = db.prepare<{ domain: string }, [string, string]>(
+		"DELETE FROM crawl_queue_items WHERE crawl_id = ? AND url = ? RETURNING domain",
 	);
-
-	const takeQueueItem = own(
-		db.prepare<{ domain: string }, [string, string]>(
-			"DELETE FROM crawl_queue_items WHERE crawl_id = ? AND url = ? RETURNING domain",
-		),
-	);
-
-	const updateProgress = own(
-		db.prepare(`
+	const updateProgress = db.prepare<
+		never,
+		[number, number, number, number, number, number, number, number, string]
+	>(`
 		UPDATE crawl_runs
 		SET
 			updated_at = CURRENT_TIMESTAMP,
@@ -107,34 +82,20 @@ export function createCrawlItemPersistence(db: Database, own: OwnStatement) {
 			total_data_bytes = ?,
 			event_sequence = ?
 		WHERE id = ?
-	`),
-	);
-	const countPages = own(
-		db.prepare<{ count: number }, [string]>(
-			"SELECT COUNT(*) AS count FROM pages WHERE crawl_id = ?",
-		),
-	);
-	const getRunCounters = own(
-		db.prepare<
-			{
-				status: Parameters<typeof isActiveCrawlStatus>[0];
-				pages_scanned: number;
-				success_count: number;
-				failure_count: number;
-				skipped_count: number;
-				links_found: number;
-				media_files: number;
-				total_data_bytes: number;
-			},
-			[string]
-		>(`
+	`);
+	const getRunCounters = db.prepare<CrawlCounterColumns & { status: CrawlStatus }, [string]>(`
 		SELECT status, pages_scanned, success_count, failure_count, skipped_count,
 			links_found, media_files, total_data_bytes
 		FROM crawl_runs
 		WHERE id = ?
 		LIMIT 1
-	`),
-	);
+	`);
+	const listTerminal = db.prepare<TerminalUrlRow, [string]>(`
+		SELECT url, outcome, domain_budget_charged, charged_domain
+		FROM crawl_terminal_urls
+		WHERE crawl_id = ?
+		ORDER BY terminal_sequence ASC
+	`);
 
 	const commitCompletedTransaction = db.transaction(
 		(input: CommitCompletedItemInput): CommitCompletedItemResult => {
@@ -156,30 +117,30 @@ export function createCrawlItemPersistence(db: Database, own: OwnStatement) {
 				input.domainBudgetCharged ? 1 : 0,
 				chargedDomain,
 			);
-			const pageId = input.page
-				? insertCompletedPage(input.crawlId, input.url, queueItem.domain, input.page)
+			const page = input.page;
+			const pageId = page
+				? insertPage.get(
+						input.crawlId,
+						input.url,
+						queueItem.domain,
+						page.contentType,
+						page.title,
+						page.description,
+						page.content,
+						page.mainContent,
+						page.wordCount,
+						page.readingTime,
+						page.language,
+					)?.id
 				: undefined;
-			const effects: TerminalCounterEffects = input.page
+			const effects: TerminalCounterEffects = page
 				? {
-						dataKb: bytesToKilobytes(input.page.contentLength),
-						mediaFiles: input.page.mediaCount,
-						discoveredLinks: input.page.discoveredLinkCount,
+						dataBytes: page.contentLength,
+						mediaFiles: page.mediaCount,
+						discoveredLinks: page.discoveredLinkCount,
 					}
 				: {};
-			const counters = deriveTerminalCounters(
-				{
-					pagesScanned: run.pages_scanned,
-					successCount: run.success_count,
-					failureCount: run.failure_count,
-					skippedCount: run.skipped_count,
-					linksFound: run.links_found,
-					mediaFiles: run.media_files,
-					totalDataKb: bytesToKilobytes(run.total_data_bytes),
-				},
-				input.outcome,
-				effects,
-			);
-
+			const counters = deriveTerminalCounters(countersFromColumns(run), input.outcome, effects);
 			updateProgress.run(
 				counters.pagesScanned,
 				counters.successCount,
@@ -192,27 +153,17 @@ export function createCrawlItemPersistence(db: Database, own: OwnStatement) {
 				input.crawlId,
 			);
 
-			if (pageId === undefined) {
-				return {
-					type: "no-page",
-					counters,
-					effects,
-					chargedDomain,
-				};
+			if (!page) {
+				return { type: "no-page", counters, effects, chargedDomain };
 			}
-			const pageCount = countPages.get(input.crawlId)?.count;
-			if (pageCount === undefined || pageCount < 1) {
+			if (pageId === undefined) {
+				throw new Error("Persisted page completion did not return its page id");
+			}
+			const pageCount = pages.countByCrawlId(input.crawlId);
+			if (pageCount < 1) {
 				throw new Error("Persisted page completion did not produce a positive page count");
 			}
-
-			return {
-				type: "page-persisted",
-				pageId,
-				pageCount,
-				counters,
-				effects,
-				chargedDomain,
-			};
+			return { type: "page-persisted", pageId, pageCount, counters, effects, chargedDomain };
 		},
 	);
 
@@ -221,22 +172,7 @@ export function createCrawlItemPersistence(db: Database, own: OwnStatement) {
 			return commitCompletedTransaction(input);
 		},
 		listTerminalUrls(crawlId: string): TerminalUrlRecord[] {
-			const rows = db
-				.query(
-					`
-						SELECT url, outcome, domain_budget_charged, charged_domain
-						FROM crawl_terminal_urls
-						WHERE crawl_id = ?
-						ORDER BY terminal_sequence ASC
-					`,
-				)
-				.all(crawlId) as Array<{
-				url: string;
-				outcome: TerminalOutcome;
-				domain_budget_charged: number;
-				charged_domain: string | null;
-			}>;
-			return rows.map((row) => ({
+			return listTerminal.all(crawlId).map((row) => ({
 				url: row.url,
 				outcome: row.outcome,
 				domainBudgetCharged: row.domain_budget_charged === 1,

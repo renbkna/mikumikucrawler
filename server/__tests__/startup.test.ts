@@ -1,25 +1,14 @@
 import { expect, test } from "bun:test";
-import { Elysia, status } from "elysia";
+import { Elysia } from "elysia";
 import { createServerListenOptions, MAX_API_REQUEST_BODY_BYTES } from "../config/listen.js";
+import { createClientKeyResolver, createListenerTransport } from "../config/rateLimit.js";
+import { createStartupGate } from "../startupGate.js";
 
 test.serial(
 	"listener serves only a startup response until the complete route tree is ready",
 	async () => {
-		const listenerOwned = Promise.withResolvers<void>();
-		let releaseApplication!: () => void;
-		const application = listenerOwned.promise.then(async () => {
-			await new Promise<void>((resolve) => {
-				releaseApplication = resolve;
-			});
-			return new Elysia().get("/ready", () => "ready");
-		});
-		let applicationApp: Awaited<typeof application> | undefined;
-		const bootstrap = new Elysia().all("*", ({ request, server }) => {
-			if (!applicationApp) return status(503, { error: "Server is starting" });
-			return applicationApp.fetch(request, server);
-		});
-		const instance = bootstrap.listen(createServerListenOptions(0));
-		listenerOwned.resolve();
+		const gate = createStartupGate();
+		const instance = gate.listener.listen(createServerListenOptions(0));
 		const port = instance.server?.port;
 		if (port === undefined) {
 			await instance.stop(true);
@@ -30,13 +19,40 @@ test.serial(
 			const starting = await fetch(`http://127.0.0.1:${port}/ready`);
 			expect(starting.status).toBe(503);
 
-			releaseApplication();
-			applicationApp = await application;
-			await applicationApp.modules;
+			const application = new Elysia().get("/ready", () => "ready");
+			await application.modules;
+			gate.open(application);
 
 			const settled = await fetch(`http://127.0.0.1:${port}/ready`);
 			expect(settled.status).toBe(200);
 			expect(await settled.text()).toBe("ready");
+		} finally {
+			await instance.stop(true);
+		}
+	},
+);
+
+test.serial(
+	"applications behind the startup gate identify clients by the listener's socket",
+	async () => {
+		const gate = createStartupGate();
+		const resolveClientKey = createClientKeyResolver(
+			false,
+			createListenerTransport(() => gate.listener.server ?? undefined),
+		);
+		const application = new Elysia().get("/client", ({ request }) => resolveClientKey(request));
+		const instance = gate.listener.listen(createServerListenOptions(0));
+		const port = instance.server?.port;
+		if (port === undefined) {
+			await instance.stop(true);
+			throw new Error("Listener owner did not expose its assigned port");
+		}
+
+		try {
+			await application.modules;
+			gate.open(application);
+			const response = await fetch(`http://127.0.0.1:${port}/client`);
+			expect(await response.text()).toBe("127.0.0.1");
 		} finally {
 			await instance.stop(true);
 		}

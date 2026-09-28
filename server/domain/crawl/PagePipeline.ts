@@ -1,14 +1,17 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { CrawlLogLevel, CrawlOptions } from "../../../shared/contracts/index.js";
+import type { Logger } from "../../config/logging.js";
 import { CRAWL_QUEUE_CONSTANTS, RETRY_CONSTANTS } from "../../constants.js";
 import { OutboundPolicyError } from "../../outbound/HttpClient.js";
 import { processContent } from "../../processors/ContentProcessor.js";
 import { isHtmlLikeContentType } from "../../processors/contentTypes.js";
+import { getErrorMessage } from "../../utils/helpers.js";
 import { OperationTimeoutError, runWithTimeout } from "../../utils/timeout.js";
 import {
 	CrawlAdmissionPolicy,
 	type CrawlAdmissionQueue,
 	type CrawlAdmissionState,
+	evaluateRobotsGate,
 	type RobotsPolicyEvaluator,
 } from "./CrawlAdmissionPolicy.js";
 import type { CrawlQueue, QueueItem } from "./CrawlQueue.js";
@@ -19,7 +22,7 @@ import { hasUsablePageContent, isClientErrorShell, isSoft404 } from "./PageDecis
 import type { BuiltPageResult } from "./PageResultBuilder.js";
 import { buildPageResult } from "./PageResultBuilder.js";
 import type { DestinationAuthorizer } from "./rendering/contracts.js";
-import { getCrawlUrlIdentity } from "./UrlPolicy.js";
+import { type CrawlUrlIdentity, getCrawlUrlIdentity } from "./UrlPolicy.js";
 
 type PagePipelineState = CrawlAdmissionState &
 	Pick<
@@ -39,6 +42,19 @@ interface EventSink {
 	log(message: string, level?: CrawlLogLevel): void;
 }
 
+export interface PagePipelineDependencies {
+	options: CrawlOptions;
+	state: PagePipelineState;
+	queue: PagePipelineQueue;
+	fetchService: PageFetcher;
+	robotsService: RobotsPolicyEvaluator;
+	eventSink: EventSink;
+	logger: Logger;
+	/** The seed URL granted the localhost capability on its first request, if any. */
+	localSeedUrl?: string;
+	itemTimeoutMs?: number;
+}
+
 interface TerminalEffects {
 	chargeDomainBudget: boolean;
 	chargedDomain?: string;
@@ -50,6 +66,7 @@ interface NonTerminalPageResult {
 	page?: never;
 }
 
+/** The domain an attempt is charged to; a redirect moves it to the destination's domain. */
 interface AttemptContext {
 	chargedDomain: string;
 }
@@ -83,6 +100,8 @@ export type PageProcessResult =
 			rescheduled?: never;
 	  };
 
+type TerminalFailureOrSkip = Extract<PageProcessResult, { terminalOutcome: "failure" | "skip" }>;
+
 function retryDelayMs(result: { retryAfterMs?: number }, retries: number): number {
 	return (
 		result.retryAfterMs ??
@@ -90,108 +109,107 @@ function retryDelayMs(result: { retryAfterMs?: number }, retries: number): numbe
 	);
 }
 
+/** Only a redirect-moved charge is recorded; the queued domain is the default charge. */
+function chargedDomainOverride(item: QueueItem, context: AttemptContext): string | undefined {
+	return context.chargedDomain === item.domain ? undefined : context.chargedDomain;
+}
+
+function requireCrawlUrlIdentity(url: string): CrawlUrlIdentity {
+	const identity = getCrawlUrlIdentity(url);
+	if ("error" in identity) throw new Error(identity.error);
+	return identity;
+}
+
 export class PagePipeline {
 	private readonly admissionPolicy: CrawlAdmissionPolicy;
+	private readonly itemTimeoutMs: number;
 
-	constructor(
-		private readonly options: CrawlOptions,
-		private readonly state: PagePipelineState,
-		private readonly queue: PagePipelineQueue,
-		private readonly fetchService: PageFetcher,
-		private readonly robotsService: RobotsPolicyEvaluator,
-		private readonly eventSink: EventSink,
-		private readonly logger: import("../../config/logging.js").Logger,
-		private readonly localSeedUrl?: string,
-		private readonly itemTimeoutMs: number = CRAWL_QUEUE_CONSTANTS.ITEM_PROCESSING_TIMEOUT_MS,
-	) {
-		this.admissionPolicy = new CrawlAdmissionPolicy(options, state, queue, robotsService);
+	constructor(private readonly deps: PagePipelineDependencies) {
+		this.admissionPolicy = new CrawlAdmissionPolicy(
+			deps.options,
+			deps.state,
+			deps.queue,
+			deps.robotsService,
+		);
+		this.itemTimeoutMs = deps.itemTimeoutMs ?? CRAWL_QUEUE_CONSTANTS.ITEM_PROCESSING_TIMEOUT_MS;
 	}
 
-	private async enqueueLinks(
-		item: QueueItem,
-		links: ReturnType<CrawlAdmissionPolicy["normalizeDiscoveredLinks"]>,
-		signal?: AbortSignal,
-	): Promise<void> {
-		signal?.throwIfAborted();
-		await this.admissionPolicy.admitNormalizedDiscoveredLinks(item, links, signal);
+	private log(message: string, level: CrawlLogLevel | undefined): void {
+		if (level) this.deps.eventSink.log(message, level);
+		else this.deps.eventSink.log(message);
 	}
 
-	private recordTerminal(
+	/** Ends the item before any response was fetched: nothing is charged to a domain budget. */
+	private unfetchedTerminal(
 		outcome: Exclude<TerminalOutcome, "success">,
-	): Extract<PageProcessResult, { terminalOutcome: "failure" | "skip" }> {
+		message: string,
+		level?: CrawlLogLevel,
+	): TerminalFailureOrSkip {
+		this.log(message, level);
+		return { terminalOutcome: outcome, terminalEffects: { chargeDomainBudget: false } };
+	}
+
+	/** Ends a fetched item: the attempt's charged domain pays for it. */
+	private fetchedTerminal(
+		outcome: Exclude<TerminalOutcome, "success">,
+		chargedDomain: string | undefined,
+		message: string,
+		level?: CrawlLogLevel,
+	): TerminalFailureOrSkip {
+		this.log(message, level);
 		return {
 			terminalOutcome: outcome,
-			terminalEffects: { chargeDomainBudget: false },
-		};
-	}
-
-	private recordFetchedTerminal(
-		outcome: Exclude<TerminalOutcome, "success">,
-		chargedDomain?: string,
-	): Extract<PageProcessResult, { terminalOutcome: "failure" | "skip" }> {
-		return {
-			terminalOutcome: outcome,
-			terminalEffects: {
-				chargeDomainBudget: true,
-				...(chargedDomain ? { chargedDomain } : {}),
-			},
+			terminalEffects: { chargeDomainBudget: true, ...(chargedDomain ? { chargedDomain } : {}) },
 		};
 	}
 
 	private createDestinationAuthorizer(
 		item: QueueItem,
+		sourceIdentity: CrawlUrlIdentity,
 		onDomainAuthorized: (domain: string) => void,
 	): DestinationAuthorizer {
-		const sourceIdentity = getCrawlUrlIdentity(item.url);
-		if ("error" in sourceIdentity) throw new Error(sourceIdentity.error);
-
+		const { options, state } = this.deps;
 		return async (destinationUrl: string, signal?: AbortSignal) => {
 			const destination = getCrawlUrlIdentity(destinationUrl);
 			if ("error" in destination) {
 				throw new OutboundPolicyError("crawl-policy", destination.error);
 			}
-			if (
-				this.options.crawlMethod !== "full" &&
-				destination.originKey !== sourceIdentity.originKey
-			) {
+			if (options.crawlMethod !== "full" && destination.originKey !== sourceIdentity.originKey) {
 				throw new OutboundPolicyError(
 					"crawl-policy",
 					`Cross-origin document navigation requires full crawl mode: ${destinationUrl}`,
 				);
 			}
 
-			if (this.options.respectRobots) {
-				const policy = await this.robotsService.evaluateIdentity(destination, signal);
-				if (policy.type === "blocked" || policy.type === "disallowed") {
-					throw new OutboundPolicyError(
-						"crawl-policy",
-						policy.type === "blocked"
-							? policy.reason
-							: `Document destination is disallowed by robots.txt: ${destinationUrl}`,
-					);
-				}
-				if (policy.type === "unavailable") {
-					this.eventSink.log(
-						`[Robots] Continuing because document-destination robots.txt is unavailable for ${destinationUrl}: ${policy.reason}`,
-					);
-				} else if (policy.crawlDelayMs !== undefined) {
-					this.state.setDomainDelay(policy.delayKey, policy.crawlDelayMs);
-				}
+			const robots = await evaluateRobotsGate(this.deps, destination, signal);
+			if (robots.type === "blocked") {
+				throw new OutboundPolicyError("crawl-policy", robots.reason);
+			}
+			if (robots.type === "disallowed") {
+				throw new OutboundPolicyError(
+					"crawl-policy",
+					`Document destination is disallowed by robots.txt: ${destinationUrl}`,
+				);
+			}
+			if (robots.type === "unavailable") {
+				this.deps.eventSink.log(
+					`[Robots] Continuing because document-destination robots.txt is unavailable for ${destinationUrl}: ${robots.reason}`,
+				);
 			}
 
-			if (!this.state.tryReserveRedirectDomain(item.url, destination.domainBudgetKey)) {
+			if (!state.tryReserveRedirectDomain(item.url, destination.domainBudgetKey)) {
 				throw new OutboundPolicyError(
 					"crawl-policy",
 					`Document destination domain budget exhausted: ${destination.domainBudgetKey}`,
 				);
 			}
-			let waitMs = this.state.timeUntilDomainReady(destination.domainBudgetKey);
+			let waitMs = state.timeUntilDomainReady(destination.domainBudgetKey);
 			while (waitMs > 0) {
 				await sleep(waitMs, undefined, signal ? { signal } : undefined);
-				waitMs = this.state.timeUntilDomainReady(destination.domainBudgetKey);
+				waitMs = state.timeUntilDomainReady(destination.domainBudgetKey);
 			}
 			signal?.throwIfAborted();
-			this.state.reserveDomain(destination.domainBudgetKey);
+			state.reserveDomain(destination.domainBudgetKey);
 			onDomainAuthorized(destination.domainBudgetKey);
 		};
 	}
@@ -209,23 +227,24 @@ export class PagePipeline {
 			if (!(error instanceof OperationTimeoutError)) {
 				signal?.throwIfAborted();
 				throw new PagePipelineError(
-					error instanceof Error ? error.message : String(error),
+					getErrorMessage(error),
 					{ cause: error },
-					context.chargedDomain === item.domain ? undefined : context.chargedDomain,
+					chargedDomainOverride(item, context),
 				);
 			}
 			signal?.throwIfAborted();
 			const delayMs = retryDelayMs({}, item.retries);
-			if (this.queue.tryScheduleRetry(item, delayMs)) {
-				this.eventSink.log(
+			if (this.deps.queue.tryScheduleRetry(item, delayMs)) {
+				this.deps.eventSink.log(
 					`[Crawler] Processing timeout: ${item.url} — retrying in ${Math.round(delayMs / 1000)}s`,
 				);
 				return { rescheduled: true };
 			}
-			this.eventSink.log(`[Crawler] Processing timeout terminal failure: ${item.url}`, "error");
-			return this.recordFetchedTerminal(
+			return this.fetchedTerminal(
 				"failure",
-				context.chargedDomain === item.domain ? undefined : context.chargedDomain,
+				chargedDomainOverride(item, context),
+				`[Crawler] Processing timeout terminal failure: ${item.url}`,
+				"error",
 			);
 		}
 	}
@@ -235,126 +254,99 @@ export class PagePipeline {
 		signal: AbortSignal,
 		context: AttemptContext,
 	): Promise<PageProcessResult> {
-		signal?.throwIfAborted();
-		if (this.state.hasVisited(item.url)) {
+		const { options, state, queue, eventSink } = this.deps;
+		signal.throwIfAborted();
+		if (state.hasVisited(item.url)) {
 			throw new Error(`Queued URL is already terminal: ${item.url}`);
 		}
-
-		if (!this.state.hasPageCapacity()) {
-			const result = this.recordTerminal("skip");
-			this.eventSink.log(`[Limit] Max pages reached: ${item.url}`);
-			return result;
+		if (!state.hasPageCapacity()) {
+			return this.unfetchedTerminal("skip", `[Limit] Max pages reached: ${item.url}`);
+		}
+		if (state.isDomainBudgetExceeded(item.domain)) {
+			return this.unfetchedTerminal("skip", `[Budget] Domain budget exceeded: ${item.url}`);
 		}
 
-		if (this.state.isDomainBudgetExceeded(item.domain)) {
-			const result = this.recordTerminal("skip");
-			this.eventSink.log(`[Budget] Domain budget exceeded: ${item.url}`);
-			return result;
+		const identity = requireCrawlUrlIdentity(item.url);
+		const robots = await evaluateRobotsGate(this.deps, identity, signal, {
+			allowLocalhostOnInitialRequest: item.url === this.deps.localSeedUrl,
+		});
+		signal.throwIfAborted();
+		if (robots.type === "blocked") {
+			return this.unfetchedTerminal(
+				"failure",
+				`[Policy] Outbound request denied for ${item.url}: ${robots.reason}`,
+				"error",
+			);
+		}
+		if (robots.type === "disallowed") {
+			return this.unfetchedTerminal("skip", `[Robots] Disallowed: ${item.url}`);
+		}
+		if (robots.type === "unavailable") {
+			eventSink.log(
+				`[Robots] Continuing because robots.txt is unavailable for ${item.url}: ${robots.reason}`,
+			);
 		}
 
-		if (this.options.respectRobots) {
-			const identity = getCrawlUrlIdentity(item.url);
-			if ("error" in identity) {
-				this.eventSink.log(`[Policy] Invalid queued URL: ${item.url}`, "error");
-				return this.recordTerminal("failure");
-			}
-			const policy = await this.robotsService.evaluateIdentity(identity, signal, {
-				allowLocalhostOnInitialRequest:
-					this.localSeedUrl !== undefined && item.url === this.localSeedUrl,
-			});
-			signal?.throwIfAborted();
-			if (policy.type === "blocked") {
-				this.eventSink.log(
-					`[Policy] Outbound request denied for ${item.url}: ${policy.reason}`,
-					"error",
-				);
-				return this.recordTerminal("failure");
-			}
-			if (policy.type === "disallowed") {
-				this.eventSink.log(`[Robots] Disallowed: ${item.url}`);
-				return this.recordTerminal("skip");
-			}
-			if (policy.type === "unavailable") {
-				this.eventSink.log(
-					`[Robots] Continuing because robots.txt is unavailable for ${item.url}: ${policy.reason}`,
-				);
-			} else if (policy.crawlDelayMs !== undefined) {
-				this.state.setDomainDelay(policy.delayKey, policy.crawlDelayMs);
-			}
-		}
-
-		const fetchResult = await this.fetchService.fetch(
+		const fetchResult = await this.deps.fetchService.fetch(
 			item,
 			signal,
-			this.createDestinationAuthorizer(item, (domain) => {
+			this.createDestinationAuthorizer(item, identity, (domain) => {
 				context.chargedDomain = domain;
 			}),
 		);
 		const releasePdfWork = fetchResult.type === "success" ? fetchResult.releasePdfWork : undefined;
 		try {
-			const chargedDomainOverride = () =>
-				context.chargedDomain === item.domain ? undefined : context.chargedDomain;
-			signal?.throwIfAborted();
+			const terminal = (
+				outcome: Exclude<TerminalOutcome, "success">,
+				message: string,
+				level?: CrawlLogLevel,
+			) => this.fetchedTerminal(outcome, chargedDomainOverride(item, context), message, level);
+			signal.throwIfAborted();
 			if (fetchResult.type === "rateLimited" || fetchResult.type === "transientFailure") {
+				const label = fetchResult.type === "rateLimited" ? "Rate limited" : "Transient failure";
 				const delayMs = retryDelayMs(fetchResult, item.retries);
-				this.state.adaptDomainDelay(context.chargedDomain, fetchResult.statusCode, delayMs);
-				if (!signal.aborted && this.queue.tryScheduleRetry(item, delayMs)) {
-					this.eventSink.log(
-						`[Crawler] ${fetchResult.type === "rateLimited" ? "Rate limited" : "Transient failure"}: ${item.url} — retrying in ${Math.round(delayMs / 1000)}s`,
+				state.adaptDomainDelay(context.chargedDomain, fetchResult.statusCode, delayMs);
+				if (!signal.aborted && queue.tryScheduleRetry(item, delayMs)) {
+					eventSink.log(
+						`[Crawler] ${label}: ${item.url} — retrying in ${Math.round(delayMs / 1000)}s`,
 					);
 					return { rescheduled: true };
 				}
-
-				const result = this.recordFetchedTerminal("failure", chargedDomainOverride());
-				this.eventSink.log(
-					`[Crawler] ${fetchResult.type === "rateLimited" ? "Rate limited" : "Transient failure"} terminal failure: ${item.url}`,
-					"error",
-				);
-				return result;
+				return terminal("failure", `[Crawler] ${label} terminal failure: ${item.url}`, "error");
 			}
 
 			if (fetchResult.type === "permanentFailure" || fetchResult.type === "blocked") {
-				this.state.adaptDomainDelay(context.chargedDomain, fetchResult.statusCode);
-				const result = this.recordFetchedTerminal("failure", chargedDomainOverride());
-				if (fetchResult.type === "blocked" && fetchResult.reason) {
-					this.eventSink.log(`[Crawler] ${fetchResult.reason}`, "error");
-				} else {
-					this.eventSink.log(
-						`[Crawler] Failed ${item.url} with ${fetchResult.statusCode}`,
-						"error",
-					);
-				}
-				return result;
+				state.adaptDomainDelay(context.chargedDomain, fetchResult.statusCode);
+				const message =
+					fetchResult.type === "blocked" && fetchResult.reason
+						? `[Crawler] ${fetchResult.reason}`
+						: `[Crawler] Failed ${item.url} with ${fetchResult.statusCode}`;
+				return terminal("failure", message, "error");
 			}
 
 			if (fetchResult.type === "unsupported") {
-				const result = this.recordFetchedTerminal("skip", chargedDomainOverride());
-				this.eventSink.log(
+				return terminal(
+					"skip",
 					`[Crawler] Unsupported content type ${fetchResult.contentType || "(missing)"}: ${item.url}`,
 				);
-				return result;
 			}
 
 			// Queue/page identity remains the requested item URL. The validated effective URL
 			// owns document-base resolution and link-origin classification.
-			const processedContent = await processContent(
+			const processed = await processContent(
 				fetchResult.content,
 				fetchResult.effectiveUrl,
 				fetchResult.contentType,
-				this.logger,
+				this.deps.logger,
 				signal,
 			);
-			signal?.throwIfAborted();
-			if (processedContent.errors.length > 0) {
-				const result = this.recordFetchedTerminal("failure", chargedDomainOverride());
-				this.eventSink.log(`[Crawler] Content processing failed: ${item.url}`, "error");
-				return result;
+			signal.throwIfAborted();
+			if (processed.type === "failed") {
+				return terminal("failure", `[Crawler] Content processing failed: ${item.url}`, "error");
 			}
-			const mainContent = processedContent.extractedData.mainContent ?? "";
-			if (!hasUsablePageContent(fetchResult.contentType, mainContent)) {
-				const result = this.recordFetchedTerminal("failure", chargedDomainOverride());
-				this.eventSink.log(`[Crawler] No usable page content: ${item.url}`, "error");
-				return result;
+			const processedContent = processed.content;
+			if (!hasUsablePageContent(fetchResult.contentType, processedContent.mainContent)) {
+				return terminal("failure", `[Crawler] No usable page content: ${item.url}`, "error");
 			}
 
 			const normalizedCrawlLinks =
@@ -364,22 +356,22 @@ export class PagePipeline {
 							processedContent.links,
 						)
 					: [];
-			const pageResult = buildPageResult(this.options, item, fetchResult, processedContent);
+			const pageResult = buildPageResult(options, item, fetchResult, processedContent);
 
 			if (isClientErrorShell(pageResult.pageData.title, pageResult.pageData.mainContent)) {
-				const result = this.recordFetchedTerminal("failure", chargedDomainOverride());
-				this.eventSink.log(`[Crawler] Client error shell detected: ${item.url}`, "error");
-				return result;
+				return terminal("failure", `[Crawler] Client error shell detected: ${item.url}`, "error");
 			}
 
 			if (pageResult.robotsDirectives.noindex) {
-				this.eventSink.log(`[Robots] noindex: ${item.url}`);
 				if (!pageResult.robotsDirectives.nofollow) {
-					await this.enqueueLinks(item, normalizedCrawlLinks, signal);
-					signal?.throwIfAborted();
+					await this.admissionPolicy.admitNormalizedDiscoveredLinks(
+						item,
+						normalizedCrawlLinks,
+						signal,
+					);
+					signal.throwIfAborted();
 				}
-				const result = this.recordFetchedTerminal("skip", chargedDomainOverride());
-				return result;
+				return terminal("skip", `[Robots] noindex: ${item.url}`);
 			}
 
 			if (
@@ -389,24 +381,22 @@ export class PagePipeline {
 					fetchResult.contentLength,
 				)
 			) {
-				const result = this.recordFetchedTerminal("skip", chargedDomainOverride());
-				this.eventSink.log(`[Crawler] Soft 404 skipped: ${item.url}`);
-				return result;
+				return terminal("skip", `[Crawler] Soft 404 skipped: ${item.url}`);
 			}
-
-			signal?.throwIfAborted();
 
 			if (!pageResult.robotsDirectives.nofollow) {
-				await this.enqueueLinks(item, normalizedCrawlLinks, signal);
+				await this.admissionPolicy.admitNormalizedDiscoveredLinks(
+					item,
+					normalizedCrawlLinks,
+					signal,
+				);
 			}
 
-			this.eventSink.log(`[Crawler] Crawled ${item.url}`, "success");
+			eventSink.log(`[Crawler] Crawled ${item.url}`, "success");
+			const chargedDomain = chargedDomainOverride(item, context);
 			return {
 				terminalOutcome: "success",
-				terminalEffects: {
-					chargeDomainBudget: true,
-					...(chargedDomainOverride() ? { chargedDomain: context.chargedDomain } : {}),
-				},
+				terminalEffects: { chargeDomainBudget: true, ...(chargedDomain ? { chargedDomain } : {}) },
 				page: {
 					pageData: pageResult.pageData,
 					eventPayload: pageResult.eventPayload,

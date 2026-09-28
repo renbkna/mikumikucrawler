@@ -27,20 +27,31 @@ export function validatePublicHttpUrl(
 		return normalized;
 	}
 
-	const hostname = new URL(normalized.url).hostname;
-	if (!options.allowLocalhost && hostname.toLowerCase() === "localhost") {
-		return { error: "Localhost targets are not allowed" };
-	}
+	const hostError = publicHostnameError(new URL(normalized.url).hostname, options);
+	return hostError === null ? normalized : { error: hostError };
+}
 
+/** Lowercases a DNS hostname and removes its one terminal root dot. */
+export function normalizeHostname(hostname: string): string {
+	return hostname.toLowerCase().replace(/\.$/, "");
+}
+
+/** Rejects hosts that are not publicly routable by name or literal address. */
+export function publicHostnameError(
+	hostname: string,
+	options: ValidateUrlOptions = {},
+): string | null {
+	if (!options.allowLocalhost && normalizeHostname(hostname) === "localhost") {
+		return "Localhost targets are not allowed";
+	}
 	if (isPrivateOrReservedIpAddressLiteral(hostname)) {
-		return { error: "Private or reserved IP addresses are not allowed" };
+		return "Private or reserved IP addresses are not allowed";
 	}
-
-	return normalized;
+	return null;
 }
 
 function parseHttpUrl(url: string): URL | { error: string } {
-	if (!url || typeof url !== "string") {
+	if (!url) {
 		return { error: "URL is required" };
 	}
 	if (url.length > MAX_URL_LENGTH) {
@@ -67,7 +78,7 @@ function parseHttpUrl(url: string): URL | { error: string } {
 		if (!["http:", "https:"].includes(parsed.protocol)) {
 			return { error: "Only HTTP and HTTPS URLs are supported" };
 		}
-		parsed.hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+		parsed.hostname = normalizeHostname(parsed.hostname);
 
 		if (
 			(parsed.protocol === "http:" && parsed.port === "80") ||

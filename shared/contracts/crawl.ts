@@ -1,4 +1,5 @@
 import type { Static } from "typebox";
+import { isOneOf } from "../isOneOf.js";
 import type {
 	CrawlCountersSchema,
 	CrawlOptionsSchema,
@@ -6,8 +7,6 @@ import type {
 	CrawlSummarySchema,
 	ResumableCrawlListResponseSchema,
 } from "./schemas.js";
-
-export const DEFAULT_CRAWL_LIST_LIMIT = 25;
 
 export type CrawlOptions = Static<typeof CrawlOptionsSchema>;
 
@@ -37,21 +36,18 @@ export const CrawlStatusValues = [
 export type CrawlStatus = (typeof CrawlStatusValues)[number];
 export type ActiveCrawlStatus = (typeof ACTIVE_CRAWL_STATUS_VALUES)[number];
 export type ResumableCrawlStatus = (typeof RESUMABLE_CRAWL_STATUS_VALUES)[number];
+export type TerminalCrawlStatus = (typeof TERMINAL_CRAWL_STATUS_VALUES)[number];
 
 export function isActiveCrawlStatus(status: CrawlStatus): status is ActiveCrawlStatus {
-	return ACTIVE_CRAWL_STATUS_VALUES.includes(status as (typeof ACTIVE_CRAWL_STATUS_VALUES)[number]);
+	return isOneOf(ACTIVE_CRAWL_STATUS_VALUES, status);
 }
 
 export function isResumableCrawlStatus(status: CrawlStatus): status is ResumableCrawlStatus {
-	return RESUMABLE_CRAWL_STATUS_VALUES.includes(
-		status as (typeof RESUMABLE_CRAWL_STATUS_VALUES)[number],
-	);
+	return isOneOf(RESUMABLE_CRAWL_STATUS_VALUES, status);
 }
 
-export function isTerminalCrawlStatus(status: CrawlStatus): boolean {
-	return TERMINAL_CRAWL_STATUS_VALUES.includes(
-		status as (typeof TERMINAL_CRAWL_STATUS_VALUES)[number],
-	);
+export function isTerminalCrawlStatus(status: CrawlStatus): status is TerminalCrawlStatus {
+	return isOneOf(TERMINAL_CRAWL_STATUS_VALUES, status);
 }
 
 export const StopCrawlModeValues = ["pause", "force"] as const;

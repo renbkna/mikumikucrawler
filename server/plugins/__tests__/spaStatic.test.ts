@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { staticPlugin } from "@elysia/static";
 import { spaStaticPlugin } from "../spaStatic.js";
 
 function createDist(): string {
@@ -13,35 +12,31 @@ function createDist(): string {
 }
 
 describe("spa static plugin", () => {
-	test("patched dependency decodes valid paths and safely rejects malformed or escaping paths", async () => {
-		const rootPath = mkdtempSync(path.join(tmpdir(), "miku-static-decoder-"));
-		const assetsPath = path.join(rootPath, "assets");
-		mkdirSync(path.join(assetsPath, "nested"), { recursive: true });
-		writeFileSync(path.join(assetsPath, "miku song.txt"), "space");
-		writeFileSync(path.join(assetsPath, "nested", "song.txt"), "nested");
-		writeFileSync(path.join(rootPath, "secret.txt"), "secret");
+	test("malformed or escaping asset paths are not found and never leave the dist root", async () => {
+		const distPath = createDist();
+		writeFileSync(path.join(distPath, "assets", "app-1a2b.js"), "hashed");
+		writeFileSync(path.join(path.dirname(distPath), `${path.basename(distPath)}-secret.txt`), "x");
 		try {
-			const app = await staticPlugin({
-				assets: assetsPath,
-				prefix: "/files",
-				alwaysStatic: false,
-				decodeURI: true,
-			});
+			const app = await spaStaticPlugin({ distPath });
 
-			const spaced = await app.handle(new Request("http://localhost/files/miku%20song.txt"));
-			expect(spaced.status).toBe(200);
-			expect(await spaced.text()).toBe("space");
+			const asset = await app.handle(new Request("http://localhost/assets/app-1a2b.js"));
+			expect(asset.status).toBe(200);
+			expect(await asset.text()).toBe("hashed");
 
-			const nested = await app.handle(new Request("http://localhost/files/nested%2Fsong.txt"));
-			expect(nested.status).toBe(200);
-			expect(await nested.text()).toBe("nested");
-
-			for (const requestPath of ["/files/%", "/files/%2e%2e%2fsecret.txt"]) {
+			for (const requestPath of [
+				"/assets/%",
+				"/assets/%2e%2e%2findex.html",
+				`/assets/..%2f..%2f${path.basename(distPath)}-secret.txt`,
+				"/%",
+			]) {
 				const response = await app.handle(new Request(`http://localhost${requestPath}`));
 				expect(response.status).toBe(404);
 			}
 		} finally {
-			rmSync(rootPath, { recursive: true, force: true });
+			rmSync(distPath, { recursive: true, force: true });
+			rmSync(path.join(path.dirname(distPath), `${path.basename(distPath)}-secret.txt`), {
+				force: true,
+			});
 		}
 	});
 

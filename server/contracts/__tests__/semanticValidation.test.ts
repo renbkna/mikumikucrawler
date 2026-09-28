@@ -7,14 +7,17 @@ import {
 	isCrawlCounters,
 	isCrawlEventEnvelope,
 	isCrawlOptions,
-	isCrawlPageSummary,
 	isCrawlSummary,
 	isResumableCrawlListResponse,
 	isSearchResponse,
 	normalizeCrawlOptions,
 	PAGE_TEXT_LIMITS,
 } from "../../../shared/contracts/index.js";
-import { CrawlCountersSchema, QueueStatsSchema } from "../../../shared/contracts/schemas.js";
+import {
+	CrawlCountersSchema,
+	CrawlPageSummarySchema,
+	QueueStatsSchema,
+} from "../../../shared/contracts/schemas.js";
 
 const OPTIONS: CrawlOptions = {
 	target: "https://example.com",
@@ -177,7 +180,7 @@ describe("shared semantic validation", () => {
 	test("response schemas accept the full SQLite Unicode code-point projection", () => {
 		const summaryText = "😀".repeat(PAGE_TEXT_LIMITS.summaryTextCharacters);
 		expect(
-			isCrawlPageSummary({
+			Value.Check(CrawlPageSummarySchema, {
 				id: 1,
 				url: "https://example.com/page",
 				domain: "example.com",

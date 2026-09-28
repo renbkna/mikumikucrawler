@@ -83,7 +83,7 @@ describe("storage contract", () => {
 		expect(() => createStorage(databasePath)).toThrow(DatabaseOwnershipError);
 		owner.close();
 		const nextOwner = createStorage(databasePath);
-		expect(() => owner.repos.crawlRuns.list()).toThrow();
+		expect(() => owner.repos.crawlRuns.list({ limit: 25 })).toThrow();
 		expect(nextOwner.repos.crawlRuns.getById("preserved-run")).not.toBeNull();
 		nextOwner.close();
 	});
@@ -164,7 +164,7 @@ describe("storage contract", () => {
 				content: `<main>${"x".repeat(128 * 1024)}</main>`,
 				mainContent: "x".repeat(128 * 1024),
 			});
-			storage.repos.crawlRuns.markCompleted(crawlId, null);
+			storage.repos.crawlRuns.transition(crawlId, "completed", { stopReason: null });
 		}
 		getTestDatabase(storage)
 			.query("UPDATE crawl_runs SET completed_at = '2026-01-01 00:00:00' WHERE id = ?")
@@ -176,7 +176,9 @@ describe("storage contract", () => {
 			...options,
 			target: "https://paused.example/",
 		});
-		storage.repos.crawlRuns.markPaused("paused-checkpoint", "Pause requested");
+		storage.repos.crawlRuns.transition("paused-checkpoint", "paused", {
+			stopReason: "Pause requested",
+		});
 
 		const pageSize = (
 			getTestDatabase(storage).query("PRAGMA page_size").get() as { page_size: number }
@@ -186,15 +188,9 @@ describe("storage contract", () => {
 			maxBytes: usedBefore + pageSize - 1,
 			pageReservationBytes: pageSize,
 		});
-		const reservation = constrainedBudget.reserve("next-crawl", {
-			maxPages: 1,
-			pagesScanned: 0,
-		});
+		constrainedBudget.reserve("next-crawl", { maxPages: 1, pagesScanned: 0 });
 
-		expect(reservation).toEqual({
-			reservedBytes: pageSize,
-			reclaimedCrawlIds: ["a-old-terminal"],
-		});
+		expect(constrainedBudget.usage().reservedBytes).toBe(pageSize);
 		expect(storage.repos.crawlRuns.getById("a-old-terminal")).toBeNull();
 		expect(storage.repos.crawlRuns.getById("z-new-terminal")?.status).toBe("completed");
 		expect(storage.repos.crawlRuns.getById("paused-checkpoint")?.status).toBe("paused");
@@ -215,7 +211,7 @@ describe("storage contract", () => {
 				content: `<main>${"x".repeat(128 * 1024)}</main>`,
 				mainContent: "x".repeat(128 * 1024),
 			});
-			storage.repos.crawlRuns.markCompleted(crawlId, null);
+			storage.repos.crawlRuns.transition(crawlId, "completed", { stopReason: null });
 		}
 		getTestDatabase(storage)
 			.query("UPDATE crawl_runs SET completed_at = '2026-01-01 00:00:00' WHERE id = ?")
@@ -241,11 +237,7 @@ describe("storage contract", () => {
 		expect(storage.repos.crawlRuns.getById("owned-terminal")).not.toBeNull();
 		expect(storage.repos.crawlRuns.getById("reclaimable-terminal")).not.toBeNull();
 
-		const reservation = budget.reserve("accepted-admission", {
-			maxPages: 1,
-			pagesScanned: 0,
-		});
-		expect(reservation.reclaimedCrawlIds).toEqual(["reclaimable-terminal"]);
+		budget.reserve("accepted-admission", { maxPages: 1, pagesScanned: 0 });
 		expect(storage.repos.crawlRuns.getById("owned-terminal")).not.toBeNull();
 		expect(storage.repos.crawlRuns.getById("reclaimable-terminal")).toBeNull();
 	});
@@ -306,7 +298,7 @@ describe("storage contract", () => {
 			.query("UPDATE crawl_runs SET created_at = '2026-02-30 00:00:00' WHERE id = ?")
 			.run("crawl-constraints");
 		expect(() => storage.repos.crawlRuns.getById("crawl-constraints")).toThrow(
-			"Persisted timestamp is outside the date-time contract",
+			"timestamp outside the date-time contract",
 		);
 	});
 
@@ -320,8 +312,10 @@ describe("storage contract", () => {
 			.query("UPDATE crawl_runs SET updated_at = '2026-01-01 00:00:00' WHERE id = ?")
 			.run(run.id);
 
-		expect(storage.repos.crawlRuns.list({ from: "2026-01-01T00:00:00.001Z" })).toEqual([]);
-		expect(storage.repos.crawlRuns.list({ to: "2026-01-01T00:00:00.999Z" })).toEqual([
+		expect(storage.repos.crawlRuns.list({ from: "2026-01-01T00:00:00.001Z", limit: 25 })).toEqual(
+			[],
+		);
+		expect(storage.repos.crawlRuns.list({ to: "2026-01-01T00:00:00.999Z", limit: 25 })).toEqual([
 			expect.objectContaining({ id: run.id }),
 		]);
 	});
@@ -378,6 +372,7 @@ describe("storage contract", () => {
 				domain: "a.example",
 				depth: 1,
 				retries: 0,
+				availableAt: 0,
 			},
 		]);
 		storage.repos.crawlQueue.enqueueMany("crawl-b", [
@@ -386,6 +381,7 @@ describe("storage contract", () => {
 				domain: "b.example",
 				depth: 1,
 				retries: 0,
+				availableAt: 0,
 			},
 		]);
 
@@ -490,7 +486,10 @@ describe("storage contract", () => {
 		});
 
 		expect(committed.counters.totalDataKb).toBe(1.5);
-		storage.repos.crawlRuns.markCompleted("crawl-typed", null, 5);
+		storage.repos.crawlRuns.transition("crawl-typed", "completed", {
+			stopReason: null,
+			eventSequence: 5,
+		});
 
 		const loaded = storage.repos.crawlRuns.getById("crawl-typed");
 		expect(loaded?.counters).toEqual({
@@ -515,7 +514,7 @@ describe("storage contract", () => {
 		);
 
 		expect(
-			storage.repos.crawlRuns.list({ from: created.createdAt }).map((run) => run.id),
+			storage.repos.crawlRuns.list({ from: created.createdAt, limit: 25 }).map((run) => run.id),
 		).toContain("crawl-filter");
 	});
 
@@ -608,8 +607,8 @@ describe("storage contract", () => {
 		};
 
 		persistPageFixture(storage, pageInput);
-		expect(storage.repos.search.count(created.id, '"old"*')).toBe(1);
-		expect(storage.repos.search.count(created.id, '"fresh"*')).toBe(0);
+		expect(storage.repos.search.search(created.id, "old", 10).count).toBe(1);
+		expect(storage.repos.search.search(created.id, "fresh", 10).count).toBe(0);
 
 		getTestDatabase(storage)
 			.query(
@@ -617,8 +616,8 @@ describe("storage contract", () => {
 			)
 			.run("Fresh haystack", "Fresh description", "fresh haystack body", created.id, pageInput.url);
 
-		expect(storage.repos.search.count(created.id, '"old"*')).toBe(0);
-		expect(storage.repos.search.count(created.id, '"fresh"*')).toBe(1);
+		expect(storage.repos.search.search(created.id, "old", 10).count).toBe(0);
+		expect(storage.repos.search.search(created.id, "fresh", 10).count).toBe(1);
 
 		const other = storage.repos.crawlRuns.createRun("crawl-fts-other", {
 			...created.options,
@@ -629,8 +628,8 @@ describe("storage contract", () => {
 			crawlId: other.id,
 			url: "https://other.example/page",
 		});
-		expect(storage.repos.search.count(other.id, '"old"*')).toBe(1);
-		expect(storage.repos.search.search(created.id, '"old"*', 10)).toEqual([]);
+		expect(storage.repos.search.search(other.id, "old", 10).count).toBe(1);
+		expect(storage.repos.search.search(created.id, "old", 10).results).toEqual([]);
 	});
 
 	test("content-only pages remain searchable through extracted main content", () => {
@@ -648,8 +647,8 @@ describe("storage contract", () => {
 			mainContent: "uniquecontentonlyneedle body",
 		});
 
-		expect(storage.repos.search.count(created.id, '"uniquecontentonlyneedle"*')).toBe(1);
-		const results = storage.repos.search.search(created.id, '"uniquecontentonlyneedle"*', 10);
+		expect(storage.repos.search.search(created.id, "uniquecontentonlyneedle", 10).count).toBe(1);
+		const results = storage.repos.search.search(created.id, "uniquecontentonlyneedle", 10).results;
 		expect(results).toHaveLength(1);
 		expect(results[0]?.snippet).toContain("uniquecontentonlyneedle");
 		expect(Array.from(storage.repos.pages.iterateForExport(created.id))[0]?.content).toBe(
@@ -672,7 +671,7 @@ describe("storage contract", () => {
 			mainContent: "uniqueemptycontentneedle body",
 		});
 
-		expect(storage.repos.search.count(created.id, '"uniqueemptycontentneedle"*')).toBe(1);
+		expect(storage.repos.search.search(created.id, "uniqueemptycontentneedle", 10).count).toBe(1);
 	});
 
 	test("FTS snippets, rebuilds, updates and deletion use the canonical searchable text", () => {
@@ -691,19 +690,19 @@ describe("storage contract", () => {
 		});
 
 		try {
-			const before = storage.repos.search.search(created.id, '"uniquemainonlyneedle"*', 10);
+			const before = storage.repos.search.search(created.id, "uniquemainonlyneedle", 10).results;
 			expect(before).toHaveLength(1);
 			expect(before[0]?.snippet).toBe("uniquemainonlyneedle body");
 			getTestDatabase(storage).exec("INSERT INTO pages_fts(pages_fts) VALUES ('rebuild')");
-			expect(storage.repos.search.search(created.id, '"uniquemainonlyneedle"*', 10)).toEqual(
+			expect(storage.repos.search.search(created.id, "uniquemainonlyneedle", 10).results).toEqual(
 				before,
 			);
-			expect(storage.repos.search.count(created.id, '"uniquerawonlyneedle"*')).toBe(0);
+			expect(storage.repos.search.search(created.id, "uniquerawonlyneedle", 10).count).toBe(0);
 			getTestDatabase(storage)
 				.query("UPDATE pages SET main_content = '' WHERE crawl_id = ?")
 				.run(created.id);
-			expect(storage.repos.search.count(created.id, '"uniquemainonlyneedle"*')).toBe(0);
-			expect(storage.repos.search.count(created.id, '"uniquerawonlyneedle"*')).toBe(1);
+			expect(storage.repos.search.search(created.id, "uniquemainonlyneedle", 10).count).toBe(0);
+			expect(storage.repos.search.search(created.id, "uniquerawonlyneedle", 10).count).toBe(1);
 			// rank=1 compares the FTS index with its external content, including stale terms.
 			getTestDatabase(storage).exec(
 				"INSERT INTO pages_fts(pages_fts, rank) VALUES ('integrity-check', 1)",
@@ -735,13 +734,13 @@ describe("storage contract", () => {
 			description: "uniquedescriptiononlyneedle",
 		});
 
-		expect(storage.repos.search.search(created.id, '"uniquetitleonlyneedle"*', 10)[0]).toEqual(
+		expect(storage.repos.search.search(created.id, "uniquetitleonlyneedle", 10).results[0]).toEqual(
 			expect.objectContaining({
 				snippet: "uniquetitleonlyneedle",
 			}),
 		);
 		expect(
-			storage.repos.search.search(created.id, '"uniquedescriptiononlyneedle"*', 10)[0],
+			storage.repos.search.search(created.id, "uniquedescriptiononlyneedle", 10).results[0],
 		).toEqual(
 			expect.objectContaining({
 				snippet: "uniquedescriptiononlyneedle",
@@ -764,7 +763,8 @@ describe("storage contract", () => {
 			mainContent: "unrelated body text should not become the snippet",
 		});
 
-		const result = storage.repos.search.search(created.id, '"uniquetitlesnippetneedle"*', 10)[0];
+		const result = storage.repos.search.search(created.id, "uniquetitlesnippetneedle", 10)
+			.results[0];
 
 		expect(result?.snippet).toContain("uniquetitlesnippetneedle");
 		expect(result?.snippet).not.toContain("unrelated body text");
@@ -839,6 +839,7 @@ describe("storage contract", () => {
 					url: "https://item.example/page",
 					depth: 0,
 					retries: 0,
+					availableAt: 0,
 					domain: "item.example",
 				},
 			]),
@@ -891,12 +892,14 @@ describe("storage contract", () => {
 				url: "https://order.example/z-skip",
 				depth: 0,
 				retries: 0,
+				availableAt: 0,
 				domain: "order.example",
 			},
 			{
 				url: "https://order.example/a-failure",
 				depth: 0,
 				retries: 0,
+				availableAt: 0,
 				domain: "order.example",
 			},
 		]);
@@ -942,6 +945,7 @@ describe("storage contract", () => {
 				url: "https://rollback.example/page",
 				depth: 0,
 				retries: 0,
+				availableAt: 0,
 				domain: "rollback.example",
 			},
 		]);

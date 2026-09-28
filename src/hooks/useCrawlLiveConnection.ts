@@ -6,10 +6,11 @@ import {
 	isTerminalCrawlStatus,
 } from "../../shared/contracts/index.js";
 import { getCrawlRecoverySnapshot, subscribeToCrawlEvents } from "../api/crawls";
+import { getApiErrorMessage } from "../api/errors";
 import {
 	type CrawlControllerAction,
 	type CrawlControllerState,
-	isTerminalRunPhase,
+	isActiveRunPhase,
 } from "./crawlControllerState";
 
 const DURABLE_RECOVERY_RETRY_MS = 5_000;
@@ -91,9 +92,7 @@ export function useCrawlLiveConnection({
 					if (!isCurrent()) return;
 					if (durableSyncErrorCrawlIdRef.current !== crawlId) {
 						durableSyncErrorCrawlIdRef.current = crawlId;
-						onRecoveryError(
-							`Could not refresh stored crawl state: ${error instanceof Error ? error.message : "Request failed"}`,
-						);
+						onRecoveryError(`Could not refresh stored crawl state: ${getApiErrorMessage(error)}`);
 					}
 				}
 			} while (job.queued && isCurrent());
@@ -136,6 +135,9 @@ export function useCrawlLiveConnection({
 			onOpen: () => {
 				if (!isCurrent()) return;
 				dispatch({ type: "connectionChanged", connectionState: "connected" });
+				// The server subscribes before it answers, so a snapshot read now covers every
+				// event published before this stream began delivering.
+				void synchronizeDurableSnapshot(crawlId);
 			},
 			onError: () => {
 				if (!isCurrent()) return;
@@ -158,14 +160,7 @@ export function useCrawlLiveConnection({
 	});
 	useEffect(() => {
 		const crawlId = activeCrawlId;
-		if (
-			!crawlId ||
-			connectionState === "connected" ||
-			runPhase === "idle" ||
-			runPhase === "paused" ||
-			runPhase === "interrupted" ||
-			isTerminalRunPhase(runPhase)
-		) {
+		if (!crawlId || connectionState === "connected" || !isActiveRunPhase(runPhase)) {
 			return;
 		}
 

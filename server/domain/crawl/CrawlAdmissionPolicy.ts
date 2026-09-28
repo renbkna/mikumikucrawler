@@ -1,13 +1,45 @@
 import type { CrawlOptions } from "../../../shared/contracts/index.js";
 import type { ExtractedLink } from "../../types.js";
-import type { CrawlQueue, QueueItem } from "./CrawlQueue.js";
+import type { CrawlQueue, QueueAdmission, QueueItem } from "./CrawlQueue.js";
 import type { CrawlState } from "./CrawlState.js";
 import type { RobotsService } from "./RobotsService.js";
-import { type NormalizedDiscoveredLink, normalizeDiscoveredLink } from "./UrlPolicy.js";
+import {
+	type CrawlUrlIdentity,
+	type NormalizedDiscoveredLink,
+	normalizeDiscoveredLink,
+} from "./UrlPolicy.js";
 
 export type CrawlAdmissionState = Pick<CrawlState, "remainingAdmissionCapacity" | "setDomainDelay">;
 export type CrawlAdmissionQueue = Pick<CrawlQueue, "enqueueNormalized">;
 export type RobotsPolicyEvaluator = Pick<RobotsService, "evaluateIdentity">;
+
+export type RobotsGateResult =
+	| { type: "allowed" }
+	| { type: "disallowed" }
+	| { type: "unavailable"; reason: string }
+	| { type: "blocked"; reason: string };
+
+/**
+ * The crawl's robots.txt policy: skipped unless the crawl respects robots, and an
+ * allowed destination's crawl-delay becomes that domain's scheduling delay.
+ */
+export async function evaluateRobotsGate(
+	context: {
+		options: Pick<CrawlOptions, "respectRobots">;
+		state: Pick<CrawlState, "setDomainDelay">;
+		robotsService: RobotsPolicyEvaluator;
+	},
+	identity: CrawlUrlIdentity,
+	signal?: AbortSignal,
+	evaluation?: { allowLocalhostOnInitialRequest?: boolean },
+): Promise<RobotsGateResult> {
+	if (!context.options.respectRobots) return { type: "allowed" };
+	const policy = await context.robotsService.evaluateIdentity(identity, signal, evaluation);
+	if (policy.type === "allowed" && policy.crawlDelayMs !== undefined) {
+		context.state.setDomainDelay(policy.delayKey, policy.crawlDelayMs);
+	}
+	return policy;
+}
 
 export type AdmissionRejectionReason =
 	| "depth-limit"
@@ -19,7 +51,7 @@ export type AdmissionRejectionReason =
 export type LinkAdmissionResult =
 	| {
 			type: "admitted";
-			item: QueueItem;
+			item: QueueAdmission;
 			link: NormalizedDiscoveredLink;
 	  }
 	| {
@@ -51,79 +83,53 @@ export class CrawlAdmissionPolicy {
 		links: NormalizedDiscoveredLink[],
 		signal?: AbortSignal,
 	): Promise<LinkAdmissionResult[]> {
+		const rejected = (reason: AdmissionRejectionReason, url: string): LinkAdmissionResult => ({
+			type: "rejected",
+			reason,
+			url,
+		});
 		if (parent.depth >= this.options.crawlDepth) {
-			return links.map((link) => ({
-				type: "rejected",
-				reason: "depth-limit",
-				url: link.link.url,
-			}));
+			return links.map((link) => rejected("depth-limit", link.link.url));
 		}
 
+		const robotsContext = {
+			options: this.options,
+			state: this.state,
+			robotsService: this.robotsService,
+		};
 		const results: LinkAdmissionResult[] = [];
 		for (const normalized of links) {
 			signal?.throwIfAborted();
+			const url = normalized.link.url;
 			if (normalized.link.nofollow) {
-				results.push({
-					type: "rejected",
-					reason: "nofollow",
-					url: normalized.link.url,
-				});
+				results.push(rejected("nofollow", url));
 				continue;
 			}
 			if (this.state.remainingAdmissionCapacity() === 0) {
-				results.push({
-					type: "rejected",
-					reason: "queue-rejected",
-					url: normalized.link.url,
-				});
+				results.push(rejected("queue-rejected", url));
 				continue;
 			}
 
-			if (this.options.respectRobots) {
-				const linkPolicy = await this.robotsService.evaluateIdentity(normalized.identity, signal);
-				if (linkPolicy.type === "blocked") {
-					results.push({
-						type: "rejected",
-						reason: "outbound-policy",
-						url: normalized.link.url,
-					});
-					continue;
-				}
-				if (linkPolicy.type === "disallowed") {
-					results.push({
-						type: "rejected",
-						reason: "robots-disallowed",
-						url: normalized.link.url,
-					});
-					continue;
-				}
-
-				if (linkPolicy.type !== "unavailable" && linkPolicy.crawlDelayMs !== undefined) {
-					this.state.setDomainDelay(linkPolicy.delayKey, linkPolicy.crawlDelayMs);
-				}
+			const robots = await evaluateRobotsGate(robotsContext, normalized.identity, signal);
+			if (robots.type === "blocked" || robots.type === "disallowed") {
+				results.push(
+					rejected(robots.type === "blocked" ? "outbound-policy" : "robots-disallowed", url),
+				);
+				continue;
 			}
 
-			const item: QueueItem = {
+			const item: QueueAdmission = {
 				url: normalized.identity.canonicalUrl,
 				domain: normalized.identity.domainBudgetKey,
 				depth: parent.depth + 1,
 				retries: 0,
 				parentUrl: parent.url,
 			};
-			if (!this.queue.enqueueNormalized(item)) {
-				results.push({
-					type: "rejected",
-					reason: "queue-rejected",
-					url: item.url,
-				});
-				continue;
-			}
-
-			results.push({
-				type: "admitted",
-				item,
-				link: normalized,
-			});
+			results.push(
+				this.queue.enqueueNormalized(item)
+					? { type: "admitted", item, link: normalized }
+					: rejected("queue-rejected", item.url),
+			);
 		}
 
 		return results;

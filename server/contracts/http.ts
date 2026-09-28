@@ -1,33 +1,16 @@
 import { t } from "elysia";
 import type { Static } from "typebox";
 
-export const SSE_LAST_EVENT_ID_MAX = Number.MAX_SAFE_INTEGER;
-
 /**
  * Shared HTTP boundary contract:
- * - inputs: repeated API-edge primitives like page ids, list limits, and SSE resume headers
- * - invariants: ids and limits are positive integers; Last-Event-ID is a safe non-negative sequence
- * - forbidden states: fractional ids/limits and malformed, oversized, or imprecise SSE positions
+ * - inputs: repeated API-edge primitives like page ids
+ * - invariants: ids are positive integers
+ * - forbidden states: fractional or non-positive ids
  */
 export const PositiveIntegerIdSchema = t.Numeric({
 	minimum: 1,
 	multipleOf: 1,
 });
-
-export const SseHeadersSchema = t.Object(
-	{
-		"last-event-id": t.Optional(
-			t.Numeric({
-				minimum: 0,
-				maximum: SSE_LAST_EVENT_ID_MAX,
-				multipleOf: 1,
-			}),
-		),
-	},
-	{
-		additionalProperties: true,
-	},
-);
 
 export const ValidationErrorDetailSchema = t.Object({
 	path: t.String(),

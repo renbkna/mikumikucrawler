@@ -1,12 +1,10 @@
 import type { Static } from "typebox";
 import type {
-	ContentAnalysisSchema,
 	CrawlPageDataSchema,
 	CrawlPageDetailsSchema,
 	CrawlPagePayloadSchema,
 	CrawlPageSummarySchema,
 	CrawlPagesResponseSchema,
-	ExtractedDataSchema,
 	PageContentResponseSchema,
 	PageMetadataSchema,
 	QueueStatsSchema,
@@ -23,8 +21,6 @@ export const PAGE_TEXT_LIMITS = {
 /** TypeBox measures strings in UTF-16 units; SQLite projections count Unicode code points. */
 export const maxUtf16LengthForCodePoints = (limit: number): number => limit * 2;
 
-export type ContentAnalysis = Static<typeof ContentAnalysisSchema>;
-export type ExtractedData = Static<typeof ExtractedDataSchema>;
 export type PageContentResponse = Static<typeof PageContentResponseSchema>;
 export type PageMetadata = Static<typeof PageMetadataSchema>;
 export type QueueStats = Static<typeof QueueStatsSchema>;

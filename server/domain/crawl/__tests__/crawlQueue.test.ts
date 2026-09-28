@@ -99,6 +99,7 @@ describe("CrawlQueue", () => {
 			domain: "example.com",
 			depth: 1,
 			retries: 0,
+			availableAt: 0,
 		};
 		expect(queue.enqueueNormalized(lateItem)).toBe(false);
 		expect(() => queue.restore([lateItem])).toThrow("discarded queue");
@@ -127,6 +128,7 @@ describe("CrawlQueue", () => {
 						domain: "example.com",
 						depth: invalid.depth,
 						retries: invalid.retries,
+						availableAt: 0,
 					},
 				]),
 			).toThrow(invalid.message);
@@ -149,6 +151,7 @@ describe("CrawlQueue", () => {
 					domain: "external.example",
 					depth: 1,
 					retries: 0,
+					availableAt: 0,
 				},
 			]),
 		).toThrow("outside full crawl mode");

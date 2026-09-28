@@ -1,7 +1,7 @@
 import path from "node:path";
 import { staticPlugin } from "@elysia/static";
 import { Elysia, status } from "elysia";
-import { API_PATHS, isApiPath } from "../../shared/contracts/index.js";
+import { isServerOwnedPath, SERVER_OWNED_PATH_PREFIXES } from "../../shared/contracts/index.js";
 
 interface SpaStaticPluginOptions {
 	distPath: string;
@@ -9,11 +9,13 @@ interface SpaStaticPluginOptions {
 
 const SPA_DOCUMENT_CACHE_CONTROL = "no-store";
 
+function staticPathSegmentPattern(prefix: string): RegExp {
+	return new RegExp(`(?:^|[\\\\/])${RegExp.escape(prefix.slice(1))}(?:[\\\\/]|$)`);
+}
+
 const ROOT_STATIC_IGNORES = [
 	/(?:^|[\\/])assets(?:[\\/]|$)/,
-	/(?:^|[\\/])api(?:[\\/]|$)/,
-	/(?:^|[\\/])health$/,
-	/(?:^|[\\/])openapi(?:[\\/]|$)/,
+	...SERVER_OWNED_PATH_PREFIXES.map(staticPathSegmentPattern),
 	/(?:^|[\\/])index\.html$/,
 	/(?:^|[\\/])\.DS_Store$/,
 	/(?:^|[\\/])\.git(?:[\\/]|$)/,
@@ -60,10 +62,7 @@ export async function spaStaticPlugin({ distPath }: SpaStaticPluginOptions) {
 			const decodedPath = decodeRequestPath(requestPath);
 			if (
 				decodedPath === null ||
-				isApiPath(decodedPath) ||
-				decodedPath === API_PATHS.health ||
-				decodedPath === API_PATHS.openapi ||
-				decodedPath.startsWith(`${API_PATHS.openapi}/`) ||
+				isServerOwnedPath(decodedPath) ||
 				!isSpaDocumentRequest(request, requestPath)
 			) {
 				return status(404, { error: "Not Found" });

@@ -3,12 +3,12 @@ import type { CrawlOptions } from "../../../../shared/contracts/index.js";
 import { silentLogger } from "../../../__tests__/runtimeFixture.js";
 import type { Logger } from "../../../config/logging.js";
 import type { RobotsPolicyEvaluator } from "../CrawlAdmissionPolicy.js";
-import { PagePipeline } from "../PagePipeline.js";
+import { PagePipeline, type PagePipelineDependencies } from "../PagePipeline.js";
 import type { DestinationAuthorizer } from "../rendering/contracts.js";
 
-type PagePipelineState = ConstructorParameters<typeof PagePipeline>[1];
-type PagePipelineQueue = ConstructorParameters<typeof PagePipeline>[2];
-type PageFetcher = ConstructorParameters<typeof PagePipeline>[3];
+type PagePipelineState = PagePipelineDependencies["state"];
+type PagePipelineQueue = PagePipelineDependencies["queue"];
+type PageFetcher = PagePipelineDependencies["fetchService"];
 
 const defaultOptions: CrawlOptions = {
 	target: "https://example.com/",
@@ -60,17 +60,17 @@ function createPipeline(
 	localSeedUrl?: string,
 	itemTimeoutMs?: number,
 ): PagePipeline {
-	return new PagePipeline(
-		{ ...defaultOptions, ...options },
-		{ ...defaultState, ...state },
-		{ ...defaultQueue, ...queue },
+	return new PagePipeline({
+		options: { ...defaultOptions, ...options },
+		state: { ...defaultState, ...state },
+		queue: { ...defaultQueue, ...queue },
 		fetchService,
-		{ ...defaultRobots, ...robotsService },
+		robotsService: { ...defaultRobots, ...robotsService },
 		eventSink,
 		logger,
-		localSeedUrl,
-		itemTimeoutMs,
-	);
+		...(localSeedUrl === undefined ? {} : { localSeedUrl }),
+		...(itemTimeoutMs === undefined ? {} : { itemTimeoutMs }),
+	});
 }
 
 describe("page pipeline contract", () => {
@@ -98,6 +98,7 @@ describe("page pipeline contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toMatchObject({ terminalOutcome: "skip" });
@@ -133,6 +134,7 @@ describe("page pipeline contract", () => {
 			domain: "www.youtube.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(state.adaptDomainDelay).toHaveBeenCalledWith("www.youtube.com", 403);
@@ -170,6 +172,7 @@ describe("page pipeline contract", () => {
 			domain: "example.com",
 			depth: 1,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toEqual({
@@ -201,6 +204,7 @@ describe("page pipeline contract", () => {
 			domain: "example.com",
 			depth: 1,
 			retries: 0,
+			availableAt: 0,
 		};
 
 		await expect(pipeline.process(item)).resolves.toEqual({
@@ -232,6 +236,7 @@ describe("page pipeline contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		};
 
 		await expect(pipeline.process(item)).rejects.toThrow(
@@ -273,6 +278,7 @@ describe("page pipeline contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(enqueueNormalized).toHaveBeenCalledWith(
@@ -326,6 +332,7 @@ describe("page pipeline contract", () => {
 					domain: "example.com",
 					depth: 0,
 					retries: 0,
+					availableAt: 0,
 				},
 				controller.signal,
 			),
@@ -363,6 +370,7 @@ describe("page pipeline contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result.page?.eventPayload.url).toBe("https://example.com/");
@@ -386,7 +394,7 @@ describe("page pipeline contract", () => {
 				fetch: async () => ({
 					type: "success",
 					content:
-						"<html><body><main>Oops! Something went wrong Miku encountered an unexpected error Try Again Reload Page</main></body></html>",
+						"<html><body><main>Oops! Something went wrong Application error: a client-side exception has occurred Try Again Reload Page</main></body></html>",
 					effectiveUrl: "https://example.com/crashed-app",
 					statusCode: 200,
 					contentType: "text/html",
@@ -405,6 +413,7 @@ describe("page pipeline contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toEqual({
@@ -449,6 +458,7 @@ describe("page pipeline contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toEqual({
@@ -487,6 +497,7 @@ describe("page pipeline contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toEqual({
@@ -539,6 +550,7 @@ describe("page pipeline contract", () => {
 					domain: "example.com",
 					depth: 0,
 					retries: 0,
+					availableAt: 0,
 				},
 				controller.signal,
 			),
@@ -578,6 +590,7 @@ describe("page pipeline contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result.page?.pageData.mediaCount).toBe(0);
@@ -621,6 +634,7 @@ describe("page pipeline contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result.page?.pageData.mediaCount).toBe(1);
@@ -637,6 +651,7 @@ describe("page pipeline contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		};
 		const pipeline = createPipeline(
 			{
@@ -679,6 +694,7 @@ describe("page pipeline contract", () => {
 					domain: "example.com",
 					depth: 0,
 					retries: 0,
+					availableAt: 0,
 				}),
 			).resolves.toEqual({
 				terminalOutcome: "failure",
@@ -696,6 +712,7 @@ describe("page pipeline contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 1,
+			availableAt: 0,
 		};
 		const pipeline = createPipeline(
 			{
@@ -734,6 +751,7 @@ describe("page pipeline contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 1,
+			availableAt: 0,
 		};
 		const pipeline = createPipeline(
 			{
@@ -811,6 +829,7 @@ describe("page pipeline contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(enqueueNormalized).toHaveBeenCalledWith(
@@ -854,6 +873,7 @@ describe("page pipeline contract", () => {
 					domain: `${source}.example`,
 					depth: 0,
 					retries: 0,
+					availableAt: 0,
 				}),
 			),
 		);
@@ -890,6 +910,7 @@ describe("page pipeline contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toMatchObject({ terminalOutcome: "failure" });
@@ -926,6 +947,7 @@ describe("page pipeline contract", () => {
 			domain: "example.com",
 			depth: 0,
 			retries: 0,
+			availableAt: 0,
 		});
 
 		expect(result).toMatchObject({ terminalOutcome: "failure" });
@@ -969,6 +991,7 @@ describe("page pipeline contract", () => {
 					domain: "example.com",
 					depth: 0,
 					retries: 0,
+					availableAt: 0,
 				},
 				controller.signal,
 			),

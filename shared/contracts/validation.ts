@@ -10,19 +10,13 @@ import type {
 } from "./crawl.js";
 import type { CrawlEventEnvelope } from "./events.js";
 import { type DeleteCrawlResponse, DeleteCrawlResponseSchema } from "./http.js";
-import type {
-	CrawlPageData,
-	CrawlPageDetails,
-	CrawlPageSummary,
-	PageContentResponse,
-} from "./pageData.js";
+import type { CrawlPageData, CrawlPageDetails, PageContentResponse } from "./pageData.js";
 import {
 	CrawlCountersSchema,
 	CrawlEventEnvelopeSchema,
 	CrawlOptionsSchema,
 	CrawlPageDataSchema,
 	CrawlPageDetailsSchema,
-	CrawlPageSummarySchema,
 	CrawlRecoverySnapshotSchema,
 	CrawlSummarySchema,
 	PageContentResponseSchema,
@@ -97,10 +91,6 @@ export function isCrawlPageData(value: unknown): value is CrawlPageData {
 
 export function isCrawlPageDetails(value: unknown): value is CrawlPageDetails {
 	return check(CrawlPageDetailsSchema, value);
-}
-
-export function isCrawlPageSummary(value: unknown): value is CrawlPageSummary {
-	return check(CrawlPageSummarySchema, value);
 }
 
 export function isCrawlRecoverySnapshot(value: unknown): value is CrawlRecoverySnapshot {

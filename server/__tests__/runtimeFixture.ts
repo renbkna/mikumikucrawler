@@ -18,8 +18,12 @@ export const successfulHtmlHttpClient: HttpClient = {
 	fetch: async () => htmlResponse(),
 };
 
-export async function waitFor<T>(read: () => T, predicate: (value: T) => boolean): Promise<T> {
-	const timeoutAt = Date.now() + 5000;
+export async function waitFor<T>(
+	read: () => T,
+	predicate: (value: T) => boolean,
+	timeoutMs = 5000,
+): Promise<T> {
+	const timeoutAt = Date.now() + timeoutMs;
 	while (Date.now() < timeoutAt) {
 		const value = read();
 		if (predicate(value)) return value;

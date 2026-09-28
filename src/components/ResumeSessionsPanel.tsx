@@ -1,10 +1,9 @@
 import { Heart, History, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useEffectEvent } from "react";
 import type { ResumableSessionSummary } from "../../shared/contracts/index.js";
-import { useDialogModal } from "../hooks/useDialogModal";
+import { Modal } from "./Modal";
 
 interface ResumeSessionsPanelProps {
-	isOpen: boolean;
 	sessions: ResumableSessionSummary[];
 	isLoading: boolean;
 	fetchError: string | null;
@@ -44,7 +43,6 @@ function shortenUrl(url: string, maxLength = 45): string {
 }
 
 export function ResumeSessionsPanel({
-	isOpen,
 	sessions,
 	isLoading,
 	fetchError,
@@ -55,16 +53,13 @@ export function ResumeSessionsPanel({
 	onClose,
 	onResume,
 }: Readonly<ResumeSessionsPanelProps>) {
-	const { dialogRef } = useDialogModal({ isOpen });
 	const isActionPending = deletingId !== null || resumingId !== null;
 	const refreshOnOpen = useEffectEvent(onRefresh);
 
-	// Fetch whenever the panel opens
+	// The panel is mounted only while open, so opening it refreshes the list.
 	useEffect(() => {
-		if (isOpen) {
-			refreshOnOpen();
-		}
-	}, [isOpen]);
+		refreshOnOpen();
+	}, []);
 
 	// ── Event handlers ─────────────────────────────────────────────────────────
 
@@ -79,151 +74,135 @@ export function ResumeSessionsPanel({
 		}
 	};
 
-	if (!isOpen) return null;
-
 	return (
-		<dialog
-			ref={dialogRef}
-			aria-labelledby="resume-dialog-title"
-			className="fixed inset-0 z-50 flex items-center justify-center p-4 m-0 w-full h-full bg-transparent border-none backdrop:bg-black/20 backdrop:backdrop-blur-sm"
-			onClose={onClose}
-		>
-			<button
-				type="button"
-				className="absolute inset-0 w-full h-full bg-transparent border-none cursor-default"
-				onClick={onClose}
-				aria-label="Close dialog"
-				tabIndex={-1}
-			/>
-			<div className="relative w-full max-w-xl p-6 bg-[#fbfcff] rounded-[18px] shadow-[0_16px_50px_rgba(105,117,170,0.14)] border border-miku-border max-h-[90vh] overflow-y-auto animate-pop focus:outline-none">
-				{/* ── Header ─────────────────────────────────────────────────────── */}
-				<div className="flex items-center justify-between mb-6">
-					<h2
-						id="resume-dialog-title"
-						className="text-xl font-bold gradient-text tracking-tight flex items-center gap-2"
+		<Modal labelledBy="resume-dialog-title" size="xl" onClose={onClose}>
+			{/* ── Header ─────────────────────────────────────────────────────── */}
+			<div className="flex items-center justify-between mb-6">
+				<h2
+					id="resume-dialog-title"
+					className="text-xl font-bold gradient-text tracking-tight flex items-center gap-2"
+				>
+					<History className="text-miku-teal w-5 h-5" />
+					Resume Crawl
+				</h2>
+
+				<div className="flex items-center gap-2">
+					<button
+						type="button"
+						onClick={onRefresh}
+						disabled={isLoading || isActionPending}
+						className="p-2 rounded-full hover:bg-miku-teal/10 text-miku-text/40 hover:text-miku-teal transition-colors disabled:opacity-40"
+						aria-label="Refresh session list"
+						title="Refresh"
 					>
-						<History className="text-miku-teal w-5 h-5" />
-						Resume Crawl
-					</h2>
-
-					<div className="flex items-center gap-2">
-						<button
-							type="button"
-							onClick={onRefresh}
-							disabled={isLoading || isActionPending}
-							className="p-2 rounded-full hover:bg-miku-teal/10 text-miku-text/40 hover:text-miku-teal transition-colors disabled:opacity-40"
-							aria-label="Refresh session list"
-							title="Refresh"
-						>
-							<RefreshCw className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
-						</button>
-						<button
-							type="button"
-							onClick={onClose}
-							className="p-2 rounded-full hover:bg-miku-pink/10 text-miku-text/40 hover:text-miku-pink transition-colors"
-							aria-label="Close dialog"
-						>
-							✕
-						</button>
-					</div>
+						<RefreshCw className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
+					</button>
+					<button
+						type="button"
+						onClick={onClose}
+						className="p-2 rounded-full hover:bg-miku-pink/10 text-miku-text/40 hover:text-miku-pink transition-colors"
+						aria-label="Close dialog"
+					>
+						✕
+					</button>
 				</div>
+			</div>
 
-				{/* ── Body ───────────────────────────────────────────────────────── */}
-				<div className="space-y-3">
-					{/* Error state */}
-					{fetchError && (
-						<div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm font-medium">
-							{fetchError}
-						</div>
-					)}
+			{/* ── Body ───────────────────────────────────────────────────────── */}
+			<div className="space-y-3">
+				{/* Error state */}
+				{fetchError && (
+					<div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm font-medium">
+						{fetchError}
+					</div>
+				)}
 
-					{/* Loading skeleton */}
-					{isLoading && sessions.length === 0 && (
-						<div className="space-y-2">
-							{[1, 2].map((n) => (
-								<div key={n} className="h-20 rounded-xl bg-miku-teal/5 animate-pulse" />
-							))}
-						</div>
-					)}
+				{/* Loading skeleton */}
+				{isLoading && sessions.length === 0 && (
+					<div className="space-y-2">
+						{[1, 2].map((n) => (
+							<div key={n} className="h-20 rounded-xl bg-miku-teal/5 animate-pulse" />
+						))}
+					</div>
+				)}
 
-					{/* Empty state */}
-					{!isLoading && sessions.length === 0 && !fetchError && (
-						<div className="py-12 text-center">
-							<Heart className="text-miku-pink/30 mx-auto mb-3" size={40} fill="currentColor" />
-							<p className="text-miku-text/40 font-medium text-sm">No resumable crawls found.</p>
-							<p className="text-miku-text/30 text-xs mt-1">
-								Paused and interrupted crawls appear here.
-							</p>
-						</div>
-					)}
+				{/* Empty state */}
+				{!isLoading && sessions.length === 0 && !fetchError && (
+					<div className="py-12 text-center">
+						<Heart className="text-miku-pink/30 mx-auto mb-3" size={40} fill="currentColor" />
+						<p className="text-miku-text/40 font-medium text-sm">No resumable crawls found.</p>
+						<p className="text-miku-text/30 text-xs mt-1">
+							Paused and interrupted crawls appear here.
+						</p>
+					</div>
+				)}
 
-					{/* Session list */}
-					{sessions.map((session) => (
-						<div
-							key={session.id}
-							className="p-4 rounded-xl border border-miku-border bg-white/65 hover:border-miku-teal/25 transition-colors duration-200"
-						>
-							<div className="flex items-start justify-between gap-3">
-								{/* Session info */}
-								<div className="min-w-0 flex-1">
-									<p className="font-bold text-miku-text text-sm truncate" title={session.target}>
-										{shortenUrl(session.target)}
-									</p>
-									<div className="flex items-center gap-3 mt-1 flex-wrap">
-										<span className="text-xs text-miku-text/50 font-medium">
-											{session.pagesScanned} page
-											{session.pagesScanned !== 1 ? "s" : ""} crawled
-										</span>
-										<span className="text-xs text-miku-text/40">·</span>
-										<span className="text-xs text-miku-text/50 font-medium">
-											{session.status === "paused" ? "Paused" : "Interrupted"}{" "}
-											{formatRelativeTime(session.updatedAt)}
-										</span>
-									</div>
-								</div>
-
-								{/* Actions */}
-								<div className="flex items-center gap-2 shrink-0">
-									<button
-										type="button"
-										onClick={() => {
-											if (window.confirm(`Delete the saved crawl for ${session.target}?`)) {
-												onDelete(session.id);
-											}
-										}}
-										disabled={isActionPending}
-										className="p-2 rounded-xl text-miku-text/30 hover:text-rose-500 hover:bg-rose-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-										aria-label={`Delete session for ${session.target}`}
-										title="Delete session"
-									>
-										<Trash2 className="w-4 h-4" />
-									</button>
-									<button
-										type="button"
-										onClick={() => {
-											void handleResume(session);
-										}}
-										disabled={isActionPending}
-										className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-miku-teal hover:bg-miku-teal-dark text-white text-xs font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-										aria-label={`Resume session for ${session.target}`}
-									>
-										<RotateCcw className="w-3.5 h-3.5" />
-										Resume
-									</button>
+				{/* Session list */}
+				{sessions.map((session) => (
+					<div
+						key={session.id}
+						className="p-4 rounded-xl border border-miku-border bg-white/65 hover:border-miku-teal/25 transition-colors duration-200"
+					>
+						<div className="flex items-start justify-between gap-3">
+							{/* Session info */}
+							<div className="min-w-0 flex-1">
+								<p className="font-bold text-miku-text text-sm truncate" title={session.target}>
+									{shortenUrl(session.target)}
+								</p>
+								<div className="flex items-center gap-3 mt-1 flex-wrap">
+									<span className="text-xs text-miku-text/50 font-medium">
+										{session.pagesScanned} page
+										{session.pagesScanned !== 1 ? "s" : ""} crawled
+									</span>
+									<span className="text-xs text-miku-text/40">·</span>
+									<span className="text-xs text-miku-text/50 font-medium">
+										{session.status === "paused" ? "Paused" : "Interrupted"}{" "}
+										{formatRelativeTime(session.updatedAt)}
+									</span>
 								</div>
 							</div>
-						</div>
-					))}
-				</div>
 
-				{/* ── Footer note ────────────────────────────────────────────────── */}
-				{sessions.length > 0 && (
-					<p className="mt-4 text-xs text-miku-text/30 text-center font-medium">
-						Resume continues from the saved queue and restores the saved crawl settings for that
-						session.
-					</p>
-				)}
+							{/* Actions */}
+							<div className="flex items-center gap-2 shrink-0">
+								<button
+									type="button"
+									onClick={() => {
+										if (window.confirm(`Delete the saved crawl for ${session.target}?`)) {
+											onDelete(session.id);
+										}
+									}}
+									disabled={isActionPending}
+									className="p-2 rounded-xl text-miku-text/30 hover:text-rose-500 hover:bg-rose-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+									aria-label={`Delete session for ${session.target}`}
+									title="Delete session"
+								>
+									<Trash2 className="w-4 h-4" />
+								</button>
+								<button
+									type="button"
+									onClick={() => {
+										void handleResume(session);
+									}}
+									disabled={isActionPending}
+									className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-miku-teal hover:bg-miku-teal-dark text-white text-xs font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+									aria-label={`Resume session for ${session.target}`}
+								>
+									<RotateCcw className="w-3.5 h-3.5" />
+									Resume
+								</button>
+							</div>
+						</div>
+					</div>
+				))}
 			</div>
-		</dialog>
+
+			{/* ── Footer note ────────────────────────────────────────────────── */}
+			{sessions.length > 0 && (
+				<p className="mt-4 text-xs text-miku-text/30 text-center font-medium">
+					Resume continues from the saved queue and restores the saved crawl settings for that
+					session.
+				</p>
+			)}
+		</Modal>
 	);
 }

@@ -1,4 +1,4 @@
-import { t } from "elysia/type-system";
+import { t } from "elysia";
 import { CRAWL_METHODS, CRAWL_OPTION_BOUNDS } from "../crawl.js";
 import { MAX_URL_LENGTH } from "../url.js";
 import { CRAWL_EXPORT_FORMAT_VALUES } from "./api.js";
@@ -10,6 +10,10 @@ import {
 	PAGE_TEXT_LIMITS,
 } from "./pageData.js";
 
+const boundedInteger = (bounds: { min: number; max: number }) =>
+	t.Number({ minimum: bounds.min, maximum: bounds.max, multipleOf: 1 });
+const nonNegativeInteger = () => t.Number({ minimum: 0, multipleOf: 1 });
+
 export const CrawlStatusSchema = t.Enum(CrawlStatusValues);
 
 export const CrawlMethodValues = CRAWL_METHODS;
@@ -20,36 +24,12 @@ export const StopCrawlModeSchema = t.Enum(StopCrawlModeValues);
 export const CrawlOptionsSchema = t.Object({
 	target: t.String({ minLength: 1, maxLength: MAX_URL_LENGTH }),
 	crawlMethod: CrawlMethodSchema,
-	crawlDepth: t.Number({
-		minimum: CRAWL_OPTION_BOUNDS.crawlDepth.min,
-		maximum: CRAWL_OPTION_BOUNDS.crawlDepth.max,
-		multipleOf: 1,
-	}),
-	crawlDelay: t.Number({
-		minimum: CRAWL_OPTION_BOUNDS.crawlDelay.min,
-		maximum: CRAWL_OPTION_BOUNDS.crawlDelay.max,
-		multipleOf: 1,
-	}),
-	maxPages: t.Number({
-		minimum: CRAWL_OPTION_BOUNDS.maxPages.min,
-		maximum: CRAWL_OPTION_BOUNDS.maxPages.max,
-		multipleOf: 1,
-	}),
-	maxPagesPerDomain: t.Number({
-		minimum: CRAWL_OPTION_BOUNDS.maxPagesPerDomain.min,
-		maximum: CRAWL_OPTION_BOUNDS.maxPagesPerDomain.max,
-		multipleOf: 1,
-	}),
-	maxConcurrentRequests: t.Number({
-		minimum: CRAWL_OPTION_BOUNDS.maxConcurrentRequests.min,
-		maximum: CRAWL_OPTION_BOUNDS.maxConcurrentRequests.max,
-		multipleOf: 1,
-	}),
-	retryLimit: t.Number({
-		minimum: CRAWL_OPTION_BOUNDS.retryLimit.min,
-		maximum: CRAWL_OPTION_BOUNDS.retryLimit.max,
-		multipleOf: 1,
-	}),
+	crawlDepth: boundedInteger(CRAWL_OPTION_BOUNDS.crawlDepth),
+	crawlDelay: boundedInteger(CRAWL_OPTION_BOUNDS.crawlDelay),
+	maxPages: boundedInteger(CRAWL_OPTION_BOUNDS.maxPages),
+	maxPagesPerDomain: boundedInteger(CRAWL_OPTION_BOUNDS.maxPagesPerDomain),
+	maxConcurrentRequests: boundedInteger(CRAWL_OPTION_BOUNDS.maxConcurrentRequests),
+	retryLimit: boundedInteger(CRAWL_OPTION_BOUNDS.retryLimit),
 	dynamic: t.Boolean(),
 	respectRobots: t.Boolean(),
 	contentOnly: t.Boolean(),
@@ -57,12 +37,12 @@ export const CrawlOptionsSchema = t.Object({
 });
 
 export const CrawlCountersSchema = t.Object({
-	pagesScanned: t.Number({ minimum: 0, multipleOf: 1 }),
-	successCount: t.Number({ minimum: 0, multipleOf: 1 }),
-	failureCount: t.Number({ minimum: 0, multipleOf: 1 }),
-	skippedCount: t.Number({ minimum: 0, multipleOf: 1 }),
-	linksFound: t.Number({ minimum: 0, multipleOf: 1 }),
-	mediaFiles: t.Number({ minimum: 0, multipleOf: 1 }),
+	pagesScanned: nonNegativeInteger(),
+	successCount: nonNegativeInteger(),
+	failureCount: nonNegativeInteger(),
+	skippedCount: nonNegativeInteger(),
+	linksFound: nonNegativeInteger(),
+	mediaFiles: nonNegativeInteger(),
 	totalDataKb: t.Number({ minimum: 0 }),
 });
 
@@ -135,16 +115,6 @@ export const PageMetadataSchema = t.Object({
 	robots: t.Optional(t.String({ maxLength: PAGE_TEXT_LIMITS.metadataValueBytes })),
 });
 
-export const ContentAnalysisSchema = t.Object({
-	wordCount: t.Optional(t.Number({ minimum: 0 })),
-	readingTime: t.Optional(t.Number({ minimum: 0 })),
-	language: t.Optional(t.String()),
-});
-
-export const ExtractedDataSchema = t.Object({
-	mainContent: t.Optional(t.String()),
-});
-
 export const CrawlPageDetailsSchema = t.Object({
 	wordCount: t.Optional(t.Number({ minimum: 0 })),
 	readingTime: t.Optional(t.Number({ minimum: 0 })),
@@ -152,8 +122,8 @@ export const CrawlPageDetailsSchema = t.Object({
 });
 
 export const QueueStatsSchema = t.Object({
-	activeRequests: t.Number({ minimum: 0, multipleOf: 1 }),
-	queueLength: t.Number({ minimum: 0, multipleOf: 1 }),
+	activeRequests: nonNegativeInteger(),
+	queueLength: nonNegativeInteger(),
 	elapsedTime: t.Number({ minimum: 0 }),
 	pagesPerSecond: t.Number({ minimum: 0 }),
 });
@@ -204,18 +174,20 @@ export const CrawlPageSummarySchema = t.Object({
 
 export const CrawlPagesResponseSchema = t.Object({
 	pages: t.Array(CrawlPageSummarySchema, { maxItems: CRAWL_PAGE_SNAPSHOT_LIMIT }),
-	count: t.Number({ minimum: 0, multipleOf: 1 }),
+	count: nonNegativeInteger(),
 });
 
 export const CrawlRecoverySnapshotSchema = t.Object({
 	crawl: CrawlSummarySchema,
 	pages: t.Array(CrawlPageSummarySchema, { maxItems: CRAWL_PAGE_SNAPSHOT_LIMIT }),
-	pageCount: t.Number({ minimum: 0, multipleOf: 1 }),
+	pageCount: nonNegativeInteger(),
 });
 
 export const CrawlStartedPayloadSchema = t.Object({
 	target: t.String(),
 	resume: t.Boolean(),
+	/** Whether the run renders JavaScript: false when not requested or when the renderer failed to start. */
+	dynamicRendering: t.Boolean(),
 });
 
 export const CrawlProgressPayloadSchema = t.Object({

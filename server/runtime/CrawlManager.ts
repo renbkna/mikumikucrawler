@@ -2,13 +2,12 @@ import type {
 	CrawlCounters,
 	CrawlOptions,
 	CrawlStatus,
+	CrawlSummary,
 	StopCrawlMode,
 } from "../../shared/contracts/index.js";
 import {
 	crawlOptionsEqual,
-	DEFAULT_CRAWL_LIST_LIMIT,
 	isActiveCrawlStatus,
-	isCrawlOptions,
 	isResumableCrawlStatus,
 	isTerminalCrawlStatus,
 } from "../../shared/contracts/index.js";
@@ -18,7 +17,8 @@ import type { DomainStateRecord } from "../domain/crawl/CrawlState.js";
 import { RobotsService } from "../domain/crawl/RobotsService.js";
 import type { HttpClient } from "../outbound/HttpClient.js";
 import type { DurableStorageBudget } from "../storage/DurableStorageBudget.js";
-import type { CrawlRunRecord, StorageRepos } from "../storage/db.js";
+import type { StorageRepos } from "../storage/db.js";
+import { getErrorMessage } from "../utils/helpers.js";
 import { WorkPermitPool } from "../utils/WorkPermitPool.js";
 import { CrawlRuntime } from "./CrawlRuntime.js";
 import type { EventStream } from "./EventStream.js";
@@ -40,18 +40,18 @@ interface RuntimeOwner {
 
 export type ResumeCrawlResult =
 	| { type: "not-found" }
-	| { type: "not-resumable"; crawl: CrawlRunRecord }
-	| { type: "already-active"; crawl: CrawlRunRecord }
-	| { type: "resumed"; crawl: CrawlRunRecord };
+	| { type: "not-resumable"; crawl: CrawlSummary }
+	| { type: "already-active"; crawl: CrawlSummary }
+	| { type: "resumed"; crawl: CrawlSummary };
 
 export type StopCrawlResult =
 	| { type: "not-found" }
-	| { type: "not-active"; crawl: CrawlRunRecord }
-	| { type: "stopped"; crawl: CrawlRunRecord };
+	| { type: "not-active"; crawl: CrawlSummary }
+	| { type: "stopped"; crawl: CrawlSummary };
 
 export type DeleteCrawlResult =
 	| { type: "not-found" }
-	| { type: "active"; crawl: CrawlRunRecord }
+	| { type: "active"; crawl: CrawlSummary }
 	| { type: "deleted" };
 
 export class CrawlManagerClosingError extends Error {
@@ -86,22 +86,44 @@ export class CrawlManager {
 		this.robotsService = new RobotsService(deps.httpClient, deps.logger);
 	}
 
+	/** Reserves durable capacity for the pages a crawl may still store. */
 	private reserveStorage(
 		crawlId: string,
 		options: CrawlOptions,
 		pagesScanned: number,
-		establish: () => void,
+		establish?: () => void,
 	): void {
-		const reservation = this.deps.storageBudget.reserve(
+		this.deps.storageBudget.reserve(
 			crawlId,
-			{
-				maxPages: options.maxPages,
-				pagesScanned,
-			},
+			{ maxPages: options.maxPages, pagesScanned },
 			establish,
 		);
-		for (const reclaimedCrawlId of reservation.reclaimedCrawlIds) {
-			this.deps.eventStream.delete(reclaimedCrawlId);
+	}
+
+	/**
+	 * Reserves capacity and establishes a runtime in one storage transaction, then
+	 * starts it. Any failure releases the reservation and the runtime.
+	 */
+	private admitRuntime(
+		crawlId: string,
+		options: CrawlOptions,
+		pagesScanned: number,
+		establish: () => { owner: RuntimeOwner; rollback?: () => void },
+	): void {
+		let admitted: ReturnType<typeof establish> | undefined;
+		try {
+			this.reserveStorage(crawlId, options, pagesScanned, () => {
+				admitted = establish();
+			});
+			admitted?.owner.start();
+		} catch (error) {
+			try {
+				admitted?.owner.discard();
+				admitted?.rollback?.();
+			} finally {
+				this.deps.storageBudget.release(crawlId);
+			}
+			throw error;
 		}
 	}
 
@@ -109,6 +131,11 @@ export class CrawlManager {
 		if (this.runtimes.size >= CRAWL_QUEUE_CONSTANTS.MAX_ACTIVE_RUNTIMES) {
 			throw new CrawlRuntimeCapacityError();
 		}
+	}
+
+	/** True while a runtime publishes events for the crawl. */
+	hasLiveRuntime(crawlId: string): boolean {
+		return this.runtimes.has(crawlId);
 	}
 
 	get activeRuntimeCount(): number {
@@ -121,20 +148,15 @@ export class CrawlManager {
 				continue;
 			}
 
-			if (crawl.status === "stopping") {
-				this.deps.repos.crawlRuns.markStopped(
-					crawl.id,
-					crawl.stopReason ?? "Force stop completed during process recovery",
-					crawl.eventSequence,
-				);
-				continue;
-			}
-
-			this.deps.repos.crawlRuns.markInterrupted(
-				crawl.id,
-				crawl.stopReason ?? "Runtime interrupted by process restart",
-				crawl.eventSequence,
-			);
+			const forceStopping = crawl.status === "stopping";
+			this.deps.repos.crawlRuns.transition(crawl.id, forceStopping ? "stopped" : "interrupted", {
+				stopReason:
+					crawl.stopReason ??
+					(forceStopping
+						? "Force stop completed during process recovery"
+						: "Runtime interrupted by process restart"),
+				eventSequence: crawl.eventSequence,
+			});
 		}
 	}
 
@@ -143,14 +165,14 @@ export class CrawlManager {
 		options: CrawlOptions,
 		config: {
 			resume: boolean;
-			eventGeneration: number;
+			/** The last durable event sequence; the runtime continues numbering after it. */
+			eventSequence: number;
 			initialCounters?: CrawlCounters;
 			initialStartedAtMs?: number;
 			initialDomainStates?: DomainStateRecord[];
 		},
 	): RuntimeOwner {
 		const owner = Symbol(crawlId);
-		const eventGeneration = config.eventGeneration;
 		let runtime!: CrawlRuntime;
 		const releaseRegistry = () => {
 			if (this.runtimeOwners.get(crawlId) === owner && this.runtimes.get(crawlId) === runtime) {
@@ -162,14 +184,15 @@ export class CrawlManager {
 			releaseRegistry();
 			this.runtimeOwners.delete(crawlId);
 			this.deps.storageBudget.release(crawlId);
-			this.deps.eventStream.scheduleCleanup(crawlId, eventGeneration);
+			// Subscribers exist only while a runtime publishes; a settled crawl is read from snapshots.
+			this.deps.eventStream.closeCrawl(crawlId);
 		};
 		runtime = new CrawlRuntime({
 			crawlId,
 			options,
 			logger: this.deps.logger,
 			repos: this.deps.repos,
-			storageBudget: this.deps.storageBudget,
+			reserveStorage: (pagesScanned) => this.reserveStorage(crawlId, options, pagesScanned),
 			eventStream: this.deps.eventStream,
 			httpClient: this.deps.httpClient,
 			robotsService: this.robotsService,
@@ -183,6 +206,7 @@ export class CrawlManager {
 				? { initialDomainStates: config.initialDomainStates }
 				: {}),
 			resume: config.resume,
+			eventSequence: config.eventSequence,
 			onInactive: releaseRegistry,
 			onSettled: releaseOwnership,
 		});
@@ -196,21 +220,17 @@ export class CrawlManager {
 					try {
 						const persisted = this.deps.repos.crawlRuns.getById(crawlId);
 						if (persisted && isActiveCrawlStatus(persisted.status)) {
-							const recovered = this.deps.repos.crawlRuns.markInterrupted(
-								crawlId,
-								`Runtime settlement failed: ${error instanceof Error ? error.message : String(error)}`,
-								this.deps.eventStream.getCurrentSequence(crawlId),
-							);
-							if (!recovered) {
-								throw new Error(`Active crawl disappeared during recovery: ${crawlId}`);
-							}
+							this.deps.repos.crawlRuns.transition(crawlId, "interrupted", {
+								stopReason: `Runtime settlement failed: ${getErrorMessage(error)}`,
+								eventSequence: runtime.eventSequence,
+							});
 						}
 						releaseOwnership();
 					} catch (recoveryError) {
 						// ponytail: keep the failed runtime as the in-process owner when SQLite
 						// cannot persist containment; process restart owns durable orphan recovery.
 						this.deps.logger.error(
-							`[Runtime] Failed to quarantine ${crawlId}; retaining ownership until process restart: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`,
+							`[Runtime] Failed to quarantine ${crawlId}; retaining ownership until process restart: ${getErrorMessage(recoveryError)}`,
 						);
 					}
 				});
@@ -218,7 +238,7 @@ export class CrawlManager {
 		};
 	}
 
-	create(crawlId: string, options: CrawlOptions): CrawlRunRecord {
+	create(crawlId: string, options: CrawlOptions): CrawlSummary {
 		const existing = this.deps.repos.crawlRuns.getById(crawlId);
 		if (existing) {
 			if (!crawlOptionsEqual(existing.options, options)) {
@@ -231,31 +251,19 @@ export class CrawlManager {
 		}
 		this.assertRuntimeCapacity();
 
-		let created = false;
-		let record!: CrawlRunRecord;
-		let runtimeOwner: ReturnType<CrawlManager["createRuntime"]> | undefined;
-		try {
-			this.reserveStorage(crawlId, options, 0, () => {
-				const eventGeneration = this.deps.eventStream.initialize(crawlId);
-				record = this.deps.repos.crawlRuns.createRun(crawlId, options);
-				created = true;
-				runtimeOwner = this.createRuntime(crawlId, record.options, {
+		this.admitRuntime(crawlId, options, 0, () => {
+			const record = this.deps.repos.crawlRuns.createRun(crawlId, options);
+			return {
+				owner: this.createRuntime(crawlId, record.options, {
 					resume: false,
-					eventGeneration,
-				});
-			});
-			runtimeOwner?.start();
-		} catch (error) {
-			try {
-				runtimeOwner?.discard();
-				if (created) this.deps.repos.crawlRuns.deleteRun(crawlId);
-			} finally {
-				this.deps.eventStream.delete(crawlId);
-				this.deps.storageBudget.release(crawlId);
-			}
-			throw error;
-		}
-		return this.deps.repos.crawlRuns.getById(crawlId) ?? record;
+					eventSequence: record.eventSequence,
+				}),
+				rollback: () => this.deps.repos.crawlRuns.deleteRun(crawlId),
+			};
+		});
+		const created = this.deps.repos.crawlRuns.getById(crawlId);
+		if (!created) throw new Error(`Created crawl ${crawlId} is missing`);
+		return created;
 	}
 
 	async stop(crawlId: string, mode: StopCrawlMode = "pause"): Promise<StopCrawlResult> {
@@ -298,29 +306,16 @@ export class CrawlManager {
 		if (!isResumableCrawlStatus(record.status)) {
 			return { type: "not-resumable", crawl: record };
 		}
-		if (!isCrawlOptions(record.options)) {
-			return { type: "not-resumable", crawl: record };
-		}
 		this.assertRuntimeCapacity();
-		let runtimeOwner: ReturnType<CrawlManager["createRuntime"]> | undefined;
-		try {
-			this.reserveStorage(crawlId, record.options, record.counters.pagesScanned, () => {
-				const eventGeneration = this.deps.eventStream.reset(crawlId, record.eventSequence);
-				runtimeOwner = this.createRuntime(crawlId, record.options, {
-					resume: true,
-					eventGeneration,
-					initialCounters: record.counters,
-					initialStartedAtMs: record.startedAt === null ? undefined : Date.parse(record.startedAt),
-					initialDomainStates: this.deps.repos.crawlDomainState.listByCrawlId(crawlId),
-				});
-			});
-			runtimeOwner?.start();
-		} catch (error) {
-			runtimeOwner?.discard();
-			this.deps.eventStream.delete(crawlId);
-			this.deps.storageBudget.release(crawlId);
-			throw error;
-		}
+		this.admitRuntime(crawlId, record.options, record.counters.pagesScanned, () => ({
+			owner: this.createRuntime(crawlId, record.options, {
+				resume: true,
+				eventSequence: record.eventSequence,
+				initialCounters: record.counters,
+				initialStartedAtMs: record.startedAt === null ? undefined : Date.parse(record.startedAt),
+				initialDomainStates: this.deps.repos.crawlDomainState.listByCrawlId(crawlId),
+			}),
+		}));
 		return {
 			type: "resumed",
 			crawl: this.deps.repos.crawlRuns.getById(crawlId) ?? record,
@@ -331,13 +326,12 @@ export class CrawlManager {
 		return this.deps.repos.crawlRuns.getById(crawlId);
 	}
 
-	list(filters: { status?: CrawlStatus; from?: string; to?: string; limit?: number }) {
+	list(filters: { status?: CrawlStatus; from?: string; to?: string; limit: number }) {
 		return this.deps.repos.crawlRuns.list(filters);
 	}
 
-	listResumable(limit?: number) {
-		const effectiveLimit = limit ?? DEFAULT_CRAWL_LIST_LIMIT;
-		return this.deps.repos.crawlRuns.getResumableRuns(effectiveLimit);
+	listResumable(limit: number) {
+		return this.deps.repos.crawlRuns.listResumable(limit);
 	}
 
 	delete(crawlId: string): DeleteCrawlResult {
@@ -349,7 +343,6 @@ export class CrawlManager {
 
 		this.deps.repos.crawlRuns.deleteRun(crawlId);
 		this.deps.storageBudget.release(crawlId);
-		this.deps.eventStream.delete(crawlId);
 		return { type: "deleted" };
 	}
 

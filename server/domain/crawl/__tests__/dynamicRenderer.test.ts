@@ -79,11 +79,7 @@ describe("dynamic renderer network contract", () => {
 		const httpClient: HttpClient = {
 			fetch: mock(async () => new Response("unused")),
 		};
-		const renderer = new DynamicRenderer(
-			{ ...dynamicOptions, dynamic: false },
-			silentLogger,
-			httpClient,
-		);
+		const renderer = new DynamicRenderer({ enabled: false, logger: silentLogger, httpClient });
 
 		expect(process.listenerCount("beforeExit")).toBe(listenerCounts.beforeExit);
 		expect(process.listenerCount("exit")).toBe(listenerCounts.exit);
@@ -93,7 +89,6 @@ describe("dynamic renderer network contract", () => {
 	test("captures rendered content, metadata, and effective URL in one document observation", async () => {
 		const snapshot = {
 			content: "<html><title>Final document</title></html>",
-			contentLength: 43,
 			description: "Final description",
 			effectiveUrl: "https://www.youtube.com/shorts/final-id",
 			title: "Final document",
@@ -189,6 +184,26 @@ describe("dynamic renderer network contract", () => {
 		expect(page.close).toHaveBeenCalledTimes(1);
 	});
 
+	test("an aborted page operation ends once its page is closed, even if Playwright never settles it", async () => {
+		const evaluationStarted = Promise.withResolvers<void>();
+		const page = {
+			// A frame that never received a document: Playwright leaves this call pending forever.
+			evaluate: mock(() => {
+				evaluationStarted.resolve();
+				return new Promise<never>(() => {});
+			}),
+			close: mock(async () => undefined),
+		} as unknown as Page;
+		const controller = new AbortController();
+		const snapshot = extractRenderedSnapshot(page, controller.signal);
+
+		await evaluationStarted.promise;
+		controller.abort(new Error("item deadline"));
+
+		await expect(snapshot).rejects.toThrow("item deadline");
+		expect(page.close).toHaveBeenCalledTimes(1);
+	});
+
 	test("routes supported non-HTML documents back to static representation acquisition", () => {
 		expect(requiresStaticRepresentationFetch("application/pdf; charset=binary")).toBe(true);
 		expect(requiresStaticRepresentationFetch("application/problem+json")).toBe(true);
@@ -230,7 +245,7 @@ describe("dynamic renderer network contract", () => {
 			fetch: mock(async () => new Response("unused")),
 		};
 
-		await configurePinnedBrowserContext(context, httpClient);
+		await configurePinnedBrowserContext(context, { httpClient });
 		if (!initScript) throw new Error("Expected a browser initialization script");
 		const realm = {
 			RTCPeerConnection: class {},
@@ -261,7 +276,10 @@ describe("dynamic renderer network contract", () => {
 		} as unknown as BrowserContext;
 		const fetch = mock(async (_request: Parameters<HttpClient["fetch"]>[0]) => new Response("ok"));
 		const httpClient: HttpClient = { fetch };
-		await configurePinnedBrowserContext(context, httpClient, undefined, "http://localhost:3000/");
+		await configurePinnedBrowserContext(context, {
+			httpClient,
+			seedUrl: "http://localhost:3000/",
+		});
 		if (!handler) throw new Error("Expected browser route handler");
 
 		await handler(createRoute({ url: "http://localhost:3000/", resourceType: "document" }).route);
@@ -292,15 +310,12 @@ describe("dynamic renderer network contract", () => {
 			}
 		});
 		const onDocumentResult = mock(() => undefined);
-		await configurePinnedBrowserContext(
-			context,
-			{ fetch },
-			undefined,
-			undefined,
+		await configurePinnedBrowserContext(context, {
+			httpClient: { fetch },
 			onDocumentResult,
-			authorizeDestination,
+			authorizeDocumentDestination: authorizeDestination,
 			mainFrame,
-		);
+		});
 		if (!handler) throw new Error("Expected browser route handler");
 
 		await handler(createRoute({ url: "https://source.example/start", frame: mainFrame }).route);
@@ -356,15 +371,12 @@ describe("dynamic renderer network contract", () => {
 		});
 		const authorizeDestination = mock(async () => undefined);
 		const onDocumentResult = mock(() => undefined);
-		await configurePinnedBrowserContext(
-			context,
-			{ fetch },
-			undefined,
-			undefined,
+		await configurePinnedBrowserContext(context, {
+			httpClient: { fetch },
 			onDocumentResult,
-			authorizeDestination,
+			authorizeDocumentDestination: authorizeDestination,
 			mainFrame,
-		);
+		});
 		if (!handler) throw new Error("Expected browser route handler");
 
 		await handler(createRoute({ url: "https://source.example/start", frame: mainFrame }).route);
@@ -388,6 +400,45 @@ describe("dynamic renderer network contract", () => {
 		);
 	});
 
+	test("each main-document load, such as a reload after consent, gets a fresh resource budget", async () => {
+		let handler: ((route: Route) => Promise<void>) | undefined;
+		const mainFrame = {} as Frame;
+		const context = {
+			addInitScript: mock(async () => undefined),
+			route: mock(async (_pattern: string, next: (route: Route) => Promise<void>) => {
+				handler = next;
+			}),
+			routeWebSocket: mock(async () => undefined),
+		} as unknown as BrowserContext;
+		const httpClient: HttpClient = {
+			fetch: async () =>
+				new Response("<main>ok</main>", { headers: { "content-type": "text/html" } }),
+		};
+		await configurePinnedBrowserContext(context, { httpClient, mainFrame });
+		if (!handler) throw new Error("Expected browser route handler");
+		const route = handler;
+		const load = async (url: string, resourceType: string) => {
+			const created = createRoute({ url, resourceType, frame: mainFrame });
+			await route(created.route);
+			return created.calls;
+		};
+		// Distinct hosts keep same-host dispatch spacing out of this budget check.
+		const loadSubresources = (prefix: string, count: number) =>
+			Promise.all(
+				Array.from({ length: count }, (_, index) =>
+					load(`https://${prefix}${index}.example/app.js`, "script"),
+				),
+			);
+		const maxRequests = DYNAMIC_RENDERER_CONSTANTS.NETWORK_BUDGET.MAX_REQUESTS_PER_PAGE;
+
+		expect((await load("https://site.example/", "document")).fulfill).toHaveBeenCalledTimes(1);
+		await loadSubresources("first", maxRequests - 1);
+		expect((await load("https://over.example/app.js", "script")).abort).toHaveBeenCalledTimes(1);
+
+		expect((await load("https://site.example/", "document")).fulfill).toHaveBeenCalledTimes(1);
+		expect((await load("https://after.example/app.js", "script")).fulfill).toHaveBeenCalledTimes(1);
+	});
+
 	test("keeps iframe documents out of main-document policy and result ownership", async () => {
 		let handler: ((route: Route) => Promise<void>) | undefined;
 		const mainFrame = {} as Frame;
@@ -405,15 +456,12 @@ describe("dynamic renderer network contract", () => {
 		);
 		const authorizeDestination = mock(async () => undefined);
 		const onDocumentResult = mock(() => undefined);
-		await configurePinnedBrowserContext(
-			context,
-			{ fetch },
-			undefined,
-			undefined,
+		await configurePinnedBrowserContext(context, {
+			httpClient: { fetch },
 			onDocumentResult,
-			authorizeDestination,
+			authorizeDocumentDestination: authorizeDestination,
 			mainFrame,
-		);
+		});
 		if (!handler) throw new Error("Expected browser route handler");
 
 		await handler(
@@ -426,7 +474,9 @@ describe("dynamic renderer network contract", () => {
 
 		expect(authorizeDestination).not.toHaveBeenCalled();
 		expect(onDocumentResult).not.toHaveBeenCalled();
-		expect(fetch.mock.calls[0]?.[0]).toMatchObject({ redirect: "manual" });
+		// Chromium leaves a subframe without a document when it receives a fulfilled 3xx,
+		// so iframe redirects are followed by the pinned client instead of the browser.
+		expect(fetch.mock.calls[0]?.[0]).not.toHaveProperty("redirect");
 	});
 
 	test("fulfills HTTP browser requests through the pinned HTTP client", async () => {
@@ -608,7 +658,6 @@ describe("dynamic renderer network contract", () => {
 		} as unknown as Page;
 		expect(await extractRenderedSnapshot(page)).toMatchObject({
 			content: html,
-			contentLength: Buffer.byteLength(html),
 			title: "Video",
 		});
 	});
@@ -688,22 +737,59 @@ describe("dynamic renderer network contract", () => {
 		expect(calls.fulfill).not.toHaveBeenCalled();
 	});
 
-	test("aborts state-changing browser requests before they reach the HTTP client", async () => {
-		const { route, calls } = createRoute({
-			url: "https://example.com/account",
-			method: "POST",
-			postData: Buffer.from("action=delete"),
-		});
-		const httpClient: HttpClient = {
-			fetch: mock(async () => new Response("must not run")),
-		};
+	test("only the page's own scripts may send POST or PUT; other writes never reach the HTTP client", async () => {
+		for (const [resourceType, method] of [
+			["document", "POST"], // form submission or POST navigation
+			["ping", "POST"], // navigator.sendBeacon
+			["fetch", "DELETE"],
+			["xhr", "PATCH"],
+		] as const) {
+			const { route, calls } = createRoute({
+				url: "https://example.com/account",
+				method,
+				resourceType,
+				postData: Buffer.from("action=delete"),
+			});
+			const httpClient: HttpClient = { fetch: mock(async () => new Response("must not run")) };
 
-		const result = await fulfillRouteWithPinnedHttpClient(route, httpClient);
+			const result = await fulfillRouteWithPinnedHttpClient(route, httpClient);
 
-		expect(result).toEqual({ type: "aborted", reason: "unsupported-method" });
-		expect(httpClient.fetch).not.toHaveBeenCalled();
-		expect(calls.abort).toHaveBeenCalledTimes(1);
-		expect(calls.fulfill).not.toHaveBeenCalled();
+			expect({ resourceType, method, result }).toEqual({
+				resourceType,
+				method,
+				result: { type: "aborted", reason: "unsupported-method" },
+			});
+			expect(httpClient.fetch).not.toHaveBeenCalled();
+			expect(calls.abort).toHaveBeenCalledTimes(1);
+		}
+
+		for (const [resourceType, method] of [
+			["fetch", "POST"],
+			["xhr", "PUT"],
+		] as const) {
+			const { route, calls } = createRoute({
+				url: "https://example.com/api/data",
+				method,
+				resourceType,
+				headers: { "content-type": "application/json" },
+				postData: Buffer.from('{"page":2}'),
+			});
+			const fetch = mock(
+				async (_request: Parameters<HttpClient["fetch"]>[0]) =>
+					new Response('{"ok":true}', { headers: { "content-type": "application/json" } }),
+			);
+			const budget = createDynamicRouteBudget(1, 1024);
+
+			await expect(fulfillRouteWithPinnedHttpClient(route, { fetch }, { budget })).resolves.toEqual(
+				{ type: "fulfilled" },
+			);
+			const request = fetch.mock.calls[0]?.[0];
+			expect(request?.method).toBe(method);
+			expect(new TextDecoder().decode(request?.body)).toBe('{"page":2}');
+			expect(calls.fulfill).toHaveBeenCalledTimes(1);
+			// A script write spends the same per-page request budget as a read.
+			expect(budget.chargeRequest()).toBe(false);
+		}
 	});
 
 	test("shares request and byte budgets across dynamic page resources", async () => {
@@ -1027,14 +1113,14 @@ describe("dynamic renderer network contract", () => {
 			if (!connected) throw new Error("replacement browser unavailable");
 			return browser;
 		});
-		const renderer = new DynamicRenderer(
-			dynamicOptions,
-			silentLogger,
-			{
+		const renderer = new DynamicRenderer({
+			enabled: dynamicOptions.dynamic,
+			logger: silentLogger,
+			httpClient: {
 				fetch: mock(async () => new Response("unused")),
 			},
-			launch,
-		);
+			launch: launch,
+		});
 		try {
 			expect(await renderer.initialize()).toEqual({ dynamicEnabled: true });
 			connected = false;
@@ -1071,12 +1157,12 @@ describe("dynamic renderer network contract", () => {
 			newContext: mock(async () => context),
 			close: closeBrowser,
 		} as unknown as Browser;
-		const renderer = new DynamicRenderer(
-			dynamicOptions,
-			silentLogger,
-			{ fetch: mock(async () => new Response("unused")) },
-			launch,
-		);
+		const renderer = new DynamicRenderer({
+			enabled: dynamicOptions.dynamic,
+			logger: silentLogger,
+			httpClient: { fetch: mock(async () => new Response("unused")) },
+			launch: launch,
+		});
 
 		const first = renderer.initialize();
 		const second = renderer.initialize();
@@ -1107,12 +1193,12 @@ describe("dynamic renderer network contract", () => {
 			isConnected: () => true,
 			close: closeBrowser,
 		} as unknown as Browser;
-		const renderer = new DynamicRenderer(
-			dynamicOptions,
-			silentLogger,
-			{ fetch: mock(async () => new Response("unused")) },
-			mock(async () => pendingBrowser.promise),
-		);
+		const renderer = new DynamicRenderer({
+			enabled: dynamicOptions.dynamic,
+			logger: silentLogger,
+			httpClient: { fetch: mock(async () => new Response("unused")) },
+			launch: mock(async () => pendingBrowser.promise),
+		});
 
 		const launchAttempt = renderer.initialize();
 		const closing = renderer.close();

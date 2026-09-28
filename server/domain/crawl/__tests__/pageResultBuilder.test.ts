@@ -30,6 +30,7 @@ const item: QueueItem = {
 	domain: "example.com",
 	depth: 0,
 	retries: 0,
+	availableAt: 0,
 };
 
 const fetchResult: Extract<FetchResult, { type: "success" }> = {
@@ -46,12 +47,11 @@ const fetchResult: Extract<FetchResult, { type: "success" }> = {
 
 function processed(overrides: Partial<ProcessedContent> = {}): ProcessedContent {
 	return {
-		extractedData: { mainContent: "Processed body" },
+		mainContent: "Processed body",
 		metadata: { title: "Metadata title", description: "Metadata description" },
 		analysis: { wordCount: 2, readingTime: 1, language: "en" },
 		mediaCount: 1,
 		links: [],
-		errors: [],
 		...overrides,
 	};
 }

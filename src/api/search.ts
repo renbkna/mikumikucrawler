@@ -1,15 +1,11 @@
-import { type CrawledPage, isSearchResponse } from "../../shared/contracts/index.js";
+import { isSearchResponse, type SearchResponse } from "../../shared/contracts/index.js";
 import { api } from "./client";
-import { getApiErrorMessage } from "./errors";
 import { createRequestSignal } from "./requestLifetime";
-import type { ApiResult } from "./result";
+import { type ApiResult, mapApiResult, unwrapApiResponse } from "./result";
 
 export const DURABLE_SEARCH_RESULT_LIMIT = 100;
 
-export interface DurablePageSearchResult {
-	count: number;
-	pages: CrawledPage[];
-}
+export type DurablePageSearchResult = Pick<SearchResponse, "count" | "results">;
 
 export async function searchStoredPages(
 	crawlId: string,
@@ -22,31 +18,16 @@ export async function searchStoredPages(
 		fetch: { signal: requestSignal },
 	});
 
-	if (response.error || !response.data) {
-		return {
-			ok: false,
-			error: getApiErrorMessage(response.error?.value, "Search failed"),
-		};
-	}
-	if (!isSearchResponse(response.data)) {
-		return { ok: false, error: "Unexpected search response" };
-	}
-	if (response.data.crawlId !== crawlId || response.data.query !== query) {
-		return { ok: false, error: "Unexpected search response" };
-	}
-
-	return {
-		ok: true,
-		data: {
-			count: response.data.count,
-			pages: response.data.results.map((result) => ({
-				id: result.id,
-				url: result.url,
-				title: result.title || undefined,
-				description: result.snippet || result.description || undefined,
-				domain: result.domain,
-				details: {},
-			})),
-		},
-	};
+	return mapApiResult(
+		unwrapApiResponse(response, {
+			isValid: isSearchResponse,
+			invalidMessage: "Unexpected search response",
+			failureMessage: "Search failed",
+			identity: {
+				matches: (search) => search.crawlId === crawlId && search.query === query,
+				message: "Unexpected search response",
+			},
+		}),
+		({ count, results }) => ({ count, results }),
+	);
 }

@@ -10,7 +10,7 @@ afterEach(() => {
 });
 
 describe("durable page search client", () => {
-	test("queries the server FTS projection and maps stored results to page cards", async () => {
+	test("queries the server FTS projection and returns its validated stored results", async () => {
 		const fetchMock = mock(async (_input: RequestInfo | URL, _init?: RequestInit) =>
 			Response.json({
 				crawlId: "crawl-older-than-live-buffer",
@@ -36,14 +36,14 @@ describe("durable page search client", () => {
 			ok: true,
 			data: {
 				count: 123,
-				pages: [
+				results: [
 					{
 						id: 42,
 						url: "https://example.com/stored",
 						title: "Stored page",
-						description: "body needle from durable content",
+						description: "metadata description",
 						domain: "example.com",
-						details: {},
+						snippet: "body needle from durable content",
 					},
 				],
 			},

@@ -1,5 +1,14 @@
 import { History, Music2, Sparkles } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import {
+	type FunctionComponent,
+	type LazyExoticComponent,
+	lazy,
+	type ReactNode,
+	Suspense,
+	useCallback,
+	useEffect,
+	useState,
+} from "react";
 import { ActionButtons } from "./components/ActionButtons";
 import { CrawlerForm } from "./components/CrawlerForm";
 import { MikuBanner } from "./components/MikuBanner";
@@ -12,37 +21,78 @@ import { isTerminalRunPhase } from "./hooks/crawlControllerState";
 import { useCrawlController } from "./hooks/useCrawlController";
 import { useToast } from "./hooks/useToast";
 
-const ConfigurationView = lazy(() =>
-	import("./components/ConfigurationView").then(({ ConfigurationView }) => ({
-		default: ConfigurationView,
-	})),
+/** Code-splits a component that its module exports by name. */
+function lazyComponent<Props extends object>(
+	load: () => Promise<FunctionComponent<Props>>,
+): LazyExoticComponent<FunctionComponent<Props>> {
+	return lazy(async () => ({ default: await load() }));
+}
+
+const ConfigurationView = lazyComponent(
+	async () => (await import("./components/ConfigurationView")).ConfigurationView,
 );
-const CrawledPagesSection = lazy(() =>
-	import("./components/CrawledPagesSection").then(({ CrawledPagesSection }) => ({
-		default: CrawledPagesSection,
-	})),
+const CrawledPagesSection = lazyComponent(
+	async () => (await import("./components/CrawledPagesSection")).CrawledPagesSection,
 );
-const ExportDialog = lazy(() =>
-	import("./components/ExportDialog").then(({ ExportDialog }) => ({ default: ExportDialog })),
+const ExportDialog = lazyComponent(
+	async () => (await import("./components/ExportDialog")).ExportDialog,
 );
-const LogsSection = lazy(() =>
-	import("./components/LogsSection").then(({ LogsSection }) => ({ default: LogsSection })),
+const LogsSection = lazyComponent(
+	async () => (await import("./components/LogsSection")).LogsSection,
 );
-const ResumeSessionsPanel = lazy(() =>
-	import("./components/ResumeSessionsPanel").then(({ ResumeSessionsPanel }) => ({
-		default: ResumeSessionsPanel,
-	})),
+const ResumeSessionsPanel = lazyComponent(
+	async () => (await import("./components/ResumeSessionsPanel")).ResumeSessionsPanel,
 );
-const StatsVisualizer = lazy(() =>
-	import("./components/StatsVisualizer").then(({ StatsVisualizer }) => ({
-		default: StatsVisualizer,
-	})),
+const StatsVisualizer = lazyComponent(
+	async () => (await import("./components/StatsVisualizer")).StatsVisualizer,
 );
-const TheatreOverlay = lazy(() =>
-	import("./components/TheatreOverlay").then(({ TheatreOverlay }) => ({
-		default: TheatreOverlay,
-	})),
+const TheatreOverlay = lazyComponent(
+	async () => (await import("./components/TheatreOverlay")).TheatreOverlay,
 );
+
+const PANEL_TONES = {
+	teal: {
+		header: "border-miku-teal/15",
+		title: "text-miku-teal-dark",
+		dot: "bg-miku-teal",
+	},
+	pink: {
+		header: "border-miku-pink/15",
+		title: "text-miku-pink-dark",
+		dot: "bg-miku-pink",
+	},
+} as const;
+
+function Panel({
+	id,
+	title,
+	tone,
+	headerAside,
+	children,
+}: Readonly<{
+	id: string;
+	title: string;
+	tone: keyof typeof PANEL_TONES;
+	headerAside?: ReactNode;
+	children: ReactNode;
+}>) {
+	const toneClasses = PANEL_TONES[tone];
+	return (
+		<section aria-labelledby={id} className="glass-panel p-5 h-[440px] flex flex-col">
+			<div className={`flex items-center justify-between mb-3 border-b ${toneClasses.header} pb-3`}>
+				<h2
+					id={id}
+					className={`text-base font-bold uppercase tracking-wide ${toneClasses.title} flex items-center gap-2`}
+				>
+					<span className={`w-2 h-2 rounded-full ${toneClasses.dot} animate-pulse`} />
+					{title}
+				</h2>
+				{headerAside}
+			</div>
+			{children}
+		</section>
+	);
+}
 
 function App() {
 	const [theatreStatus, setTheatreStatus] = useState<TheatreStatus>("idle");
@@ -74,7 +124,7 @@ function App() {
 		searchResultCount,
 		isSearchingPages,
 		pageSearchError,
-		displayedPages,
+		searchResults,
 		clearSearch,
 		isAttacking,
 		canStart,
@@ -249,19 +299,7 @@ function App() {
 					)}
 
 					<div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-						<section
-							aria-labelledby="logs-heading"
-							className="glass-panel p-5 h-[440px] flex flex-col"
-						>
-							<div className="flex items-center justify-between mb-3 border-b border-miku-teal/15 pb-3">
-								<h2
-									id="logs-heading"
-									className="text-base font-bold uppercase tracking-wide text-miku-teal-dark flex items-center gap-2"
-								>
-									<span className="w-2 h-2 rounded-full bg-miku-teal animate-pulse" />
-									System Logs
-								</h2>
-							</div>
+						<Panel id="logs-heading" title="System Logs" tone="teal">
 							{logs.length > 0 ? (
 								<Suspense fallback={null}>
 									<LogsSection logs={logs} clearLogs={clearLogs} />
@@ -275,27 +313,21 @@ function App() {
 									</p>
 								</div>
 							)}
-						</section>
-						<section
-							aria-labelledby="data-heading"
-							className="glass-panel p-5 h-[440px] flex flex-col"
-						>
-							<div className="flex items-center justify-between mb-3 border-b border-miku-pink/15 pb-3">
-								<h2
-									id="data-heading"
-									className="text-base font-bold uppercase tracking-wide text-miku-pink-dark flex items-center gap-2"
-								>
-									<span className="w-2 h-2 rounded-full bg-miku-pink animate-pulse" />
-									Captured Data
-								</h2>
+						</Panel>
+						<Panel
+							id="data-heading"
+							title="Captured Data"
+							tone="pink"
+							headerAside={
 								<span className="cute-badge flex items-center gap-1">{storedPageCount} stored</span>
-							</div>
+							}
+						>
 							{activeCrawlId ? (
 								<Suspense fallback={null}>
 									<CrawledPagesSection
 										crawlId={activeCrawlId}
 										crawledPages={crawledPages}
-										displayedPages={displayedPages}
+										searchResults={searchResults}
 										searchQuery={searchQuery}
 										onSearchChange={setSearchQuery}
 										onClearSearch={clearSearch}
@@ -311,7 +343,7 @@ function App() {
 									<p className="text-xs mt-1 font-medium">Start the Miku Beam to begin!</p>
 								</div>
 							)}
-						</section>
+						</Panel>
 					</div>
 				</main>
 
@@ -341,7 +373,6 @@ function App() {
 			<Suspense fallback={null}>
 				{openedConfig && (
 					<ConfigurationView
-						isOpen
 						onClose={() => setOpenedConfig(false)}
 						options={crawlOptions}
 						editingNextRun={activeCrawlOptions !== null && !isTerminalRunPhase(runPhase)}
@@ -352,11 +383,10 @@ function App() {
 					/>
 				)}
 				{openExportDialog && (
-					<ExportDialog isOpen onClose={() => setOpenExportDialog(false)} onExport={exportCrawl} />
+					<ExportDialog onClose={() => setOpenExportDialog(false)} onExport={exportCrawl} />
 				)}
 				{openResumePanel && (
 					<ResumeSessionsPanel
-						isOpen
 						sessions={resumableSessions}
 						isLoading={resumableSessionsLoading}
 						fetchError={resumableSessionsError}

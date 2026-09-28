@@ -1,4 +1,4 @@
-import type { ContentAnalysis, ExtractedData, PageMetadata } from "../shared/contracts/pageData.js";
+import type { PageMetadata } from "../shared/contracts/pageData.js";
 
 export interface ExtractedLink {
 	url: string;
@@ -6,24 +6,21 @@ export interface ExtractedLink {
 	nofollow?: boolean;
 }
 
-export interface ProcessingError {
-	type: string;
-	message: string;
-	timestamp?: string;
+export interface ContentAnalysis {
+	wordCount: number;
+	readingTime: number;
+	/** ISO 639-1 code, or "unknown" when detection is inconclusive. */
+	language: string;
 }
 
 export interface ProcessedContent {
-	extractedData: ExtractedData;
+	mainContent: string;
 	metadata: PageMetadata;
 	analysis: ContentAnalysis;
 	mediaCount: number;
 	links: ExtractedLink[];
-	errors: ProcessingError[];
 }
 
-export interface LoggerLike {
-	debug(message: string): void;
-	warn(message: string): void;
-	info(message: string): void;
-	error(message: string): void;
-}
+export type ContentProcessingResult =
+	| { type: "processed"; content: ProcessedContent }
+	| { type: "failed"; message: string };

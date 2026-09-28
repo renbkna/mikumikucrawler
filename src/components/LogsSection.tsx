@@ -5,7 +5,6 @@ import {
 	Copy,
 	Filter,
 	Info,
-	Music2,
 	Trash2,
 	X,
 } from "lucide-react";
@@ -19,6 +18,7 @@ const LOG_LEVELS = {
 		bgColor: "bg-miku-teal/10",
 		borderColor: "border-miku-teal/30",
 		label: "INFO",
+		filterLabel: "Info",
 	},
 	error: {
 		icon: AlertCircle,
@@ -26,6 +26,7 @@ const LOG_LEVELS = {
 		bgColor: "bg-rose-500/10",
 		borderColor: "border-rose-500/30",
 		label: "ERROR",
+		filterLabel: "Error",
 	},
 	warn: {
 		icon: AlertTriangle,
@@ -33,6 +34,7 @@ const LOG_LEVELS = {
 		bgColor: "bg-amber-500/10",
 		borderColor: "border-amber-500/30",
 		label: "WARN",
+		filterLabel: "Warn",
 	},
 	success: {
 		icon: CheckCircle2,
@@ -40,8 +42,22 @@ const LOG_LEVELS = {
 		bgColor: "bg-emerald-500/10",
 		borderColor: "border-emerald-500/30",
 		label: "SUCCESS",
+		filterLabel: "Success",
 	},
-} as const;
+} as const satisfies Record<ControllerLog["level"], object>;
+
+type LogLevel = ControllerLog["level"];
+
+const LOG_LEVEL_ORDER = Object.keys(LOG_LEVELS) as LogLevel[];
+
+function countLogLevels(logs: readonly ControllerLog[]): Record<LogLevel, number> {
+	const counts = Object.fromEntries(LOG_LEVEL_ORDER.map((level) => [level, 0])) as Record<
+		LogLevel,
+		number
+	>;
+	for (const log of logs) counts[log.level] += 1;
+	return counts;
+}
 
 function highlightUrls(text: string): ReactNode {
 	const parts: ReactNode[] = [];
@@ -145,7 +161,7 @@ export const LogsSection = memo(function LogsSection({
 	logs,
 	clearLogs,
 }: Readonly<LogsSectionProps>) {
-	const [filterLevel, setFilterLevel] = useState<ControllerLog["level"] | "all">("all");
+	const [filterLevel, setFilterLevel] = useState<LogLevel | "all">("all");
 	const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
 	const filteredLogs = useMemo(() => {
@@ -168,32 +184,14 @@ export const LogsSection = memo(function LogsSection({
 		setFilterLevel("all");
 	};
 
-	const levelOptions: {
-		value: ControllerLog["level"] | "all";
-		label: string;
-		count: number;
-	}[] = [
+	const levelCounts = useMemo(() => countLogLevels(logs), [logs]);
+	const levelOptions: { value: LogLevel | "all"; label: string; count: number }[] = [
 		{ value: "all", label: "All", count: logs.length },
-		{
-			value: "info",
-			label: "Info",
-			count: logs.filter((log) => log.level === "info").length,
-		},
-		{
-			value: "error",
-			label: "Error",
-			count: logs.filter((log) => log.level === "error").length,
-		},
-		{
-			value: "warn",
-			label: "Warn",
-			count: logs.filter((log) => log.level === "warn").length,
-		},
-		{
-			value: "success",
-			label: "Success",
-			count: logs.filter((log) => log.level === "success").length,
-		},
+		...LOG_LEVEL_ORDER.map((level) => ({
+			value: level,
+			label: LOG_LEVELS[level].filterLabel,
+			count: levelCounts[level],
+		})),
 	];
 
 	return (
@@ -269,7 +267,7 @@ export const LogsSection = memo(function LogsSection({
 								onCopy={handleCopy}
 							/>
 						))
-					) : logs.length > 0 ? (
+					) : (
 						<div className="h-full flex flex-col items-center justify-center text-miku-text/40">
 							<Filter className="w-12 h-12 mb-4 text-miku-text/20" />
 							<p className="text-sm font-medium">No logs match the filter</p>
@@ -280,12 +278,6 @@ export const LogsSection = memo(function LogsSection({
 							>
 								Clear filter
 							</button>
-						</div>
-					) : (
-						<div className="h-full flex flex-col items-center justify-center text-miku-text/40">
-							<Music2 className="text-miku-teal/35 mb-3" size={34} />
-							<p className="font-medium">Waiting for Miku to start writing...</p>
-							<p className="text-xs mt-1 opacity-60">Logs will appear here when crawling begins</p>
 						</div>
 					)}
 				</div>

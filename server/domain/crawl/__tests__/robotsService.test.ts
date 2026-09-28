@@ -2,6 +2,13 @@ import { describe, expect, mock, test } from "bun:test";
 import { silentLogger } from "../../../__tests__/runtimeFixture.js";
 import { DOMAIN_DELAY_CONSTANTS, REQUEST_CONSTANTS } from "../../../constants.js";
 import { RobotsService } from "../RobotsService.js";
+import { getCrawlUrlIdentity } from "../UrlPolicy.js";
+
+function evaluateUrl(service: RobotsService, url: string, signal?: AbortSignal) {
+	const identity = getCrawlUrlIdentity(url);
+	if ("error" in identity) throw new Error(identity.error);
+	return service.evaluateIdentity(identity, signal);
+}
 
 describe("RobotsService", () => {
 	test("bounds transient robots failures per origin and retries after the containment TTL", async () => {
@@ -16,14 +23,14 @@ describe("RobotsService", () => {
 		});
 		const service = new RobotsService({ fetch }, silentLogger, 20);
 
-		await expect(service.evaluate("https://example.com/another")).resolves.toEqual({
+		await expect(evaluateUrl(service, "https://example.com/another")).resolves.toEqual({
 			type: "unavailable",
 			delayKey: "example.com",
 			reason: "temporary outage",
 		});
 		expect(fetch).toHaveBeenCalledTimes(1);
 		await Bun.sleep(30);
-		await expect(service.evaluate("https://example.com/private")).resolves.toEqual({
+		await expect(evaluateUrl(service, "https://example.com/private")).resolves.toEqual({
 			type: "disallowed",
 			delayKey: "example.com",
 		});
@@ -35,10 +42,10 @@ describe("RobotsService", () => {
 		const service = new RobotsService({ fetch }, silentLogger);
 
 		await expect(
-			service.evaluate("https://example.com/anything").then((policy) => policy.type),
+			evaluateUrl(service, "https://example.com/anything").then((policy) => policy.type),
 		).resolves.toBe("allowed");
 		await expect(
-			service.evaluate("https://example.com/anything-else").then((policy) => policy.type),
+			evaluateUrl(service, "https://example.com/anything-else").then((policy) => policy.type),
 		).resolves.toBe("allowed");
 		expect(fetch).toHaveBeenCalledTimes(1);
 	});
@@ -54,8 +61,8 @@ describe("RobotsService", () => {
 		});
 		const service = new RobotsService({ fetch }, silentLogger);
 
-		const first = service.evaluate("https://example.com/one");
-		const second = service.evaluate("https://example.com/two");
+		const first = evaluateUrl(service, "https://example.com/one");
+		const second = evaluateUrl(service, "https://example.com/two");
 		await Bun.sleep(0);
 
 		expect(fetch).toHaveBeenCalledTimes(1);
@@ -78,8 +85,8 @@ describe("RobotsService", () => {
 		const service = new RobotsService({ fetch }, silentLogger);
 		const controller = new AbortController();
 
-		const canceled = service.evaluate("https://example.com/canceled", controller.signal);
-		const survivor = service.evaluate("https://example.com/survivor");
+		const canceled = evaluateUrl(service, "https://example.com/canceled", controller.signal);
+		const survivor = evaluateUrl(service, "https://example.com/survivor");
 		controller.abort(new Error("page canceled"));
 
 		await expect(canceled).rejects.toThrow("page canceled");
@@ -93,10 +100,10 @@ describe("RobotsService", () => {
 		const service = new RobotsService({ fetch }, silentLogger);
 
 		await expect(
-			service.evaluate("https://example.com/anything").then((policy) => policy.type),
+			evaluateUrl(service, "https://example.com/anything").then((policy) => policy.type),
 		).resolves.toBe("unavailable");
 		await expect(
-			service.evaluate("https://example.com/anything-else").then((policy) => policy.type),
+			evaluateUrl(service, "https://example.com/anything-else").then((policy) => policy.type),
 		).resolves.toBe("unavailable");
 		expect(fetch).toHaveBeenCalledTimes(1);
 	});
@@ -113,7 +120,7 @@ describe("RobotsService", () => {
 		);
 		const service = new RobotsService({ fetch }, silentLogger);
 
-		const evaluation = service.evaluate("https://example.com/private", controller.signal);
+		const evaluation = evaluateUrl(service, "https://example.com/private", controller.signal);
 		controller.abort(new Error("force stop"));
 
 		await expect(evaluation).rejects.toThrow("force stop");
@@ -129,7 +136,7 @@ describe("RobotsService", () => {
 		const service = new RobotsService({ fetch }, silentLogger);
 
 		await expect(
-			service.evaluate("https://example.com/search?b=2&a=1").then((policy) => policy.type),
+			evaluateUrl(service, "https://example.com/search?b=2&a=1").then((policy) => policy.type),
 		).resolves.toBe("disallowed");
 	});
 
@@ -147,7 +154,7 @@ Disallow: /same
 		const service = new RobotsService({ fetch }, silentLogger);
 
 		await expect(
-			service.evaluate("https://example.com/same").then((policy) => policy.type),
+			evaluateUrl(service, "https://example.com/same").then((policy) => policy.type),
 		).resolves.toBe("disallowed");
 	});
 
@@ -160,7 +167,7 @@ Disallow: /same
 		);
 		const service = new RobotsService({ fetch }, silentLogger);
 
-		const policy = await service.evaluate("http://example.com:8080/page");
+		const policy = await evaluateUrl(service, "http://example.com:8080/page");
 
 		expect(policy).toMatchObject({
 			type: "allowed",
@@ -192,10 +199,10 @@ Disallow: /same
 			silentLogger,
 		);
 
-		await expect(service.evaluate("https://one.example/page")).resolves.toMatchObject({
+		await expect(evaluateUrl(service, "https://one.example/page")).resolves.toMatchObject({
 			type: "unavailable",
 		});
-		await expect(service.evaluate("https://two.example/page")).resolves.toMatchObject({
+		await expect(evaluateUrl(service, "https://two.example/page")).resolves.toMatchObject({
 			type: "unavailable",
 		});
 		expect(streamedCanceled).toBe(true);
@@ -210,7 +217,7 @@ Disallow: /same
 				silentLogger,
 			);
 
-			await expect(service.evaluate("https://example.com/page")).resolves.toMatchObject({
+			await expect(evaluateUrl(service, "https://example.com/page")).resolves.toMatchObject({
 				type: "unavailable",
 				reason: `robots.txt crawl-delay must be between 0 and ${DOMAIN_DELAY_CONSTANTS.MAX_MS}ms`,
 			});

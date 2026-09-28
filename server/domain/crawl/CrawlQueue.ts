@@ -7,9 +7,13 @@ export interface QueueItem {
 	readonly domain: string;
 	readonly depth: number;
 	readonly retries: number;
-	readonly availableAt?: number;
+	/** Epoch milliseconds before which the item must not be dispatched. */
+	readonly availableAt: number;
 	readonly parentUrl?: string;
 }
+
+/** A newly discovered item; without an explicit dispatch time it is available on admission. */
+export type QueueAdmission = Omit<QueueItem, "availableAt"> & { readonly availableAt?: number };
 
 interface QueuePersistence {
 	enqueueMany(items: QueueItem[]): void;
@@ -84,7 +88,7 @@ export class CrawlQueue {
 		}
 	}
 
-	enqueueNormalized(item: QueueItem): boolean {
+	enqueueNormalized(item: QueueAdmission): boolean {
 		if (this.discarded) return false;
 		if (item.retries !== 0) {
 			throw new Error("New queue admissions must start without retries");
@@ -159,7 +163,7 @@ export class CrawlQueue {
 			}
 
 			const waitMs = Math.max(
-				(candidate.availableAt ?? 0) - now,
+				candidate.availableAt - now,
 				this.state.timeUntilDomainReady(delayKey, now),
 			);
 			if (waitMs > 0) {
@@ -171,7 +175,7 @@ export class CrawlQueue {
 
 			this.state.reserveDomain(delayKey, now);
 			const nextAllowedAt = this.state.nextAllowedAtForDomain(delayKey);
-			if (nextAllowedAt > (candidate.availableAt ?? 0)) {
+			if (nextAllowedAt > candidate.availableAt) {
 				candidate = Object.freeze({ ...candidate, availableAt: nextAllowedAt });
 				this.persistence.reschedule(candidate);
 			}
@@ -200,7 +204,7 @@ export class CrawlQueue {
 	deferPendingToDomainDelays(): void {
 		for (const [index, item] of this.pending.entries()) {
 			const nextAllowedAt = this.state.nextAllowedAtForDomain(item.domain);
-			if (nextAllowedAt <= (item.availableAt ?? 0)) {
+			if (nextAllowedAt <= item.availableAt) {
 				continue;
 			}
 

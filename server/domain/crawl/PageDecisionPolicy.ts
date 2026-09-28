@@ -58,22 +58,14 @@ export function isSoft404(title: string, mainContent: string, contentLength: num
 	return false;
 }
 
+/** Client-side frameworks' crash screens render as HTTP 200 pages with no real content. */
+const CLIENT_ERROR_SHELL_MARKERS = [
+	"application error: a client-side exception has occurred",
+] as const;
+
 export function isClientErrorShell(title: string, mainContent: string): boolean {
-	const combined = `${title} ${mainContent}`.toLowerCase().replace(/\s+/g, " ").trim();
-
-	if (!combined) {
-		return false;
-	}
-
-	if (combined.includes("application error: a client-side exception has occurred")) {
-		return true;
-	}
-
-	return (
-		combined.includes("miku encountered an unexpected error") &&
-		combined.includes("try again") &&
-		combined.includes("reload page")
-	);
+	const combined = `${title} ${mainContent}`.toLowerCase().replace(/\s+/g, " ");
+	return CLIENT_ERROR_SHELL_MARKERS.some((marker) => combined.includes(marker));
 }
 
 /** HTML success requires readable extracted content; non-HTML types retain their explicit representation. */

@@ -233,6 +233,18 @@ describe("crawl controller state", () => {
 
 		expect(started).toMatchObject({ activeCrawlId: "crawl-2", lastSequence: 0 });
 		expect(resumed).toMatchObject({ activeCrawlId: "crawl-2", lastSequence: 9 });
+
+		// Command identity belongs to the command lifecycle, not to crawl acceptance.
+		const accepted = reduce(active({ pendingCommand: "start" }), {
+			type: "crawlAccepted",
+			crawlId: "crawl-2",
+			kind: "start",
+		}).state;
+		expect(accepted.pendingCommand).toBe("start");
+		expect(reduce(accepted, { type: "commandSucceeded", kind: "start" }).state).toMatchObject({
+			pendingCommand: null,
+			runPhase: "starting",
+		});
 	});
 
 	test("accepts only newer events for the active, non-terminal crawl", () => {
@@ -372,23 +384,45 @@ describe("crawl controller state", () => {
 		});
 	});
 
-	test("bounds logs and emits the static-fallback hint once", () => {
+	test("bounds logs", () => {
 		let state = active();
-		let warningCount = 0;
 		for (let index = 0; index <= UI_LIMITS.MAX_LOGS; index += 1) {
-			const transition = reduce(state, {
+			state = reduce(state, {
 				type: "logAppended",
-				message: index < 2 ? `Falling back to static crawling ${index}` : `ordinary log ${index}`,
+				message: `log ${index}`,
 				level: "info",
-			});
-			state = transition.state;
-			warningCount += transition.effects.filter(
-				(effect) => effect.type === "toast" && effect.level === "warning",
-			).length;
+			}).state;
 		}
 		expect(state.logs).toHaveLength(UI_LIMITS.MAX_LOGS);
-		expect(warningCount).toBe(1);
+		expect(state.logs[0]?.message).toBe(`log ${UI_LIMITS.MAX_LOGS}`);
 	});
+
+	test.each([
+		[true, false, 1],
+		[true, true, 0],
+		[false, false, 0],
+	] as const)(
+		"a run requested with dynamic=%p that starts with dynamicRendering=%p emits %p static-fallback warnings",
+		(dynamic, dynamicRendering, warnings) => {
+			const transition = reduce(
+				active({ runPhase: "starting", activeCrawlOptions: { ...options, dynamic } }),
+				{
+					type: "sseEventReceived",
+					envelope: event("crawl.started", {
+						target: options.target,
+						resume: false,
+						dynamicRendering,
+					}),
+				},
+			);
+			expect(transition.state.runPhase).toBe("running");
+			expect(
+				transition.effects.filter(
+					(effect) => effect.type === "toast" && effect.level === "warning",
+				),
+			).toHaveLength(warnings);
+		},
+	);
 
 	test("serializes resumable-session mutation and removes deleted state", () => {
 		const session = {

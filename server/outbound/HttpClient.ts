@@ -2,14 +2,17 @@ import { lookup } from "node:dns/promises";
 import net from "node:net";
 import { LRUCache } from "lru-cache";
 import { CookieJar } from "tough-cookie";
-import { isPublicIpAddressLiteral } from "../../shared/ipPolicy.js";
-import { normalizeCanonicalHttpUrl } from "../../shared/url.js";
+import { isPublicIpAddressLiteral, unbracketIpLiteral } from "../../shared/ipPolicy.js";
+import { normalizeCanonicalHttpUrl, normalizeHostname } from "../../shared/url.js";
+import { abortError, raceAbort } from "../utils/abort.js";
+import { toError } from "../utils/helpers.js";
 import { disposeResponseBody } from "../utils/responseBody.js";
+import { SingleFlight } from "../utils/singleFlight.js";
 
 const RESOLUTION_TTL_MS = 5 * 60 * 1000;
 const RESOLUTION_CACHE_MAX_ENTRIES = 512;
 const MAX_REDIRECT_HOPS = 10;
-const FOLLOW_REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+export const REDIRECT_STATUS_CODES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
 const ORIGIN_BOUND_HEADERS = new Set(["authorization", "cookie", "host", "proxy-authorization"]);
 
 type DnsLookupRecord = { address: string; family: number };
@@ -56,9 +59,16 @@ interface RedirectHop {
 	hopNumber: number;
 }
 
-interface HttpClientRequest {
+/** Methods that carry a request body; only rendered pages' own scripts send them. */
+export type BodyMethod = "POST" | "PUT";
+
+/** A read carries no body; a write sends the body its page script supplied. */
+type HttpClientRequestMethod =
+	| { method?: "GET" | "HEAD"; body?: never }
+	| { method: BodyMethod; body?: Uint8Array<ArrayBuffer> };
+
+type HttpClientRequest = HttpClientRequestMethod & {
 	url: string;
-	method?: "GET" | "HEAD";
 	headers?: Record<string, string>;
 	signal?: AbortSignal;
 	redirect?: "manual";
@@ -66,6 +76,25 @@ interface HttpClientRequest {
 	allowLocalhostOnInitialRequest?: boolean;
 	/** Must authorize a normalized, public redirect destination before it is requested. */
 	authorizeRedirect?: (hop: RedirectHop, signal?: AbortSignal) => Promise<void> | void;
+};
+
+/** Headers that describe a request body; a redirect that drops the body drops them too. */
+const REQUEST_BODY_HEADERS = [
+	"content-encoding",
+	"content-language",
+	"content-location",
+	"content-type",
+];
+
+/**
+ * The Fetch standard's redirect rule: 303 turns any write into GET, and 301/302 turn a
+ * POST into GET, discarding the body; 307/308 repeat the request unchanged.
+ */
+function redirectRewritesToGet(status: number, method: string): boolean {
+	return (
+		(status === 303 && method !== "GET" && method !== "HEAD") ||
+		((status === 301 || status === 302) && method === "POST")
+	);
 }
 
 export interface HttpClient {
@@ -77,7 +106,7 @@ export class DefaultResolver implements Resolver {
 		max: RESOLUTION_CACHE_MAX_ENTRIES,
 		ttl: RESOLUTION_TTL_MS,
 	});
-	private readonly inFlightResolutions = new Map<string, Promise<DnsLookupRecord[]>>();
+	private readonly inFlightResolutions = new SingleFlight<string, DnsLookupRecord[]>();
 
 	constructor(
 		private readonly lookupFn: LookupAll = lookup as LookupAll,
@@ -97,11 +126,7 @@ export class DefaultResolver implements Resolver {
 			throw new OutboundPolicyError("empty-host", "Target host is empty");
 		}
 
-		const normalizedHost = (
-			hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname
-		)
-			.toLowerCase()
-			.replace(/\.$/, "");
+		const normalizedHost = normalizeHostname(unbracketIpLiteral(hostname));
 
 		if (normalizedHost === "localhost") {
 			if (this.allowLocalhost && options.allowLocalhost === true) {
@@ -127,20 +152,12 @@ export class DefaultResolver implements Resolver {
 			return cached;
 		}
 
-		let pending = this.inFlightResolutions.get(normalizedHost);
-		if (!pending) {
-			pending = this.lookupFn(normalizedHost, {
-				all: true,
-				verbatim: false,
-			}).finally(() => {
-				if (this.inFlightResolutions.get(normalizedHost) === pending) {
-					this.inFlightResolutions.delete(normalizedHost);
-				}
-			});
-			this.inFlightResolutions.set(normalizedHost, pending);
-		}
-
-		const records = await waitForAbort(pending, options.signal, "DNS resolution aborted");
+		const pending = this.inFlightResolutions.run(normalizedHost, () =>
+			this.lookupFn(normalizedHost, { all: true, verbatim: false }),
+		);
+		const records = await raceAbort(pending, options.signal, (signal) =>
+			abortError(signal, "DNS resolution aborted"),
+		);
 		options.signal?.throwIfAborted();
 		const addresses = records.map((record) => record.address);
 		if (addresses.length === 0) {
@@ -170,7 +187,8 @@ export class PinnedHttpClient implements HttpClient {
 		const seenUrls = new Set<string>();
 		let currentUrl = normalizeOutboundUrl(request.url);
 		let redirectCount = 0;
-		const method = request.method ?? "GET";
+		let method: string = request.method ?? "GET";
+		let body = request.body;
 		const headers = new Headers(request.headers);
 		headers.delete("host");
 		const cookieJar = new CookieJar();
@@ -215,6 +233,7 @@ export class PinnedHttpClient implements HttpClient {
 				const init: RequestInit & { tls?: { serverName?: string } } = {
 					method,
 					headers: requestHeaders,
+					...(body ? { body } : {}),
 					redirect: "manual",
 					signal: request.signal,
 				};
@@ -235,12 +254,12 @@ export class PinnedHttpClient implements HttpClient {
 			}
 
 			if (!response) {
-				throw lastError instanceof Error ? lastError : new Error(String(lastError));
+				throw toError(lastError);
 			}
 			for (const setCookie of response.headers.getSetCookie()) {
 				await cookieJar.setCookie(setCookie, currentUrl, { ignoreError: true });
 			}
-			if (!FOLLOW_REDIRECT_STATUSES.has(response.status)) {
+			if (!REDIRECT_STATUS_CODES.has(response.status)) {
 				return withEffectiveUrl(response, currentUrl);
 			}
 
@@ -284,6 +303,11 @@ export class PinnedHttpClient implements HttpClient {
 			if (url.origin !== validatedRedirectUrl.origin) {
 				for (const name of ORIGIN_BOUND_HEADERS) headers.delete(name);
 			}
+			if (redirectRewritesToGet(response.status, method)) {
+				method = "GET";
+				body = undefined;
+				for (const name of REQUEST_BODY_HEADERS) headers.delete(name);
+			}
 			currentUrl = normalizedRedirectUrl;
 			redirectCount += 1;
 		}
@@ -322,30 +346,4 @@ function normalizeOutboundUrl(url: string): string {
 		throw new OutboundPolicyError("invalid-url", normalized.error);
 	}
 	return normalized.url;
-}
-
-function waitForAbort<T>(
-	promise: Promise<T>,
-	signal: AbortSignal | undefined,
-	fallback: string,
-): Promise<T> {
-	if (!signal) return promise;
-	signal.throwIfAborted();
-	return new Promise<T>((resolve, reject) => {
-		const onAbort = () => {
-			signal.removeEventListener("abort", onAbort);
-			reject(signal.reason instanceof Error ? signal.reason : new Error(fallback));
-		};
-		signal.addEventListener("abort", onAbort, { once: true });
-		promise.then(
-			(value) => {
-				signal.removeEventListener("abort", onAbort);
-				resolve(value);
-			},
-			(error) => {
-				signal.removeEventListener("abort", onAbort);
-				reject(error);
-			},
-		);
-	});
 }

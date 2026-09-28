@@ -1,3 +1,5 @@
+import { isOneOf } from "./isOneOf.js";
+
 /**
  * Shared crawl-option contract used by both the frontend and backend.
  * This prevents UI controls and server validation from drifting apart.
@@ -16,5 +18,5 @@ export const CRAWL_OPTION_BOUNDS = {
 } as const;
 
 export function isCrawlMethod(value: string): value is CrawlMethod {
-	return CRAWL_METHODS.includes(value as CrawlMethod);
+	return isOneOf(CRAWL_METHODS, value);
 }

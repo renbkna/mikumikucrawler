@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { TOAST_DEFAULTS } from "../constants";
 import type { Toast } from "../types";
 
@@ -36,19 +36,20 @@ export const ToastNotification = memo(function ToastNotification({
 	const [isLeaving, setIsLeaving] = useState(false);
 	const isDismissedRef = useRef(false);
 	const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const { id, timeout } = toast;
+
+	/** Starts the exit animation once, then removes the toast. */
+	const dismiss = useCallback(() => {
+		if (isDismissedRef.current) return;
+		isDismissedRef.current = true;
+		setIsLeaving(true);
+		dismissTimerRef.current = setTimeout(() => {
+			onDismiss(id);
+		}, TOAST_DEFAULTS.EXIT_ANIMATION_MS);
+	}, [id, onDismiss]);
 
 	useEffect(() => {
-		const timer = setTimeout(
-			() => {
-				if (isDismissedRef.current) return;
-				isDismissedRef.current = true;
-				setIsLeaving(true);
-				dismissTimerRef.current = setTimeout(() => {
-					onDismiss(toast.id);
-				}, TOAST_DEFAULTS.EXIT_ANIMATION_MS);
-			},
-			Math.max(toast.timeout - TOAST_DEFAULTS.EXIT_ANIMATION_MS, 0),
-		);
+		const timer = setTimeout(dismiss, Math.max(timeout - TOAST_DEFAULTS.EXIT_ANIMATION_MS, 0));
 
 		return () => {
 			clearTimeout(timer);
@@ -56,16 +57,7 @@ export const ToastNotification = memo(function ToastNotification({
 				clearTimeout(dismissTimerRef.current);
 			}
 		};
-	}, [toast, onDismiss]);
-
-	const handleDismiss = () => {
-		if (isDismissedRef.current) return;
-		isDismissedRef.current = true;
-		setIsLeaving(true);
-		dismissTimerRef.current = setTimeout(() => {
-			onDismiss(toast.id);
-		}, TOAST_DEFAULTS.EXIT_ANIMATION_MS);
-	};
+	}, [dismiss, timeout]);
 
 	return (
 		<div
@@ -82,7 +74,7 @@ export const ToastNotification = memo(function ToastNotification({
 			</div>
 			<button
 				type="button"
-				onClick={handleDismiss}
+				onClick={dismiss}
 				className={`${
 					BUTTON_STYLES[toast.type]
 				} transition-colors duration-200 flex-shrink-0 p-1 rounded-full`}

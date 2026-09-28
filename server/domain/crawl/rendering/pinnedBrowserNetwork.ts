@@ -6,8 +6,15 @@ import type {
 	Route,
 	WebSocketRoute,
 } from "playwright";
+import { isOneOf } from "../../../../shared/isOneOf.js";
+import { normalizeHostname } from "../../../../shared/url.js";
 import { DYNAMIC_RENDERER_CONSTANTS } from "../../../constants.js";
-import { type HttpClient, isOutboundPolicyError } from "../../../outbound/HttpClient.js";
+import {
+	type BodyMethod,
+	type HttpClient,
+	isOutboundPolicyError,
+	REDIRECT_STATUS_CODES,
+} from "../../../outbound/HttpClient.js";
 import {
 	isJsonContentType,
 	isPdfContentType,
@@ -19,15 +26,16 @@ import { disposeResponseBody, readLimitedResponseBody } from "../../../utils/res
 import { type WorkLease, WorkPermitPool } from "../../../utils/WorkPermitPool.js";
 import type { DestinationAuthorizer } from "./contracts.js";
 
-const BROWSER_REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
-
 type BudgetedBody =
 	| { type: "body"; bytes: Uint8Array }
 	| { type: "rejected"; reason: "response-budget" | "response-too-large" };
 
 class DynamicRouteBudgetError extends Error {}
 
-/** One page owns this budget. Callers cannot replenish it or bypass serialized byte accounting. */
+/**
+ * One document load owns this budget: its main document and every subresource it pulls.
+ * Callers cannot replenish it or bypass serialized byte accounting.
+ */
 export function createDynamicRouteBudget(
 	maxRequests: number = DYNAMIC_RENDERER_CONSTANTS.NETWORK_BUDGET.MAX_REQUESTS_PER_PAGE,
 	maxBytes: number = DYNAMIC_RENDERER_CONSTANTS.NETWORK_BUDGET.MAX_RESPONSE_BYTES_PER_PAGE,
@@ -98,7 +106,7 @@ export function createDynamicSubrequestAdmission(
 	const permits = new WorkPermitPool(maxConcurrent);
 	const nextAllowedAt = new Map<string, number>();
 	const waitForDispatch = async (url: string, signal?: AbortSignal) => {
-		const hostname = new URL(url).hostname.toLowerCase().replace(/\.$/, "");
+		const hostname = normalizeHostname(new URL(url).hostname);
 		const now = Date.now();
 		const dispatchAt = Math.max(now, nextAllowedAt.get(hostname) ?? 0);
 		nextAllowedAt.set(hostname, dispatchAt + minimumDelayMs);
@@ -176,6 +184,30 @@ function createRouteFulfillHeaders(headers: Headers): Record<string, string> {
 	return Object.fromEntries(fulfilledHeaders);
 }
 
+/** Requests a rendered page's own scripts make; the crawler never initiates these. */
+const SCRIPT_RESOURCE_TYPES: ReadonlySet<string> = new Set(["fetch", "xhr"]);
+const SCRIPT_BODY_METHODS = ["POST", "PUT"] as const satisfies readonly BodyMethod[];
+
+/**
+ * Every browser request may read. Only the page's own scripts may also send POST or PUT,
+ * as rendering crawlers allow so script-driven pages can load their data; navigations
+ * (including form submissions), beacons, and other methods stay read-only.
+ */
+function requestMethodPolicy(
+	request: ReturnType<Route["request"]>,
+): { method: "GET" | "HEAD" } | { method: BodyMethod; body?: Uint8Array<ArrayBuffer> } | null {
+	const method = request.method().toUpperCase();
+	if (method === "GET" || method === "HEAD") return { method };
+	if (!SCRIPT_RESOURCE_TYPES.has(request.resourceType()) || !isOneOf(SCRIPT_BODY_METHODS, method)) {
+		return null;
+	}
+	const body = request.postDataBuffer();
+	return {
+		method,
+		...(body ? { body: new Uint8Array(body) } : {}),
+	};
+}
+
 export async function fulfillRouteWithPinnedHttpClient(
 	route: Route,
 	httpClient: HttpClient,
@@ -202,8 +234,8 @@ export async function fulfillRouteWithPinnedHttpClient(
 		return { type: "aborted", reason: "policy" };
 	}
 
-	const method = request.method().toUpperCase();
-	if (method !== "GET" && method !== "HEAD") {
+	const requestMethod = requestMethodPolicy(request);
+	if (!requestMethod) {
 		await route.abort();
 		return { type: "aborted", reason: "unsupported-method" };
 	}
@@ -222,12 +254,14 @@ export async function fulfillRouteWithPinnedHttpClient(
 		const response = await httpClient.fetch({
 			url: requestUrl,
 			headers: request.headers(),
-			method,
+			...requestMethod,
 			signal: options.signal,
-			...(isDocument ? { redirect: "manual" as const } : {}),
+			// Only the main frame follows a fulfilled 3xx; Chromium leaves a subframe that
+			// receives one without a document, so subframe redirects are followed here.
+			...(isMainDocument ? { redirect: "manual" as const } : {}),
 			...(options.allowLocalhostOnInitialRequest ? { allowLocalhostOnInitialRequest: true } : {}),
 			authorizeRedirect: async (hop, redirectSignal) => {
-				if (!isDocument) {
+				if (!isMainDocument) {
 					if (!budget.chargeRequest()) {
 						throw new DynamicRouteBudgetError("Dynamic redirect request budget exhausted");
 					}
@@ -238,8 +272,8 @@ export async function fulfillRouteWithPinnedHttpClient(
 		});
 		const contentType = response.headers.get("content-type") ?? "";
 		const isBrowserRedirect =
-			isDocument &&
-			BROWSER_REDIRECT_STATUSES.has(response.status) &&
+			isMainDocument &&
+			REDIRECT_STATUS_CODES.has(response.status) &&
 			response.headers.has("location");
 		if (isDocument && !isBrowserRedirect) {
 			if (requiresStaticRepresentationFetch(contentType)) {
@@ -335,14 +369,27 @@ async function abortWebSocketRoute(route: WebSocketRoute): Promise<void> {
 	});
 }
 
+export interface PinnedBrowserContextOptions {
+	httpClient: HttpClient;
+	signal?: AbortSignal;
+	/** The one main-document URL granted the localhost capability on its first request. */
+	seedUrl?: string;
+	onDocumentResult?: (result: DynamicRouteResult, url: string) => void;
+	authorizeDocumentDestination?: DestinationAuthorizer;
+	/** Documents in other frames are subrequests, not the crawled document. */
+	mainFrame?: Frame;
+}
+
 export async function configurePinnedBrowserContext(
 	context: BrowserContext,
-	httpClient: HttpClient,
-	signal?: AbortSignal,
-	seedUrl?: string,
-	onDocumentResult?: (result: DynamicRouteResult, url: string) => void,
-	authorizeDocumentDestination?: DestinationAuthorizer,
-	mainFrame?: Frame,
+	{
+		httpClient,
+		signal,
+		seedUrl,
+		onDocumentResult,
+		authorizeDocumentDestination,
+		mainFrame,
+	}: PinnedBrowserContextOptions,
 ): Promise<void> {
 	await context.addInitScript(() => {
 		Object.defineProperties(globalThis, {
@@ -354,7 +401,9 @@ export async function configurePinnedBrowserContext(
 	let seedCapabilityAvailable = seedUrl !== undefined;
 	let initialMainDocumentAvailable = true;
 	let preauthorizedDocumentUrl: string | undefined;
-	const budget = createDynamicRouteBudget();
+	// Each main-document load, such as the reload after accepting a consent wall, starts a
+	// fresh budget; loops stay bounded by the render deadline and subrequest admission.
+	let budget = createDynamicRouteBudget();
 	const admitSubrequest = createDynamicSubrequestAdmission();
 	await context.route("**/*", async (route) => {
 		const request = route.request();
@@ -366,6 +415,8 @@ export async function configurePinnedBrowserContext(
 				isMainDocument = false;
 			}
 		}
+		if (isMainDocument && !initialMainDocumentAvailable) budget = createDynamicRouteBudget();
+		const documentBudget = budget;
 		const isInitialMainDocument = isMainDocument && initialMainDocumentAvailable;
 		if (isInitialMainDocument) {
 			initialMainDocumentAvailable = false;
@@ -382,7 +433,7 @@ export async function configurePinnedBrowserContext(
 		const result = await fulfillRouteWithPinnedHttpClient(route, httpClient, {
 			signal,
 			allowLocalhostOnInitialRequest: useSeedCapability,
-			budget,
+			budget: documentBudget,
 			authorizeDocumentRequest:
 				isMainDocument && !isInitialMainDocument && !isPreauthorizedDocument
 					? authorizeDocumentDestination

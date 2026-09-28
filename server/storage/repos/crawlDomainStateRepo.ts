@@ -1,63 +1,35 @@
 import type { Database } from "bun:sqlite";
-import { DOMAIN_DELAY_CONSTANTS } from "../../constants.js";
-import type { OwnStatement } from "../db.js";
+import type { DomainStateRecord } from "../../domain/crawl/CrawlState.js";
 
-export interface CrawlDomainStateRecord {
+interface DomainStateRow {
 	delayKey: string;
 	delayMs: number;
 	nextAllowedAt: number;
 }
 
-export function createCrawlDomainStateRepo(db: Database, own: OwnStatement) {
-	const upsert = own(
-		db.prepare(`
-		INSERT INTO crawl_domain_state (
-			crawl_id,
-			delay_key,
-			delay_ms,
-			next_allowed_at
-		) VALUES (?, ?, ?, ?)
+/** Persists the scheduler projection; schema CHECK constraints own the value bounds. */
+export function createCrawlDomainStateRepo(db: Database) {
+	const upsert = db.prepare<never, [string, string, number, number]>(`
+		INSERT INTO crawl_domain_state (crawl_id, delay_key, delay_ms, next_allowed_at)
+		VALUES (?, ?, ?, ?)
 		ON CONFLICT(crawl_id, delay_key) DO UPDATE SET
 			delay_ms = excluded.delay_ms,
 			next_allowed_at = excluded.next_allowed_at,
 			updated_at = CURRENT_TIMESTAMP
-	`),
-	);
+	`);
+	const listByCrawl = db.prepare<DomainStateRow, [string]>(`
+		SELECT delay_key AS delayKey, delay_ms AS delayMs, next_allowed_at AS nextAllowedAt
+		FROM crawl_domain_state
+		WHERE crawl_id = ?
+		ORDER BY delay_key ASC
+	`);
 
 	return {
-		upsert(crawlId: string, record: CrawlDomainStateRecord): void {
-			if (
-				!Number.isSafeInteger(record.delayMs) ||
-				record.delayMs < 0 ||
-				record.delayMs > DOMAIN_DELAY_CONSTANTS.MAX_MS ||
-				!Number.isSafeInteger(record.nextAllowedAt) ||
-				record.nextAllowedAt < 0
-			) {
-				throw new Error(`Cannot persist invalid domain scheduler state for ${crawlId}`);
-			}
+		upsert(crawlId: string, record: DomainStateRecord): void {
 			upsert.run(crawlId, record.delayKey, record.delayMs, record.nextAllowedAt);
 		},
-		listByCrawlId(crawlId: string): CrawlDomainStateRecord[] {
-			const rows = db
-				.query(
-					`
-					SELECT delay_key, delay_ms, next_allowed_at
-					FROM crawl_domain_state
-					WHERE crawl_id = ?
-					ORDER BY delay_key ASC
-				`,
-				)
-				.all(crawlId) as Array<{
-				delay_key: string;
-				delay_ms: number;
-				next_allowed_at: number;
-			}>;
-
-			return rows.map((row) => ({
-				delayKey: row.delay_key,
-				delayMs: row.delay_ms,
-				nextAllowedAt: row.next_allowed_at,
-			}));
+		listByCrawlId(crawlId: string): DomainStateRecord[] {
+			return listByCrawl.all(crawlId);
 		},
 	};
 }

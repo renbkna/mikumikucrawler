@@ -145,7 +145,7 @@ describe("cross-boundary invariants", () => {
 		]);
 		expect(validationSource).not.toContain("TypeCompiler");
 		expect(validationSource).not.toContain(".Compile(");
-		expect(schemaSource).toContain('from "elysia/type-system"');
+		expect(schemaSource).toContain('import { t } from "elysia"');
 		expect(schemaSource).not.toContain('from "./http.js"');
 		expect(schemaSource).not.toContain("t.Numeric(");
 	});

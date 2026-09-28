@@ -11,10 +11,17 @@ import {
 } from "../../__tests__/runtimeFixture.js";
 import { createInMemoryStorage, getTestDatabase } from "../../__tests__/storageFixture.js";
 import { createApp } from "../../app.js";
+import type { RequestTransport } from "../../config/rateLimit.js";
 import { CRAWL_QUEUE_CONSTANTS } from "../../constants.js";
 import type { HttpClient } from "../../outbound/HttpClient.js";
 import { CrawlManager } from "../../runtime/CrawlManager.js";
 import { EventStream } from "../../runtime/EventStream.js";
+
+/** The app outside a real listener: no socket peer and no idle timeout to lift. */
+const DETACHED_TRANSPORT: RequestTransport = {
+	peerAddress: () => undefined,
+	keepOpen: () => {},
+};
 
 function decodeSseChunk(value: unknown): string {
 	if (typeof value === "string") return value;
@@ -25,6 +32,7 @@ function decodeSseChunk(value: unknown): string {
 function buildApp(
 	httpClient: HttpClient = successfulHtmlHttpClient,
 	storage = createInMemoryStorage(),
+	appOptions: Parameters<typeof createApp>[1] = {},
 ) {
 	const eventStream = new EventStream();
 	const logger = silentLogger;
@@ -36,13 +44,16 @@ function buildApp(
 		storageBudget: storage.budget,
 	});
 
-	const app = createApp({
-		logger,
-		storage,
-		eventStream,
-		crawlManager,
-		rateLimitGenerator: () => "api-contract-client",
-	});
+	const app = createApp(
+		{
+			logger,
+			storage,
+			eventStream,
+			crawlManager,
+			transport: DETACHED_TRANSPORT,
+		},
+		appOptions,
+	);
 
 	return { app, crawlManager, storage };
 }
@@ -148,29 +159,7 @@ describe("api contract", () => {
 		expect(pageContentResponse.status).toBe(422);
 	});
 
-	test("Elysia owns bounded numeric SSE replay cursor validation", async () => {
-		const { app } = buildApp();
-
-		for (const value of ["not-a-sequence", "-1", "1.5", String(Number.MAX_SAFE_INTEGER + 1)]) {
-			const response = await app.handle(
-				new Request("http://localhost/api/crawls/example/events", {
-					headers: { "last-event-id": value },
-				}),
-			);
-			expect(response.status).toBe(422);
-		}
-
-		for (const value of ["01", String(Number.MAX_SAFE_INTEGER)]) {
-			const response = await app.handle(
-				new Request("http://localhost/api/crawls/example/events", {
-					headers: { "last-event-id": value },
-				}),
-			);
-			expect(response.status).toBe(404);
-		}
-	});
-
-	test("settled SSE reconnects stop after the terminal event cursor", async () => {
+	test("settled crawls answer SSE with 204 so clients read the snapshot", async () => {
 		const { app, crawlManager } = buildApp();
 		const crawlId = "settled-sse-reconnect";
 		crawlManager.create(crawlId, { ...crawlBody, maxPages: 1 });
@@ -180,11 +169,7 @@ describe("api contract", () => {
 		);
 		if (!settled) throw new Error("Expected completed crawl");
 
-		const response = await app.handle(
-			new Request(`http://localhost/api/crawls/${crawlId}/events`, {
-				headers: { "last-event-id": String(settled.eventSequence) },
-			}),
-		);
+		const response = await app.handle(new Request(`http://localhost/api/crawls/${crawlId}/events`));
 
 		expect(response.status).toBe(204);
 		expect(await response.text()).toBe("");
@@ -273,7 +258,7 @@ describe("api contract", () => {
 			error: "Only HTTP and HTTPS URLs are supported",
 			code: "INVALID_TARGET",
 		});
-		expect(storage.repos.crawlRuns.list()).toHaveLength(0);
+		expect(storage.repos.crawlRuns.list({ limit: 25 })).toHaveLength(0);
 	});
 
 	test("normalizes accepted crawl targets before persisting the crawl", async () => {
@@ -304,7 +289,10 @@ describe("api contract", () => {
 			...crawlBody,
 			target: "https://shutdown-resume.example",
 		});
-		storage.repos.crawlRuns.markPaused(paused.id, "Paused", 0);
+		storage.repos.crawlRuns.transition(paused.id, "paused", {
+			stopReason: "Paused",
+			eventSequence: 0,
+		});
 		const shutdown = crawlManager.shutdownAll();
 		const createResponse = await app.handle(
 			new Request("http://localhost/api/crawls", {
@@ -595,17 +583,21 @@ describe("api contract", () => {
 		expect(search.count).toBe(3);
 	});
 
+	test("API documentation is not served outside development", async () => {
+		const { app } = buildApp();
+
+		for (const path of ["/openapi", "/openapi/json"]) {
+			expect((await app.handle(new Request(`http://localhost${path}`))).status).toBe(404);
+		}
+	});
+
 	test("openapi documents streaming and export media types truthfully", async () => {
-		const { app, storage } = buildApp();
+		const { app, storage } = buildApp(undefined, undefined, { exposeApiDocumentation: true });
 
 		const response = await app.handle(new Request("http://localhost/openapi/json"));
 
 		expect(response.status).toBe(200);
 		const spec = await response.json();
-		expect(JSON.stringify(spec)).not.toContain("~elyTyp");
-		const lastEventIdParameter = spec.paths["/api/crawls/{id}/events"].get.parameters.find(
-			(parameter: { name?: string }) => parameter.name === "Last-Event-ID",
-		);
 		const eventContent = spec.paths["/api/crawls/{id}/events"].get.responses["200"].content;
 		const exportContent = spec.paths["/api/crawls/{id}/export"].get.responses["200"].content;
 		const findParameter = (path: string, name: string) =>
@@ -613,12 +605,9 @@ describe("api contract", () => {
 				(parameter: { name?: string }) => parameter.name === name,
 			);
 
-		expect(lastEventIdParameter?.schema).toEqual({
-			type: "integer",
-			minimum: 0,
-			maximum: Number.MAX_SAFE_INTEGER,
-		});
-		expect(lastEventIdParameter?.description).toContain("Bounded live replay cursor");
+		// Elysia's runtime schema tags are not JSON Schema and must not reach documentation readers.
+		expect(JSON.stringify(spec)).not.toContain("~elyTyp");
+		expect(findParameter("/api/crawls/{id}/events", "Last-Event-ID")).toBeUndefined();
 		expect(findParameter("/api/crawls/", "limit")?.schema.default).toBe(25);
 		expect(findParameter("/api/crawls/resumable", "limit")?.schema.default).toBe(25);
 		expect(findParameter("/api/search", "limit")?.schema.default).toBe(20);
@@ -642,8 +631,6 @@ describe("api contract", () => {
 			if (componentName) expect(spec.components?.schemas).toHaveProperty(componentName);
 		}
 
-		const uiResponse = await app.handle(new Request("http://localhost/openapi"));
-		expect(uiResponse.status).toBe(404);
 		const crawl = storage.repos.crawlRuns.createRun("openapi-export", crawlBody);
 		persistPageFixture(storage, {
 			crawlId: crawl.id,
@@ -718,7 +705,7 @@ describe("api contract", () => {
 		expect(retry.status).toBe(200);
 		expect((await first.json()).id).toBe(crawlId);
 		expect((await retry.json()).id).toBe(crawlId);
-		expect(storage.repos.crawlRuns.list()).toHaveLength(1);
+		expect(storage.repos.crawlRuns.list({ limit: 25 })).toHaveLength(1);
 
 		const conflict = await app.handle(
 			new Request("http://localhost/api/crawls", {
@@ -801,7 +788,10 @@ describe("api contract", () => {
 			content: "<main>prior</main>",
 			mainContent: "prior",
 		});
-		storage.repos.crawlRuns.markPaused(crawl.id, "Paused", 7);
+		storage.repos.crawlRuns.transition(crawl.id, "paused", {
+			stopReason: "Paused",
+			eventSequence: 7,
+		});
 
 		const response = await app.handle(
 			new Request(`http://localhost/api/crawls/${crawl.id}/resume`, { method: "POST" }),
@@ -913,7 +903,7 @@ describe("api contract", () => {
 			...crawlBody,
 			target: "https://running.example",
 		});
-		storage.repos.crawlRuns.markRunning(active.id, 0);
+		storage.repos.crawlRuns.transition(active.id, "running", { eventSequence: 0 });
 
 		const deleteResponse = await app.handle(
 			new Request(`http://localhost/api/crawls/${active.id}`, {
@@ -934,7 +924,10 @@ describe("api contract", () => {
 			...crawlBody,
 			target: "https://delete.example",
 		});
-		storage.repos.crawlRuns.markPaused(paused.id, "Paused", 0);
+		storage.repos.crawlRuns.transition(paused.id, "paused", {
+			stopReason: "Paused",
+			eventSequence: 0,
+		});
 
 		const remove = () =>
 			app.handle(
@@ -970,10 +963,22 @@ describe("api contract", () => {
 			...crawlBody,
 			target: "https://completed.example",
 		});
-		storage.repos.crawlRuns.markPaused(paused.id, "Paused", 0);
-		storage.repos.crawlRuns.markPausing(pausing.id, "Pause requested", 0);
-		storage.repos.crawlRuns.markInterrupted(interrupted.id, "Shutdown", 0);
-		storage.repos.crawlRuns.markCompleted(completed.id, null, 0);
+		storage.repos.crawlRuns.transition(paused.id, "paused", {
+			stopReason: "Paused",
+			eventSequence: 0,
+		});
+		storage.repos.crawlRuns.transition(pausing.id, "pausing", {
+			stopReason: "Pause requested",
+			eventSequence: 0,
+		});
+		storage.repos.crawlRuns.transition(interrupted.id, "interrupted", {
+			stopReason: "Shutdown",
+			eventSequence: 0,
+		});
+		storage.repos.crawlRuns.transition(completed.id, "completed", {
+			stopReason: null,
+			eventSequence: 0,
+		});
 
 		const response = await app.handle(new Request("http://localhost/api/crawls/resumable"));
 
@@ -1015,9 +1020,14 @@ describe("api contract", () => {
 		}
 
 		releaseFetch();
-		const firstChunk = await reader.read();
-		const firstWireChunk = decodeSseChunk(firstChunk.value);
-		expect(firstWireChunk).toContain("event: crawl.started");
+		// Live-only delivery: the first frame is whichever event follows the subscription.
+		let wire = "";
+		while (!wire.includes("data: ")) {
+			const chunk = await reader.read();
+			expect(chunk.done).toBe(false);
+			wire += decodeSseChunk(chunk.value);
+		}
+		expect(wire).toMatch(/event: crawl\.[a-z]+/);
 		await reader.cancel();
 
 		const completed = await waitFor(

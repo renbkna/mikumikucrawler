@@ -1,52 +1,41 @@
 import type { Page } from "playwright";
-import { REQUEST_CONSTANTS } from "../../../constants.js";
+import { DYNAMIC_RENDERER_CONSTANTS, REQUEST_CONSTANTS } from "../../../constants.js";
+import { onAbort, raceAbort } from "../../../utils/abort.js";
 import { OperationTimeoutError, runWithTimeout } from "../../../utils/timeout.js";
 
 export const MAX_RENDERED_DOM_NODES = 50_000;
 
 export interface RenderedSnapshot {
 	content: string;
-	contentLength: number;
 	description: string;
 	effectiveUrl: string;
 	title: string;
 }
 
-export function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-	if (!signal) return promise;
-	if (signal.aborted) return Promise.reject(signal.reason);
+/** Playwright reports these conditions only through error text; this is the one place that reads it. */
+const CLOSED_TARGET_MARKER = "Target page, context or browser has been closed";
+const TRANSIENT_BROWSER_MARKERS = [
+	CLOSED_TARGET_MARKER,
+	"Navigation failed because page crashed",
+	"net::ERR_ABORTED",
+	"Execution context was destroyed",
+	"Frame was detached",
+];
 
-	return new Promise((resolve, reject) => {
-		const onAbort = () => {
-			signal.removeEventListener("abort", onAbort);
-			reject(signal.reason);
-		};
-		signal.addEventListener("abort", onAbort, { once: true });
-		promise.then(
-			(value) => {
-				signal.removeEventListener("abort", onAbort);
-				resolve(value);
-			},
-			(error) => {
-				signal.removeEventListener("abort", onAbort);
-				reject(error);
-			},
-		);
-	});
+function messageIncludesAny(error: unknown, markers: readonly string[]): boolean {
+	return error instanceof Error && markers.some((marker) => error.message.includes(marker));
 }
 
+/** True when the page, context, or browser was already closed. */
+export function isClosedBrowserTargetError(error: unknown): boolean {
+	return messageIncludesAny(error, [CLOSED_TARGET_MARKER, "Page closed"]);
+}
+
+/** True when a browser step failed in a way a static fallback or retry can recover from. */
 export function isRecoverableBrowserError(err: unknown): boolean {
 	if (!(err instanceof Error)) return false;
 	if (err instanceof OperationTimeoutError || err.name === "TimeoutError") return true;
-
-	const message = err.message;
-	return (
-		message.includes("Target page, context or browser has been closed") ||
-		message.includes("Navigation failed because page crashed") ||
-		message.includes("net::ERR_ABORTED") ||
-		message.includes("Execution context was destroyed") ||
-		message.includes("Frame was detached")
-	);
+	return messageIncludesAny(err, TRANSIENT_BROWSER_MARKERS);
 }
 
 export function readBoundedDocumentText(options: {
@@ -91,7 +80,7 @@ export async function openBrowserPageWithRetry(
 		signal?.throwIfAborted();
 		throw new Error("Browser page acquisition completed after renderer ownership ended");
 	};
-	const acquire = () => waitForAbort(createPage().then(accept), signal);
+	const acquire = () => raceAbort(createPage().then(accept), signal);
 	try {
 		return await acquire();
 	} catch (error) {
@@ -119,17 +108,13 @@ export async function runPageOperationWithDeadline<T>(options: {
 		operationName: options.operationName,
 		...(options.signal ? { signal: options.signal } : {}),
 		run: async (operationSignal) => {
-			const closeOnAbort = () => closePage();
-			if (operationSignal.aborted) {
-				closePage();
-			} else {
-				operationSignal.addEventListener("abort", closeOnAbort, { once: true });
-			}
 			try {
+				using _closeOnAbort = onAbort(operationSignal, closePage);
 				operationSignal.throwIfAborted();
-				return await options.run(operationSignal);
+				// Closing the page releases everything the operation holds, but Playwright may
+				// never settle a call into a frame that has no document; the close is the settlement.
+				return await raceAbort(options.run(operationSignal), operationSignal);
 			} finally {
-				operationSignal.removeEventListener("abort", closeOnAbort);
 				await closePromise;
 			}
 		},
@@ -142,7 +127,7 @@ export async function extractRenderedSnapshot(
 ): Promise<RenderedSnapshot | "tooLarge"> {
 	return runPageOperationWithDeadline({
 		page,
-		timeoutMs: 10_000,
+		timeoutMs: DYNAMIC_RENDERER_CONSTANTS.TIMEOUTS.SNAPSHOT,
 		operationName: "Rendered document snapshot",
 		...(signal ? { signal } : {}),
 		run: () =>
@@ -152,7 +137,6 @@ export async function extractRenderedSnapshot(
 					if (!root) {
 						return {
 							content: "",
-							contentLength: 0,
 							description: "",
 							effectiveUrl: window.location.href,
 							title: document.title || "",
@@ -245,7 +229,6 @@ export async function extractRenderedSnapshot(
 
 					return {
 						content,
-						contentLength,
 						description:
 							document.querySelector('meta[name="description"]')?.getAttribute("content") || "",
 						effectiveUrl: window.location.href,

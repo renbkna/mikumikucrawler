@@ -38,6 +38,15 @@ export function buildCrawlExportPath(crawlId: string, format: CrawlExportFormat 
 	return `${API_PATHS.crawls}/${encodePathSegment(crawlId)}/export?${query}`;
 }
 
-export function isApiPath(pathname: string): boolean {
-	return pathname === API_PATHS.root || pathname.startsWith(`${API_PATHS.root}/`);
+/** Path prefixes the backend serves itself; the SPA and static files never claim them. */
+export const SERVER_OWNED_PATH_PREFIXES = [
+	API_PATHS.root,
+	API_PATHS.health,
+	API_PATHS.openapi,
+] as const;
+
+export function isServerOwnedPath(pathname: string): boolean {
+	return SERVER_OWNED_PATH_PREFIXES.some(
+		(prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+	);
 }

@@ -428,6 +428,45 @@ describe("outbound HTTP contract", () => {
 		});
 	}
 
+	for (const [method, status, expected] of [
+		["POST", 302, "GET"],
+		["POST", 301, "GET"],
+		["POST", 303, "GET"],
+		["PUT", 303, "GET"],
+		["PUT", 301, "PUT"],
+		["POST", 307, "POST"],
+		["PUT", 308, "PUT"],
+	] as const) {
+		test(`a ${method} redirected with ${status} continues as ${expected}, like a browser`, async () => {
+			const resolver: Resolver = {
+				resolveHost: async () => ["93.184.216.34"],
+				assertPublicHostname: async () => {},
+			};
+			const fetchMock = mock(async (url: string) =>
+				url.endsWith("/start")
+					? new Response(null, { status, headers: { location: "/next" } })
+					: new Response("ok"),
+			);
+			const httpClient = new PinnedHttpClient(resolver, fetchMock as unknown as typeof fetch);
+
+			await httpClient.fetch({
+				url: "https://example.com/start",
+				method,
+				headers: { "content-type": "application/json" },
+				body: new TextEncoder().encode('{"q":1}'),
+			});
+
+			const [, firstInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+			const [, secondInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+			expect(firstInit.method).toBe(method);
+			expect(firstInit.body).toBeDefined();
+			expect(secondInit.method).toBe(expected);
+			const keepsBody = expected === method;
+			expect(secondInit.body !== undefined).toBe(keepsBody);
+			expect(new Headers(secondInit.headers).has("content-type")).toBe(keepsBody);
+		});
+	}
+
 	test("fails fast on redirect loops instead of following forever", async () => {
 		const resolver: Resolver = {
 			resolveHost: async () => ["93.184.216.34"],

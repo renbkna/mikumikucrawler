@@ -1,26 +1,21 @@
 import ipaddr from "ipaddr.js";
 
-function normalizeIpLiteral(address: string): string {
+/** Removes the brackets URL syntax puts around IPv6 literals. */
+export function unbracketIpLiteral(address: string): string {
 	return address.startsWith("[") && address.endsWith("]") ? address.slice(1, -1) : address;
 }
 
+function parseIpLiteral(address: string): ipaddr.IPv4 | ipaddr.IPv6 | null {
+	const literal = unbracketIpLiteral(address);
+	// process() unwraps IPv4-mapped IPv6 so the IPv4 range policy applies to it.
+	return ipaddr.isValid(literal) ? ipaddr.process(literal) : null;
+}
+
 export function isPublicIpAddressLiteral(address: string): boolean {
-	try {
-		let parsed: ipaddr.IPv4 | ipaddr.IPv6 = ipaddr.parse(normalizeIpLiteral(address));
-		if (parsed.kind() === "ipv6" && (parsed as ipaddr.IPv6).isIPv4MappedAddress()) {
-			parsed = (parsed as ipaddr.IPv6).toIPv4Address();
-		}
-		return parsed.range() === "unicast";
-	} catch {
-		return false;
-	}
+	return parseIpLiteral(address)?.range() === "unicast";
 }
 
 export function isPrivateOrReservedIpAddressLiteral(address: string): boolean {
-	try {
-		ipaddr.parse(normalizeIpLiteral(address));
-	} catch {
-		return false;
-	}
-	return !isPublicIpAddressLiteral(address);
+	const parsed = parseIpLiteral(address);
+	return parsed !== null && parsed.range() !== "unicast";
 }

@@ -1,6 +1,7 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, loadEnv } from "vite";
+import { SERVER_OWNED_PATH_PREFIXES } from "./shared/contracts/api.js";
 import { resolveBackendTransportPolicy } from "./src/api/backendUrl.js";
 
 const BACKEND_CONNECT_SOURCE_MARKER = "__VITE_BACKEND_CONNECT_SOURCE__";
@@ -34,12 +35,13 @@ export default defineConfig(({ command, mode }) => {
 		...(backendPolicy.type === "same-origin-proxy"
 			? {
 					server: {
-						proxy: {
-							"/api": {
-								target: backendPolicy.proxyTarget,
-								changeOrigin: true,
-							},
-						},
+						proxy: Object.fromEntries(
+							// Keys starting with ^ are RegExps: match whole path segments, like isServerOwnedPath.
+							SERVER_OWNED_PATH_PREFIXES.map((prefix) => [
+								`^${prefix}(?:[/?]|$)`,
+								{ target: backendPolicy.proxyTarget, changeOrigin: true },
+							]),
+						),
 					},
 				}
 			: {}),

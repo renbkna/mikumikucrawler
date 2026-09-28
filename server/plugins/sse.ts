@@ -11,7 +11,6 @@ type CrawlSsePayload = SSEPayload<CrawlEventEnvelope, CrawlEventEnvelope["type"]
 export function createCrawlEventStream(options: {
 	crawlId: string;
 	eventStream: EventStream;
-	afterSequence: number;
 	clientKey?: string;
 }) {
 	let close = () => {};
@@ -67,11 +66,8 @@ export function createCrawlEventStream(options: {
 			const write = (event: CrawlEventEnvelope) => {
 				if (closed) return;
 				try {
-					const payload = sse({
-						id: event.sequence,
-						event: event.type,
-						data: event,
-					});
+					// No SSE id: reconnects resume from the snapshot, not from Last-Event-ID.
+					const payload = sse({ event: event.type, data: event });
 					const bytes = new TextEncoder().encode(JSON.stringify(event)).byteLength;
 					if (!isSettledCrawlEventType(event.type)) {
 						enqueue(payload, bytes);
@@ -88,13 +84,7 @@ export function createCrawlEventStream(options: {
 				}
 			};
 
-			unsubscribe = options.eventStream.subscribe(
-				options.crawlId,
-				write,
-				options.afterSequence,
-				close,
-				options.clientKey,
-			);
+			unsubscribe = options.eventStream.subscribe(options.crawlId, write, close, options.clientKey);
 			if (closed) {
 				unsubscribe();
 				return;

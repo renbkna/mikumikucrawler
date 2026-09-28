@@ -2,19 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { PAGE_TEXT_LIMITS } from "../../../shared/contracts/index.js";
 import { silentLogger } from "../../__tests__/runtimeFixture.js";
 import { PDF_CONSTANTS } from "../../constants.js";
-import type { ProcessedContent } from "../../types.js";
 import { type PdfJsLoader, processPdfContent } from "../PdfContentHandler.js";
-
-function createResult(): ProcessedContent {
-	return {
-		extractedData: {},
-		metadata: {},
-		analysis: {},
-		mediaCount: 0,
-		links: [],
-		errors: [],
-	};
-}
 
 function loaderFor(
 	document: object,
@@ -29,13 +17,8 @@ function loaderFor(
 		}) as never;
 }
 
-function processWithLoader(
-	content: Buffer,
-	result: ProcessedContent,
-	loadPdfJs: PdfJsLoader,
-	signal?: AbortSignal,
-) {
-	return processPdfContent(content, result, silentLogger, signal, loadPdfJs);
+function processWithLoader(content: Buffer, loadPdfJs: PdfJsLoader, signal?: AbortSignal) {
+	return processPdfContent(content, silentLogger, signal, loadPdfJs);
 }
 
 function textStream(
@@ -52,19 +35,18 @@ function textStream(
 describe("PDF resource lifecycle", () => {
 	test("destroys the loading task when the page-count policy rejects its document", async () => {
 		const destroy = mock(async () => undefined);
-		const result = createResult();
 		const loadPdfJs = loaderFor({ numPages: 1001 }, destroy);
 
-		await processWithLoader(Buffer.from("%PDF-oversized"), result, loadPdfJs);
+		await expect(processWithLoader(Buffer.from("%PDF-oversized"), loadPdfJs)).rejects.toThrow(
+			"PDF has too many pages",
+		);
 
 		expect(destroy).toHaveBeenCalledTimes(1);
-		expect(result.errors[0]?.type).toBe("pdf_processing_error");
 	});
 
 	test("cleans the current page and document when text extraction fails", async () => {
 		const cleanup = mock(() => undefined);
 		const destroy = mock(async () => undefined);
-		const result = createResult();
 		const loadPdfJs = loaderFor(
 			{
 				numPages: 1,
@@ -82,17 +64,17 @@ describe("PDF resource lifecycle", () => {
 			destroy,
 		);
 
-		await processWithLoader(Buffer.from("%PDF-broken-page"), result, loadPdfJs);
+		await expect(processWithLoader(Buffer.from("%PDF-broken-page"), loadPdfJs)).rejects.toThrow(
+			"malformed page stream",
+		);
 
 		expect(cleanup).toHaveBeenCalledTimes(1);
 		expect(destroy).toHaveBeenCalledTimes(1);
-		expect(result.errors[0]?.message).toContain("malformed page stream");
 	});
 
 	test("cancels decompressed text at the owner budget before reading another chunk", async () => {
 		let cancelled = false;
 		let reads = 0;
-		const result = createResult();
 		const loadPdfJs = loaderFor({
 			numPages: 1,
 			getPage: async () => ({
@@ -116,9 +98,10 @@ describe("PDF resource lifecycle", () => {
 			getMetadata: async () => null,
 		});
 
-		await processWithLoader(Buffer.from("%PDF-expanding-text"), result, loadPdfJs);
+		await expect(processWithLoader(Buffer.from("%PDF-expanding-text"), loadPdfJs)).rejects.toThrow(
+			"PDF extracted text exceeds",
+		);
 
-		expect(result.errors[0]?.message).toContain("PDF extracted text exceeds");
 		expect(cancelled).toBe(true);
 		expect(reads).toBe(1);
 	});
@@ -127,7 +110,6 @@ describe("PDF resource lifecycle", () => {
 		const cleanup = mock(() => undefined);
 		const destroy = mock(async () => undefined);
 		const getMetadata = mock(async () => null);
-		const result = createResult();
 		const loadPdfJs = loaderFor(
 			{
 				numPages: 1,
@@ -144,16 +126,16 @@ describe("PDF resource lifecycle", () => {
 			destroy,
 		);
 
-		await processWithLoader(Buffer.from("%PDF-expanding-text"), result, loadPdfJs);
+		await expect(processWithLoader(Buffer.from("%PDF-expanding-text"), loadPdfJs)).rejects.toThrow(
+			"PDF extracted text exceeds",
+		);
 
-		expect(result.errors[0]?.message).toContain("PDF extracted text exceeds");
 		expect(getMetadata).not.toHaveBeenCalled();
 		expect(cleanup).toHaveBeenCalledTimes(1);
 		expect(destroy).toHaveBeenCalledTimes(1);
 	});
 
 	test("bounds PDF metadata at the shared page projection", async () => {
-		const result = createResult();
 		const loadPdfJs = loaderFor({
 			numPages: 0,
 			getMetadata: async () => ({
@@ -161,7 +143,7 @@ describe("PDF resource lifecycle", () => {
 			}),
 		});
 
-		await processWithLoader(Buffer.from("%PDF-metadata"), result, loadPdfJs);
+		const result = await processWithLoader(Buffer.from("%PDF-metadata"), loadPdfJs);
 
 		expect(new TextEncoder().encode(result.metadata.title ?? "").byteLength).toBeLessThanOrEqual(
 			PAGE_TEXT_LIMITS.metadataValueBytes,
@@ -186,12 +168,10 @@ describe("PDF resource lifecycle", () => {
 				},
 			}) as never;
 
-		const result = createResult();
-		await processWithLoader(content, result, loadPdfJs);
+		await processWithLoader(content, loadPdfJs);
 
 		expect(received?.buffer.byteLength).toBe(0);
 		expect(content.equals(original)).toBe(true);
-		expect(result.errors).toEqual([]);
 	});
 
 	test("propagates caller abort only after owned PDF resources begin cleanup", async () => {
@@ -219,12 +199,7 @@ describe("PDF resource lifecycle", () => {
 			},
 			destroy,
 		);
-		const processing = processWithLoader(
-			Buffer.from("%PDF-abort"),
-			createResult(),
-			loadPdfJs,
-			controller.signal,
-		);
+		const processing = processWithLoader(Buffer.from("%PDF-abort"), loadPdfJs, controller.signal);
 		while (!rejectText || !textController) await Promise.resolve();
 
 		controller.abort(new Error("crawl item stopped"));

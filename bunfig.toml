@@ -1,5 +1,0 @@
-[install]
-# The pinned Elysia beta is runtime-compatible with the direct Eden and rate-limit
-# dependencies, whose published peer ranges exclude prereleases. Remove this
-# exception when their pinned releases advertise compatible peer metadata.
-peer = false

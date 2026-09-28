@@ -1,4 +1,5 @@
 import type {
+	ActiveCrawlStatus,
 	CrawlCounters,
 	CrawlEventEnvelope,
 	CrawlEventMap,
@@ -21,6 +22,8 @@ import { TOAST_DEFAULTS, UI_LIMITS } from "../constants";
 export type ConnectionState = "connecting" | "connected" | "disconnected";
 
 export type RunPhase = Exclude<CrawlStatus, "pending"> | "idle";
+
+export type ActiveRunPhase = Exclude<ActiveCrawlStatus, "pending">;
 
 export type CommandKind = "start" | "stop" | "forceStop" | "resume" | "refresh" | "delete";
 
@@ -46,7 +49,6 @@ export interface CrawlControllerState {
 	storedPageCount: number;
 	progress: number;
 	logs: ControllerLog[];
-	hasShownStaticFallbackHint: boolean;
 	searchQuery: string;
 	resumableSessions: ResumableSessionsState;
 	lastSequence: number;
@@ -100,7 +102,6 @@ export function createInitialCrawlControllerState(): CrawlControllerState {
 		storedPageCount: 0,
 		progress: 0,
 		logs: [],
-		hasShownStaticFallbackHint: false,
 		searchQuery: "",
 		resumableSessions: {
 			items: [],
@@ -125,43 +126,35 @@ function reconcileStoredPageCount(current: number, durableCount: number): number
 	return Math.max(current, durableCount);
 }
 
+function withoutEffects(state: CrawlControllerState): ControllerStateTransition {
+	return { state, effects: [] };
+}
+
 function appendLog(
 	state: CrawlControllerState,
 	message: string,
 	level: ControllerLog["level"],
-): ControllerStateTransition {
-	const nextLogs = [{ id: (state.logs[0]?.id ?? 0) + 1, message, level }, ...state.logs].slice(
-		0,
-		UI_LIMITS.MAX_LOGS,
-	);
-	const effects: ControllerEffect[] = [];
-
-	if (
-		message.toLowerCase().includes("falling back to static crawling") &&
-		!state.hasShownStaticFallbackHint
-	) {
-		effects.push({
-			type: "toast",
-			level: "warning",
-			message: "Tip: Try disabling JavaScript crawling in settings for better performance",
-			timeout: TOAST_DEFAULTS.LONG_TIMEOUT,
-		});
-	}
-
+): CrawlControllerState {
 	return {
-		state: {
-			...state,
-			logs: nextLogs,
-			hasShownStaticFallbackHint:
-				state.hasShownStaticFallbackHint ||
-				message.toLowerCase().includes("falling back to static crawling"),
-		},
-		effects,
+		...state,
+		logs: [{ id: (state.logs[0]?.id ?? 0) + 1, message, level }, ...state.logs].slice(
+			0,
+			UI_LIMITS.MAX_LOGS,
+		),
 	};
 }
 
+export function isActiveRunPhase(runPhase: RunPhase): runPhase is ActiveRunPhase {
+	return runPhase !== "idle" && isActiveCrawlStatus(runPhase);
+}
+
 export function isTerminalRunPhase(runPhase: RunPhase): boolean {
-	return runPhase === "completed" || runPhase === "failed" || runPhase === "stopped";
+	return runPhase !== "idle" && isTerminalCrawlStatus(runPhase);
+}
+
+/** A locally requested pause or stop outranks non-settling evidence that the crawl is still active. */
+function keepWindingDownPhase(current: RunPhase, next: RunPhase): RunPhase {
+	return current === "pausing" || current === "stopping" ? current : next;
 }
 
 function synchronizeCrawlSummary(
@@ -185,10 +178,7 @@ function synchronizeCrawlSummary(
 		progress: isTerminalCrawlStatus(crawl.status)
 			? 100
 			: computeProgress({ ...state, activeCrawlOptions: crawl.options }, stats, state.queueStats),
-		runPhase:
-			!snapshotSettled && (state.runPhase === "pausing" || state.runPhase === "stopping")
-				? state.runPhase
-				: runPhase,
+		runPhase: snapshotSettled ? runPhase : keepWindingDownPhase(state.runPhase, runPhase),
 		connectionState: snapshotSettled ? "disconnected" : state.connectionState,
 		pendingCommand: snapshotSettled ? null : state.pendingCommand,
 		lastSequence: crawl.eventSequence,
@@ -222,24 +212,14 @@ export function getCrawlCommandAvailability(
 	const forceStopPending = state.pendingCommand === "forceStop";
 
 	return {
-		canStart:
-			!commandPending &&
-			state.runPhase !== "starting" &&
-			state.runPhase !== "running" &&
-			state.runPhase !== "pausing" &&
-			state.runPhase !== "stopping",
-		isAttacking:
-			state.runPhase === "starting" ||
-			state.runPhase === "running" ||
-			state.runPhase === "pausing" ||
-			state.runPhase === "stopping",
+		canStart: !commandPending && !isActiveRunPhase(state.runPhase),
+		isAttacking: isActiveRunPhase(state.runPhase),
 		canPause: canRequestPause(state.runPhase) && !commandPending,
 		canForceStop:
 			!forceStopPending &&
 			(!commandPending || canEscalateStop) &&
-			(state.runPhase === "starting" ||
-				state.runPhase === "running" ||
-				state.runPhase === "pausing"),
+			isActiveRunPhase(state.runPhase) &&
+			state.runPhase !== "stopping",
 	};
 }
 
@@ -275,6 +255,16 @@ function computeProgress(
 	return totalWork > 0 ? Math.min((scanned / effectiveTotal) * 100, 100) : 0;
 }
 
+type ResumableSessionsAction =
+	| { type: "resumableSessionsLoading" }
+	| { type: "resumableSessionsLoaded"; sessions: ResumableSessionSummary[] }
+	| { type: "resumableSessionsFailed"; error: string }
+	| { type: "resumableSessionDeleting"; sessionId: string }
+	| { type: "resumableSessionResuming"; sessionId: string }
+	| { type: "resumableSessionResumeFinished"; sessionId: string }
+	| { type: "resumableSessionRemoved"; sessionId: string }
+	| { type: "resumableSessionDeleteFailed"; sessionId: string; error: string };
+
 export type CrawlControllerAction =
 	| { type: "crawlOptionsChanged"; crawlOptions: CrawlOptions }
 	| { type: "searchChanged"; searchQuery: string }
@@ -294,40 +284,8 @@ export type CrawlControllerAction =
 			crawlOptions?: CrawlOptions;
 	  }
 	| { type: "sseEventReceived"; envelope: CrawlEventEnvelope }
-	| { type: "resumableSessionsLoading" }
-	| {
-			type: "resumableSessionsLoaded";
-			sessions: ResumableSessionSummary[];
-	  }
-	| {
-			type: "resumableSessionsFailed";
-			error: string;
-	  }
-	| {
-			type: "resumableSessionDeleting";
-			sessionId: string;
-	  }
-	| {
-			type: "resumableSessionResuming";
-			sessionId: string;
-	  }
-	| {
-			type: "resumableSessionResumeFinished";
-			sessionId: string;
-	  }
-	| {
-			type: "resumableSessionDeleted";
-			sessionId: string;
-	  }
-	| {
-			type: "resumableSessionRemoved";
-			sessionId: string;
-	  }
-	| {
-			type: "resumableSessionDeleteFailed";
-			sessionId: string;
-			error: string;
-	  };
+	| { type: "resumableSessionDeleted"; sessionId: string }
+	| ResumableSessionsAction;
 
 function applyTerminalEvent(
 	state: CrawlControllerState,
@@ -414,16 +372,12 @@ function applySseEvent(
 	state: CrawlControllerState,
 	envelope: CrawlEventEnvelope,
 ): ControllerStateTransition {
-	if (state.activeCrawlId !== envelope.crawlId) {
-		return { state, effects: [] };
-	}
-
-	if (isTerminalRunPhase(state.runPhase)) {
-		return { state, effects: [] };
-	}
-
-	if (envelope.sequence <= state.lastSequence) {
-		return { state, effects: [] };
+	if (
+		state.activeCrawlId !== envelope.crawlId ||
+		isTerminalRunPhase(state.runPhase) ||
+		envelope.sequence <= state.lastSequence
+	) {
+		return withoutEffects(state);
 	}
 
 	const nextStateBase: CrawlControllerState = {
@@ -433,52 +387,56 @@ function applySseEvent(
 
 	switch (envelope.type) {
 		case "crawl.started": {
-			const transition = appendLog(
-				{
-					...nextStateBase,
-					runPhase:
-						nextStateBase.runPhase === "stopping" || nextStateBase.runPhase === "pausing"
-							? nextStateBase.runPhase
-							: "running",
-				},
-				envelope.payload.resume
-					? `[Resume] Crawl runtime resumed for ${envelope.payload.target}`
-					: `[Crawler] Crawl started for ${envelope.payload.target}`,
-				"info",
-			);
-			return transition;
+			const { target, resume, dynamicRendering } = envelope.payload;
+			const staticFallback = state.activeCrawlOptions?.dynamic === true && !dynamicRendering;
+			return {
+				state: appendLog(
+					{
+						...nextStateBase,
+						runPhase: keepWindingDownPhase(nextStateBase.runPhase, "running"),
+					},
+					resume
+						? `[Resume] Crawl runtime resumed for ${target}`
+						: `[Crawler] Crawl started for ${target}`,
+					"info",
+				),
+				effects: staticFallback
+					? [
+							{
+								type: "toast",
+								level: "warning",
+								message:
+									"Tip: Try disabling JavaScript crawling in settings for better performance",
+								timeout: TOAST_DEFAULTS.LONG_TIMEOUT,
+							},
+						]
+					: [],
+			};
 		}
 		case "crawl.log":
-			return appendLog(nextStateBase, envelope.payload.message, envelope.payload.level);
+			return withoutEffects(
+				appendLog(nextStateBase, envelope.payload.message, envelope.payload.level),
+			);
 		case "crawl.page": {
 			const { pageCount, ...page } = envelope.payload;
 			const crawledPages = mergeCrawledPages([page], nextStateBase.crawledPages);
-			return {
-				state: {
-					...nextStateBase,
-					crawledPages,
-					storedPageCount: reconcileStoredPageCount(nextStateBase.storedPageCount, pageCount),
-				},
-				effects: [],
-			};
+			return withoutEffects({
+				...nextStateBase,
+				crawledPages,
+				storedPageCount: reconcileStoredPageCount(nextStateBase.storedPageCount, pageCount),
+			});
 		}
 		case "crawl.progress": {
 			const nextQueue = envelope.payload.queue;
 			const nextStats = reconcileMonotonicStats(nextStateBase.stats, envelope.payload.counters);
 
-			return {
-				state: {
-					...nextStateBase,
-					queueStats: nextQueue,
-					stats: nextStats,
-					progress: computeProgress(nextStateBase, nextStats, nextQueue),
-					runPhase:
-						nextStateBase.runPhase === "stopping" || nextStateBase.runPhase === "pausing"
-							? nextStateBase.runPhase
-							: "running",
-				},
-				effects: [],
-			};
+			return withoutEffects({
+				...nextStateBase,
+				queueStats: nextQueue,
+				stats: nextStats,
+				progress: computeProgress(nextStateBase, nextStats, nextQueue),
+				runPhase: keepWindingDownPhase(nextStateBase.runPhase, "running"),
+			});
 		}
 		case "crawl.completed":
 		case "crawl.stopped":
@@ -515,9 +473,178 @@ function resetLiveState(state: CrawlControllerState): CrawlControllerState {
 		storedPageCount: 0,
 		progress: 0,
 		logs: [],
-		hasShownStaticFallbackHint: false,
 		searchQuery: "",
 		lastSequence: 0,
+	};
+}
+
+function removeResumableSession(
+	sessions: ResumableSessionsState,
+	sessionId: string,
+): ResumableSessionsState {
+	return {
+		...sessions,
+		items: sessions.items.filter((session) => session.id !== sessionId),
+		deletingId: sessions.deletingId === sessionId ? null : sessions.deletingId,
+		resumingId: sessions.resumingId === sessionId ? null : sessions.resumingId,
+		isLoading: false,
+	};
+}
+
+function reduceResumableSessions(
+	sessions: ResumableSessionsState,
+	action: ResumableSessionsAction,
+): ResumableSessionsState {
+	const mutationPending = sessions.deletingId !== null || sessions.resumingId !== null;
+	switch (action.type) {
+		case "resumableSessionsLoading":
+			return { ...sessions, isLoading: true, error: null };
+		case "resumableSessionsLoaded":
+			return { ...sessions, items: action.sessions, isLoading: false, error: null };
+		case "resumableSessionsFailed":
+			return { ...sessions, isLoading: false, error: action.error };
+		case "resumableSessionDeleting":
+			if (mutationPending) return sessions;
+			return { ...sessions, isLoading: false, deletingId: action.sessionId, error: null };
+		case "resumableSessionResuming":
+			if (mutationPending) return sessions;
+			return { ...sessions, isLoading: false, resumingId: action.sessionId, error: null };
+		case "resumableSessionResumeFinished":
+			if (sessions.resumingId !== action.sessionId) return sessions;
+			return { ...sessions, resumingId: null };
+		case "resumableSessionRemoved":
+			return removeResumableSession(sessions, action.sessionId);
+		case "resumableSessionDeleteFailed":
+			if (sessions.deletingId !== action.sessionId) return sessions;
+			return { ...sessions, deletingId: null, error: action.error };
+		default:
+			return assertNever(action);
+	}
+}
+
+function reduceState(
+	state: CrawlControllerState,
+	action: Exclude<CrawlControllerAction, { type: "sseEventReceived" | "commandFailed" }>,
+): CrawlControllerState {
+	switch (action.type) {
+		case "crawlOptionsChanged":
+			return { ...state, crawlOptions: normalizeCrawlOptions(action.crawlOptions) };
+		case "searchChanged":
+			return { ...state, searchQuery: action.searchQuery };
+		case "logsCleared":
+			return { ...state, logs: [] };
+		case "logAppended":
+			return appendLog(state, action.message, action.level);
+		case "liveStateReset":
+			return resetLiveState(state);
+		case "crawlSummarySynchronized":
+			return synchronizeCrawlSummary(state, action.crawl);
+		case "crawlRecoverySnapshotSynchronized": {
+			const { crawl, pages, pageCount } = action.snapshot;
+			if (state.activeCrawlId !== crawl.id) return state;
+
+			const synchronizedState = synchronizeCrawlSummary(state, crawl);
+
+			// Durable snapshots contain summary projections. Existing live page
+			// payloads carry richer fields for the same persisted page identity and
+			// must not be downgraded when the snapshot fills gaps in live delivery.
+			return {
+				...synchronizedState,
+				crawledPages: mergeCrawledPages(synchronizedState.crawledPages, pages),
+				storedPageCount: reconcileStoredPageCount(synchronizedState.storedPageCount, pageCount),
+			};
+		}
+		case "connectionChanged":
+			return { ...state, connectionState: action.connectionState };
+		case "commandStarted":
+			if (!canStartCommand(state, action.kind)) return state;
+			return {
+				...state,
+				pendingCommand: action.kind,
+				runPhase:
+					action.kind === "forceStop"
+						? "stopping"
+						: action.kind === "stop"
+							? "pausing"
+							: state.runPhase,
+			};
+		case "commandSucceeded":
+			if (state.pendingCommand !== action.kind) return state;
+			return {
+				...state,
+				pendingCommand: null,
+				runPhase:
+					(action.kind === "stop" || action.kind === "forceStop") &&
+					state.activeCrawlId &&
+					isActiveRunPhase(state.runPhase)
+						? action.kind === "forceStop"
+							? "stopping"
+							: "pausing"
+						: state.runPhase,
+			};
+		case "crawlAccepted":
+			return {
+				...state,
+				activeCrawlId: action.crawlId,
+				activeCrawlOptions: action.crawlOptions ?? state.crawlOptions,
+				runPhase: "starting",
+				connectionState: "connecting",
+				lastSequence: action.kind === "resume" ? state.lastSequence : 0,
+			};
+		case "resumableSessionDeleted": {
+			const nextState = state.activeCrawlId === action.sessionId ? resetLiveState(state) : state;
+			return {
+				...nextState,
+				resumableSessions: removeResumableSession(nextState.resumableSessions, action.sessionId),
+			};
+		}
+		case "resumableSessionsLoading":
+		case "resumableSessionsLoaded":
+		case "resumableSessionsFailed":
+		case "resumableSessionDeleting":
+		case "resumableSessionResuming":
+		case "resumableSessionResumeFinished":
+		case "resumableSessionRemoved":
+		case "resumableSessionDeleteFailed": {
+			const resumableSessions = reduceResumableSessions(state.resumableSessions, action);
+			return resumableSessions === state.resumableSessions
+				? state
+				: { ...state, resumableSessions };
+		}
+		default:
+			return assertNever(action);
+	}
+}
+
+function applyCommandFailed(
+	state: CrawlControllerState,
+	action: Extract<CrawlControllerAction, { type: "commandFailed" }>,
+): ControllerStateTransition {
+	if (state.pendingCommand !== action.kind) return withoutEffects(state);
+	const recoveredCrawl =
+		action.recoveredCrawl?.id === state.activeCrawlId ? action.recoveredCrawl : undefined;
+	const recoveredState = recoveredCrawl ? synchronizeCrawlSummary(state, recoveredCrawl) : state;
+	const recoveredCommandSucceeded =
+		recoveredCrawl !== undefined &&
+		((action.kind === "stop" && !isActiveCrawlStatus(recoveredCrawl.status)) ||
+			(action.kind === "forceStop" && isTerminalCrawlStatus(recoveredCrawl.status)));
+
+	return {
+		state: {
+			...recoveredState,
+			pendingCommand: null,
+			runPhase:
+				recoveredCrawl !== undefined
+					? runPhaseFromCrawlStatus(recoveredCrawl.status)
+					: (action.kind === "stop" || action.kind === "forceStop") &&
+							state.activeCrawlId &&
+							!isTerminalRunPhase(state.runPhase)
+						? "running"
+						: recoveredState.runPhase,
+		},
+		effects: recoveredCommandSucceeded
+			? []
+			: [{ type: "toast", level: "error", message: action.error }],
 	};
 }
 
@@ -526,303 +653,11 @@ export function crawlControllerReducer(
 	action: CrawlControllerAction,
 ): ControllerStateTransition {
 	switch (action.type) {
-		case "crawlOptionsChanged":
-			return {
-				state: {
-					...state,
-					crawlOptions: normalizeCrawlOptions(action.crawlOptions),
-				},
-				effects: [],
-			};
-		case "searchChanged":
-			return {
-				state: { ...state, searchQuery: action.searchQuery },
-				effects: [],
-			};
-		case "logsCleared":
-			return {
-				state: { ...state, logs: [] },
-				effects: [],
-			};
-		case "logAppended":
-			return appendLog(state, action.message, action.level);
-		case "liveStateReset":
-			return {
-				state: resetLiveState(state),
-				effects: [],
-			};
-		case "crawlSummarySynchronized":
-			return {
-				state: synchronizeCrawlSummary(state, action.crawl),
-				effects: [],
-			};
-		case "crawlRecoverySnapshotSynchronized": {
-			const { crawl, pages, pageCount } = action.snapshot;
-			if (state.activeCrawlId !== crawl.id) {
-				return { state, effects: [] };
-			}
-
-			const synchronizedState = synchronizeCrawlSummary(state, crawl);
-
-			// Durable snapshots contain summary projections. Existing live page
-			// payloads carry richer fields for the same persisted page identity and
-			// must not be downgraded when the snapshot fills replay gaps.
-			const crawledPages = mergeCrawledPages(synchronizedState.crawledPages, pages);
-			return {
-				state: {
-					...synchronizedState,
-					crawledPages,
-					storedPageCount: reconcileStoredPageCount(synchronizedState.storedPageCount, pageCount),
-				},
-				effects: [],
-			};
-		}
-		case "connectionChanged":
-			return {
-				state: {
-					...state,
-					connectionState: action.connectionState,
-				},
-				effects: [],
-			};
-		case "commandStarted":
-			if (!canStartCommand(state, action.kind)) {
-				return { state, effects: [] };
-			}
-			return {
-				state: {
-					...state,
-					pendingCommand: action.kind,
-					runPhase:
-						action.kind === "forceStop"
-							? "stopping"
-							: action.kind === "stop"
-								? "pausing"
-								: state.runPhase,
-				},
-				effects: [],
-			};
-		case "commandSucceeded":
-			if (state.pendingCommand !== action.kind) {
-				return { state, effects: [] };
-			}
-
-			return {
-				state: {
-					...state,
-					pendingCommand: null,
-					runPhase:
-						(action.kind === "stop" || action.kind === "forceStop") &&
-						state.activeCrawlId &&
-						(state.runPhase === "starting" ||
-							state.runPhase === "running" ||
-							state.runPhase === "pausing" ||
-							state.runPhase === "stopping")
-							? action.kind === "forceStop"
-								? "stopping"
-								: "pausing"
-							: state.runPhase,
-				},
-				effects: [],
-			};
-		case "commandFailed": {
-			if (state.pendingCommand !== action.kind) {
-				return { state, effects: [] };
-			}
-			const recoveredCrawl =
-				action.recoveredCrawl?.id === state.activeCrawlId ? action.recoveredCrawl : undefined;
-			const recoveredState = recoveredCrawl
-				? synchronizeCrawlSummary(state, recoveredCrawl)
-				: state;
-			const recoveredCommandSucceeded =
-				recoveredCrawl !== undefined &&
-				((action.kind === "stop" && !isActiveCrawlStatus(recoveredCrawl.status)) ||
-					(action.kind === "forceStop" && isTerminalCrawlStatus(recoveredCrawl.status)));
-
-			return {
-				state: {
-					...recoveredState,
-					pendingCommand: null,
-					runPhase:
-						recoveredCrawl !== undefined
-							? runPhaseFromCrawlStatus(recoveredCrawl.status)
-							: (action.kind === "stop" || action.kind === "forceStop") &&
-									state.activeCrawlId &&
-									!isTerminalRunPhase(state.runPhase)
-								? "running"
-								: recoveredState.runPhase,
-				},
-				effects: recoveredCommandSucceeded
-					? []
-					: [{ type: "toast", level: "error", message: action.error }],
-			};
-		}
-		case "crawlAccepted":
-			return {
-				state: {
-					...state,
-					activeCrawlId: action.crawlId,
-					activeCrawlOptions: action.crawlOptions ?? state.crawlOptions,
-					runPhase: "starting",
-					connectionState: "connecting",
-					lastSequence: action.kind === "resume" ? state.lastSequence : 0,
-					pendingCommand: null,
-				},
-				effects: [],
-			};
 		case "sseEventReceived":
 			return applySseEvent(state, action.envelope);
-		case "resumableSessionsLoading":
-			return {
-				state: {
-					...state,
-					resumableSessions: {
-						...state.resumableSessions,
-						isLoading: true,
-						error: null,
-					},
-				},
-				effects: [],
-			};
-		case "resumableSessionsLoaded":
-			return {
-				state: {
-					...state,
-					resumableSessions: {
-						items: action.sessions,
-						isLoading: false,
-						error: null,
-						deletingId: state.resumableSessions.deletingId,
-						resumingId: state.resumableSessions.resumingId,
-					},
-				},
-				effects: [],
-			};
-		case "resumableSessionsFailed":
-			return {
-				state: {
-					...state,
-					resumableSessions: {
-						...state.resumableSessions,
-						isLoading: false,
-						error: action.error,
-					},
-				},
-				effects: [],
-			};
-		case "resumableSessionDeleting":
-			if (state.resumableSessions.deletingId || state.resumableSessions.resumingId) {
-				return { state, effects: [] };
-			}
-
-			return {
-				state: {
-					...state,
-					resumableSessions: {
-						...state.resumableSessions,
-						isLoading: false,
-						deletingId: action.sessionId,
-						error: null,
-					},
-				},
-				effects: [],
-			};
-		case "resumableSessionResuming":
-			if (state.resumableSessions.deletingId || state.resumableSessions.resumingId) {
-				return { state, effects: [] };
-			}
-
-			return {
-				state: {
-					...state,
-					resumableSessions: {
-						...state.resumableSessions,
-						isLoading: false,
-						resumingId: action.sessionId,
-						error: null,
-					},
-				},
-				effects: [],
-			};
-		case "resumableSessionResumeFinished":
-			if (state.resumableSessions.resumingId !== action.sessionId) {
-				return { state, effects: [] };
-			}
-
-			return {
-				state: {
-					...state,
-					resumableSessions: {
-						...state.resumableSessions,
-						resumingId: null,
-					},
-				},
-				effects: [],
-			};
-		case "resumableSessionDeleted": {
-			const activeCrawlDeleted = state.activeCrawlId === action.sessionId;
-			const nextState = activeCrawlDeleted ? resetLiveState(state) : state;
-			return {
-				state: {
-					...nextState,
-					resumableSessions: {
-						...nextState.resumableSessions,
-						items: nextState.resumableSessions.items.filter(
-							(session) => session.id !== action.sessionId,
-						),
-						deletingId:
-							nextState.resumableSessions.deletingId === action.sessionId
-								? null
-								: nextState.resumableSessions.deletingId,
-						resumingId:
-							nextState.resumableSessions.resumingId === action.sessionId
-								? null
-								: nextState.resumableSessions.resumingId,
-						isLoading: false,
-					},
-				},
-				effects: [],
-			};
-		}
-		case "resumableSessionRemoved":
-			return {
-				state: {
-					...state,
-					resumableSessions: {
-						...state.resumableSessions,
-						items: state.resumableSessions.items.filter(
-							(session) => session.id !== action.sessionId,
-						),
-						deletingId:
-							state.resumableSessions.deletingId === action.sessionId
-								? null
-								: state.resumableSessions.deletingId,
-						resumingId:
-							state.resumableSessions.resumingId === action.sessionId
-								? null
-								: state.resumableSessions.resumingId,
-						isLoading: false,
-					},
-				},
-				effects: [],
-			};
-		case "resumableSessionDeleteFailed":
-			if (state.resumableSessions.deletingId !== action.sessionId) {
-				return { state, effects: [] };
-			}
-
-			return {
-				state: {
-					...state,
-					resumableSessions: {
-						...state.resumableSessions,
-						deletingId: null,
-						error: action.error,
-					},
-				},
-				effects: [],
-			};
+		case "commandFailed":
+			return applyCommandFailed(state, action);
 		default:
-			return assertNever(action);
+			return withoutEffects(reduceState(state, action));
 	}
 }

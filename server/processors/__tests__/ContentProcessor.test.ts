@@ -6,22 +6,33 @@ import { processContent } from "../ContentProcessor.js";
  * CONTRACT: ContentProcessor.processContent
  *
  * Input: (content: string | Buffer, url: string, contentType: string)
- * Output: ProcessedContent with extractedData, metadata, analysis, mediaCount, links, errors
+ * Output: { type: "processed", content } or { type: "failed", message }
  *
  * Dispatch rules:
  *   - text/html/application/xhtml+xml → HTML extraction pipeline (main content, metadata, links, media count, analysis)
  *   - application/json → JSON processing (mainContent from parsed JSON)
  *   - application/pdf → PDF extraction (text extraction, metadata)
- *   - other → empty result, no errors
+ *   - other → failed (callers only process supported document types)
  *
  * Error contract:
- *   - processing errors → errors[] populated, error defaults applied
- *   - PDF parse failure → pdf_processing_error in errors[]
+ *   - processing errors and PDF parse failures → failed with the cause's message
  *   - caller aborts propagate after owned processing resources settle
  */
 
 const processTestContent = (content: string | Buffer, url: string, contentType: string) =>
 	processContent(content, url, contentType, silentLogger);
+
+async function processOk(content: string | Buffer, url: string, contentType: string) {
+	const result = await processTestContent(content, url, contentType);
+	if (result.type !== "processed") throw new Error(`Expected processed content: ${result.message}`);
+	return result.content;
+}
+
+async function processFailure(content: string | Buffer, url: string, contentType: string) {
+	const result = await processTestContent(content, url, contentType);
+	if (result.type !== "failed") throw new Error("Expected content processing to fail");
+	return result.message;
+}
 
 describe("ContentProcessor dispatch contract", () => {
 	test("propagates caller aborts instead of serializing a late processing result", async () => {
@@ -43,10 +54,9 @@ describe("ContentProcessor dispatch contract", () => {
 		const html = `<html><head><title>Test</title></head>
 			<body><main><h1>Hello World</h1><p>Crawler test content here.</p></main></body></html>`;
 
-		const result = await processTestContent(html, "https://example.com/test", "text/html");
+		const result = await processOk(html, "https://example.com/test", "text/html");
 
-		expect(result.errors).toHaveLength(0);
-		expect(result.extractedData.mainContent).toContain("Hello World");
+		expect(result.mainContent).toContain("Hello World");
 		expect(result.analysis.wordCount).toBeGreaterThan(0);
 		expect(Array.isArray(result.links)).toBe(true);
 		expect(result.mediaCount).toBe(0);
@@ -55,112 +65,86 @@ describe("ContentProcessor dispatch contract", () => {
 	test("rejects an over-depth DOM before any sibling extraction runs", async () => {
 		const html = `<body>${"<div>".repeat(129)}<a href="/hidden">hidden</a>${"</div>".repeat(129)}</body>`;
 
-		const result = await processTestContent(html, "https://example.com/deep", "text/html");
+		const message = await processFailure(html, "https://example.com/deep", "text/html");
 
-		expect(result.errors[0]?.message).toContain("DOM exceeds depth 128");
-		expect(result.links).toEqual([]);
-		expect(result.mediaCount).toBe(0);
+		expect(message).toContain("DOM exceeds depth 128");
 	});
 
 	test("XHTML → uses the HTML extraction pipeline", async () => {
 		const html = `<html><body><main>XHTML content</main><a href="/next">Next</a></body></html>`;
 
-		const result = await processTestContent(
+		const result = await processOk(
 			html,
 			"https://example.com/page",
 			"application/xhtml+xml; charset=utf-8",
 		);
 
-		expect(result.errors).toHaveLength(0);
-		expect(result.extractedData.mainContent).toBe("XHTML content");
+		expect(result.mainContent).toBe("XHTML content");
 		expect(result.links.map((link) => link.url)).toEqual(["https://example.com/next"]);
 		expect(result.analysis.wordCount).toBeGreaterThan(0);
 	});
 
-	test("JSON → extractedData.mainContent contains serialized data", async () => {
+	test("JSON → mainContent contains serialized data", async () => {
 		const json = JSON.stringify({ key: "value", nested: { data: 123 } });
 
-		const result = await processTestContent(
-			json,
-			"https://api.example.com/data",
-			"application/json",
-		);
+		const result = await processOk(json, "https://api.example.com/data", "application/json");
 
-		expect(result.errors).toHaveLength(0);
-		expect(result.extractedData.mainContent).toContain("value");
+		expect(result.mainContent).toContain("value");
 		expect(result.analysis.wordCount).toBeGreaterThan(0);
 		expect(result.analysis.language).toBeDefined();
 	});
 
 	test("JSON dispatch normalizes media type casing and parameters", async () => {
-		const result = await processTestContent(
+		const result = await processOk(
 			JSON.stringify({ key: "mixed-case" }),
 			"https://api.example.com/data",
 			"Application/JSON; Charset=UTF-8",
 		);
 
-		expect(result.errors).toHaveLength(0);
-		expect(result.extractedData.mainContent).toContain("mixed-case");
+		expect(result.mainContent).toContain("mixed-case");
 		expect(result.analysis.wordCount).toBeGreaterThan(0);
 	});
 
 	test("JSON primitives preserve parsed values instead of truthy fallback", async () => {
 		const [zero, bool, nil] = await Promise.all([
-			processTestContent("0", "https://api.example.com/zero", "application/json"),
-			processTestContent("false", "https://api.example.com/false", "application/json"),
-			processTestContent("null", "https://api.example.com/null", "application/json"),
+			processOk("0", "https://api.example.com/zero", "application/json"),
+			processOk("false", "https://api.example.com/false", "application/json"),
+			processOk("null", "https://api.example.com/null", "application/json"),
 		]);
 
-		expect(zero.extractedData.mainContent).toBe("0");
-		expect(bool.extractedData.mainContent).toBe("false");
-		expect(nil.extractedData.mainContent).toBe("null");
+		expect(zero.mainContent).toBe("0");
+		expect(bool.mainContent).toBe("false");
+		expect(nil.mainContent).toBe("null");
 	});
 
 	test("JSON string roots and invalid JSON fallback do not gain extra quotes", async () => {
 		const [stringRoot, invalid] = await Promise.all([
-			processTestContent('"hello"', "https://api.example.com/string", "application/json"),
-			processTestContent("not-json", "https://api.example.com/invalid", "application/json"),
+			processOk('"hello"', "https://api.example.com/string", "application/json"),
+			processOk("not-json", "https://api.example.com/invalid", "application/json"),
 		]);
 
-		expect(stringRoot.extractedData.mainContent).toBe("hello");
-		expect(invalid.extractedData.mainContent).toBe("not-json");
+		expect(stringRoot.mainContent).toBe("hello");
+		expect(invalid.mainContent).toBe("not-json");
 	});
 
-	test("PDF with invalid data → pdf_processing_error", async () => {
-		const result = await processTestContent(
+	test("PDF with invalid data → failed", async () => {
+		const message = await processFailure(
 			Buffer.from("fake pdf content"),
 			"https://example.com/doc.pdf",
 			"Application/PDF; charset=binary",
 		);
 
-		expect(result.errors).toHaveLength(1);
-		expect(result.errors[0].type).toBe("pdf_processing_error");
-		expect(result.extractedData).toEqual({ mainContent: "" });
-		expect(result.metadata).toEqual({});
-		expect(result.mediaCount).toBe(0);
-		expect(result.links).toEqual([]);
-		expect(result.analysis).toMatchObject({
-			wordCount: 0,
-			readingTime: 0,
-			language: "unknown",
-		});
+		expect(message).toBe("Invalid PDF header");
 	});
 
-	test("unknown content type → empty result, no errors", async () => {
-		const result = await processTestContent(
+	test("unsupported content type → failed", async () => {
+		const message = await processFailure(
 			"some binary data",
 			"https://example.com/file.bin",
 			"application/octet-stream",
 		);
 
-		expect(result).toEqual({
-			extractedData: {},
-			metadata: {},
-			analysis: {},
-			mediaCount: 0,
-			links: [],
-			errors: [],
-		});
+		expect(message).toContain("Unsupported content type");
 	});
 
 	test("PDF with valid minimal structure → extracts without errors", async () => {
@@ -187,13 +171,8 @@ startxref
 			"binary",
 		);
 
-		const result = await processTestContent(
-			minimalPdf,
-			"https://example.com/test.pdf",
-			"application/pdf",
-		);
+		const result = await processOk(minimalPdf, "https://example.com/test.pdf", "application/pdf");
 
-		expect(result.errors).toEqual([]);
-		expect(result.extractedData.mainContent).toContain("Hello World");
+		expect(result.mainContent).toContain("Hello World");
 	}, 30_000);
 });

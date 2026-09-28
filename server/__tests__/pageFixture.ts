@@ -50,6 +50,7 @@ export function persistPageFixture(storage: Storage, overrides: PageFixtureOverr
 				url,
 				depth: 0,
 				retries: 0,
+				availableAt: 0,
 				domain,
 			},
 		]);

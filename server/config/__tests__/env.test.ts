@@ -35,7 +35,7 @@ describe("environment policy", () => {
 		const cases: Array<{ overrides: Record<string, string>; message?: string }> = [
 			{
 				overrides: { MEMORY_THRESHOLD_MB: "0" },
-				message: `Invalid MEMORY_THRESHOLD_MB=0 — must be between 1 and ${MAX_MEMORY_THRESHOLD_MB}.`,
+				message: `MEMORY_THRESHOLD_MB="0" — expected an integer between 1 and ${MAX_MEMORY_THRESHOLD_MB}`,
 			},
 			{ overrides: { MEMORY_THRESHOLD_MB: String(MAX_MEMORY_THRESHOLD_MB + 1) } },
 			{ overrides: { MEMORY_THRESHOLD_MB: "9".repeat(400) } },

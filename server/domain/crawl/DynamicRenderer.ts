@@ -1,19 +1,19 @@
 import { type Browser, chromium, type Page } from "playwright";
-import type { CrawlOptions } from "../../../shared/contracts/index.js";
 import { normalizeCanonicalHttpUrl } from "../../../shared/url.js";
 import { resolveChromiumExecutable } from "../../config/browser.js";
 import { config } from "../../config/env.js";
 import type { Logger } from "../../config/logging.js";
 import { DYNAMIC_RENDERER_CONSTANTS, FETCH_HEADERS, TIMEOUT_CONSTANTS } from "../../constants.js";
 import type { HttpClient } from "../../outbound/HttpClient.js";
+import { onAbort, raceAbort } from "../../utils/abort.js";
 import { getErrorMessage } from "../../utils/helpers.js";
 import { isUnresolvedStrictConsentWall } from "./consent.js";
 import {
 	extractRenderedSnapshot,
+	isClosedBrowserTargetError,
 	isRecoverableBrowserError,
 	openBrowserPageWithRetry,
 	type RenderedSnapshot,
-	waitForAbort,
 } from "./rendering/browserPage.js";
 import { handleConsentModals } from "./rendering/consentInteraction.js";
 import type {
@@ -68,6 +68,11 @@ function classifyDocumentRouteFailure(
 	};
 }
 
+const RENDERER_UNAVAILABLE: DynamicRenderAttempt = {
+	type: "staticFallback",
+	reason: "renderer-unavailable",
+};
+
 /**
  * Dynamic renderer contract:
  * - owns one crawl-scoped browser and one isolated context per rendered page
@@ -75,29 +80,33 @@ function classifyDocumentRouteFailure(
  * - never uses Playwright's native HTTP(S) network path; browser requests are
  *   fulfilled through the same pinned HTTP client used by static crawling
  */
+export interface DynamicRendererDependencies {
+	/** Whether the crawl requested JS rendering. */
+	enabled: boolean;
+	logger: Logger;
+	httpClient: HttpClient;
+	/** The seed URL granted the localhost capability on its first document request, if any. */
+	localSeedUrl?: string;
+	launch?: BrowserLauncher;
+}
+
 export class DynamicRenderer implements CrawlRenderer {
-	private readonly options: CrawlOptions;
 	private readonly logger: Logger;
 	private readonly httpClient: HttpClient;
-	private browser: Browser | null;
+	private readonly localSeedUrl: string | undefined;
+	private readonly launch: BrowserLauncher;
+	private browser: Browser | null = null;
 	private enabled: boolean;
-	private launchPromise: Promise<void> | null;
-	private closePromise: Promise<void> | null;
+	private launchPromise: Promise<void> | null = null;
+	private closePromise: Promise<void> | null = null;
 	private closed = false;
 
-	constructor(
-		options: CrawlOptions,
-		logger: Logger,
-		httpClient: HttpClient,
-		private readonly launch: BrowserLauncher = (launchOptions) => chromium.launch(launchOptions),
-	) {
-		this.options = options;
-		this.logger = logger;
-		this.httpClient = httpClient;
-		this.browser = null;
-		this.enabled = options.dynamic;
-		this.launchPromise = null;
-		this.closePromise = null;
+	constructor(deps: DynamicRendererDependencies) {
+		this.enabled = deps.enabled;
+		this.logger = deps.logger;
+		this.httpClient = deps.httpClient;
+		this.localSeedUrl = deps.localSeedUrl;
+		this.launch = deps.launch ?? ((launchOptions) => chromium.launch(launchOptions));
 	}
 
 	isEnabled(): boolean {
@@ -135,10 +144,7 @@ export class DynamicRenderer implements CrawlRenderer {
 			};
 		}
 
-		const closeOnAbort = () => {
-			void this.close();
-		};
-		signal?.addEventListener("abort", closeOnAbort, { once: true });
+		using _closeOnAbort = onAbort(signal, () => void this.close());
 		try {
 			await this.launchBrowser(signal);
 			signal?.throwIfAborted();
@@ -151,8 +157,6 @@ export class DynamicRenderer implements CrawlRenderer {
 				dynamicEnabled: false,
 				fallbackLog: "Falling back to static crawling: dynamic renderer failed to start",
 			};
-		} finally {
-			signal?.removeEventListener("abort", closeOnAbort);
 		}
 	}
 
@@ -169,7 +173,7 @@ export class DynamicRenderer implements CrawlRenderer {
 		this.launchPromise ??= this.acquireBrowser(signal).finally(() => {
 			this.launchPromise = null;
 		});
-		await waitForAbort(this.launchPromise, signal);
+		await raceAbort(this.launchPromise, signal);
 		signal?.throwIfAborted();
 	}
 
@@ -233,10 +237,7 @@ export class DynamicRenderer implements CrawlRenderer {
 			const context = await browser.newContext(createDynamicBrowserContextOptions());
 			let closePromise: Promise<void> | undefined;
 			const closeContext = () => (closePromise ??= context.close().catch(() => undefined));
-			const closeOnAbort = () => {
-				void closeContext();
-			};
-			signal?.addEventListener("abort", closeOnAbort, { once: true });
+			using _closeOnAbort = onAbort(signal, () => void closeContext());
 			try {
 				signal?.throwIfAborted();
 				const page = await context.newPage();
@@ -245,8 +246,6 @@ export class DynamicRenderer implements CrawlRenderer {
 			} catch (error) {
 				await closeContext();
 				throw error;
-			} finally {
-				signal?.removeEventListener("abort", closeOnAbort);
 			}
 		};
 
@@ -281,15 +280,14 @@ export class DynamicRenderer implements CrawlRenderer {
 			DNT: "1",
 		});
 
-		await configurePinnedBrowserContext(
-			page.context(),
-			this.httpClient,
-			signal,
-			url === this.options.target ? url : undefined,
-			onDocumentResult,
-			authorizeDocumentDestination,
-			page.mainFrame(),
-		);
+		await configurePinnedBrowserContext(page.context(), {
+			httpClient: this.httpClient,
+			mainFrame: page.mainFrame(),
+			...(signal ? { signal } : {}),
+			...(url === this.localSeedUrl ? { seedUrl: url } : {}),
+			...(onDocumentResult ? { onDocumentResult } : {}),
+			...(authorizeDocumentDestination ? { authorizeDocumentDestination } : {}),
+		});
 
 		page.on("dialog", (dialog) => {
 			dialog.dismiss().catch((err) => {
@@ -323,9 +321,7 @@ export class DynamicRenderer implements CrawlRenderer {
 		authorizeDestination?: DestinationAuthorizer,
 	): Promise<DynamicRenderAttempt> {
 		signal?.throwIfAborted();
-		if (!this.isEnabled()) {
-			return { type: "staticFallback", reason: "renderer-unavailable" };
-		}
+		if (!this.isEnabled()) return RENDERER_UNAVAILABLE;
 
 		if (!this.browser?.isConnected()) {
 			try {
@@ -334,37 +330,43 @@ export class DynamicRenderer implements CrawlRenderer {
 				signal?.throwIfAborted();
 				await this.closeResources();
 				this.disableDynamic(`Failed to relaunch Playwright: ${getErrorMessage(err)}`);
-				return { type: "staticFallback", reason: "renderer-unavailable" };
+				return RENDERER_UNAVAILABLE;
 			}
 		}
-
-		if (!this.browser) {
-			return { type: "staticFallback", reason: "renderer-unavailable" };
-		}
+		if (!this.browser) return RENDERER_UNAVAILABLE;
 
 		const page = await this.openPage(signal);
 		let abortCleanup: Promise<void> | undefined;
 		let documentRouteFailure: DynamicRenderAttempt | undefined;
 		const documentState: { response: DynamicDocumentResponse | null; url: string } = {
 			response: null,
-			url: url,
+			url,
 		};
-		const closeOnAbort = () => {
-			abortCleanup ??= this.closePageSafely(page);
+		const contentUnavailable = (): DynamicRenderAttempt => ({
+			type: "staticFallback",
+			reason: "content-unavailable",
+			targetUrl: documentState.url,
+		});
+		// The route handler records document failures asynchronously; after every
+		// awaited page step, a recorded failure outranks what the page shows.
+		const routeFailure = () => {
+			signal?.throwIfAborted();
+			return documentRouteFailure;
 		};
-		signal?.addEventListener("abort", closeOnAbort, { once: true });
 
 		try {
-			signal?.throwIfAborted();
+			using _closeOnAbort = onAbort(signal, () => {
+				abortCleanup ??= this.closePageSafely(page);
+			});
 			await this.configurePage(
 				page,
 				url,
 				signal,
-				(result, url) => {
+				(result, routedUrl) => {
 					documentState.response =
 						result.type === "fulfilled" ? (result.documentResponse ?? null) : null;
-					documentState.url = documentState.response?.url ?? url;
-					documentRouteFailure ??= classifyDocumentRouteFailure(result, url);
+					documentState.url = documentState.response?.url ?? routedUrl;
+					documentRouteFailure ??= classifyDocumentRouteFailure(result, routedUrl);
 				},
 				authorizeDestination,
 			);
@@ -374,16 +376,12 @@ export class DynamicRenderer implements CrawlRenderer {
 				waitUntil: "domcontentloaded",
 				timeout: TIMEOUT_CONSTANTS.DOCUMENT_FETCH,
 			});
-			signal?.throwIfAborted();
-			if (documentRouteFailure) {
-				return documentRouteFailure;
-			}
+			const navigationFailure = routeFailure();
+			if (navigationFailure) return navigationFailure;
 
 			const consentBypass = await handleConsentModals(page, documentState.url, this.logger, signal);
-			signal?.throwIfAborted();
-			if (documentRouteFailure) {
-				return documentRouteFailure;
-			}
+			const consentFailure = routeFailure();
+			if (consentFailure) return consentFailure;
 			if (isUnresolvedStrictConsentWall(consentBypass, documentState.url)) {
 				const statusCode = documentState.response?.statusCode ?? 200;
 				return {
@@ -393,87 +391,47 @@ export class DynamicRenderer implements CrawlRenderer {
 				};
 			}
 
-			signal?.throwIfAborted();
-			if (documentRouteFailure) {
-				return documentRouteFailure;
-			}
-
 			const finalDocumentResponse = documentState.response;
 			const extracted = await this.safeExtractContent(page, signal);
-			signal?.throwIfAborted();
-			if (documentRouteFailure) {
-				return documentRouteFailure;
-			}
-			if (finalDocumentResponse !== documentState.response) {
-				return {
-					type: "staticFallback",
-					reason: "content-unavailable",
-					targetUrl: documentState.url,
-				};
-			}
-			if (!extracted || extracted === "tooLarge") {
-				return extracted === "tooLarge"
-					? { type: "tooLarge" }
-					: {
-							type: "staticFallback",
-							reason: "content-unavailable",
-							targetUrl: documentState.url,
-						};
+			const extractionFailure = routeFailure();
+			if (extractionFailure) return extractionFailure;
+			if (extracted === "tooLarge") return { type: "tooLarge" };
+			// A navigation after the snapshot began makes the snapshot's document unknown.
+			if (!extracted || finalDocumentResponse !== documentState.response) {
+				return contentUnavailable();
 			}
 
 			const normalizedEffectiveUrl = normalizeCanonicalHttpUrl(extracted.effectiveUrl);
-			if ("error" in normalizedEffectiveUrl) {
-				return {
-					type: "staticFallback",
-					reason: "content-unavailable",
-					targetUrl: documentState.url,
-				};
-			}
+			if ("error" in normalizedEffectiveUrl) return contentUnavailable();
 
-			if (documentRouteFailure) {
-				return documentRouteFailure;
-			}
-			const statusCode = finalDocumentResponse?.statusCode ?? 200;
 			return {
 				type: "success",
 				result: {
 					content: extracted.content,
 					effectiveUrl: normalizedEffectiveUrl.url,
-					statusCode,
+					statusCode: finalDocumentResponse?.statusCode ?? 200,
 					contentType: finalDocumentResponse?.contentType ?? "text/html",
-					contentLength: extracted.contentLength,
 					title: extracted.title,
-					description: extracted.description || "",
+					description: extracted.description,
 					xRobotsTag: finalDocumentResponse?.xRobotsTag ?? null,
 					retryAfter: finalDocumentResponse?.retryAfter ?? null,
 				},
 			};
 		} catch (err) {
-			signal?.throwIfAborted();
-
-			if (documentRouteFailure) return documentRouteFailure;
+			const failure = routeFailure();
+			if (failure) return failure;
 
 			if (isRecoverableBrowserError(err)) {
 				this.logger.debug(
 					`Recoverable browser error for ${url}, falling back to static crawling: ${getErrorMessage(err)}`,
 				);
-				return {
-					type: "staticFallback",
-					reason: "content-unavailable",
-					targetUrl: documentState.url,
-				};
+			} else {
+				this.logger.warn(
+					`Unexpected error during dynamic rendering of ${url}: ${getErrorMessage(err)}`,
+				);
 			}
-
-			this.logger.warn(
-				`Unexpected error during dynamic rendering of ${url}: ${getErrorMessage(err)}`,
-			);
-			return {
-				type: "staticFallback",
-				reason: "content-unavailable",
-				targetUrl: documentState.url,
-			};
+			return contentUnavailable();
 		} finally {
-			signal?.removeEventListener("abort", closeOnAbort);
 			await (abortCleanup ?? this.closePageSafely(page));
 		}
 	}
@@ -481,13 +439,9 @@ export class DynamicRenderer implements CrawlRenderer {
 	private async closePageSafely(page: Page): Promise<void> {
 		try {
 			await page.context().close();
-		} catch (error_) {
-			const message = getErrorMessage(error_);
-			if (
-				!message.includes("Target page, context or browser has been closed") &&
-				!message.includes("Page closed")
-			) {
-				this.logger.debug(`Error closing page: ${message}`);
+		} catch (error) {
+			if (!isClosedBrowserTargetError(error)) {
+				this.logger.debug(`Error closing page: ${getErrorMessage(error)}`);
 			}
 		}
 	}

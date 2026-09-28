@@ -1,10 +1,9 @@
 ARG BUN_IMAGE=oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895
-ARG PLAYWRIGHT_IMAGE=mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48
+ARG PLAYWRIGHT_IMAGE=mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27
 
 FROM ${BUN_IMAGE} AS dependency-base
 WORKDIR /app
-COPY package.json bun.lock bunfig.toml ./
-COPY patches ./patches
+COPY package.json bun.lock ./
 
 FROM dependency-base AS build-dependencies
 RUN bun install --frozen-lockfile --ignore-scripts

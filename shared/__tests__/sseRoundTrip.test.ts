@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { Elysia } from "elysia";
 import { createCrawlEventStream } from "../../server/plugins/sse.js";
 import { EventStream } from "../../server/runtime/EventStream.js";
@@ -6,9 +6,9 @@ import type { CrawlEventEnvelope, CrawlEventType } from "../contracts/events.js"
 import { parseCrawlEventEnvelope } from "../contracts/validation.js";
 
 describe("SSE boundary", () => {
-	function createResponse(stream: EventStream, crawlId: string, afterSequence = 0) {
+	function createResponse(stream: EventStream, crawlId: string) {
 		const app = new Elysia().get("/events", () =>
-			createCrawlEventStream({ crawlId, eventStream: stream, afterSequence }),
+			createCrawlEventStream({ crawlId, eventStream: stream }),
 		);
 		return app.handle(new Request("http://localhost/events"));
 	}
@@ -21,15 +21,19 @@ describe("SSE boundary", () => {
 		const reader = response.body?.getReader();
 		if (!reader) throw new Error("Expected SSE response body");
 		try {
-			const { value, done } = await reader.read();
-			expect(done).toBe(false);
-			const wire =
-				typeof value === "string"
-					? value
-					: value instanceof Uint8Array
-						? new TextDecoder().decode(value)
-						: "";
-			expect(wire).toContain("id: ");
+			let wire = "";
+			while (!wire.includes("data: ")) {
+				const { value, done } = await reader.read();
+				expect(done).toBe(false);
+				wire +=
+					typeof value === "string"
+						? value
+						: value instanceof Uint8Array
+							? new TextDecoder().decode(value)
+							: "";
+			}
+			// Frames carry no SSE id: reconnecting clients recover from the snapshot.
+			expect(wire).not.toContain("id: ");
 			expect(wire).toContain(`event: ${expectedType}`);
 			const data = wire.split("\n").find((line) => line.startsWith("data: "));
 			if (!data) throw new Error("Expected SSE data frame payload");
@@ -56,15 +60,16 @@ describe("SSE boundary", () => {
 			{
 				type: "crawl.started",
 				publish: (stream, crawlId) =>
-					stream.publish(crawlId, "crawl.started", {
+					stream.publish(crawlId, 1, "crawl.started", {
 						target: "https://example.com/",
 						resume: false,
+						dynamicRendering: false,
 					}),
 			},
 			{
 				type: "crawl.progress",
 				publish: (stream, crawlId) =>
-					stream.publish(crawlId, "crawl.progress", {
+					stream.publish(crawlId, 1, "crawl.progress", {
 						counters,
 						queue: {
 							activeRequests: 1,
@@ -78,7 +83,7 @@ describe("SSE boundary", () => {
 			{
 				type: "crawl.page",
 				publish: (stream, crawlId) =>
-					stream.publish(crawlId, "crawl.page", {
+					stream.publish(crawlId, 1, "crawl.page", {
 						id: 1,
 						pageCount: 1,
 						url: "https://example.com/",
@@ -88,21 +93,21 @@ describe("SSE boundary", () => {
 			{
 				type: "crawl.log",
 				publish: (stream, crawlId) =>
-					stream.publish(crawlId, "crawl.log", { message: "ready", level: "info" }),
+					stream.publish(crawlId, 1, "crawl.log", { message: "ready", level: "info" }),
 			},
 			{
 				type: "crawl.completed",
-				publish: (stream, crawlId) => stream.publish(crawlId, "crawl.completed", { counters }),
+				publish: (stream, crawlId) => stream.publish(crawlId, 1, "crawl.completed", { counters }),
 			},
 			{
 				type: "crawl.failed",
 				publish: (stream, crawlId) =>
-					stream.publish(crawlId, "crawl.failed", { error: "failed", counters }),
+					stream.publish(crawlId, 1, "crawl.failed", { error: "failed", counters }),
 			},
 			{
 				type: "crawl.stopped",
 				publish: (stream, crawlId) =>
-					stream.publish(crawlId, "crawl.stopped", {
+					stream.publish(crawlId, 1, "crawl.stopped", {
 						stopReason: "stopped",
 						counters,
 					}),
@@ -110,7 +115,7 @@ describe("SSE boundary", () => {
 			{
 				type: "crawl.paused",
 				publish: (stream, crawlId) =>
-					stream.publish(crawlId, "crawl.paused", {
+					stream.publish(crawlId, 1, "crawl.paused", {
 						stopReason: "paused",
 						counters,
 					}),
@@ -119,22 +124,20 @@ describe("SSE boundary", () => {
 
 		const crawlId = "round-trip";
 		const stream = new EventStream();
-		stream.initialize(crawlId);
-		for (const [index, event] of events.entries()) {
+		for (const event of events) {
+			const response = await createResponse(stream, crawlId);
 			const published = event.publish(stream, crawlId);
-			const parsed = parseCrawlEventEnvelope(
-				await readFirstPayload(await createResponse(stream, crawlId, index), event.type),
-			);
+			const parsed = parseCrawlEventEnvelope(await readFirstPayload(response, event.type));
 			expect(parsed).toEqual(published);
 		}
 	});
 
-	test("delivers a replayed settled event before closing, even beyond the pending-event bound", async () => {
+	test("delivers a settled event before closing, even beyond the pending-event bound", async () => {
 		const stream = new EventStream();
-		const crawlId = "settled-replay";
-		stream.initialize(crawlId);
-		stream.publish(crawlId, "crawl.log", { message: "before settlement", level: "info" });
-		stream.publish(crawlId, "crawl.failed", {
+		const crawlId = "settled-live";
+		const response = await createResponse(stream, crawlId);
+		stream.publish(crawlId, 1, "crawl.log", { message: "before settlement", level: "info" });
+		stream.publish(crawlId, 2, "crawl.failed", {
 			error: `failed-${"x".repeat(300_000)}`,
 			counters: {
 				pagesScanned: 0,
@@ -147,7 +150,6 @@ describe("SSE boundary", () => {
 			},
 		});
 
-		const response = await createResponse(stream, crawlId);
 		const wire = await response.text();
 
 		expect(wire).toContain("event: crawl.log");
@@ -160,9 +162,8 @@ describe("SSE boundary", () => {
 
 	test("Elysia stream cancellation releases EventStream subscriber ownership", async () => {
 		const stream = new EventStream();
-		stream.initialize("cancel");
-		stream.publish("cancel", "crawl.log", { message: "ready", level: "info" });
 		const response = await createResponse(stream, "cancel");
+		stream.publish("cancel", 1, "crawl.log", { message: "ready", level: "info" });
 		const reader = response.body?.getReader();
 		if (!reader) throw new Error("Expected SSE response body");
 		await reader.read();
@@ -174,10 +175,12 @@ describe("SSE boundary", () => {
 
 	test("evicts a subscriber whose unread delivery queue reaches its bound", async () => {
 		const stream = new EventStream();
-		stream.initialize("slow-client");
 		const response = await createResponse(stream, "slow-client");
 		for (let index = 0; index < 40; index += 1) {
-			stream.publish("slow-client", "crawl.log", { message: `event-${index}`, level: "info" });
+			stream.publish("slow-client", index + 1, "crawl.log", {
+				message: `event-${index}`,
+				level: "info",
+			});
 		}
 		await Promise.resolve();
 
@@ -190,9 +193,8 @@ describe("SSE boundary", () => {
 
 	test("evicts a subscriber before one oversized event enters its delivery queue", async () => {
 		const stream = new EventStream();
-		stream.initialize("oversized-event");
 		const response = await createResponse(stream, "oversized-event");
-		stream.publish("oversized-event", "crawl.log", {
+		stream.publish("oversized-event", 1, "crawl.log", {
 			message: "x".repeat(300_000),
 			level: "info",
 		});
@@ -203,29 +205,5 @@ describe("SSE boundary", () => {
 		);
 		for (const unsubscribe of unsubscribers) unsubscribe();
 		await response.body?.cancel();
-	});
-
-	test("replay overflow releases subscriber ownership before stream startup returns", async () => {
-		const stream = new EventStream();
-		stream.initialize("replay-overflow");
-		for (let index = 0; index < 40; index += 1) {
-			stream.publish("replay-overflow", "crawl.log", {
-				message: `event-${index}`,
-				level: "info",
-			});
-		}
-		const setIntervalSpy = spyOn(globalThis, "setInterval");
-		let response: Response | undefined;
-		try {
-			response = await createResponse(stream, "replay-overflow");
-			expect(setIntervalSpy).not.toHaveBeenCalled();
-			const unsubscribers = Array.from({ length: 10 }, () =>
-				stream.subscribe("replay-overflow", () => {}),
-			);
-			for (const unsubscribe of unsubscribers) unsubscribe();
-		} finally {
-			await response?.body?.cancel();
-			setIntervalSpy.mockRestore();
-		}
 	});
 });

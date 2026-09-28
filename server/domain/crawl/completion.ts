@@ -1,11 +1,12 @@
 import type { CrawlCounters } from "../../../shared/contracts/index.js";
-import { kilobytesToBytes } from "../../../shared/text.js";
+import { bytesToKilobytes } from "../../../shared/text.js";
 
 /** Completion data and counter policy shared by runtime state and durable transactions. */
-export type TerminalOutcome = "success" | "failure" | "skip";
+export const TERMINAL_OUTCOME_VALUES = ["success", "failure", "skip"] as const;
+export type TerminalOutcome = (typeof TERMINAL_OUTCOME_VALUES)[number];
 
 export interface TerminalCounterEffects {
-	dataKb?: number;
+	dataBytes?: number;
 	mediaFiles?: number;
 	discoveredLinks?: number;
 }
@@ -30,8 +31,7 @@ export function deriveTerminalCounters(
 	effects: TerminalCounterEffects = {},
 ): CrawlCounters {
 	const counters = { ...current };
-	const dataKb = effects.dataKb ?? 0;
-	kilobytesToBytes(dataKb);
+	const dataBytes = requireCounterIncrement(effects.dataBytes ?? 0, "data byte");
 	const mediaFiles = requireCounterIncrement(effects.mediaFiles ?? 0, "media file");
 	const discoveredLinks = requireCounterIncrement(effects.discoveredLinks ?? 0, "discovered link");
 	counters.pagesScanned += 1;
@@ -40,7 +40,7 @@ export function deriveTerminalCounters(
 	switch (outcome) {
 		case "success":
 			counters.successCount += 1;
-			counters.totalDataKb += dataKb;
+			counters.totalDataKb += bytesToKilobytes(dataBytes);
 			break;
 		case "failure":
 			counters.failureCount += 1;

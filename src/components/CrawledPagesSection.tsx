@@ -10,9 +10,29 @@ import {
 	Sparkles,
 	X,
 } from "lucide-react";
-import { memo, useEffect, useRef, useState } from "react";
-import { type CrawledPage, MAX_SEARCH_QUERY_LENGTH } from "../../shared/contracts/index.js";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type CrawledPage,
+	type CrawlPageDetails,
+	MAX_SEARCH_QUERY_LENGTH,
+	type SearchResult,
+} from "../../shared/contracts/index.js";
+import { getApiErrorMessage } from "../api/errors";
 import { getPageContent } from "../api/pages";
+
+/** What a page card renders; live pages carry details, stored-page search results do not. */
+type PageCardView = Pick<CrawledPage, "id" | "url" | "title" | "description"> &
+	Partial<Pick<CrawledPage, "details">>;
+
+/** Search results show their matching snippet in the description slot. */
+export function searchResultCard(result: SearchResult): PageCardView {
+	return {
+		id: result.id,
+		url: result.url,
+		title: result.title,
+		description: result.snippet || result.description,
+	};
+}
 
 type PageContentState = { type: "unloaded" } | { type: "loaded"; content: string | null };
 
@@ -21,7 +41,7 @@ const CrawledPageCard = memo(function CrawledPageCard({
 	page,
 }: {
 	crawlId: string;
-	page: CrawledPage;
+	page: PageCardView;
 }) {
 	const [isExpanded, setIsExpanded] = useState(false);
 	const [showSource, setShowSource] = useState(false);
@@ -59,7 +79,7 @@ const CrawledPageCard = memo(function CrawledPageCard({
 				return;
 			}
 
-			setFetchError(err instanceof Error ? err.message : "Failed to fetch content");
+			setFetchError(getApiErrorMessage(err, "Failed to fetch content"));
 		} finally {
 			if (!lifetimeController.signal.aborted) {
 				setIsLoadingContent(false);
@@ -93,7 +113,7 @@ const CrawledPageCard = memo(function CrawledPageCard({
 		contentState.type === "loaded" && contentState.content !== null
 			? contentState.content
 			: "(no content stored - metadata-only mode)";
-	const details = page.details;
+	const details: CrawlPageDetails = page.details ?? {};
 	const hasSummaryMetrics =
 		typeof details.wordCount === "number" ||
 		typeof details.readingTime === "number" ||
@@ -230,7 +250,7 @@ const CrawledPageCard = memo(function CrawledPageCard({
 interface CrawledPagesSectionProps {
 	crawlId: string;
 	crawledPages: CrawledPage[];
-	displayedPages: CrawledPage[];
+	searchResults: SearchResult[];
 	searchQuery: string;
 	onSearchChange: (text: string) => void;
 	onClearSearch: () => void;
@@ -243,7 +263,7 @@ interface CrawledPagesSectionProps {
 export const CrawledPagesSection = memo(function CrawledPagesSection({
 	crawlId,
 	crawledPages,
-	displayedPages,
+	searchResults,
 	searchQuery,
 	onSearchChange,
 	onClearSearch,
@@ -267,8 +287,13 @@ export const CrawledPagesSection = memo(function CrawledPagesSection({
 		return () => clearTimeout(timer);
 	}, [localQuery, onSearchChange, searchQuery]);
 
+	const hasSearchQuery = searchQuery.trim().length > 0;
+	const displayedPages = useMemo<PageCardView[]>(
+		() => (hasSearchQuery ? searchResults.map(searchResultCard) : crawledPages),
+		[crawledPages, hasSearchQuery, searchResults],
+	);
+
 	const listContent = (() => {
-		const hasSearchQuery = searchQuery.trim().length > 0;
 		if (isSearching && displayedPages.length === 0) {
 			return (
 				<div className="h-full flex items-center justify-center text-miku-text/40">

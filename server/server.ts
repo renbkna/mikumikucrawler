@@ -1,23 +1,24 @@
-import { Elysia, status } from "elysia";
 import { type AppDependencies, createApp, createDefaultAppDependencies } from "./app.js";
 import { config } from "./config/env.js";
 import { createServerListenOptions } from "./config/listen.js";
 import { setupLogging } from "./config/logging.js";
+import { createListenerTransport } from "./config/rateLimit.js";
+import { createStartupGate } from "./startupGate.js";
 
 const logger = await setupLogging();
 const started = await (async () => {
 	let dependencies: AppDependencies | undefined;
-	let applicationApp: ReturnType<typeof createApp> | undefined;
+	const gate = createStartupGate();
+	const bootstrap = gate.listener;
 	const listenerOwned = Promise.withResolvers<void>();
 	const application = listenerOwned.promise.then(async () => {
-		dependencies = createDefaultAppDependencies(logger);
+		dependencies = createDefaultAppDependencies(
+			logger,
+			createListenerTransport(() => bootstrap.server ?? undefined),
+		);
 		const app = createApp(dependencies);
 		await app.modules;
 		return app;
-	});
-	const bootstrap = new Elysia().all("*", ({ request, server }) => {
-		if (!applicationApp) return status(503, { error: "Server is starting" });
-		return applicationApp.fetch(request, server);
 	});
 
 	try {
@@ -25,7 +26,7 @@ const started = await (async () => {
 			createServerListenOptions(config.port, config.allowLocalhostTargets),
 		);
 		listenerOwned.resolve();
-		applicationApp = await application;
+		gate.open(await application);
 		if (!dependencies) throw new Error("Application dependencies did not initialize");
 		dependencies.crawlManager.recoverOrphanedActiveCrawls();
 		logger.info(

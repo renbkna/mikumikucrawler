@@ -19,7 +19,42 @@ import { parseCrawlEventEnvelope } from "../../shared/contracts/validation.js";
 import { api, createCrawlEventSource, getCrawlExportUrl } from "./client";
 import { getApiErrorMessage } from "./errors";
 import { createRequestSignal } from "./requestLifetime";
-import type { ApiResult } from "./result";
+import { type ApiResult, mapApiResult, unwrapApiResponse } from "./result";
+
+const CRAWL_RESPONSE_MESSAGES = {
+	invalid: "Unexpected crawl response",
+	mismatch: "Crawl response identity mismatch",
+};
+
+const CRAWL_RECOVERY_RESPONSE_MESSAGES = {
+	invalid: "Unexpected crawl recovery response",
+	mismatch: "Crawl recovery response identity mismatch",
+};
+
+function crawlSummaryContract(crawlId: string) {
+	return {
+		isValid: isCrawlSummary,
+		invalidMessage: CRAWL_RESPONSE_MESSAGES.invalid,
+		identity: {
+			matches: (crawl: CrawlSummary) => crawl.id === crawlId,
+			message: CRAWL_RESPONSE_MESSAGES.mismatch,
+		},
+	};
+}
+
+function crawlRecoverySnapshotContract(
+	crawlId: string,
+	messages: { invalid: string; mismatch: string },
+) {
+	return {
+		isValid: isCrawlRecoverySnapshot,
+		invalidMessage: messages.invalid,
+		identity: {
+			matches: (snapshot: CrawlRecoverySnapshot) => snapshot.crawl.id === crawlId,
+			message: messages.mismatch,
+		},
+	};
+}
 
 export async function createCrawl(
 	crawlId: string,
@@ -28,21 +63,7 @@ export async function createCrawl(
 ): Promise<ApiResult<CrawlSummary>> {
 	const signal = createRequestSignal(lifetimeSignal);
 	const response = await api.api.crawls.post({ id: crawlId, options }, { fetch: { signal } });
-	if (response.error || !response.data) {
-		const status = response.error?.status;
-		return {
-			ok: false,
-			error: getApiErrorMessage(response.error?.value),
-			...(typeof status === "number" ? { status } : {}),
-		};
-	}
-	if (!isCrawlSummary(response.data)) {
-		return { ok: false, error: "Unexpected crawl response" };
-	}
-	if (response.data.id !== crawlId) {
-		return { ok: false, error: "Crawl response identity mismatch" };
-	}
-	return { ok: true, data: response.data };
+	return unwrapApiResponse(response, crawlSummaryContract(crawlId));
 }
 
 export async function getCrawlRecoverySnapshot(
@@ -51,21 +72,10 @@ export async function getCrawlRecoverySnapshot(
 ): Promise<ApiResult<CrawlRecoverySnapshot>> {
 	const signal = createRequestSignal(lifetimeSignal);
 	const response = await api.api.crawls({ id: crawlId }).snapshot.get({ fetch: { signal } });
-	if (response.error || !response.data) {
-		const status = response.error?.status;
-		return {
-			ok: false,
-			error: getApiErrorMessage(response.error?.value),
-			...(typeof status === "number" ? { status } : {}),
-		};
-	}
-	if (!isCrawlRecoverySnapshot(response.data)) {
-		return { ok: false, error: "Unexpected crawl recovery response" };
-	}
-	if (response.data.crawl.id !== crawlId) {
-		return { ok: false, error: "Crawl recovery response identity mismatch" };
-	}
-	return { ok: true, data: response.data };
+	return unwrapApiResponse(
+		response,
+		crawlRecoverySnapshotContract(crawlId, CRAWL_RECOVERY_RESPONSE_MESSAGES),
+	);
 }
 
 export async function stopCrawl(
@@ -75,21 +85,7 @@ export async function stopCrawl(
 ): Promise<ApiResult<CrawlSummary>> {
 	const signal = createRequestSignal(lifetimeSignal);
 	const response = await api.api.crawls({ id: crawlId }).stop.post({ mode }, { fetch: { signal } });
-	if (response.error || !response.data) {
-		const status = response.error?.status;
-		return {
-			ok: false,
-			error: getApiErrorMessage(response.error?.value),
-			...(typeof status === "number" ? { status } : {}),
-		};
-	}
-	if (!isCrawlSummary(response.data)) {
-		return { ok: false, error: "Unexpected crawl response" };
-	}
-	if (response.data.id !== crawlId) {
-		return { ok: false, error: "Crawl response identity mismatch" };
-	}
-	return { ok: true, data: response.data };
+	return unwrapApiResponse(response, crawlSummaryContract(crawlId));
 }
 
 export async function resumeCrawl(
@@ -100,16 +96,10 @@ export async function resumeCrawl(
 	const response = await api.api.crawls({ id: crawlId }).resume.post(undefined, {
 		fetch: { signal },
 	});
-	if (response.error || !response.data) {
-		return { ok: false, error: getApiErrorMessage(response.error?.value) };
-	}
-	if (!isCrawlRecoverySnapshot(response.data)) {
-		return { ok: false, error: "Unexpected crawl response" };
-	}
-	if (response.data.crawl.id !== crawlId) {
-		return { ok: false, error: "Crawl response identity mismatch" };
-	}
-	return { ok: true, data: response.data };
+	return unwrapApiResponse(
+		response,
+		crawlRecoverySnapshotContract(crawlId, CRAWL_RESPONSE_MESSAGES),
+	);
 }
 
 export async function listResumableCrawls(
@@ -117,18 +107,13 @@ export async function listResumableCrawls(
 ): Promise<ApiResult<ResumableSessionSummary[]>> {
 	const signal = createRequestSignal(lifetimeSignal);
 	const response = await api.api.crawls.resumable.get({ fetch: { signal } });
-	if (response.error || !response.data) {
-		return { ok: false, error: getApiErrorMessage(response.error?.value) };
-	}
-
-	if (!isResumableCrawlListResponse(response.data)) {
-		return { ok: false, error: "Unexpected crawl list response" };
-	}
-
-	return {
-		ok: true,
-		data: response.data.crawls.map(toResumableSessionSummary),
-	};
+	return mapApiResult(
+		unwrapApiResponse(response, {
+			isValid: isResumableCrawlListResponse,
+			invalidMessage: "Unexpected crawl list response",
+		}),
+		(list) => list.crawls.map(toResumableSessionSummary),
+	);
 }
 
 export async function deleteCrawl(
@@ -137,13 +122,13 @@ export async function deleteCrawl(
 ): Promise<ApiResult<void>> {
 	const signal = createRequestSignal(lifetimeSignal);
 	const response = await api.api.crawls({ id: crawlId }).delete({ fetch: { signal } });
-	if (response.error || !response.data) {
-		return { ok: false, error: getApiErrorMessage(response.error?.value) };
-	}
-	if (!isDeleteCrawlResponse(response.data)) {
-		return { ok: false, error: "Unexpected delete response" };
-	}
-	return { ok: true, data: undefined };
+	return mapApiResult(
+		unwrapApiResponse(response, {
+			isValid: isDeleteCrawlResponse,
+			invalidMessage: "Unexpected delete response",
+		}),
+		() => undefined,
+	);
 }
 
 export async function downloadCrawlExport(

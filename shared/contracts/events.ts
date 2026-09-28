@@ -1,4 +1,5 @@
 import type { Static } from "typebox";
+import { isOneOf } from "../isOneOf.js";
 import type { CrawlEventEnvelopeSchema } from "./schemas.js";
 
 export const CRAWL_EVENT_TYPES = {
@@ -42,5 +43,5 @@ export type CrawlEventEnvelopeBase<TType extends CrawlEventType> = Omit<
 };
 
 export function isSettledCrawlEventType(value: CrawlEventType): value is SettledCrawlEventType {
-	return SETTLED_CRAWL_EVENT_TYPE_VALUES.includes(value as SettledCrawlEventType);
+	return isOneOf(SETTLED_CRAWL_EVENT_TYPE_VALUES, value);
 }

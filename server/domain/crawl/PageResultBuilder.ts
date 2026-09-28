@@ -37,23 +37,14 @@ export function buildPageResult(
 		processedContent.metadata.robots,
 		fetchResult.xRobotsTag,
 	);
-	const mediaCount =
-		options.saveMedia && (options.crawlMethod === "media" || options.crawlMethod === "full")
-			? processedContent.mediaCount
-			: 0;
-	const mainContent = processedContent.extractedData.mainContent ?? "";
-	const language = processedContent.analysis.language
-		? truncateUtf8Text(processedContent.analysis.language, PAGE_TEXT_LIMITS.languageBytes)
-		: undefined;
-	const details = {
-		...(processedContent.analysis.wordCount === undefined
-			? {}
-			: { wordCount: processedContent.analysis.wordCount }),
-		...(processedContent.analysis.readingTime === undefined
-			? {}
-			: { readingTime: processedContent.analysis.readingTime }),
-		...(language === undefined ? {} : { language }),
-	};
+	// Valid crawl options only enable saveMedia for crawl methods that count media.
+	const mediaCount = options.saveMedia ? processedContent.mediaCount : 0;
+	const { wordCount, readingTime } = processedContent.analysis;
+	const language = truncateUtf8Text(
+		processedContent.analysis.language,
+		PAGE_TEXT_LIMITS.languageBytes,
+	);
+	const details = { wordCount, readingTime, language };
 
 	const eventPayload: CrawlPageData = {
 		url: item.url,
@@ -76,10 +67,10 @@ export function buildPageResult(
 			description: resolvedDescription,
 			content:
 				options.contentOnly || typeof fetchResult.content !== "string" ? null : fetchResult.content,
-			mainContent,
-			wordCount: processedContent.analysis.wordCount ?? 0,
-			readingTime: processedContent.analysis.readingTime ?? 0,
-			language: language ?? "unknown",
+			mainContent: processedContent.mainContent,
+			wordCount,
+			readingTime,
+			language,
 			mediaCount,
 			discoveredLinkCount: processedContent.links.length,
 		},

@@ -9,7 +9,6 @@ import {
 	PAGE_TEXT_LIMITS,
 } from "../../../shared/contracts/index.js";
 import { truncateUtf8Text } from "../../../shared/text.js";
-import type { OwnStatement } from "../db.js";
 
 interface PageSummaryRow {
 	id: number;
@@ -37,24 +36,19 @@ function readPageDetails(row: PageSummaryRow): CrawlPageDetails {
 	return details;
 }
 
-export function createPageRepo(db: Database, own: OwnStatement) {
-	const exportIds = own(
-		db.query<{ id: number }, [string]>(`
-			SELECT id FROM pages WHERE crawl_id = ? ORDER BY crawled_at DESC, id DESC
-		`),
+export function createPageRepo(db: Database) {
+	const exportIds = db.prepare<{ id: number }, [string]>(
+		"SELECT id FROM pages WHERE crawl_id = ? ORDER BY crawled_at DESC, id DESC",
 	);
-	const exportPage = own(
-		db.query<ExportPageRow, [boolean, number, string]>(`
+	const exportPage = db.prepare<ExportPageRow, [boolean, number, string]>(`
 		SELECT id, url, title, description,
 			content_type AS contentType,
 			domain,
 			CASE WHEN ? THEN search_content ELSE NULL END AS content,
 			crawled_at AS crawledAt
 		FROM pages WHERE id = ? AND crawl_id = ?
-	`),
-	);
-	const listSummaries = own(
-		db.query<PageSummaryRow, [string, number]>(`
+	`);
+	const listSummaries = db.prepare<PageSummaryRow, [string, number]>(`
 		SELECT
 			id,
 			url,
@@ -69,21 +63,23 @@ export function createPageRepo(db: Database, own: OwnStatement) {
 		WHERE crawl_id = ?
 		ORDER BY crawled_at DESC, id DESC
 		LIMIT ?
-	`),
+	`);
+	const countPages = db.prepare<{ count: number }, [string]>(
+		"SELECT COUNT(*) AS count FROM pages WHERE crawl_id = ?",
 	);
-	const countByCrawlId = own(
-		db.query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM pages WHERE crawl_id = ?"),
+	const getContent = db.prepare<{ content: string | null }, [string, number]>(
+		"SELECT content FROM pages WHERE crawl_id = ? AND id = ? LIMIT 1",
 	);
 
+	function countByCrawlId(crawlId: string): number {
+		return countPages.get(crawlId)?.count ?? 0;
+	}
+
 	return {
+		countByCrawlId,
+		/** Stored content for a crawl's page: undefined when the page is absent, null when not stored. */
 		getContentById(crawlId: string, id: number): string | null | undefined {
-			const row = db
-				.query("SELECT content FROM pages WHERE crawl_id = ? AND id = ? LIMIT 1")
-				.get(crawlId, id) as {
-				content: string | null;
-			} | null;
-			if (row === null) return undefined;
-			return row.content;
+			return getContent.get(crawlId, id)?.content;
 		},
 		listSnapshot(crawlId: string): CrawlPagesResponse {
 			const pages: CrawlPageSummary[] = Array.from(
@@ -98,10 +94,7 @@ export function createPageRepo(db: Database, own: OwnStatement) {
 					details: readPageDetails(row),
 				}),
 			);
-			return {
-				pages,
-				count: countByCrawlId.get(crawlId)?.count ?? 0,
-			};
+			return { pages, count: countByCrawlId(crawlId) };
 		},
 		iterateForExport(
 			crawlId: string,

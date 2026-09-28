@@ -1,6 +1,5 @@
 import type { CrawlOptions } from "../../../shared/contracts/index.js";
-import { isPrivateOrReservedIpAddressLiteral } from "../../../shared/ipPolicy.js";
-import { normalizeCanonicalHttpUrl } from "../../../shared/url.js";
+import { normalizeCanonicalHttpUrl, publicHostnameError } from "../../../shared/url.js";
 import type { ExtractedLink } from "../../types.js";
 
 const SKIPPED_EXTENSIONS =
@@ -34,7 +33,7 @@ export function getCrawlUrlIdentity(url: string): CrawlUrlIdentityResult {
 		return normalized;
 	}
 	const parsed = new URL(normalized.url);
-	const originKey = parsed.origin.toLowerCase();
+	const originKey = parsed.origin;
 
 	return {
 		canonicalUrl: normalized.url,
@@ -43,6 +42,12 @@ export function getCrawlUrlIdentity(url: string): CrawlUrlIdentityResult {
 		domainBudgetKey: parsed.hostname,
 		skippedByExtension: SKIPPED_EXTENSIONS.test(parsed.pathname),
 	};
+}
+
+/** True when `domain` is exactly the budget key a crawl URL on that host would carry. */
+export function isCanonicalDomainBudgetKey(domain: string): boolean {
+	const identity = getCrawlUrlIdentity(`http://${domain}/`);
+	return !("error" in identity) && identity.domainBudgetKey === domain;
 }
 
 export function normalizeDiscoveredLink(
@@ -64,14 +69,9 @@ export function normalizeDiscoveredLink(
 		return { ...identity, reason: "invalid-url" };
 	}
 
-	if (
-		identity.hostname.toLowerCase() === "localhost" ||
-		isPrivateOrReservedIpAddressLiteral(identity.hostname)
-	) {
-		return {
-			error: "Localhost and private IP targets are not allowed in discovered links",
-			reason: "ssrf-blocked",
-		};
+	const hostError = publicHostnameError(identity.hostname);
+	if (hostError !== null) {
+		return { error: hostError, reason: "ssrf-blocked" };
 	}
 
 	if (identity.skippedByExtension) {

@@ -1,12 +1,7 @@
 import { Elysia, t } from "elysia";
-import {
-	API_PATHS,
-	CRAWL_ROUTE_SEGMENTS,
-	isActiveCrawlStatus,
-} from "../../shared/contracts/index.js";
+import { API_PATHS, CRAWL_ROUTE_SEGMENTS } from "../../shared/contracts/index.js";
 import { CrawlIdParamsSchema } from "../../shared/contracts/schemas.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
-import { SseHeadersSchema } from "../contracts/http.js";
 import { createCrawlEventStream } from "../plugins/sse.js";
 import type { RouteServicesPlugin } from "./context.js";
 
@@ -16,10 +11,9 @@ export function sseApi(services: RouteServicesPlugin) {
 	return app.get(
 		CRAWL_ROUTE_SEGMENTS.events,
 		{
-			headers: SseHeadersSchema,
 			params: CrawlIdParamsSchema,
 			response: {
-				204: t.Void({ description: "Crawl settled with no unseen terminal event" }),
+				204: t.Void({ description: "Crawl has no live runtime; read its snapshot instead" }),
 				404: ApiErrorSchema,
 				422: ApiErrorSchema,
 				429: ApiErrorSchema,
@@ -29,27 +23,14 @@ export function sseApi(services: RouteServicesPlugin) {
 				summary: "Subscribe to crawl events",
 			},
 		},
-		async ({
-			crawlManager,
-			eventStream,
-			headers,
-			params,
-			resolveClientKey,
-			request,
-			server,
-			set,
-			status,
-		}) => {
-			const clientKey = await resolveClientKey(request, server);
+		({ crawlManager, eventStream, keepOpen, params, resolveClientKey, request, set, status }) => {
+			const clientKey = resolveClientKey(request);
 			const crawl = crawlManager.get(params.id);
 			if (!crawl) {
 				return status(404, { error: "Crawl not found" });
 			}
-			const afterSequence = headers["last-event-id"] ?? 0;
-			if (
-				!isActiveCrawlStatus(crawl.status) &&
-				!eventStream.hasReplayableSettledEvent(params.id, afterSequence)
-			) {
+			// The stream carries only events published after subscription; settled crawls have none.
+			if (!crawlManager.hasLiveRuntime(params.id)) {
 				return new Response(null, { status: 204 });
 			}
 			if (!eventStream.hasSubscriberCapacity(params.id, clientKey)) {
@@ -59,14 +40,13 @@ export function sseApi(services: RouteServicesPlugin) {
 				});
 			}
 
-			server?.timeout(request, 0);
+			keepOpen(request);
 			set.headers["cache-control"] = "no-cache, no-transform";
 			set.headers["x-accel-buffering"] = "no";
 
 			return createCrawlEventStream({
 				crawlId: params.id,
 				eventStream,
-				afterSequence,
 				clientKey,
 			});
 		},

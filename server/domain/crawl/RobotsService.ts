@@ -4,9 +4,12 @@ import { config } from "../../config/env.js";
 import type { Logger } from "../../config/logging.js";
 import { DOMAIN_DELAY_CONSTANTS, MEMORY_CONSTANTS, REQUEST_CONSTANTS } from "../../constants.js";
 import { type HttpClient, isOutboundPolicyError } from "../../outbound/HttpClient.js";
+import { abortError, raceAbort } from "../../utils/abort.js";
+import { getErrorMessage } from "../../utils/helpers.js";
 import { disposeResponseBody, readLimitedResponseBody } from "../../utils/responseBody.js";
+import { SingleFlight } from "../../utils/singleFlight.js";
 import { shouldTreatRobotsResponseAsNoRules } from "./httpStatusPolicy.js";
-import { type CrawlUrlIdentity, getCrawlUrlIdentity } from "./UrlPolicy.js";
+import type { CrawlUrlIdentity } from "./UrlPolicy.js";
 
 type RobotsResult = ReturnType<typeof robotsParserModule>;
 export const ROBOTS_UNAVAILABLE_CACHE_TTL_MS = 5_000;
@@ -39,42 +42,14 @@ type RobotsRulesResult =
 	| { type: "blocked"; reason: string }
 	| { type: "unavailable"; reason: string };
 
-function abortReason(signal: AbortSignal): Error {
-	return signal.reason instanceof Error ? signal.reason : new Error("Robots evaluation aborted");
-}
-
-function waitForSharedRules(
-	promise: Promise<RobotsRulesResult>,
-	signal?: AbortSignal,
-): Promise<RobotsRulesResult> {
-	if (!signal) return promise;
-	if (signal.aborted) return Promise.reject(abortReason(signal));
-
-	return new Promise((resolve, reject) => {
-		const onAbort = () => {
-			signal.removeEventListener("abort", onAbort);
-			reject(abortReason(signal));
-		};
-		signal.addEventListener("abort", onAbort, { once: true });
-		promise.then(
-			(result) => {
-				signal.removeEventListener("abort", onAbort);
-				resolve(result);
-			},
-			(error) => {
-				signal.removeEventListener("abort", onAbort);
-				reject(error);
-			},
-		);
-	});
-}
+const robotsAbortError = (signal: AbortSignal) => abortError(signal, "Robots evaluation aborted");
 
 export class RobotsService {
 	private readonly cache = new LRUCache<string, RobotsResult | false>({
 		max: MEMORY_CONSTANTS.ROBOTS_CACHE_MAX_SIZE,
 		ttl: MEMORY_CONSTANTS.ROBOTS_CACHE_TTL_MS,
 	});
-	private readonly inFlightRules = new Map<string, Promise<RobotsRulesResult>>();
+	private readonly inFlightRules = new SingleFlight<string, RobotsRulesResult>();
 	private readonly unavailableCache: LRUCache<string, string>;
 	private readonly lifecycleController = new AbortController();
 
@@ -93,11 +68,6 @@ export class RobotsService {
 		originKey: string,
 		allowLocalhostOnInitialRequest: boolean,
 	): Promise<RobotsRulesResult> {
-		const cached = this.cache.get(originKey);
-		if (cached !== undefined) {
-			return cached === false ? { type: "no-rules" } : { type: "rules", rules: cached };
-		}
-
 		const timeoutSignal = AbortSignal.any([
 			this.lifecycleController.signal,
 			AbortSignal.timeout(REQUEST_CONSTANTS.ROBOTS_FETCH_TIMEOUT_MS),
@@ -141,9 +111,9 @@ export class RobotsService {
 			};
 		} catch (error) {
 			if (this.lifecycleController.signal.aborted) {
-				throw abortReason(this.lifecycleController.signal);
+				throw robotsAbortError(this.lifecycleController.signal);
 			}
-			const reason = error instanceof Error ? error.message : String(error);
+			const reason = getErrorMessage(error);
 			if (isOutboundPolicyError(error)) {
 				return { type: "blocked", reason };
 			}
@@ -152,66 +122,45 @@ export class RobotsService {
 		}
 	}
 
+	private cachedRules(originKey: string): RobotsRulesResult | undefined {
+		const cached = this.cache.get(originKey);
+		if (cached === undefined) return undefined;
+		return cached === false ? { type: "no-rules" } : { type: "rules", rules: cached };
+	}
+
 	private fetchRulesForOrigin(
 		originKey: string,
 		signal?: AbortSignal,
 		allowLocalhostOnInitialRequest = false,
 	): Promise<RobotsRulesResult> {
 		if (this.lifecycleController.signal.aborted) {
-			return Promise.reject(abortReason(this.lifecycleController.signal));
+			return Promise.reject(robotsAbortError(this.lifecycleController.signal));
 		}
 		if (signal?.aborted) {
-			return Promise.reject(abortReason(signal));
+			return Promise.reject(robotsAbortError(signal));
 		}
 
-		const cached = this.cache.get(originKey);
-		if (cached !== undefined) {
-			return Promise.resolve(
-				cached === false ? { type: "no-rules" } : { type: "rules", rules: cached },
-			);
-		}
+		const cached = this.cachedRules(originKey);
+		if (cached) return Promise.resolve(cached);
 		const requestKey = `${allowLocalhostOnInitialRequest ? "local" : "public"}:${originKey}`;
 		const unavailableReason = this.unavailableCache.get(requestKey);
 		if (unavailableReason !== undefined) {
 			return Promise.resolve({ type: "unavailable", reason: unavailableReason });
 		}
 
-		let pending = this.inFlightRules.get(requestKey);
-		if (!pending) {
-			pending = this.loadRulesForOrigin(originKey, allowLocalhostOnInitialRequest)
-				.then((result) => {
-					if (result.type === "unavailable") {
-						this.unavailableCache.set(requestKey, result.reason);
-					}
-					return result;
-				})
-				.finally(() => {
-					if (this.inFlightRules.get(requestKey) === pending) {
-						this.inFlightRules.delete(requestKey);
-					}
-				});
-			this.inFlightRules.set(requestKey, pending);
-		}
-
-		return waitForSharedRules(pending, signal);
+		const pending = this.inFlightRules.run(requestKey, async () => {
+			const result = await this.loadRulesForOrigin(originKey, allowLocalhostOnInitialRequest);
+			if (result.type === "unavailable") {
+				this.unavailableCache.set(requestKey, result.reason);
+			}
+			return result;
+		});
+		return raceAbort(pending, signal, robotsAbortError);
 	}
 
 	async close(): Promise<void> {
 		this.lifecycleController.abort(new Error("Robots service is shutting down"));
-		await Promise.allSettled([...this.inFlightRules.values()]);
-	}
-
-	async evaluate(
-		url: string,
-		signal?: AbortSignal,
-		options: { allowLocalhostOnInitialRequest?: boolean } = {},
-	): Promise<RobotsPolicy> {
-		const identity = getCrawlUrlIdentity(url);
-		if ("error" in identity) {
-			throw new Error(identity.error);
-		}
-
-		return this.evaluateIdentity(identity, signal, options);
+		await this.inFlightRules.settled();
 	}
 
 	async evaluateIdentity(

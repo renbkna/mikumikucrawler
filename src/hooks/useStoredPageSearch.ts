@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { CrawledPage } from "../../shared/contracts/index.js";
+import type { SearchResult } from "../../shared/contracts/index.js";
+import { getApiErrorMessage } from "../api/errors";
 import { searchStoredPages } from "../api/search";
 import type { CrawlControllerState } from "./crawlControllerState";
 
@@ -17,12 +18,12 @@ export function useStoredPageSearch({
 }) {
 	const requestPageSearchRef = useRef(() => {});
 	const [pageSearch, setPageSearch] = useState<{
-		pages: CrawledPage[];
+		results: SearchResult[];
 		count: number;
 		isLoading: boolean;
 		error: string | null;
 	}>({
-		pages: [],
+		results: [],
 		count: 0,
 		isLoading: false,
 		error: null,
@@ -31,7 +32,7 @@ export function useStoredPageSearch({
 		const query = searchQuery.trim();
 
 		if (!query || !crawlId) {
-			setPageSearch({ pages: [], count: 0, isLoading: false, error: null });
+			setPageSearch({ results: [], count: 0, isLoading: false, error: null });
 			return;
 		}
 
@@ -39,7 +40,7 @@ export function useStoredPageSearch({
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		let running = false;
 		let queued = false;
-		setPageSearch({ pages: [], count: 0, isLoading: true, error: null });
+		setPageSearch({ results: [], count: 0, isLoading: true, error: null });
 
 		// Keep one request in flight and coalesce page bursts into its next refresh.
 		const schedule = (delay = 250) => {
@@ -54,11 +55,11 @@ export function useStoredPageSearch({
 					.then((result) => {
 						if (controller.signal.aborted) return;
 						if (!result.ok) {
-							setPageSearch({ pages: [], count: 0, isLoading: false, error: result.error });
+							setPageSearch({ results: [], count: 0, isLoading: false, error: result.error });
 							return;
 						}
 						setPageSearch({
-							pages: result.data.pages,
+							results: result.data.results,
 							count: result.data.count,
 							isLoading: false,
 							error: null,
@@ -67,10 +68,10 @@ export function useStoredPageSearch({
 					.catch((error: unknown) => {
 						if (controller.signal.aborted) return;
 						setPageSearch({
-							pages: [],
+							results: [],
 							count: 0,
 							isLoading: false,
-							error: error instanceof Error ? error.message : "Request failed",
+							error: getApiErrorMessage(error),
 						});
 					})
 					.finally(() => {

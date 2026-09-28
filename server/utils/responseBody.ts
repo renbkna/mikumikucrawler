@@ -1,3 +1,7 @@
+import { abortError, raceAbort } from "./abort.js";
+
+const readAbortError = (signal: AbortSignal) => abortError(signal, "Response body read aborted");
+
 export type LimitedResponseBody = { type: "body"; bytes: Uint8Array } | { type: "tooLarge" };
 
 export async function disposeResponseBody(response: Response): Promise<void> {
@@ -33,7 +37,7 @@ export async function readLimitedResponseBody(
 	let totalLength = 0;
 	try {
 		for (;;) {
-			const { done, value } = await readWithAbort(reader, signal);
+			const { done, value } = await raceAbort(reader.read(), signal, readAbortError);
 			if (done) break;
 			if (!value) continue;
 
@@ -53,37 +57,4 @@ export async function readLimitedResponseBody(
 		type: "body",
 		bytes: Buffer.concat(chunks, totalLength),
 	};
-}
-
-function readWithAbort(
-	reader: ReadableStreamDefaultReader<Uint8Array>,
-	signal?: AbortSignal,
-): ReturnType<ReadableStreamDefaultReader<Uint8Array>["read"]> {
-	if (!signal) return reader.read();
-	if (signal.aborted) {
-		void reader.cancel(signal.reason).catch(() => undefined);
-		return Promise.reject(
-			signal.reason instanceof Error ? signal.reason : new Error("Response body read aborted"),
-		);
-	}
-	return new Promise((resolve, reject) => {
-		const onAbort = () => {
-			signal.removeEventListener("abort", onAbort);
-			void reader.cancel(signal.reason).catch(() => undefined);
-			reject(
-				signal.reason instanceof Error ? signal.reason : new Error("Response body read aborted"),
-			);
-		};
-		signal.addEventListener("abort", onAbort, { once: true });
-		reader.read().then(
-			(result) => {
-				signal.removeEventListener("abort", onAbort);
-				resolve(result);
-			},
-			(error) => {
-				signal.removeEventListener("abort", onAbort);
-				reject(error);
-			},
-		);
-	});
 }

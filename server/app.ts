@@ -2,7 +2,6 @@ import { lookup } from "node:dns/promises";
 import path from "node:path";
 import { cors } from "@elysia/cors";
 import { Elysia } from "elysia";
-import { type Generator, rateLimit } from "elysia-rate-limit";
 import type { Static } from "typebox";
 import { API_PATHS } from "../shared/contracts/index.js";
 import { routeServicesPlugin } from "./api/context.js";
@@ -13,11 +12,12 @@ import { sseApi } from "./api/sse.js";
 import { isCorsOriginAllowed } from "./config/cors.js";
 import { config } from "./config/env.js";
 import type { AppLogger } from "./config/logging.js";
-import { createRateLimitKeyGenerator } from "./config/rateLimit.js";
+import { createClientKeyResolver, type RequestTransport } from "./config/rateLimit.js";
 import type { ApiErrorSchema } from "./contracts/errors.js";
 import { handleAppError } from "./errorHandling.js";
 import { DefaultResolver, PinnedHttpClient } from "./outbound/HttpClient.js";
-import { openapiPlugin } from "./plugins/openapi.js";
+import { openapiModels, openapiPlugin } from "./plugins/openapi.js";
+import { rateLimitPlugin } from "./plugins/rateLimit.js";
 import { spaStaticPlugin } from "./plugins/spaStatic.js";
 import { CrawlManager } from "./runtime/CrawlManager.js";
 import { EventStream } from "./runtime/EventStream.js";
@@ -35,10 +35,13 @@ export interface AppDependencies {
 	storage: Storage;
 	eventStream: EventStream;
 	crawlManager: CrawlManager;
-	rateLimitGenerator: Generator;
+	transport: RequestTransport;
 }
 
-export function createDefaultAppDependencies(logger: AppLogger): AppDependencies {
+export function createDefaultAppDependencies(
+	logger: AppLogger,
+	transport: RequestTransport,
+): AppDependencies {
 	const storage = createStorage();
 	let eventStream: EventStream | undefined;
 	try {
@@ -59,7 +62,7 @@ export function createDefaultAppDependencies(logger: AppLogger): AppDependencies
 			storage,
 			eventStream,
 			crawlManager,
-			rateLimitGenerator: createRateLimitKeyGenerator(config.isRender),
+			transport,
 		};
 	} catch (error) {
 		eventStream?.close();
@@ -70,16 +73,26 @@ export function createDefaultAppDependencies(logger: AppLogger): AppDependencies
 
 type SpaRoutes = Awaited<ReturnType<typeof spaStaticPlugin>>;
 
+interface AppOptions {
+	spaRoutes?: SpaRoutes | Promise<SpaRoutes>;
+	/** Serves `/openapi` and `/openapi/json`; the API is documented for development only. */
+	exposeApiDocumentation?: boolean;
+}
+
 export function createApp(
 	deps: AppDependencies,
-	spaRoutes: SpaRoutes | Promise<SpaRoutes> = spaStaticPlugin({ distPath }),
+	{
+		spaRoutes = spaStaticPlugin({ distPath }),
+		exposeApiDocumentation = config.isDevelopment,
+	}: AppOptions = {},
 ) {
+	const resolveClientKey = createClientKeyResolver(config.isRender, deps.transport);
 	const routeServices = routeServicesPlugin({
 		crawlManager: deps.crawlManager,
 		eventStream: deps.eventStream,
 		repos: deps.storage.repos,
-		resolveClientKey: (request, server) =>
-			deps.rateLimitGenerator(request as Parameters<Generator>[0], server, {}),
+		resolveClientKey,
+		keepOpen: deps.transport.keepOpen,
 	});
 
 	const app = new Elysia({ introspect: true })
@@ -91,15 +104,16 @@ export function createApp(
 			}),
 		)
 		.use(
-			rateLimit({
+			rateLimitPlugin({
 				max: 100,
-				duration: 60_000,
-				countFailedRequest: true,
-				generator: deps.rateLimitGenerator,
-				skip: isRateLimitExempt,
+				windowMs: 60_000,
+				maxClients: 10_000,
+				clientKey: resolveClientKey,
+				isExempt: isRateLimitExempt,
 			}),
 		)
-		.use(openapiPlugin({ interactive: config.isDevelopment }));
+		.model(openapiModels)
+		.use(openapiPlugin({ enabled: exposeApiDocumentation }));
 
 	return app
 		.use(crawlsApi(routeServices))

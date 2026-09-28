@@ -1,18 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
 import { Elysia, t } from "elysia";
-import { rateLimit } from "elysia-rate-limit";
+import type { Logger } from "../config/logging.js";
 import { handleAppError } from "../errorHandling.js";
-import type { LoggerLike } from "../types.js";
 
-function createLogger(): LoggerLike & {
-	error: ReturnType<typeof mock>;
-} {
-	return {
-		error: mock(() => undefined),
-		info: mock(() => undefined),
-		warn: mock(() => undefined),
-		debug: mock(() => undefined),
-	} as unknown as LoggerLike & {
+function createLogger(): Pick<Logger, "error"> & { error: ReturnType<typeof mock> } {
+	return { error: mock(() => undefined) } as unknown as Pick<Logger, "error"> & {
 		error: ReturnType<typeof mock>;
 	};
 }
@@ -124,7 +116,12 @@ describe("app error handling", () => {
 		expect(response.status).toBe(500);
 		expect(await response.json()).toEqual({ error: "Internal Server Error" });
 		expect(logger.error).toHaveBeenCalledWith(
-			"[App] database password token leaked in stack context",
+			{
+				err: expect.objectContaining({
+					message: "database password token leaked in stack context",
+				}),
+			},
+			"unhandled request error",
 		);
 	});
 
@@ -142,32 +139,9 @@ describe("app error handling", () => {
 
 		expect(response.status).toBe(500);
 		expect(await response.json()).toEqual({ error: "Internal Server Error" });
-		expect(logger.error).toHaveBeenCalledWith("[App] private upstream rejection");
-	});
-
-	test("does not let status-shaped errors bypass the configured failed-request policy", async () => {
-		const logger = createLogger();
-		const app = new Elysia()
-			.use(
-				rateLimit({
-					max: 1,
-					generator: () => "error-contract-client",
-				}),
-			)
-			.error(({ error, status }) => {
-				const response = handleAppError({ error, logger });
-				return status(response.status, response.body);
-			})
-			.get("/failure", () => {
-				throw Object.assign(new Error("private upstream rejection"), { status: 404 });
-			})
-			.get("/ok", () => "ok");
-
-		const failure = await app.handle(new Request("http://localhost/failure"));
-		expect(failure.status).toBe(500);
-
-		const success = await app.handle(new Request("http://localhost/ok"));
-		expect(success.status).toBe(200);
-		expect(await success.text()).toBe("ok");
+		expect(logger.error).toHaveBeenCalledWith(
+			{ err: expect.objectContaining({ message: "private upstream rejection" }) },
+			"unhandled request error",
+		);
 	});
 });

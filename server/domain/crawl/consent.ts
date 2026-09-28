@@ -2,8 +2,8 @@
  * Consent-wall contract:
  * - detect common consent/interstitial screens using body text
  * - recognize action labels across localized variants
- * - for consent-sensitive domains such as YouTube, do not degrade to static crawl
- *   when the wall is detected but not bypassed
+ * - for STRICT_CONSENT_DOMAINS, do not degrade to static crawl when the wall is
+ *   detected but not bypassed
  */
 
 const CONSENT_WALL_MARKERS = [
@@ -59,6 +59,7 @@ export const CONSENT_NEGATIVE_ACTION_MARKERS = [
 	"einstellungen verwalten",
 ] as const;
 
+/** Exact controls for known consent dialogs, tried before text-based matching. */
 export const CONSENT_BUTTON_SELECTORS = [
 	"ytd-button-renderer#accept-button button",
 	'#dialog button[aria-label="Accept all"]',
@@ -73,14 +74,22 @@ export function isConsentWallText(text: string): boolean {
 	return CONSENT_WALL_MARKERS.some((marker) => normalized.includes(marker));
 }
 
+/**
+ * Sites whose consent wall hides the real document: an unbypassed wall there is a
+ * blocked fetch, not content, and must not degrade to a static crawl of the wall.
+ */
+export const STRICT_CONSENT_DOMAINS = ["youtube.com"] as const;
+
 export function requiresStrictConsentBypass(url: string): boolean {
+	let hostname: string;
 	try {
-		const parsed = new URL(url);
-		const hostname = parsed.hostname.replace(/^www\./, "");
-		return hostname === "youtube.com" || hostname.endsWith(".youtube.com");
+		hostname = new URL(url).hostname;
 	} catch {
 		return false;
 	}
+	return STRICT_CONSENT_DOMAINS.some(
+		(domain) => hostname === domain || hostname.endsWith(`.${domain}`),
+	);
 }
 
 export function isUnresolvedStrictConsentWall(

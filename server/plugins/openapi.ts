@@ -1,4 +1,6 @@
 import { openapi } from "@elysia/openapi";
+import type { AnyElysia } from "elysia/base";
+import packageJson from "../../package.json" with { type: "json" };
 import {
 	API_PATHS,
 	CRAWL_EXPORT_FORMAT_VALUES,
@@ -7,7 +9,6 @@ import {
 	OPENAPI_CRAWL_EXPORT_PATH,
 } from "../../shared/contracts/index.js";
 import { ApiErrorSchema } from "../contracts/errors.js";
-import { SSE_LAST_EVENT_ID_MAX } from "../contracts/http.js";
 
 const apiErrorContent = {
 	"application/json": {
@@ -15,17 +16,35 @@ const apiErrorContent = {
 	},
 } as const;
 
-export function openapiPlugin(options: { interactive: boolean } = { interactive: true }) {
-	return openapi({
+const SPECIFICATION_PATH = `${API_PATHS.openapi}/json`;
+
+/** Elysia's runtime tag on its schemas; it is not a JSON Schema keyword. */
+const ELYSIA_TYPE_ANNOTATION = "~elyTyp";
+
+/** Copies a projected specification without the runtime tags the OpenAPI plugin carries over. */
+export function withoutElysiaTypeAnnotations(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(withoutElysiaTypeAnnotations);
+	if (!value || typeof value !== "object") return value;
+	return Object.fromEntries(
+		Object.entries(value)
+			.filter(([key]) => key !== ELYSIA_TYPE_ANNOTATION)
+			.map(([key, nested]) => [key, withoutElysiaTypeAnnotations(nested)]),
+	);
+}
+
+/** Development-only API documentation: the interactive UI and the JSON specification it reads. */
+export function openapiPlugin({ enabled }: { enabled: boolean }) {
+	const documentation = openapi({
+		enabled,
 		path: API_PATHS.openapi,
-		provider: options.interactive ? "scalar" : null,
+		specPath: SPECIFICATION_PATH,
+		provider: "scalar",
 		scalar: { version: "1.62.9" },
+		openapiVersion: "3.1.0",
 		documentation: {
-			openapi: "3.1.0",
-			components: { schemas: { CrawlExport: CrawlExportSchema } },
 			info: {
 				title: "MikuMikuCrawler API",
-				version: "3.0.0",
+				version: packageJson.version,
 				description: "HTTP + SSE backend for crawl execution, persistence, and search.",
 			},
 			tags: [
@@ -38,24 +57,14 @@ export function openapiPlugin(options: { interactive: boolean } = { interactive:
 					get: {
 						tags: ["Crawls"],
 						summary: "Subscribe to crawl events",
+						description:
+							"Delivers events published after the subscription opens. On connect or reconnect, recover earlier state from the crawl snapshot endpoint.",
 						parameters: [
 							{
 								name: "id",
 								in: "path",
 								required: true,
 								schema: { type: "string" },
-							},
-							{
-								name: "Last-Event-ID",
-								in: "header",
-								required: false,
-								description:
-									"Bounded live replay cursor. Older events may be unavailable after process restart or stream cleanup; recover durable state from crawl and page endpoints.",
-								schema: {
-									type: "integer",
-									minimum: 0,
-									maximum: SSE_LAST_EVENT_ID_MAX,
-								},
 							},
 						],
 						responses: {
@@ -68,7 +77,7 @@ export function openapiPlugin(options: { interactive: boolean } = { interactive:
 								},
 							},
 							"204": {
-								description: "Crawl settled with no unseen terminal event",
+								description: "Crawl has no live runtime; read its snapshot instead",
 							},
 							"404": {
 								description: "Crawl not found",
@@ -133,4 +142,18 @@ export function openapiPlugin(options: { interactive: boolean } = { interactive:
 			},
 		},
 	});
+	if (typeof documentation !== "function") return documentation;
+	// The hook precedes the plugin so it wraps the specification route the plugin registers.
+	return (host: AnyElysia) =>
+		documentation(
+			host.afterHandle(({ path, responseValue }) =>
+				path === SPECIFICATION_PATH ? withoutElysiaTypeAnnotations(responseValue) : undefined,
+			),
+		);
 }
+
+/**
+ * Schemas the documentation references by name. The host registers them as models, which
+ * the OpenAPI plugin projects into `components.schemas`.
+ */
+export const openapiModels = { CrawlExport: CrawlExportSchema };

@@ -61,8 +61,9 @@ export async function stopCrawl(id, mode, signal) {
 }
 export async function searchStoredPages(id, query, signal) {
   const count = query === 'needle' ? window.savedPages : 0;
-  const result = {ok: true, data: {count, pages: Array.from({length: count}, (_, i) => ({
-    id: i + 1, url: 'https://example.com/' + (i + 1), title: 'needle', details: {}
+  const result = {ok: true, data: {count, results: Array.from({length: count}, (_, i) => ({
+    id: i + 1, url: 'https://example.com/' + (i + 1), title: 'needle', description: '',
+    domain: 'example.com', snippet: 'needle'
   }))}};
   const call = {signal, query};
   window.calls.push(call);
@@ -157,7 +158,7 @@ test("mounted search follows durable revisions and isolates superseded requests"
 		await page.waitForFunction("c.searchResultCount === 5 && !c.isSearchingPages");
 		expect(await page.evaluate<number>("calls.length")).toBe(beforeBurst + 1);
 
-		// A terminal replay gap still finishes recovery after closing its stream.
+		// A terminal delivery gap still finishes recovery after closing its stream.
 		await page.evaluate("holdSnapshot = true; handlers.onInvalidEvent()");
 		await page.waitForFunction("!!snapshotCalls.at(-1).release");
 		await page.evaluate(
@@ -201,7 +202,7 @@ test("live recovery coalesces requests and retires callbacks across same-crawl r
 		await page.waitForFunction(
 			"!!c.activeCrawlId && !!window.handlers && snapshotCalls.length === 1",
 		);
-		// Repeated replay gaps must not starve a snapshot already being fetched.
+		// Repeated delivery gaps must not starve a snapshot already being fetched.
 		await page.evaluate("holdSnapshot = true; handlers.onInvalidEvent()");
 		await page.waitForFunction("!!snapshotCalls.at(-1).release");
 		await page.evaluate(
@@ -218,8 +219,11 @@ test("live recovery coalesces requests and retires callbacks across same-crawl r
 		await page.waitForFunction("c.runPhase === 'paused'");
 		await page.evaluate("c.resumeCrawl(c.activeCrawlId)");
 		await page.waitForFunction("handlers !== retired && c.runPhase === 'running'");
-		await page.evaluate("handlers.onOpen()");
-		await page.waitForFunction("c.connectionState === 'connected'");
+		// Events published before the stream opened are recovered from a snapshot read after it.
+		await page.evaluate("window.beforeOpen = snapshotCalls.length; handlers.onOpen()");
+		await page.waitForFunction(
+			"c.connectionState === 'connected' && snapshotCalls.length > beforeOpen",
+		);
 		await page.evaluate(`
    window.beforeRetired = snapshotCalls.length;
    retired.onError(); retired.onOpen(); retired.onInvalidEvent();

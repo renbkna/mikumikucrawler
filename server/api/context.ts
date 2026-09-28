@@ -1,5 +1,5 @@
 import { Elysia } from "elysia";
-import type { Generator } from "elysia-rate-limit";
+import type { ClientKeyResolver, RequestTransport } from "../config/rateLimit.js";
 import type { CrawlManager } from "../runtime/CrawlManager.js";
 import type { EventStream } from "../runtime/EventStream.js";
 import type { StorageRepos } from "../storage/db.js";
@@ -8,7 +8,8 @@ export interface RouteServices {
 	crawlManager: CrawlManager;
 	eventStream: EventStream;
 	repos: StorageRepos;
-	resolveClientKey: (request: Request, server: Parameters<Generator>[1]) => ReturnType<Generator>;
+	resolveClientKey: ClientKeyResolver;
+	keepOpen: RequestTransport["keepOpen"];
 }
 
 export function routeServicesPlugin(services: RouteServices) {
@@ -16,7 +17,8 @@ export function routeServicesPlugin(services: RouteServices) {
 		.decorate("crawlManager", services.crawlManager)
 		.decorate("eventStream", services.eventStream)
 		.decorate("repos", services.repos)
-		.decorate("resolveClientKey", services.resolveClientKey);
+		.decorate("resolveClientKey", services.resolveClientKey)
+		.decorate("keepOpen", services.keepOpen);
 }
 
 export type RouteServicesPlugin = ReturnType<typeof routeServicesPlugin>;

@@ -1,4 +1,4 @@
-import { t } from "elysia/type-system";
+import { t } from "elysia";
 import type { Static } from "typebox";
 import { API_LIST_LIMIT_BOUNDS } from "./http.js";
 import { maxUtf16LengthForCodePoints, PAGE_TEXT_LIMITS } from "./pageData.js";
