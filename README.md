@@ -43,16 +43,16 @@
 
 ### 🕷️ Crawling
 
-| | Feature |
-|---|---------|
-| 📡 | **SSE streaming** — ordered live events; reconnects recover from the durable snapshot |
-| 🎭 | **Playwright** — renders JavaScript-heavy pages with headless Chromium |
-| ⚡ | **Cheerio** — fast HTML extraction for static pages |
-| 🤖 | **robots.txt** — optional compliance with crawl rules and crawl-delay |
-| 🔀 | **Concurrency** — configurable parallel page jobs |
-| 🔄 | **Retry with backoff** — delayed retries for rate-limit and backpressure responses |
-| 💾 | **Session resume** — interrupted crawls persist and resume from where they stopped |
-| 🚦 | **Domain throttling** — hostname-scoped page scheduling to be a polite crawler |
+|     | Feature                                                                               |
+| --- | ------------------------------------------------------------------------------------- |
+| 📡  | **SSE streaming** — ordered live events; reconnects recover from the durable snapshot |
+| 🎭  | **Playwright** — renders JavaScript-heavy pages with headless Chromium                |
+| ⚡  | **Cheerio** — fast HTML extraction for static pages                                   |
+| 🤖  | **robots.txt** — optional compliance with crawl rules and crawl-delay                 |
+| 🔀  | **Concurrency** — configurable parallel page jobs                                     |
+| 🔄  | **Retry with backoff** — delayed retries for rate-limit and backpressure responses    |
+| 💾  | **Session resume** — interrupted crawls persist and resume from where they stopped    |
+| 🚦  | **Domain throttling** — hostname-scoped page scheduling to be a polite crawler        |
 
 </td></tr>
 <tr><td>
@@ -61,30 +61,30 @@
 
 Every crawled page is reduced to the data used by crawling, recovery, search, and export:
 
-| | Analysis |
-|---|---------|
-| 🌐 | **Language** — detection via `franc` |
-| 📖 | **Reading time** — derived from the stored main-content word count |
-| 📝 | **Page metadata** — bounded title, description, and robots directives |
-| 🖼️ | **Media count** — optional bounded count of unique image, video, and audio references |
-| 🔗 | **Links** — canonical HTTP(S) targets with `nofollow` admission policy |
+|     | Analysis                                                                              |
+| --- | ------------------------------------------------------------------------------------- |
+| 🌐  | **Language** — detection via `franc`                                                  |
+| 📖  | **Reading time** — derived from the stored main-content word count                    |
+| 📝  | **Page metadata** — bounded title, description, and robots directives                 |
+| 🖼️  | **Media count** — optional bounded count of unique image, video, and audio references |
+| 🔗  | **Links** — canonical HTTP(S) targets with `nofollow` admission policy                |
 
 </td></tr>
 <tr><td>
 
 ### 🎨 Interface
 
-| Component | |
-|-----------|---|
-| `CrawlerForm` | Configure and launch crawls |
-| `StatsGrid` | Live counters — pages, data size, speed |
-| `ProgressBar` | Visual crawl progress |
-| `CrawledPagesSection` | Bounded page list with durable search |
-| `TheatreOverlay` | Timed crawl launch sequence with optional audio |
-| `ExportDialog` | JSON / CSV export |
-| `ResumeSessionsPanel` | Browse & resume interrupted sessions |
-| `LogsSection` | Live crawl log stream |
-| `MikuBanner` | ✨ Animated mascot ✨ |
+| Component             |                                                 |
+| --------------------- | ----------------------------------------------- |
+| `CrawlerForm`         | Configure and launch crawls                     |
+| `StatsGrid`           | Live counters — pages, data size, speed         |
+| `ProgressBar`         | Visual crawl progress                           |
+| `CrawledPagesSection` | Bounded page list with durable search           |
+| `TheatreOverlay`      | Timed crawl launch sequence with optional audio |
+| `ExportDialog`        | JSON / CSV export                               |
+| `ResumeSessionsPanel` | Browse & resume interrupted sessions            |
+| `LogsSection`         | Live crawl log stream                           |
+| `MikuBanner`          | ✨ Animated mascot ✨                           |
 
 </td></tr>
 </table>
@@ -93,7 +93,7 @@ Every crawled page is reduced to the data used by crawling, recovery, search, an
 
 ## 🚀 Quick Start
 
-> **Requires [Bun 1.4.2](https://bun.sh)** — the repository's declared runtime.
+> **Requires [Bun 1.4.4](https://bun.sh)** — the repository's declared runtime.
 
 ```bash
 git clone https://github.com/renbkna/mikumikucrawler
@@ -107,11 +107,11 @@ Playwright's managed Chromium is preferred. If it is not installed, local develo
 use `chromium`, `chromium-browser`, `google-chrome`, or `google-chrome-stable` from `PATH`.
 On Linux systems missing browser libraries, run `bunx playwright install --with-deps chromium`.
 
-| | Service | URL |
-|---|---------|-----|
-| 🎨 | Frontend | <http://localhost:5173> |
-| ⚙️ | Backend | <http://localhost:3000> |
-| 📋 | OpenAPI (development UI) | <http://localhost:3000/openapi> |
+|     | Service                  | URL                             |
+| --- | ------------------------ | ------------------------------- |
+| 🎨  | Frontend                 | <http://localhost:5173>         |
+| ⚙️  | Backend                  | <http://localhost:3000>         |
+| 📋  | OpenAPI (development UI) | <http://localhost:3000/openapi> |
 
 By default, the backend owns port `3000` exclusively and fails clearly if another process already owns it.
 The checked-in default is owned by `shared/deploymentDefaults.ts`; the documented URLs are projections of that value.
@@ -162,19 +162,19 @@ indexing, snippets, rebuilds, and JSON exports use that same projection.
 
 <br/>
 
-| Setting | Default | Range |
-|---------|---------|-------|
-| Crawl Depth | `2` | 1–5 |
-| Max Pages | `50` | 1–200 |
-| Max Pages Per Domain | `0` | 0–1000 (`0` = unlimited) |
-| Page Crawl Delay | `1000ms` | 200–10000ms |
-| Method | `full` | links / media / full |
-| Concurrent Page Jobs | `5` | 1–10 |
-| Retry Limit | `3` | 0–5 |
-| Dynamic Content | `true` | — |
-| Respect Robots | `true` | — |
-| Content Only | `false` | — |
-| Count Media (`saveMedia`) | `false` | — |
+| Setting                   | Default  | Range                    |
+| ------------------------- | -------- | ------------------------ |
+| Crawl Depth               | `2`      | 1–5                      |
+| Max Pages                 | `50`     | 1–200                    |
+| Max Pages Per Domain      | `0`      | 0–1000 (`0` = unlimited) |
+| Page Crawl Delay          | `1000ms` | 200–10000ms              |
+| Method                    | `full`   | links / media / full     |
+| Concurrent Page Jobs      | `5`      | 1–10                     |
+| Retry Limit               | `3`      | 0–5                      |
+| Dynamic Content           | `true`   | —                        |
+| Respect Robots            | `true`   | —                        |
+| Content Only              | `false`  | —                        |
+| Count Media (`saveMedia`) | `false`  | —                        |
 
 Dynamic pages use a separate fixed subrequest policy: at most four concurrent
 subrequests, at least 50 ms between same-host dispatches, and at most 100
@@ -192,46 +192,44 @@ beacons, and other methods stay read-only (`GET`/`HEAD`).
 
 > API documentation (the interactive `/openapi` UI and its `/openapi/json` specification) is served in development only.
 
-| | Method | Endpoint | Description |
-|---|--------|----------|-------------|
-| 🆕 | `POST` | `/api/crawls` | Create a crawl run |
-| 📋 | `GET` | `/api/crawls` | List crawl runs |
-| ♻️ | `GET` | `/api/crawls/resumable?limit=25` | List paused/interrupted runs (`limit` defaults to 25, maximum 100) |
-| 🔍 | `GET` | `/api/crawls/:id` | Get crawl state & counters |
-| ♻️ | `GET` | `/api/crawls/:id/snapshot` | Recover crawl state, latest stored pages, and total stored count in one response |
-| ⏹️ | `POST` | `/api/crawls/:id/stop` | Request pause or force stop |
-| ▶️ | `POST` | `/api/crawls/:id/resume` | Resume a paused or interrupted crawl |
-| 📡 | `GET` | `/api/crawls/:id/events` | SSE event stream |
-| 📄 | `GET` | `/api/crawls/:id/pages` | List the latest stored page summaries and total stored count |
-| 📦 | `GET` | `/api/crawls/:id/export` | Export pages (JSON / CSV) |
-| 🗑️ | `DELETE` | `/api/crawls/:id` | Delete a stored crawl |
-| 📄 | `GET` | `/api/crawls/:id/pages/:pageId/content` | Fetch crawl-owned stored page content |
-| 🔎 | `GET` | `/api/search?crawlId=:id&q=keyword` | Search one crawl's stored pages (FTS5) |
-| 💚 | `GET` | `/health` | Health check |
+|     | Method   | Endpoint                                | Description                                                                      |
+| --- | -------- | --------------------------------------- | -------------------------------------------------------------------------------- |
+| 🆕  | `POST`   | `/api/crawls`                           | Create a crawl run                                                               |
+| 📋  | `GET`    | `/api/crawls`                           | List crawl runs                                                                  |
+| ♻️  | `GET`    | `/api/crawls/resumable?limit=25`        | List paused/interrupted runs (`limit` defaults to 25, maximum 100)               |
+| 🔍  | `GET`    | `/api/crawls/:id`                       | Get crawl state & counters                                                       |
+| ♻️  | `GET`    | `/api/crawls/:id/snapshot`              | Recover crawl state, latest stored pages, and total stored count in one response |
+| ⏹️  | `POST`   | `/api/crawls/:id/stop`                  | Request pause or force stop                                                      |
+| ▶️  | `POST`   | `/api/crawls/:id/resume`                | Resume a paused or interrupted crawl                                             |
+| 📡  | `GET`    | `/api/crawls/:id/events`                | SSE event stream                                                                 |
+| 📄  | `GET`    | `/api/crawls/:id/pages`                 | List the latest stored page summaries and total stored count                     |
+| 📦  | `GET`    | `/api/crawls/:id/export`                | Export pages (JSON / CSV)                                                        |
+| 🗑️  | `DELETE` | `/api/crawls/:id`                       | Delete a stored crawl                                                            |
+| 📄  | `GET`    | `/api/crawls/:id/pages/:pageId/content` | Fetch crawl-owned stored page content                                            |
+| 🔎  | `GET`    | `/api/search?crawlId=:id&q=keyword`     | Search one crawl's stored pages (FTS5)                                           |
+| 💚  | `GET`    | `/health`                               | Health check                                                                     |
 
 ### 📡 Event Stream
 
 ```javascript
-const source = new EventSource(
-  "http://localhost:3000/api/crawls/<crawl-id>/events"
-);
+const source = new EventSource("http://localhost:3000/api/crawls/<crawl-id>/events");
 
 source.addEventListener("crawl.progress", (event) => {
-  const { sequence, payload } = JSON.parse(event.data);
-  console.log(payload.counters);
+	const { sequence, payload } = JSON.parse(event.data);
+	console.log(payload.counters);
 });
 ```
 
-| Event | When |
-|-------|------|
-| `crawl.started` | Crawl begins processing |
-| `crawl.progress` | Counter & queue stats update |
-| `crawl.page` | A page was persisted, with its positive row ID and post-commit stored-page count |
-| `crawl.log` | Runtime log message with explicit severity |
-| `crawl.completed` | Crawl finished normally |
-| `crawl.paused` | Paused by user and available to resume |
-| `crawl.stopped` | Stopped by user |
-| `crawl.failed` | Terminated due to error |
+| Event             | When                                                                             |
+| ----------------- | -------------------------------------------------------------------------------- |
+| `crawl.started`   | Crawl begins processing                                                          |
+| `crawl.progress`  | Counter & queue stats update                                                     |
+| `crawl.page`      | A page was persisted, with its positive row ID and post-commit stored-page count |
+| `crawl.log`       | Runtime log message with explicit severity                                       |
+| `crawl.completed` | Crawl finished normally                                                          |
+| `crawl.paused`    | Paused by user and available to resume                                           |
+| `crawl.stopped`   | Stopped by user                                                                  |
+| `crawl.failed`    | Terminated due to error                                                          |
 
 Events are sequenced and delivered live only: a subscription receives the events
 published after it opens. On connect or reconnect, recover from the backend-owned
@@ -260,27 +258,27 @@ storage types, JSON/CSV projections, and the OpenAPI 3.1 schema derive from it.
 
 ### 🎨 Frontend
 
-| | Technology |
-|---|------------|
-| ⚛️ | React 19 |
-| 📘 | TypeScript |
-| 🎨 | Tailwind CSS 4 |
-| ⚡ | Vite |
-| 🔗 | Eden Treaty |
-| ✏️ | Lucide React |
+|     | Technology     |
+| --- | -------------- |
+| ⚛️  | React 19       |
+| 📘  | TypeScript     |
+| 🎨  | Tailwind CSS 4 |
+| ⚡  | Vite           |
+| 🔗  | Eden Treaty    |
+| ✏️  | Lucide React   |
 
 </td>
 <td width="50%">
 
 ### ⚙️ Backend
 
-| | Technology |
-|---|------------|
-| 🥟 | Bun + bun:sqlite |
-| 🦊 | Elysia + OpenAPI |
-| 🎭 | Playwright |
-| 📝 | Pino |
-| 🔒 | IP validation + rate limiting |
+|     | Technology                    |
+| --- | ----------------------------- |
+| 🥟  | Bun + bun:sqlite              |
+| 🦊  | Elysia + OpenAPI              |
+| 🎭  | Playwright                    |
+| 📝  | Pino                          |
+| 🔒  | IP validation + rate limiting |
 
 </td>
 </tr>
@@ -471,13 +469,13 @@ as the crawler. Install Chromium as described above before running the checks.
 
 ## ⚠️ Responsible Use
 
-| | |
-|---|---|
-| ✅ | Get permission before crawling |
-| ✅ | Respect robots.txt and rate limits |
-| ✅ | Use reasonable delays |
-| ❌ | Don't overload servers |
-| ❌ | Don't scrape copyrighted content without authorization |
+|     |                                                        |
+| --- | ------------------------------------------------------ |
+| ✅  | Get permission before crawling                         |
+| ✅  | Respect robots.txt and rate limits                     |
+| ✅  | Use reasonable delays                                  |
+| ❌  | Don't overload servers                                 |
+| ❌  | Don't scrape copyrighted content without authorization |
 
 ---
 

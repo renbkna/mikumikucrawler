@@ -34,7 +34,7 @@ export function rateLimitPlugin({
 }: RateLimitOptions) {
 	const windows = new LRUCache<string, AdmissionWindow>({ max: maxClients });
 
-	return new Elysia({ name: "rate-limit" }).request(({ request, set, status }) => {
+	return new Elysia({ name: "rate-limit" }).onRequest(({ request, set, status }) => {
 		if (isExempt(request)) return;
 		const key = clientKey(request);
 		const nowMs = now();

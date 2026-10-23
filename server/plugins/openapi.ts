@@ -146,7 +146,7 @@ export function openapiPlugin({ enabled }: { enabled: boolean }) {
 	// The hook precedes the plugin so it wraps the specification route the plugin registers.
 	return (host: AnyElysia) =>
 		documentation(
-			host.afterHandle(({ path, responseValue }) =>
+			host.onAfterHandle(({ path, responseValue }) =>
 				path === SPECIFICATION_PATH ? withoutElysiaTypeAnnotations(responseValue) : undefined,
 			),
 		);

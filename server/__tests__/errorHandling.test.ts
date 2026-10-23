@@ -13,7 +13,7 @@ describe("app error handling", () => {
 	test("preserves validation errors as 422 responses", async () => {
 		const logger = createLogger();
 		const app = new Elysia()
-			.error(({ error, status }) => {
+			.onError(({ error, status }) => {
 				const response = handleAppError({
 					error,
 					logger,
@@ -49,7 +49,7 @@ describe("app error handling", () => {
 	test("treats response-schema violations as internal failures", async () => {
 		const logger = createLogger();
 		const app = new Elysia()
-			.error(({ error, status }) => {
+			.onError(({ error, status }) => {
 				const response = handleAppError({ error, logger });
 				return status(response.status, response.body);
 			})
@@ -69,7 +69,7 @@ describe("app error handling", () => {
 	test("preserves parse errors as 400 responses", async () => {
 		const logger = createLogger();
 		const app = new Elysia()
-			.error(({ error, status }) => {
+			.onError(({ error, status }) => {
 				const response = handleAppError({
 					error,
 					logger,
@@ -104,7 +104,7 @@ describe("app error handling", () => {
 	test("does not expose raw internal error messages for 500 responses", async () => {
 		const logger = createLogger();
 		const app = new Elysia()
-			.error(({ error, status }) => {
+			.onError(({ error, status }) => {
 				const response = handleAppError({ error, logger });
 				return status(response.status, response.body);
 			})
@@ -128,7 +128,7 @@ describe("app error handling", () => {
 	test("does not let status-shaped internal errors claim HTTP response authority", async () => {
 		const logger = createLogger();
 		const app = new Elysia()
-			.error(({ error, status }) => {
+			.onError(({ error, status }) => {
 				const response = handleAppError({ error, logger });
 				return status(response.status, response.body);
 			})

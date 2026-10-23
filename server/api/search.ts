@@ -9,8 +9,8 @@ import {
 import type { RouteServicesPlugin } from "./context.js";
 
 export function searchApi(services: RouteServicesPlugin) {
-	return new Elysia({ name: "search-api", prefix: API_PATHS.root }).use(services).get(
-		API_PATHS.search.slice(API_PATHS.root.length),
+	return new Elysia({ name: "search-api", prefix: API_PATHS.search }).use(services).get(
+		"",
 		{
 			query: SearchQuerySchema,
 			response: {

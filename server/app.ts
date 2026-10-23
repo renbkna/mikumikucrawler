@@ -95,7 +95,7 @@ export function createApp(
 		keepOpen: deps.transport.keepOpen,
 	});
 
-	const app = new Elysia({ introspect: true })
+	const app = new Elysia()
 		.decorate("logger", deps.logger)
 		.use(
 			cors({
@@ -121,7 +121,7 @@ export function createApp(
 		.use(searchApi(routeServices))
 		.use(healthApi(routeServices))
 		.use(spaRoutes)
-		.error(({ error, logger: requestLogger, status }) => {
+		.onError("global", ({ error, logger: requestLogger, status }) => {
 			const response = handleAppError({
 				error,
 				logger: requestLogger,
