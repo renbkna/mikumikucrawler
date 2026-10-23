@@ -97,6 +97,15 @@ export function createApp(
 
 	const app = new Elysia()
 		.decorate("logger", deps.logger)
+		// Registered before any route or plugin: Elysia applies a hook only to routes added after it.
+		.onError("global", ({ error, logger: requestLogger, status }) => {
+			const response = handleAppError({
+				error,
+				logger: requestLogger,
+			});
+
+			return status(response.status, response.body satisfies Static<typeof ApiErrorSchema>);
+		})
 		.use(
 			cors({
 				origin: (request) => isCorsOriginAllowed(request.headers.get("origin"), config),
@@ -120,15 +129,7 @@ export function createApp(
 		.use(sseApi(routeServices))
 		.use(searchApi(routeServices))
 		.use(healthApi(routeServices))
-		.use(spaRoutes)
-		.onError("global", ({ error, logger: requestLogger, status }) => {
-			const response = handleAppError({
-				error,
-				logger: requestLogger,
-			});
-
-			return status(response.status, response.body satisfies Static<typeof ApiErrorSchema>);
-		});
+		.use(spaRoutes);
 }
 
 export type App = ReturnType<typeof createApp>;

@@ -13,6 +13,7 @@ import { createInMemoryStorage, getTestDatabase } from "../../__tests__/storageF
 import { createApp } from "../../app.js";
 import type { RequestTransport } from "../../config/rateLimit.js";
 import { CRAWL_QUEUE_CONSTANTS } from "../../constants.js";
+import { ApiErrorSchema } from "../../contracts/errors.js";
 import type { HttpClient } from "../../outbound/HttpClient.js";
 import { CrawlManager } from "../../runtime/CrawlManager.js";
 import { EventStream } from "../../runtime/EventStream.js";
@@ -27,6 +28,16 @@ function decodeSseChunk(value: unknown): string {
 	if (typeof value === "string") return value;
 	if (value instanceof Uint8Array) return new TextDecoder().decode(value);
 	throw new Error("Expected an SSE string or byte chunk");
+}
+
+/** Every route, including plugin routes, must answer validation failures with the API error contract. */
+async function expectValidationError(response: Response): Promise<void> {
+	expect(response.status).toBe(422);
+	const body: unknown = await response.json();
+	if (!Value.Check(ApiErrorSchema, body)) {
+		throw new Error(`Response body violates the API error contract: ${JSON.stringify(body)}`);
+	}
+	expect(body.details?.length).toBeGreaterThan(0);
 }
 
 function buildApp(
@@ -132,12 +143,12 @@ describe("api contract", () => {
 				),
 			}),
 		);
-		expect(invalidCreateResponse.status).toBe(422);
+		await expectValidationError(invalidCreateResponse);
 
 		const invalidListResponse = await app.handle(
 			new Request("http://localhost/api/crawls?status=unknown"),
 		);
-		expect(invalidListResponse.status).toBe(422);
+		await expectValidationError(invalidListResponse);
 	});
 
 	test("rejects fractional numeric query and path parameters at the API boundary", async () => {
@@ -146,17 +157,17 @@ describe("api contract", () => {
 		const crawlListResponse = await app.handle(
 			new Request("http://localhost/api/crawls?limit=1.5"),
 		);
-		expect(crawlListResponse.status).toBe(422);
+		await expectValidationError(crawlListResponse);
 
 		const searchResponse = await app.handle(
 			new Request("http://localhost/api/search?q=contract&limit=1.5"),
 		);
-		expect(searchResponse.status).toBe(422);
+		await expectValidationError(searchResponse);
 
 		const pageContentResponse = await app.handle(
 			new Request("http://localhost/api/crawls/example/pages/1.5/content"),
 		);
-		expect(pageContentResponse.status).toBe(422);
+		await expectValidationError(pageContentResponse);
 	});
 
 	test("settled crawls answer SSE with 204 so clients read the snapshot", async () => {
